@@ -46,5 +46,33 @@ describe("update package retention", () => {
         entry.startsWith(".openclaw-previous"),
       ),
     ).toEqual([".openclaw-previous"]);
+
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+    );
+    await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), 'console.log("2.0.0");\n');
+    const replacement = await retainCurrentPackageForUpdate({
+      packageRoot,
+      globalRoot,
+      expectedVersion: "2.0.0",
+      runCommand: async (argv, options) => {
+        const command = await runCommandWithTimeout(argv, options);
+        return { stdout: command.stdout, stderr: command.stderr, code: command.code };
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(replacement.step.exitCode).toBe(0);
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(replacement.retainedRoot ?? "", "package.json"), "utf8"),
+      ),
+    ).toMatchObject({ version: "2.0.0" });
+    expect(
+      (await fs.readdir(path.dirname(replacement.retainedRoot ?? ""))).filter((entry) =>
+        entry.startsWith(".openclaw-previous"),
+      ),
+    ).toEqual([".openclaw-previous"]);
   });
 });

@@ -41,26 +41,22 @@ Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
 
-### Update rollback recovery
+### Update retention boundary
 
 An owned launchd/systemd Gateway installed through the local-prefix npm
-installer gets a separate update transaction. Before package mutation,
-OpenClaw retains one launchable package. The supervisor requires the replacement
-Gateway to reach `/readyz` within 60 seconds. Failure restores the package,
-restarts the previous Gateway, and leaves a plain rollback notice for `status`,
-Doctor, and the custodian overview. Ordinary npm-global, pnpm, Git, Windows, and
-unowned service layouts receive a warning and manual recovery instructions
-instead of automatic package swapping.
+installer retains one launchable previous package before mutation after
+verifying installer provenance, ownership, and write permissions. Automatic
+rollback is not enabled: package lifecycle/Doctor migrations currently commit
+before restart confirmation, and restoring only the old package could run it
+against newer state. State snapshot/restore and deferred migration commit must
+land before package swapping is safe.
 
-This transaction uses one owner-only `update-rollback` marker in the state
-directory. It is not a replacement for SQLite runtime state. There is no config
-surface; `OPENCLAW_UPDATE_NO_ROLLBACK=1` is the only escape. State
-snapshot/restore is not enabled. The current updater still runs package
-lifecycle/Doctor migration before restart confirmation, so package rollback
-does not undo a completed data migration. Resident old/new Gateway handover and
-its exclusive channel pause/resume and delivery/human confirmation tiers also
-remain disabled until that ordering can change without running two exclusive
-channel transports concurrently.
+Resident old/new Gateway handover and its exclusive channel pause/resume and
+delivery/human confirmation tiers are also not enabled. Ordinary npm-global,
+pnpm, Git, Windows, unowned service layouts, and unverifiable lookalike prefixes
+receive manual recovery instructions instead of retention or swapping. Set
+`OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to bypass
+retention; there is no config surface.
 
 ## How interrupted work is detected
 

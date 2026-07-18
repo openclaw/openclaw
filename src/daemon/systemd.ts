@@ -17,10 +17,8 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "../infra/parse-finite-number.js";
-import { resolveUpdateRollbackMarkerPath } from "../infra/update-rollback.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
-  GATEWAY_SERVICE_KIND,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayServiceDescription,
   resolveGatewaySystemdServiceName,
@@ -61,28 +59,9 @@ import {
   parseSystemdExecStart,
   renderSystemdEnvAssignment,
 } from "./systemd-unit.js";
-import { buildUpdateRollbackSupervisorScript } from "./update-rollback-wrapper.js";
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
-const SYSTEMD_UPDATE_WRAPPER_FILENAME = "gateway-update-wrapper.sh";
-
-function resolveSystemdUpdateWrapperPath(env: GatewayServiceEnv): string {
-  return path.join(
-    resolveStateDir(env as NodeJS.ProcessEnv),
-    "service-env",
-    SYSTEMD_UPDATE_WRAPPER_FILENAME,
-  );
-}
-
-function unwrapSystemdUpdateWrapper(env: GatewayServiceEnv, programArguments: string[]): string[] {
-  const wrapperPath = programArguments[1];
-  return programArguments[0] === "/bin/sh" &&
-    wrapperPath !== undefined &&
-    path.resolve(wrapperPath) === path.resolve(resolveSystemdUpdateWrapperPath(env))
-    ? programArguments.slice(2)
-    : programArguments;
-}
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = toPosixPath(resolveHomeDir(env));
@@ -238,7 +217,7 @@ export async function readSystemdServiceExecStart(
       inlineEnvironment,
       environmentFromFiles.environment,
     );
-    const programArguments = unwrapSystemdUpdateWrapper(env, parseSystemdExecStart(execStart));
+    const programArguments = parseSystemdExecStart(execStart);
     return {
       programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
@@ -1083,23 +1062,9 @@ async function writeSystemdUnit({
       return value.trim() !== stateDirValue.trim();
     }),
   );
-  let renderedProgramArguments = programArguments;
-  if (environment?.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND) {
-    const wrapperPath = resolveSystemdUpdateWrapperPath(env);
-    await fs.mkdir(path.dirname(wrapperPath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      wrapperPath,
-      buildUpdateRollbackSupervisorScript({
-        markerPath: resolveUpdateRollbackMarkerPath(env as NodeJS.ProcessEnv),
-      }),
-      { encoding: "utf8", mode: 0o700 },
-    );
-    await fs.chmod(wrapperPath, 0o700);
-    renderedProgramArguments = ["/bin/sh", wrapperPath, ...programArguments];
-  }
   const unit = buildSystemdUnit({
     description: serviceDescription,
-    programArguments: renderedProgramArguments,
+    programArguments,
     workingDirectory,
     environment: environmentSansDotEnvEntries,
     environmentFiles: environmentFileResult.environmentFiles,

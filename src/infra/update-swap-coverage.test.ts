@@ -38,7 +38,7 @@ describe("update swap coverage", () => {
       }),
     ).toMatchObject({
       kind: "managed-prefix",
-      protection: "swap",
+      protection: "retention-only",
       prefix,
     });
     await fs.rm(temporaryPrefix, { recursive: true });

@@ -6,7 +6,7 @@ import path from "node:path";
 type UpdateSwapCoverage =
   | {
       kind: "managed-prefix";
-      protection: "swap";
+      protection: "retention-only";
       prefix: string;
       nodePath: string;
     }
@@ -108,7 +108,7 @@ export async function resolveUpdateSwapCoverage(params: {
     if (await hasManagedPrefixProvenance({ prefix, packageRoot: normalized, nodeSegment })) {
       return {
         kind: "managed-prefix",
-        protection: "swap",
+        protection: "retention-only",
         prefix,
         nodePath: path.join(prefix, "tools", "node", "bin", "node"),
       };
@@ -148,7 +148,7 @@ export async function resolveUpdateSwapCoverage(params: {
 }
 
 export function formatUpdateSwapCoverageWarning(coverage: UpdateSwapCoverage): string | null {
-  if (coverage.protection === "swap") {
+  if (coverage.protection === "retention-only") {
     return null;
   }
   return `Automatic update rollback is unavailable for this ${coverage.kind} install: ${coverage.reason}. If startup fails, reinstall the previous version manually.`;

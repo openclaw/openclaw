@@ -97,7 +97,6 @@ export function buildStatusCommandOverviewRows(
     formatKTokens: (value: number) => string;
     updateValue?: string;
     updateRestartValue?: string | null;
-    updateRollbackValue?: string | null;
   } & StatusMemoryStateResolvers,
 ) {
   const agentsValue = buildStatusAgentsValue({
@@ -184,9 +183,6 @@ export function buildStatusCommandOverviewRows(
       ...(params.updateRestartValue
         ? [{ Item: "Update restart", Value: params.updateRestartValue }]
         : []),
-      ...(params.updateRollbackValue
-        ? [{ Item: "Update rollback", Value: params.updateRollbackValue }]
-        : []),
       { Item: "Memory", Value: memoryValue },
       ...(degradedSecretsValue ? [{ Item: "Degraded secrets", Value: degradedSecretsValue }] : []),
       ...(degradedPluginsValue ? [{ Item: "Degraded plugins", Value: degradedPluginsValue }] : []),
@@ -217,7 +213,6 @@ export function buildStatusAllOverviewRows(params: {
   configPath: string;
   secretDiagnosticsCount: number;
   updateRestartValue?: string | null;
-  updateRollbackValue?: string | null;
   agentStatus: {
     bootstrapPendingCount: number;
     totalSessions: number;
@@ -243,9 +238,6 @@ export function buildStatusAllOverviewRows(params: {
     middleRows: [
       ...(params.updateRestartValue
         ? [{ Item: "Update restart", Value: params.updateRestartValue }]
-        : []),
-      ...(params.updateRollbackValue
-        ? [{ Item: "Update rollback", Value: params.updateRollbackValue }]
         : []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
     ],

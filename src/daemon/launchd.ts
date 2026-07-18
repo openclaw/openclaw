@@ -10,7 +10,6 @@ import { probePortUsage } from "../infra/ports-probe.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
-import { resolveUpdateRollbackMarkerPath } from "../infra/update-rollback.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
 import {
@@ -45,7 +44,6 @@ import type {
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
 } from "./service-types.js";
-import { buildUpdateRollbackSupervisorScript } from "./update-rollback-wrapper.js";
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 // launchd rejects user LaunchAgent plists without group/other read access on
@@ -204,11 +202,16 @@ function buildLaunchAgentEnvironmentFile(entries: Array<[string, string]>): stri
   ].join("\n");
 }
 
-function buildLaunchAgentEnvironmentWrapper(env: GatewayServiceEnv): string {
-  return buildUpdateRollbackSupervisorScript({
-    markerPath: resolveUpdateRollbackMarkerPath(env as NodeJS.ProcessEnv),
-    loadEnvironmentFile: true,
-  });
+function buildLaunchAgentEnvironmentWrapper(): string {
+  return `#!/bin/sh
+set -eu
+env_file="$1"
+shift
+if [ -f "$env_file" ]; then
+  . "$env_file"
+fi
+exec "$@"
+`;
 }
 
 async function resolveLaunchAgentEnvironmentWrapperOverwriteWarnings(params: {
@@ -276,7 +279,7 @@ async function prepareLaunchAgentProgramArguments(params: {
   const envDir = resolveLaunchAgentEnvDir(params.env);
   const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
-  const generatedWrapper = buildLaunchAgentEnvironmentWrapper(params.env);
+  const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
   await fs.writeFile(envFilePath, buildLaunchAgentEnvironmentFile(entries), {
     encoding: "utf8",

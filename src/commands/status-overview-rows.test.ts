@@ -51,16 +51,6 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Update restart")).toBe("failed · managed-service-handoff-failed");
   });
 
-  it("shows plain rollback narration in fast status output", () => {
-    const narration =
-      "The update to 2.0.0 broke and was rolled back to 1.9.0; the error was: gateway exited; run `openclaw update` to retry.";
-    const rows = buildStatusCommandOverviewRows(
-      createStatusCommandOverviewRowsParams({ updateRollbackValue: narration }),
-    );
-
-    expect(findRowValue(rows, "Update rollback")).toBe(narration);
-  });
-
   it("lists plugins quarantined as configured-unavailable", () => {
     const rows = buildStatusCommandOverviewRows(
       createStatusCommandOverviewRowsParams({
@@ -96,8 +86,6 @@ describe("status-overview-rows", () => {
       configPath: "/tmp/openclaw.json",
       secretDiagnosticsCount: 2,
       updateRestartValue: "restart pending health verification",
-      updateRollbackValue:
-        "The update to 2.0.0 broke and was rolled back to 1.9.0; the error was: gateway exited; run `openclaw update` to retry.",
       agentStatus: {
         bootstrapPendingCount: 1,
         totalSessions: 2,
@@ -110,7 +98,6 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "OS")).toBe("macOS");
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
-    expect(findRowValue(rows, "Update rollback")).toContain("rolled back to 1.9.0");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });

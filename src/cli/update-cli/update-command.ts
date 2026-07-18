@@ -562,7 +562,6 @@ async function updateCommandInternal(
     managedServiceRootRedirect,
     invocationCwd,
     recoveryState,
-    packageRollbackConfig: configSnapshot.valid ? configSnapshot.config : undefined,
   });
   if (!execution) {
     return;

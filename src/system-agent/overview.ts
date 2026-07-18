@@ -17,10 +17,6 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import {
-  formatUpdateRollbackNarration,
-  readUpdateRollbackTransaction,
-} from "../infra/update-rollback.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
@@ -58,7 +54,6 @@ export type SystemAgentOverview = {
     reachable: boolean;
     error?: string;
   };
-  updateRollback?: string | null;
   references: {
     docsPath?: string;
     docsUrl: string;
@@ -86,7 +81,6 @@ type SystemAgentOverviewDependencies = {
   probeLocalCommand?: typeof probeLocalCommand;
   probeGatewayUrl?: typeof probeGatewayUrl;
   resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
-  readUpdateRollbackTransaction?: typeof readUpdateRollbackTransaction;
 };
 
 function issueMessages(snapshot: ConfigFileSnapshot): string[] {
@@ -176,7 +170,7 @@ export async function loadSystemAgentOverview(
   }
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
-  const [codex, claude, gemini, gateway, references, updateRollback] = await Promise.all([
+  const [codex, claude, gemini, gateway, references] = await Promise.all([
     // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
     commandProbe("codex"),
     commandProbe("claude"),
@@ -188,7 +182,6 @@ export async function loadSystemAgentOverview(
         cwd: process.cwd(),
         moduleUrl: import.meta.url,
       }),
-    (deps.readUpdateRollbackTransaction ?? readUpdateRollbackTransaction)(env),
   ]);
   return {
     config: {
@@ -216,7 +209,6 @@ export async function loadSystemAgentOverview(
       reachable: gateway.reachable,
       error: gateway.error ?? gatewayError,
     },
-    updateRollback: formatUpdateRollbackNarration(updateRollback),
     references: {
       docsPath: references.docsPath ?? undefined,
       docsUrl: OPENCLAW_DOCS_URL,
@@ -282,7 +274,6 @@ export function formatSystemAgentOverview(overview: SystemAgentOverview): string
       : `Source: ${overview.references.sourceUrl}`,
     `Gateway: ${overview.gateway.reachable ? "reachable" : "not reachable"} (${overview.gateway.url}, ${overview.gateway.source})`,
     overview.gateway.error ? `Gateway note: ${overview.gateway.error}` : undefined,
-    overview.updateRollback ?? undefined,
     `Next: ${recommendSystemAgentNextStep(overview)}`,
     ...issueLines,
   ]
@@ -372,7 +363,6 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
     `- ${formatStartupUse(overview)}`,
     `- Config: ${formatStartupConfigStatus(overview)}. Default agent: ${agentLabel}.`,
     `- ${formatStartupGatewayStatus(overview)}`,
-    ...(overview.updateRollback ? [`- ${overview.updateRollback}`] : []),
     "",
     formatStartupAction(overview),
   ].join("\n");

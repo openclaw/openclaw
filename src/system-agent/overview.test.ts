@@ -36,7 +36,6 @@ function createOverview(defaultModel?: string): SystemAgentOverview {
       source: "local loopback",
       reachable: false,
     },
-    updateRollback: null,
   };
 }
 
@@ -83,7 +82,6 @@ describe("loadSystemAgentOverview", () => {
           version: command === "codex" ? "codex 1.0.0" : undefined,
         }),
         probeGatewayUrl: async (url) => ({ reachable: false, url, error: "offline" }),
-        readUpdateRollbackTransaction: async () => null,
       },
     });
 
@@ -134,16 +132,5 @@ describe("loadSystemAgentOverview", () => {
     expect(welcome).toContain("Verified model: openai/gpt-5.2");
     expect(welcome).toContain("finish your workspace, Gateway");
     expect(welcome).not.toContain("Your agent is ready");
-  });
-
-  it("narrates an update rollback in overview and startup greeting", () => {
-    const overview = {
-      ...createOverview("openai/gpt-5.2"),
-      updateRollback:
-        "The update to 2.0.0 broke and was rolled back to 1.9.0; the error was: gateway exited; run `openclaw update` to retry.",
-    };
-
-    expect(formatSystemAgentOverview(overview)).toContain("rolled back to 1.9.0");
-    expect(formatSystemAgentStartupMessage(overview)).toContain("rolled back to 1.9.0");
   });
 });

@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -59,7 +58,6 @@ export async function executeMutableUpdate(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   invocationCwd?: string;
   recoveryState: UpdateCommandRecoveryState;
-  packageRollbackConfig?: OpenClawConfig;
 }): Promise<MutableUpdateExecutionResult | null> {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let schemaRefusalAfterStop = false;
@@ -189,7 +187,6 @@ export async function executeMutableUpdate(params: {
               nodeRunner: params.packageUpdateNodeRunner,
               installEnv: params.packageInstallEnv,
               installTarget: params.packageInstallTarget,
-              rollbackConfig: params.packageRollbackConfig,
             })
           : await runGitUpdate({
               root: params.root,

@@ -175,43 +175,33 @@ expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
 For a restart-enabled update of an owned macOS launchd or Linux systemd Gateway,
-OpenClaw enables automatic package rollback only for the npm layout created by
-the local-prefix `install-cli.sh` installer (`<prefix>/tools/node/...`). It keeps
-one launch-verified copy of the previous package. The refreshed service gets 60
-seconds to reach `/readyz` on its first post-update start. If the new process
-exits or never becomes ready, the service wrapper restores that retained
-package and starts it without exiting through the supervisor, so
-launchd/systemd cannot race the fallback. The next `openclaw status`,
-`openclaw doctor`, and custodian greeting name the failed and restored versions
-and show the retry command. A later successful update replaces the one retained
-copy and clears the rollback notice after the new Gateway becomes ready.
+OpenClaw retains one launch-verified previous package only for the npm layout
+created by the local-prefix `install-cli.sh` installer
+(`<prefix>/tools/node/...`). It verifies the generated installer wrapper, real
+package paths, process ownership, and write permissions before retention. A
+later update replaces the one retained copy.
 
-Ordinary npm-global installs, pnpm globals, Git checkouts, Windows services, and
-unowned services do not get package swapping. The updater detects these
-layouts, prints a warning with manual reinstall guidance, and preserves their
-existing update behavior. Shared or root-owned global package parents cannot
-be replaced safely by the service account.
+Automatic package rollback is not enabled. The current update pipeline runs
+package lifecycle scripts and post-install Doctor before the replacement
+Gateway is confirmed. Restoring only the old package after a committed data
+migration could run old code against new state. State snapshot/restore and
+deferred migration commit are therefore required before automatic rollback can
+be enabled.
 
-The handshake uses one owner-only product marker in the state directory,
-`update-rollback`. It contains transaction state, versions, package roots, the
-Gateway port, and a bounded failure summary. The POSIX service wrapper parses
-it before launching Node; it is not general runtime state and no second
-rollback sidecar is written.
+Resident old/new Gateway handover, exclusive channel pause/resume, delivery
+acknowledgement, and human reply confirmation are also not enabled. The updater
+must first keep the old Gateway resident without mutating its live package tree
+and commit migrations only after confirmation. Startup remains fail-closed.
 
-This rollback handshake is default-on for the managed-prefix layout. Set
-`OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to bypass
-retention and the first-start handshake. This is the only escape; there is no
-config option.
+Ordinary npm-global installs, pnpm globals, Git checkouts, Windows services,
+unowned services, and lookalike prefixes without verifiable installer
+provenance do not get retention or package swapping. The updater prints manual
+reinstall guidance and preserves their existing update behavior. Shared or
+root-owned global package parents cannot be replaced safely by the service
+account.
 
-The current update pipeline runs package lifecycle scripts and post-install
-Doctor before the replacement Gateway is confirmed. State snapshot/restore is
-not enabled, so a migration that succeeds before a later startup failure is not
-rolled back with the package. Migration commit also cannot yet be deferred
-until channel confirmation. Resident old/new Gateway handover, exclusive
-channel pause/resume, delivery acknowledgement, and human reply confirmation
-remain disabled until the updater can keep the old Gateway resident without
-mutating its live package tree. Startup remains fail-closed; the updater does
-not weaken config validation to work around these limitations.
+Set `OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to
+bypass previous-package retention. There is no config option.
 
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
