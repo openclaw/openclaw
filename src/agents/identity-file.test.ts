@@ -9,9 +9,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadAgentIdentityFromFile,
   loadAgentIdentityFromWorkspace,
-  MAX_IDENTITY_FILE_BYTES,
   mergeIdentityMarkdownContent,
 } from "./identity-file.js";
+
+const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
 async function parseIdentityFromContent(
   content: string,
@@ -197,7 +198,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
   it("returns null when IDENTITY.md exceeds the size cap", () => {
     fs.writeFileSync(
       path.join(tempDir, "IDENTITY.md"),
-      "x".repeat(MAX_IDENTITY_FILE_BYTES + 1),
+      "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1),
       "utf-8",
     );
 

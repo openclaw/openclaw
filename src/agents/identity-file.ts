@@ -11,7 +11,7 @@ import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
 // IDENTITY.md may contain the supported 2 MiB avatar encoded as a roughly
 // 2.7 MiB data URL. Keep bounded headroom for the remaining identity fields.
-export const MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
 /** Parsed rich identity values from a workspace `IDENTITY.md` file. */
 export type AgentIdentityFile = {

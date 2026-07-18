@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_IDENTITY_FILE_BYTES } from "../agents/identity-file.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+
+const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
 const configMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn().mockResolvedValue(undefined);
@@ -238,7 +239,7 @@ describe("agents set-identity command", () => {
     const { workspace } = await createIdentityWorkspace();
     const identityPath = await writeIdentityFile(workspace, [
       "- Name: Oversized",
-      "x".repeat(MAX_IDENTITY_FILE_BYTES + 1),
+      "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1),
     ]);
 
     configMocks.readConfigFileSnapshot.mockResolvedValue({
@@ -249,7 +250,7 @@ describe("agents set-identity command", () => {
     await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      `Identity file ${identityPath} exceeds the maximum size of ${MAX_IDENTITY_FILE_BYTES} bytes`,
+      `Identity file ${identityPath} exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
