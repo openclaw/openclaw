@@ -40,7 +40,9 @@ export type RuntimeWebSecretOwner = {
   path: string;
   ref: SecretRef;
   refKey: string;
+  resolvedValue?: string;
   reason?: SecretDegradationReason;
+  restoreResolvedValue?: (value: string) => void;
 };
 
 export type RuntimeWebUnavailableProvider = RuntimeWebSecretOwner & {
@@ -442,6 +444,7 @@ export async function resolveRuntimeWebProviderSelection<
       ref?: SecretRef;
       refKey?: string;
       reason: SecretDegradationReason;
+      restoreResolvedValue: (value: string) => void;
     };
     const unresolvedWithoutFallback: UnresolvedProvider[] = [];
     let keylessFallbackProvider: TProvider | undefined;
@@ -518,6 +521,12 @@ export async function resolveRuntimeWebProviderSelection<
           ref: selectedCandidateResolution.secretRef,
           refKey: selectedCandidateResolution.secretRefKey,
           reason: selectedCandidateResolution.unresolvedRefReason,
+          restoreResolvedValue: (resolvedValue) =>
+            params.setResolvedCredential({
+              resolvedConfig: params.resolvedConfig,
+              provider,
+              value: resolvedValue,
+            }),
         });
       }
 
@@ -628,6 +637,7 @@ export async function resolveRuntimeWebProviderSelection<
                 ref: entry.ref,
                 refKey: entry.refKey,
                 reason: entry.reason,
+                restoreResolvedValue: entry.restoreResolvedValue,
               },
             ]
           : [],
@@ -656,6 +666,7 @@ export async function resolveRuntimeWebProviderSelection<
             ref,
             refKey,
             reason: unresolved.reason,
+            restoreResolvedValue: unresolved.restoreResolvedValue,
           };
           if (params.allowUnavailableProviders) {
             unavailableProviders.push(unavailable);
@@ -684,6 +695,7 @@ export async function resolveRuntimeWebProviderSelection<
                   ref: entry.ref,
                   refKey: entry.refKey,
                   reason: entry.reason,
+                  restoreResolvedValue: entry.restoreResolvedValue,
                 },
               ]
             : [],
@@ -761,6 +773,7 @@ export async function resolveRuntimeWebProviderSelection<
           path: selectedPath,
           ref: selectedResolution.secretRef,
           refKey: selectedResolution.secretRefKey,
+          ...(selectedResolution.value ? { resolvedValue: selectedResolution.value } : {}),
         }
       : undefined;
   return {

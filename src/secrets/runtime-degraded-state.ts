@@ -26,13 +26,18 @@ export type DegradedSecretOwner = {
   ownerKind: Exclude<SecretOwnerKind, "unknown">;
   ownerId: string;
   state: "unavailable";
+  /** Operator-facing reload state. Omitted legacy/runtime-discovered owners are cold. */
+  degradationState?: "cold" | "stale";
   paths: string[];
   refKeys: string[];
   reason: string;
 };
 
 /** SecretRef identities resolved for one owner in an active runtime snapshot. */
-export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "ownerId" | "refKeys">;
+export type SecretOwnerRefState = Pick<DegradedSecretOwner, "ownerKind" | "ownerId" | "refKeys"> & {
+  /** Last materialized values, kept process-local for unchanged-ref reload fallback. */
+  resolvedValues?: Array<{ refKey: string; value: unknown }>;
+};
 
 /** One owner from an atomic resolution attempt, including whether it caused the failure. */
 type SecretResolutionErrorOwner = DegradedSecretOwner & {
@@ -199,7 +204,10 @@ export function findActiveDegradedSecretOwner(
 ): DegradedSecretOwner | undefined {
   const owner =
     activeDegradedOwners.find(
-      (entry) => entry.ownerKind === ownerKind && entry.ownerId === ownerId,
+      (entry) =>
+        entry.ownerKind === ownerKind &&
+        entry.ownerId === ownerId &&
+        entry.degradationState !== "stale",
     ) ?? activeCredentialDegradedOwners.get(ownerKey(ownerKind, ownerId));
   return owner ? cloneOwner(owner) : undefined;
 }

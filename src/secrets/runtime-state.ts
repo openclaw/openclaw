@@ -168,6 +168,36 @@ function cloneSecretsRuntimeRefreshContext(
   return cloned;
 }
 
+function cloneDegradedSecretOwner(owner: DegradedSecretOwner): DegradedSecretOwner {
+  const cloned: DegradedSecretOwner = {
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+    state: owner.state,
+    paths: [...owner.paths],
+    refKeys: [...owner.refKeys],
+    reason: owner.reason,
+  };
+  if (owner.degradationState) {
+    cloned.degradationState = owner.degradationState;
+  }
+  return cloned;
+}
+
+function cloneSecretOwnerRefState(owner: SecretOwnerRefState): SecretOwnerRefState {
+  const cloned: SecretOwnerRefState = {
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+    refKeys: [...owner.refKeys],
+  };
+  if (owner.resolvedValues) {
+    cloned.resolvedValues = owner.resolvedValues.map((entry) => ({
+      refKey: entry.refKey,
+      value: structuredClone(entry.value),
+    }));
+  }
+  return cloned;
+}
+
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
     sourceConfig: structuredClone(snapshot.sourceConfig),
@@ -178,19 +208,8 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     })),
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
-    degradedOwners: (snapshot.degradedOwners ?? []).map((owner) => ({
-      ownerKind: owner.ownerKind,
-      ownerId: owner.ownerId,
-      state: owner.state,
-      paths: [...owner.paths],
-      refKeys: [...owner.refKeys],
-      reason: owner.reason,
-    })),
-    secretOwners: (snapshot.secretOwners ?? []).map((owner) => ({
-      ownerKind: owner.ownerKind,
-      ownerId: owner.ownerId,
-      refKeys: [...owner.refKeys],
-    })),
+    degradedOwners: (snapshot.degradedOwners ?? []).map(cloneDegradedSecretOwner),
+    secretOwners: (snapshot.secretOwners ?? []).map(cloneSecretOwnerRefState),
     webTools: structuredClone(snapshot.webTools),
   };
 }

@@ -15,6 +15,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { providerResolutionError, refResolutionError } from "../secrets/resolve-errors.js";
 import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degraded-state.js";
+import { activateProviderAuthRuntimeSnapshot } from "../secrets/runtime-provider-auth-activation.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshot,
@@ -440,6 +441,59 @@ describe("gateway startup config secret preflight", () => {
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledOnce();
   });
 
+  it("signals degradation for a snapshot activated by an external CAS owner", async () => {
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const candidate = {
+      ...preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token"),
+      degradedOwners: [
+        {
+          ownerKind: "provider" as const,
+          ownerId: "openai",
+          state: "unavailable" as const,
+          degradationState: "stale" as const,
+          paths: ["models.providers.openai.apiKey"],
+          refKeys: ["env:default:OPENAI_API_KEY"],
+          reason: "secret reference was not found",
+        },
+      ],
+    };
+    const emitStateEvent = vi.fn();
+    const logSecrets = mockLogSecretsForTest();
+    const activateRuntimeSecretsSnapshot = vi.fn();
+    runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot,
+      emitStateEvent,
+      logSecrets,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    const expectedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const activateSnapshotIfCurrent = vi.fn(() => {
+      activateSecretsRuntimeSnapshotForTest(candidate);
+      return true;
+    });
+
+    await expect(
+      activateProviderAuthRuntimeSnapshot({
+        snapshot: candidate,
+        expectedRevision,
+        activateSnapshotIfCurrent,
+      }),
+    ).resolves.toBe(true);
+
+    expect(activateSnapshotIfCurrent).toHaveBeenCalledOnce();
+    expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+    expect(emitStateEvent).toHaveBeenCalledWith(
+      "SECRETS_RELOADER_DEGRADED",
+      "Secret resolution degraded one or more owners; healthy owners were refreshed.",
+      candidate.config,
+    );
+    expect(logSecrets.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[SECRETS_DEGRADED] stale provider:openai"),
+      expect.objectContaining({ event: "secrets.degraded", state: "stale" }),
+    );
+  });
+
   it("rejects a managed reload prepared before an OAuth credential mutation", async () => {
     const agentDir = "/tmp/openclaw-managed-auth-store-cas";
     const initial = preparedSnapshot(gatewayTokenConfig({}));
@@ -827,7 +881,7 @@ describe("gateway startup config secret preflight", () => {
       ).rejects.toThrow(missingSecretError.message);
 
       expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ allowUnavailableSecretOwners: false }),
+        expect.objectContaining({ allowUnavailableSecretOwners: true }),
       );
       expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
       expect(logSecrets.warn).not.toHaveBeenCalledWith(

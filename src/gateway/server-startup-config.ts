@@ -20,6 +20,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import {
   classifySecretResolutionErrorDegradations,
   listSecretResolutionErrorOwners,
@@ -32,6 +33,7 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
+import { registerProviderAuthRuntimeSnapshotActivationOwner } from "../secrets/runtime-provider-auth-activation.js";
 import {
   activateSecretsRuntimeSnapshotState,
   graftActiveSecretsRuntimeAuthState,
@@ -139,6 +141,27 @@ function logSecretDegradation(log: GatewayStartupLog, degradation: SecretDegrada
       state: degradation.state,
       retryHint: degradation.retryHint,
     },
+  );
+}
+
+function preparedDegradationSupportsSourceOnlyRecovery(
+  snapshot: PreparedRuntimeSecretsSnapshot,
+): boolean {
+  const degradedOwners = snapshot.degradedOwners ?? [];
+  const authStoreOwnerIds = new Set(
+    snapshot.authStores.flatMap(({ agentDir, store }) =>
+      Object.keys(store.profiles).map((profileId) =>
+        resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+      ),
+    ),
+  );
+  return (
+    degradedOwners.length > 0 &&
+    degradedOwners.every(
+      (owner) =>
+        owner.degradationState === "cold" &&
+        !(owner.ownerKind === "account" && authStoreOwnerIds.has(owner.ownerId)),
+    )
   );
 }
 
@@ -285,13 +308,16 @@ export function createRuntimeSecretsActivator(params: {
     options?: {
       activateRuntimeSecretsSnapshot?: (snapshot: PreparedRuntimeSecretsSnapshot) => void;
       onActivated?: () => void;
+      alreadyActivated?: boolean;
     },
   ) => {
     assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
-    if (activationParams.activate) {
+    if (activationParams.activate && !options?.alreadyActivated) {
       const activateRuntimeSecretsSnapshot =
         options?.activateRuntimeSecretsSnapshot ?? (await loadActivateRuntimeSecretsSnapshot());
       activateRuntimeSecretsSnapshot(prepared);
+    }
+    if (activationParams.activate) {
       // Invoke publication at the activation edge so no microtask can replace
       // the candidate before its runtime commit begins.
       options?.onActivated?.();
@@ -300,22 +326,34 @@ export function createRuntimeSecretsActivator(params: {
     for (const warning of prepared.warnings) {
       params.logSecrets.warn(`[${warning.code}] ${warning.message}`);
     }
-    if (
-      activationParams.reason === "startup" &&
-      activationParams.activate &&
-      (prepared.degradedOwners?.length ?? 0) > 0
-    ) {
+    if (activationParams.activate && (prepared.degradedOwners?.length ?? 0) > 0) {
       for (const owner of prepared.degradedOwners ?? []) {
         logSecretDegradation(params.logSecrets, {
           kind: owner.ownerKind,
           id: owner.ownerId,
           reason: owner.reason,
-          state: "cold",
+          state: owner.degradationState ?? "cold",
           retryHint: SECRET_DEGRADATION_RETRY_HINT,
         });
       }
-    }
-    if (activationParams.activate && activeDegradationGeneration !== null) {
+      if (activationParams.reason !== "startup") {
+        if (!secretsDegraded) {
+          params.emitStateEvent(
+            "SECRETS_RELOADER_DEGRADED",
+            "Secret resolution degraded one or more owners; healthy owners were refreshed.",
+            prepared.config,
+          );
+        }
+        const currentSupportsSourceOnlyRecovery =
+          preparedDegradationSupportsSourceOnlyRecovery(prepared);
+        activeDegradationSupportsSourceOnlyRecovery = secretsDegraded
+          ? activeDegradationSupportsSourceOnlyRecovery && currentSupportsSourceOnlyRecovery
+          : currentSupportsSourceOnlyRecovery;
+        secretsDegraded = true;
+        activeDegradationGeneration = ++degradationGeneration;
+        activeDegradationConfig = structuredClone(prepared.sourceConfig);
+      }
+    } else if (activationParams.activate && secretsDegraded) {
       if (activationParams.publishRecovery === false) {
         deferredRecoveryGenerations.set(prepared, activeDegradationGeneration);
       } else {
@@ -432,7 +470,7 @@ export function createRuntimeSecretsActivator(params: {
         const prepareRuntimeSecretsSnapshot =
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
         const allowUnavailableSecretOwners =
-          activationParams.reason === "startup" && getActiveSecretsRuntimeSnapshot() === null;
+          activationParams.reason !== "startup" || getActiveSecretsRuntimeSnapshot() === null;
         const prepared = await measureDiagnosticsTimelineSpan(
           "secrets.prepare",
           () =>
@@ -533,6 +571,22 @@ export function createRuntimeSecretsActivator(params: {
       return activated;
     });
   };
+
+  const providerAuthActivationParams = { reason: "reload", activate: true } as const;
+  registerProviderAuthRuntimeSnapshotActivationOwner({
+    runExclusive: runWithSecretsActivationLock,
+    isCurrent: (snapshot, expectedRevision) =>
+      getActiveSecretsRuntimeSnapshotRevision() === expectedRevision &&
+      hasCurrentAuthStoreCredentialsRevision(snapshot),
+    assertValid: (snapshot) => assertRuntimeGatewayAuthNotKnownWeak(snapshot.config),
+    publish: async (snapshot) => {
+      await finishPreparedSnapshot(snapshot, providerAuthActivationParams, {
+        alreadyActivated: true,
+      });
+    },
+    onError: (error, snapshot) =>
+      handleSecretsActivationError(error, providerAuthActivationParams, snapshot.sourceConfig),
+  });
 
   runtimeSecretsRecoveryPublishers.set(activateRuntimeSecrets, (snapshot, options) => {
     const expectedGeneration = deferredRecoveryGenerations.get(snapshot);

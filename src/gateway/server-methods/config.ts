@@ -40,6 +40,7 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
+import { redactSecretDegradationReason } from "../../secrets/runtime-degraded-state.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
@@ -495,6 +496,7 @@ async function ensureResolvableSecretRefsOrRespond(params: {
     return await prepareSecretsRuntimeSnapshot({
       config: params.config,
       includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
     });
   } catch (error) {
     const details = formatErrorMessage(error);
@@ -508,6 +510,21 @@ async function ensureResolvableSecretRefsOrRespond(params: {
     );
     return null;
   }
+}
+
+function listPreparedSecretDegradations(snapshot: PreparedSecretsRuntimeSnapshot) {
+  return (snapshot.degradedOwners ?? []).map((owner) => ({
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+    state: owner.degradationState ?? "cold",
+    paths: [...owner.paths],
+    reason: redactSecretDegradationReason(owner.reason),
+  }));
+}
+
+function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapshot) {
+  const degradedSecretOwners = listPreparedSecretDegradations(snapshot);
+  return degradedSecretOwners.length > 0 ? { degradedSecretOwners } : {};
 }
 
 export function clearConfigSchemaResponseCacheForTests() {
@@ -532,6 +549,7 @@ async function respondWithConfigRestartWrite(params: {
   context: GatewayRequestContext | undefined;
   respond: RespondFn;
   uiHints: ConfigRedactionHints;
+  preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): Promise<void> {
   clearConfigSchemaResponseCache();
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
@@ -553,6 +571,7 @@ async function respondWithConfigRestartWrite(params: {
       // persisted bytes, so writers can adopt it without a reload.
       ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
       config: redactConfigObject(params.writeResult.config, params.uiHints),
+      ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,
       sentinel: {
         persisted: sentinelPersisted,
@@ -692,7 +711,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
+    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+      config: parsed.config,
+      respond,
+    });
+    if (!preparedSecretsSnapshot) {
       return;
     }
     const writeResult = await commitGatewayConfigWrite({
@@ -711,6 +734,7 @@ export const configHandlers: GatewayRequestHandlers = {
         // persisted bytes, so writers can adopt it without a reload.
         ...(writeResult.hash ? { hash: writeResult.hash } : {}),
         config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
+        ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
       },
       undefined,
     );
@@ -888,6 +912,7 @@ export const configHandlers: GatewayRequestHandlers = {
       context,
       respond,
       uiHints: schemaPatch.uiHints,
+      preparedSecretsSnapshot,
     });
   },
   "config.apply": async ({ params, respond, client, context }) => {
@@ -939,6 +964,7 @@ export const configHandlers: GatewayRequestHandlers = {
       context,
       respond,
       uiHints: parsed.schema.uiHints,
+      preparedSecretsSnapshot,
     });
   },
   "config.openFile": async ({ params, respond, context }) => {

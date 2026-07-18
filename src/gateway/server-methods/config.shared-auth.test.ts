@@ -284,7 +284,7 @@ describe("config shared auth disconnects", () => {
     );
   });
 
-  it("rejects unresolved TTS SecretRefs before config.set writes", async () => {
+  it("accepts an unresolved isolatable TTS SecretRef and reports the cold owner", async () => {
     const submittedConfig: OpenClawConfig = {
       messages: {
         tts: {
@@ -297,9 +297,20 @@ describe("config shared auth disconnects", () => {
       },
     };
     mockPreviousConfig({});
-    prepareSecretsRuntimeSnapshotMock.mockRejectedValueOnce(
-      new Error('Environment variable "ELEVENLABS_API_KEY" is missing or empty.'),
-    );
+    prepareSecretsRuntimeSnapshotMock.mockResolvedValueOnce({
+      config: submittedConfig,
+      degradedOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "cold",
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason: "secret reference was not found",
+        },
+      ],
+    });
     const { options, respond } = createConfigHandlerHarness({
       method: "config.set",
       params: {
@@ -317,14 +328,22 @@ describe("config shared auth disconnects", () => {
     expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
       config: submittedConfig,
       includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
     });
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
+      true,
       expect.objectContaining({
-        message: expect.stringContaining("active SecretRef resolution failed"),
+        degradedSecretOwners: [
+          expect.objectContaining({
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "cold",
+            reason: "secret reference was not found",
+          }),
+        ],
       }),
+      undefined,
     );
   });
 
