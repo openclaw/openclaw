@@ -9,7 +9,9 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
@@ -715,6 +717,20 @@ describe("session transcript runtime SDK", () => {
       });
     });
 
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: scope.agentId,
+    }).path;
+    expect(databasePath).toBeDefined();
+    const database = openOpenClawAgentDatabase({
+      agentId: scope.agentId,
+      path: databasePath,
+    });
+    // Identity rows are maintained atomically with raw events. A dirty active
+    // projection must not force mirror fact lookups back to full event scans.
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(scope.sessionId);
+
     await withSessionTranscriptWriteLock(scope, async (locked) => {
       const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
         "user-key",
@@ -737,6 +753,11 @@ describe("session transcript runtime SDK", () => {
       expect(userMessagesByIdempotencyKey.has("assistant-key")).toBe(false);
       expect(await locked.readMessageEventCount()).toBe(2);
     });
+    expect(
+      database.db
+        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+        .get(scope.sessionId),
+    ).toEqual({ needs_rebuild: 1 });
 
     await replaceTranscriptEvents(scope, [
       { id: "replacement-metadata", type: "custom" },
