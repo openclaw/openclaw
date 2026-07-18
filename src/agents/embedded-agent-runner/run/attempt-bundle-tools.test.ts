@@ -95,7 +95,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(disposeLsp).toHaveBeenCalledOnce();
   });
 
-  it("refreshes spawned-child inheritance from the final materialized tool surface", async () => {
+  it("keeps core tools while adding final materialized tools to spawned-child inheritance", async () => {
     const inheritedToolAllowlist = ["read", "sessions_spawn"];
     const allowedMcpTool = makeTool("probe__search");
     const blockedMcpTool = makeTool("probe__delete");
@@ -145,8 +145,14 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       sessionAgentId: "main",
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
-    await prepareEmbeddedAttemptBundleTools(input);
+    const prepared = await prepareEmbeddedAttemptBundleTools(input);
 
+    expect(prepared.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+      "read",
+      "sessions_spawn",
+      "probe__search",
+      "lsp_hover_typescript",
+    ]);
     expect(inheritedToolAllowlist).toEqual([
       "read",
       "sessions_spawn",
