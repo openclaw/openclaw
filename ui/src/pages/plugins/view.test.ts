@@ -331,6 +331,9 @@ describe("renderPlugins", () => {
             transport: "http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
           },
         ],
         onMcpToggle,
@@ -347,7 +350,7 @@ describe("renderPlugins", () => {
     actionButton(row, "Remove github")?.click();
     expect(onMcpRemove).toHaveBeenCalledWith("github");
 
-    const form = container.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = container.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
@@ -390,6 +393,41 @@ describe("renderPlugins", () => {
     });
   });
 
+  it("renders featured plugins newest-featured first", () => {
+    const plugins = [
+      createPlugin({
+        id: "not-featured",
+        name: "Not Featured",
+        featured: false,
+        origin: "official",
+        installed: false,
+        order: 0,
+      }),
+      createPlugin({
+        id: "older-popular",
+        name: "Older Popular",
+        featured: true,
+        featuredAt: 100,
+        order: 1,
+      }),
+      createPlugin({
+        id: "newest-featured",
+        name: "Newest Featured",
+        featured: true,
+        featuredAt: 200,
+        order: 99,
+      }),
+    ];
+
+    const container = mount(createProps({ activeTab: "discover", result: createResult(plugins) }));
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-plugin-id]")].map(
+        (row) => row.dataset.pluginId,
+      ),
+    ).toEqual(["newest-featured", "older-popular", "not-featured"]);
+  });
+
   it("adds MCP connectors and routes ClawHub connector searches", () => {
     const onAddConnector = vi.fn();
     const onSearchClawHub = vi.fn();
@@ -414,7 +452,16 @@ describe("renderPlugins", () => {
       createProps({
         activeTab: "discover",
         mcpServers: [
-          { name: "github", enabled: true, transport: "http", target: "https://x", auth: "oauth" },
+          {
+            name: "github",
+            enabled: true,
+            transport: "http",
+            target: "https://x",
+            auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
+          },
         ],
       }),
     );

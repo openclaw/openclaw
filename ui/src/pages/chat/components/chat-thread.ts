@@ -15,6 +15,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
@@ -47,6 +48,7 @@ import {
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
+  persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
   syncToolCardExpansionState,
@@ -62,6 +64,7 @@ import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
+  openChatRewindConfirmation,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
@@ -109,6 +112,7 @@ type ChatThreadProps = {
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
   runWorking?: boolean;
   planStatus?: PlanStatus | null;
+  questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
@@ -139,6 +143,8 @@ type ChatThreadProps = {
   getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
+  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+  onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
   /** Sends a detached /btw side question built from the selection popup. */
   onSideQuestion?: (command: string) => void;
@@ -194,7 +200,31 @@ function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
 class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private readonly controllers = new Set<ReactiveController>();
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
-  private scrollElement: HTMLDivElement | null = null;
+  private threadInnerElement: HTMLDivElement | null = null;
+  // Lit calls refs before newly rendered nodes are connected. Resolve the
+  // scroll parent lazily or a stable ref can permanently capture null.
+  private get scrollElement(): HTMLDivElement | null {
+    const parent = this.threadInnerElement?.parentElement;
+    return parent instanceof HTMLDivElement ? parent : null;
+  }
+  // Stable Lit refs: inline arrows change identity per render, making Lit
+  // re-invoke them for every visible row and re-measure each row every render.
+  // Lit tracks the last element per callback, so each row needs its own.
+  private readonly scrollElementRef = (element?: Element) => {
+    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
+  };
+  private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
+  private measureRowRefFor(key: string): (element?: Element) => void {
+    let callback = this.measureRowRefs.get(key);
+    if (!callback) {
+      callback = (element?: Element) =>
+        this.virtualizerController
+          .getVirtualizer()
+          .measureElement(element instanceof HTMLElement ? element : null);
+      this.measureRowRefs.set(key, callback);
+    }
+    return callback;
+  }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private focusedRowKey: string | null = null;
@@ -273,7 +303,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
-    this.scrollElement = null;
+    this.threadInnerElement = null;
   }
 
   render(
@@ -288,13 +318,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     const virtualizer = this.virtualizerController.getVirtualizer();
     const virtualRows = virtualizer.getVirtualItems();
     return html`
-      <div
-        class="chat-thread-inner chat-thread-inner--virtual"
-        ${ref((element) => {
-          this.scrollElement =
-            element?.parentElement instanceof HTMLDivElement ? element.parentElement : null;
-        })}
-      >
+      <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
         <div
           class="chat-virtual-sizer"
           style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
@@ -320,9 +344,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}
-                  ${ref((element) =>
-                    virtualizer.measureElement(element instanceof HTMLElement ? element : null),
-                  )}
+                  ${ref(this.measureRowRefFor(row.key))}
                 >
                   ${renderRow(row)}
                 </div>
@@ -384,6 +406,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     }
     this.rowKeys = Object.freeze(nextKeys);
     this.rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
+    for (const key of this.measureRowRefs.keys()) {
+      if (!this.rowIndexesByKey.has(key)) {
+        this.measureRowRefs.delete(key);
+      }
+    }
     const keys = this.rowKeys;
     const virtualizer = this.virtualizerController.getVirtualizer();
     virtualizer.setOptions({
@@ -702,6 +729,25 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   return button;
 }
 
+function createMessageActionContextButton(params: {
+  label: string;
+  disabled: boolean;
+  tooltip: string;
+  onClick: () => void;
+}): { element: HTMLElement; button: HTMLButtonElement } {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.disabled = params.disabled;
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", params.label);
+  button.textContent = params.label;
+  button.addEventListener("click", params.onClick);
+  const tooltip = document.createElement("openclaw-tooltip");
+  tooltip.content = params.tooltip;
+  tooltip.append(button);
+  return { element: tooltip, button };
+}
+
 function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
   if (typeof props.onSideQuestion !== "function") {
     return;
@@ -726,7 +772,7 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
 
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const bubble = (event.target as HTMLElement).closest(".chat-bubble");
-  if (!bubble || typeof props.onSetReply !== "function") {
+  if (!bubble) {
     return;
   }
   const group = bubble.closest(".chat-group");
@@ -742,13 +788,16 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const senderEl = group.querySelector(".chat-sender-name");
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
-  if (!text) {
+  const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
+  const isUserMessage = group.classList.contains("user") && Boolean(entryId);
+  const canReply = Boolean(text && props.onSetReply);
+  const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
+  const canFork = isUserMessage && typeof props.onForkMessage === "function";
+  if (!canReply && !canRewind && !canFork) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
-  const messageId =
-    (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
   removeReplyContextMenu();
   const menu = document.createElement("div");
   menu.className = "chat-reply-context-menu";
@@ -756,12 +805,52 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.setAttribute("aria-label", "Message actions");
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
-  const button = createReplyContextMenuButton(() => {
-    props.onSetReply?.({ messageId, text, senderLabel });
-    removeReplyContextMenu();
-    props.onFocusComposer?.();
-  });
-  menu.append(button);
+  const focusCandidates: HTMLButtonElement[] = [];
+  if (canReply) {
+    const messageId =
+      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
+    const replyButton = createReplyContextMenuButton(() => {
+      props.onSetReply?.({ messageId, text, senderLabel });
+      removeReplyContextMenu();
+      props.onFocusComposer?.();
+    });
+    menu.append(replyButton);
+    focusCandidates.push(replyButton);
+  }
+  const working = Boolean(props.runActive || props.runWorking);
+  if (canRewind) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.rewindToHere"),
+      disabled: working,
+      tooltip: working ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewindToHere"),
+      onClick: () => {
+        openChatRewindConfirmation(action.button, () => {
+          removeReplyContextMenu();
+          void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
+            if (rewound) {
+              props.onFocusComposer?.();
+            }
+          });
+        });
+      },
+    });
+    action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canFork) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.forkFromHere"),
+      disabled: working,
+      tooltip: working ? t("chat.messages.forkUnavailable") : t("chat.messages.forkFromHere"),
+      onClick: () => {
+        removeReplyContextMenu();
+        void props.onForkMessage?.(entryId);
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
   document.body.appendChild(menu);
   activeReplyContextMenu = menu;
   activeReplyContextMenuPaneId = props.paneId;
@@ -777,7 +866,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
-  button.focus();
+  focusCandidates.find((button) => !button.disabled)?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== menu) {
       return;
@@ -975,12 +1064,16 @@ function renderChatThreadContents(
     runWorking: Boolean(props.runWorking),
     runActive: Boolean(props.runActive),
     planStatus: props.planStatus,
+    questionPrompts: props.questionPrompts,
     loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
+  const questionPrompts = new Map(
+    (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
+  );
   const toggleToolCardExpanded = (toolCardId: string) => {
     expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
     requestUpdate();
@@ -1012,6 +1105,11 @@ function renderChatThreadContents(
     if (deleted.has(item.key)) {
       return nothing;
     }
+    const lastMessage = item.messages.at(-1)?.message;
+    const rewindEntryId =
+      item.role.toLowerCase() === "user" && lastMessage
+        ? persistedMessageEntryId(lastMessage)
+        : null;
     return renderMessageGroup(item, {
       onOpenSidebar: props.onOpenSidebar,
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
@@ -1045,6 +1143,17 @@ function renderChatThreadContents(
         deleted.delete(item.key);
         requestUpdate();
       },
+      onRewind:
+        rewindEntryId && props.onRewindMessage
+          ? () => {
+              void Promise.resolve(props.onRewindMessage?.(rewindEntryId)).then((rewound) => {
+                if (rewound) {
+                  props.onFocusComposer?.();
+                }
+              });
+            }
+          : undefined,
+      rewindDisabled: Boolean(props.runActive || props.runWorking),
     });
   };
   const renderItem = guardChatRenderItems(state, (item) => {
@@ -1053,6 +1162,7 @@ function renderChatThreadContents(
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
+        questionPrompts,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         onOpenSidebar: props.onOpenSidebar,
@@ -1076,6 +1186,11 @@ function renderChatThreadContents(
     }
     if (item.kind === "group") {
       return renderGroupItem(item);
+    }
+    if (item.kind === "question") {
+      return renderStreamGroup([item], {
+        questionPrompts,
+      });
     }
     return nothing;
   });
@@ -1123,6 +1238,7 @@ function renderChatThreadContents(
     Boolean(props.runActive),
     Boolean(props.runWorking),
     props.planStatus,
+    props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,

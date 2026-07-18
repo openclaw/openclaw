@@ -428,7 +428,7 @@ final class NodeAppModel {
     var gatewayPairingPaused: Bool = false
     var gatewayPairingRequestId: String?
     // Bumped on every non-nil assignment, including re-reports of an equal problem;
-    // value equality alone cannot tell the UI to re-surface or shake the toast.
+    // value equality alone cannot tell the UI to re-surface a dismissed toast.
     private(set) var gatewayProblemReportCount = 0
     private(set) var lastGatewayProblem: GatewayConnectionProblem? {
         didSet { if self.lastGatewayProblem != nil { self.gatewayProblemReportCount &+= 1 } }
@@ -3918,7 +3918,7 @@ extension NodeAppModel {
     }
 
     private func hasStoredGatewayRoleToken(_ role: String, gatewayID: String) -> Bool {
-        let identity = DeviceIdentityStore.loadOrCreate()
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return false }
         return DeviceAuthStore.loadToken(
             deviceId: identity.deviceId,
             role: role,
@@ -4788,9 +4788,13 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedOperatorScopes = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes ?? []
         return Self.shouldRequestOperatorApprovalScope(
             token: token,
@@ -4825,9 +4829,13 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedOperatorScopes = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes ?? []
         return Self.shouldRequestOperatorAdminScope(
             token: token,
@@ -4869,10 +4877,10 @@ extension NodeAppModel {
         if includeAdminScope {
             scopes.append("operator.admin")
         }
-        // Preserve reconnect compatibility for older paired operator tokens that were
-        // approved before iOS requested operator.approvals by default.
+        // Older paired tokens request a scope upgrade before interactive prompts can arrive.
         if includeApprovalScope {
             scopes.append("operator.approvals")
+            scopes.append("operator.questions")
         }
         return GatewayConnectOptions(
             role: "operator",
@@ -4943,9 +4951,13 @@ extension NodeAppModel {
             return
         }
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        let identity = DeviceIdentityStore.loadOrCreate()
-        self.hasOperatorAdminScope = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        self.hasOperatorAdminScope = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes
             .contains("operator.admin") == true
     }

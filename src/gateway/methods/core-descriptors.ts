@@ -60,6 +60,11 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "exec.approval.request", scope: "operator.approvals" },
   { name: "exec.approval.waitDecision", scope: "operator.approvals" },
   { name: "exec.approval.resolve", scope: "operator.approvals" },
+  { name: "question.request", scope: "operator.questions" },
+  { name: "question.waitAnswer", scope: "operator.questions" },
+  { name: "question.resolve", scope: "operator.questions" },
+  { name: "question.get", scope: "operator.questions" },
+  { name: "question.list", scope: "operator.questions" },
   { name: "plugin.approval.list", scope: "operator.approvals" },
   { name: "plugin.approval.request", scope: "operator.approvals" },
   { name: "plugin.approval.waitDecision", scope: "operator.approvals" },
@@ -191,12 +196,14 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compaction.get", scope: "operator.read" },
   { name: "sessions.compaction.branch", scope: "operator.write" },
   { name: "sessions.compaction.restore", scope: "operator.admin" },
+  { name: "sessions.rewind", scope: "operator.admin" },
+  { name: "sessions.fork", scope: "operator.write" },
   // Params-aware: explicit cwd can point at any host checkout and requires admin.
   { name: "sessions.create", scope: "dynamic", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
   // Params-aware: write scope may mutate chat-organization fields
-  // (label/category/pinned/archived/unread); every other patch field stays
+  // (label/category/icon/pinned/archived/unread); every other patch field stays
   // admin-only. Policy lives in method-scopes.ts.
   { name: "sessions.patch", scope: "dynamic" },
   { name: "sessions.pluginPatch", scope: "operator.admin" },

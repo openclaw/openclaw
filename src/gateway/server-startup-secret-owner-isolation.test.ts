@@ -5,6 +5,7 @@ import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runt
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -186,6 +187,60 @@ describe("Gateway startup SecretRef owner isolation", () => {
           state: "unavailable",
         },
       ]);
+    });
+  });
+
+  it("reaches /readyz with one cold agent sandbox and rejects that runtime", async () => {
+    await withEnvAsync({ MISSING_SANDBOX_IDENTITY: undefined }, async () => {
+      await writeConfig({
+        ...baseConfig(),
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "ssh",
+              ssh: {
+                target: "sandbox@example.com:22",
+                identityData: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_SANDBOX_IDENTITY",
+                },
+              },
+            },
+          },
+          list: [{ id: "cold" }],
+        },
+      });
+
+      const port = await getFreePort();
+      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+      expect(ready.status).toBe(200);
+      const active = getActiveSecretsRuntimeSnapshot();
+      expect(active?.degradedOwners).toMatchObject([
+        {
+          ownerKind: "capability",
+          ownerId: "agent-sandbox:cold",
+          state: "unavailable",
+          paths: ["agents.defaults.sandbox.ssh.identityData"],
+        },
+      ]);
+      if (!active) {
+        throw new Error("Expected active secrets runtime snapshot");
+      }
+      await expect(
+        resolveSandboxContext({
+          config: active.config,
+          agentId: "cold",
+          sessionKey: "agent:cold:main",
+        }),
+      ).rejects.toMatchObject({
+        code: "SECRET_SURFACE_UNAVAILABLE",
+        ownerKind: "capability",
+        ownerId: "agent-sandbox:cold",
+      });
     });
   });
 

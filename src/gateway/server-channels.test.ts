@@ -18,7 +18,10 @@ import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
+import {
+  listActiveDegradedSecretOwners,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
@@ -70,6 +73,11 @@ vi.mock("../infra/approval-handler-bootstrap.js", () => ({
 type TestAccount = {
   enabled?: boolean;
   configured?: boolean;
+  credentialDiagnostics?: Array<{
+    code: "CREDENTIAL_FILE_UNAVAILABLE";
+    path: string;
+    reason: string;
+  }>;
 };
 
 const createdManagers: Array<{ manager: ChannelManager; channelIds: ChannelId[] }> = [];
@@ -1314,6 +1322,68 @@ describe("server-channels auto restart", () => {
       lastError:
         "Secret owner account:discord:broken is configured but unavailable (secret reference was not found).",
     });
+  });
+
+  it("keeps one file-credential account cold and recovers it without restarting siblings", async () => {
+    let broken = true;
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        id: "discord",
+        listAccountIds: () => ["broken", "healthy"],
+        resolveAccount: (_cfg, accountId) => ({
+          enabled: true,
+          configured: true,
+          ...(accountId === "broken" && broken
+            ? {
+                credentialDiagnostics: [
+                  {
+                    code: "CREDENTIAL_FILE_UNAVAILABLE" as const,
+                    path: "channels.discord.accounts.broken.tokenFile",
+                    reason: "not-found",
+                  },
+                ],
+              }
+            : {}),
+        }),
+        startAccount,
+      }),
+    );
+    const manager = createManager({ channelIds: ["discord"] });
+
+    await expect(manager.startChannels()).resolves.toBeUndefined();
+
+    expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(["healthy"]);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.broken).toMatchObject({
+      configured: true,
+      running: false,
+      lastError:
+        "Secret owner account:discord:broken is configured but unavailable (credential file is unavailable).",
+    });
+    expect(listActiveDegradedSecretOwners()).toContainEqual(
+      expect.objectContaining({
+        ownerId: "discord:broken",
+        paths: ["channels.discord.accounts.broken.tokenFile"],
+        refKeys: [],
+      }),
+    );
+
+    broken = false;
+    await manager.startChannel("discord", "broken");
+
+    expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
+      "healthy",
+      "broken",
+    ]);
+    expect(listActiveDegradedSecretOwners()).not.toContainEqual(
+      expect.objectContaining({ ownerId: "discord:broken" }),
+    );
+    await manager.stopChannel("discord");
   });
 
   it("uses fallback logger and runtime when a channel is missing startup wiring", async () => {

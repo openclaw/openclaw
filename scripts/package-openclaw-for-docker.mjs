@@ -4,8 +4,9 @@
 // helpers, and GitHub Actions all prepare the exact same npm tarball.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
@@ -726,7 +727,9 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
 
 export async function writePackageInventoryForDocker(sourceDir, runImpl = run) {
   // Frozen release refs own their inventory shape; run their writer instead of importing current-main helpers.
-  const tsxModuleUrl = import.meta.resolve("tsx");
+  // Resolve the loader from that checkout too: the workflow harness may install production deps only.
+  const sourceRequire = createRequire(path.join(sourceDir, "package.json"));
+  const tsxModuleUrl = pathToFileURL(sourceRequire.resolve("tsx")).href;
   await runImpl(
     "node",
     ["--import", tsxModuleUrl, path.join(sourceDir, "scripts/write-package-dist-inventory.ts")],

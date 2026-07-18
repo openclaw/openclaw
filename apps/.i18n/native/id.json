@@ -7114,6 +7114,46 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d0d3975e637ca1a0",
+      "source": "Stop Dictation",
+      "translated": "Hentikan Dikte"
+    },
+    {
+      "id": "native.android.6349fe65bab3c7f5",
+      "source": "Dictation",
+      "translated": "Dikte"
+    },
+    {
+      "id": "native.android.0a166c48e7cd6443",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "Pengenalan ucapan di perangkat tidak tersedia."
+    },
+    {
+      "id": "native.android.2c4742b33e272b13",
+      "source": "Microphone permission is required.",
+      "translated": "Izin mikrofon diperlukan."
+    },
+    {
+      "id": "native.android.956057c06c3421af",
+      "source": "Recognizer busy",
+      "translated": "Pengenal sedang sibuk"
+    },
+    {
+      "id": "native.android.d33751c0ac92fe33",
+      "source": "Network error",
+      "translated": "Kesalahan jaringan"
+    },
+    {
+      "id": "native.android.53593582608e9873",
+      "source": "No matches",
+      "translated": "Tidak ada kecocokan"
+    },
+    {
+      "id": "native.android.ec1c1e50397faf58",
+      "source": "Speech recognition",
+      "translated": "Pengenalan ucapan"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "Widget tidak tersedia"
@@ -7342,6 +7382,56 @@
       "id": "native.android.09720189ba712747",
       "source": "Unsupported attachment",
       "translated": "Lampiran tidak didukung"
+    },
+    {
+      "id": "native.android.bf40f9f9a508155d",
+      "source": "Other answer",
+      "translated": "Jawaban lain"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "Kirim"
+    },
+    {
+      "id": "native.android.f68cd7a84be4089e",
+      "source": "Answered",
+      "translated": "Sudah dijawab"
+    },
+    {
+      "id": "native.android.a0dc883947c2f980",
+      "source": "Answered elsewhere",
+      "translated": "Dijawab di tempat lain"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "Kedaluwarsa"
+    },
+    {
+      "id": "native.android.d6d8fc83cec68418",
+      "source": "Cancelled",
+      "translated": "Dibatalkan"
+    },
+    {
+      "id": "native.android.73f64d0d54b7f9c0",
+      "source": "Pending",
+      "translated": "Menunggu"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "Mengirim…"
+    },
+    {
+      "id": "native.android.c5e9ee99f9d9c612",
+      "source": "Expires in ${seconds / 60}m ${seconds % 60}s",
+      "translated": "Kedaluwarsa dalam ${seconds / 60}m ${seconds % 60}s"
+    },
+    {
+      "id": "native.android.2ca602fbdf96f1e7",
+      "source": "Expires in ${seconds}s",
+      "translated": "Kedaluwarsa dalam ${seconds}s"
     },
     {
       "id": "native.android.118e8d239b18895e",
@@ -7629,9 +7719,14 @@
       "translated": "Kirim pesan ke OpenClaw"
     },
     {
-      "id": "native.android.97602a28629a331f",
-      "source": "Open voice",
-      "translated": "Buka suara"
+      "id": "native.android.9b42791ed9da90d3",
+      "source": "End Talk",
+      "translated": "Akhiri Bicara"
+    },
+    {
+      "id": "native.android.1d55fe6bab0d3f74",
+      "source": "Start Talk",
+      "translated": "Mulai Percakapan"
     },
     {
       "id": "native.android.6f4dc5330b262dea",
@@ -10439,6 +10534,11 @@
       "translated": "Chat Baru di Worktree"
     },
     {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Sesi…"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Tugas Latar Belakang"
@@ -10447,6 +10547,11 @@
       "id": "native.apple.ced228bb4d20a726",
       "source": "Export Transcript",
       "translated": "Ekspor Transkrip"
+    },
+    {
+      "id": "native.apple.f26cef22f417abb4",
+      "source": "Show reasoning & tool activity",
+      "translated": "Tampilkan penalaran & aktivitas alat"
     },
     {
       "id": "native.apple.940e1f943750c94b",
@@ -13109,6 +13214,11 @@
       "translated": "Jalankan Uji Mandiri Berbagi"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Apple Health"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "Log Debug Penemuan"
@@ -14299,6 +14409,36 @@
       "translated": "Jangan tampilkan lagi"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Ringkasan Apple Health"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "Data Apple Health tidak tersedia di perangkat ini."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "Membaca langkah, tidur, detak jantung saat istirahat, dan latihan dari Apple Health hanya saat ringkasan diminta. Hanya data agregat yang dikirim dari perangkat ini melalui Gateway ke penyedia AI yang Anda konfigurasi; sampel mentah tetap berada di perangkat ini dan hasilnya mungkin tetap tersimpan dalam riwayat chat."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "Membuat ringkasan hanya-baca dari aplikasi Apple Health untuk langkah, tidur, detak jantung saat istirahat, dan olahraga. Hanya ringkasan yang diminta yang dikirim dari perangkat ini melalui Gateway Anda ke penyedia AI yang dikonfigurasi; sampel mentah tetap berada di perangkat ini."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "Nonaktifkan Ringkasan"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Aktifkan Ringkasan Apple Health"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw menggunakan kalender Anda untuk menampilkan acara dan konteks penjadwalan saat Anda mengaktifkan akses kalender."
@@ -14344,14 +14484,14 @@
       "translated": "OpenClaw dapat menggunakan data gerak untuk mendukung interaksi dan automasi yang sadar perangkat."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "Setelah Anda mengaktifkan Ringkasan Kesehatan, OpenClaw membaca langkah, tidur, detak jantung saat istirahat, dan olahraga untuk membagikan data agregat yang diminta kepada penyedia AI yang Anda konfigurasikan."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw membaca data langkah, tidur, detak jantung saat istirahat, dan olahraga Anda dari aplikasi Apple Health untuk membuat ringkasan yang Anda minta dan mengirimkannya melalui Gateway Anda ke penyedia AI yang dikonfigurasi."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw tidak menulis atau mengubah data Health. Health Summaries membaca langkah, tidur, detak jantung istirahat, dan latihan untuk membagikan agregat yang diminta ke penyedia AI yang Anda konfigurasikan."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw tidak menulis data ke aplikasi Apple Health. OpenClaw menggunakan data hanya-baca untuk membuat ringkasan yang Anda minta dan mengirimkannya melalui Gateway Anda ke penyedia AI yang dikonfigurasi."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15659,6 @@
       "translated": "Hanya Tambah"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "Ringkasan Kesehatan"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "Izinkan"
@@ -15532,31 +15667,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Buka Pengaturan"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "Data kesehatan tidak tersedia di perangkat ini."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "Hanya membagikan data agregat yang diminta untuk langkah, tidur, detak jantung saat istirahat, dan olahraga melalui Gateway Anda kepada penyedia AI yang dikonfigurasi. Hasil dapat tetap tersimpan dalam riwayat obrolan."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "Nonaktif secara default. Jika diaktifkan, data agregat yang diminta dapat meninggalkan iPhone ini melalui Gateway dan penyedia AI yang Anda konfigurasikan."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "Nonaktifkan"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "Aktifkan & Bagikan Ringkasan"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -20089,6 +20199,11 @@
       "translated": "Gateway tidak dapat merencanakan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Coba lagi."
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "Bangunlah, temanku!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<rahasia disunting>"
@@ -20122,6 +20237,16 @@
       "id": "native.apple.35a542956f4f5497",
       "source": "Reply to OpenClaw… (yes sets everything up)",
       "translated": "Balas OpenClaw… (yes menyiapkan semuanya)"
+    },
+    {
+      "id": "native.apple.134b9ae1d8a543df",
+      "source": "Skip for now",
+      "translated": "Lewati untuk sekarang"
+    },
+    {
+      "id": "native.apple.5435391fa338f227",
+      "source": "Recommended",
+      "translated": "Direkomendasikan"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -21109,14 +21234,129 @@
       "translated": "Lanjutkan"
     },
     {
-      "id": "native.apple.b3700cf60f4520dc",
-      "source": "Message \\(self.model.agentDisplay.name)",
-      "translated": "Kirim pesan ke \\(self.model.agentDisplay.name)"
+      "id": "native.apple.0a4fcdf09c5e7b3f",
+      "source": "Capture Window…",
+      "translated": "Ambil Gambar Jendela…"
     },
     {
-      "id": "native.apple.edf12ff583307f43",
-      "source": "Send a window screenshot",
-      "translated": "Kirim tangkapan layar jendela"
+      "id": "native.apple.d7ac1580e29304af",
+      "source": "Capture Area…",
+      "translated": "Ambil Gambar Area…"
+    },
+    {
+      "id": "native.apple.33adb82aa3c53c00",
+      "source": "focused app",
+      "translated": "aplikasi yang difokuskan"
+    },
+    {
+      "id": "native.apple.5d20c8bd1235a43c",
+      "source": "No focused application is available.",
+      "translated": "Tidak ada aplikasi yang sedang difokuskan."
+    },
+    {
+      "id": "native.apple.3c1a2f1ac3b50de0",
+      "source": "Focused app",
+      "translated": "Aplikasi yang difokuskan"
+    },
+    {
+      "id": "native.apple.511248f39affffc4",
+      "source": "Focus another app before attaching its text.",
+      "translated": "Fokuskan aplikasi lain sebelum melampirkan teksnya."
+    },
+    {
+      "id": "native.apple.1c94e8c0010021d9",
+      "source": "Accessibility access is required to attach text from \\(appName).",
+      "translated": "Akses Aksesibilitas diperlukan untuk melampirkan teks dari \\(appName)."
+    },
+    {
+      "id": "native.apple.a3e3d4b0ab6e94d9",
+      "source": "No focused window is available in \\(appName).",
+      "translated": "Tidak ada jendela yang sedang difokuskan di \\(appName)."
+    },
+    {
+      "id": "native.apple.a2a454a96a011397",
+      "source": "Focused Window",
+      "translated": "Jendela yang Difokuskan"
+    },
+    {
+      "id": "native.apple.67d183bf2f9e4c2c",
+      "source": "\\(appName) is not responding to Accessibility requests.",
+      "translated": "\\(appName) tidak merespons permintaan Aksesibilitas."
+    },
+    {
+      "id": "native.apple.2f56bc484453a456",
+      "source": "No readable text was found in \\(appName).",
+      "translated": "Tidak ditemukan teks yang dapat dibaca di \\(appName)."
+    },
+    {
+      "id": "native.apple.507c2d9c7e94716f",
+      "source": "Allow OpenClaw to read text from \\(appName)",
+      "translated": "Izinkan OpenClaw membaca teks dari \\(appName)"
+    },
+    {
+      "id": "native.apple.c5313d544a833af0",
+      "source": "Attaching focused-window text uses macOS Accessibility access.",
+      "translated": "Melampirkan teks dari jendela yang difokuskan menggunakan akses Aksesibilitas macOS."
+    },
+    {
+      "id": "native.apple.e68aeef0995a7d00",
+      "source": "Grant Access",
+      "translated": "Berikan Akses"
+    },
+    {
+      "id": "native.apple.43dd985a6d9ec004",
+      "source": "Cancel",
+      "translated": "Batal"
+    },
+    {
+      "id": "native.apple.a8880557335b5a25",
+      "source": "focused app",
+      "translated": "aplikasi yang difokuskan"
+    },
+    {
+      "id": "native.apple.6af15237e49bd0bd",
+      "source": "Couldn't capture that image.",
+      "translated": "Tidak dapat mengambil gambar tersebut."
+    },
+    {
+      "id": "native.apple.b31041aa0da3768c",
+      "source": "Screenshot: \\(label)",
+      "translated": "Tangkapan layar: \\(label)"
+    },
+    {
+      "id": "native.apple.72e5bffb7ee89f19",
+      "source": "Context from \\(context.appName) — \\(context.windowTitle)",
+      "translated": "Konteks dari \\(context.appName) — \\(context.windowTitle)"
+    },
+    {
+      "id": "native.apple.b5524e37a230e571",
+      "source": "New message to \\(agentName)",
+      "translated": "Pesan baru kepada \\(agentName)"
+    },
+    {
+      "id": "native.apple.b99799f97999f481",
+      "source": "Reply in \\(override.displayName)",
+      "translated": "Balas di \\(override.displayName)"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "Kirim pesan kepada \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.da0b9bd07a337bda",
+      "source": "Continue a recent conversation",
+      "translated": "Lanjutkan percakapan terbaru"
+    },
+    {
+      "id": "native.apple.c76e52d21bef75ba",
+      "source": "Attach text from \\(self.model.frontmostAppName)",
+      "translated": "Lampirkan teks dari \\(self.model.frontmostAppName)"
+    },
+    {
+      "id": "native.apple.aedd7e9870c3579a",
+      "source": "Capture a screenshot",
+      "translated": "Ambil tangkapan layar"
     },
     {
       "id": "native.apple.136cef9f750d3803",
@@ -21137,6 +21377,46 @@
       "id": "native.apple.a3332fa4db187973",
       "source": "Not now",
       "translated": "Jangan sekarang"
+    },
+    {
+      "id": "native.apple.1962232c9bc52e12",
+      "source": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) chars)",
+      "translated": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) karakter)"
+    },
+    {
+      "id": "native.apple.66ec93e9eefd9bd7",
+      "source": "Remove attached text context",
+      "translated": "Hapus konteks teks terlampir"
+    },
+    {
+      "id": "native.apple.88d0123c86b06144",
+      "source": "Allow OpenClaw to capture windows",
+      "translated": "Izinkan OpenClaw menangkap jendela"
+    },
+    {
+      "id": "native.apple.677c5733cd132aed",
+      "source": "Allow OpenClaw to capture a screen area",
+      "translated": "Izinkan OpenClaw menangkap area layar"
+    },
+    {
+      "id": "native.apple.529a6fc5aeba03b0",
+      "source": "Sending a screenshot uses macOS Screen Recording access.",
+      "translated": "Mengirim tangkapan layar menggunakan akses Perekaman Layar macOS."
+    },
+    {
+      "id": "native.apple.615245bf05ed3234",
+      "source": "Grant Access",
+      "translated": "Berikan Akses"
+    },
+    {
+      "id": "native.apple.2a64131ba32d175d",
+      "source": "Cancel",
+      "translated": "Batal"
+    },
+    {
+      "id": "native.apple.6521871fc0ddc987",
+      "source": "Selected area",
+      "translated": "Area yang dipilih"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22539,9 +22819,49 @@
       "translated": "Konteks yang digunakan %@%%"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@ (ditimpa)"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "Berpikir"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "Penuh"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "Tingkat detail"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "Default (diwarisi)"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "Aktif"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "Nonaktif"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "Cepat"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "Respons cepat"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22554,14 +22874,14 @@
       "translated": "Terbaru"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "Model"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "Model"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "Default"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22729,6 +23049,41 @@
       "translated": "%@ token telah digunakan"
     },
     {
+      "id": "native.apple.ccfd6ae994d82449",
+      "source": "Loading full message…",
+      "translated": "Memuat pesan lengkap…"
+    },
+    {
+      "id": "native.apple.669ad52de4a26b87",
+      "source": "Full message unavailable",
+      "translated": "Pesan lengkap tidak tersedia"
+    },
+    {
+      "id": "native.apple.6f79794ee74caf99",
+      "source": "Full Message",
+      "translated": "Pesan Lengkap"
+    },
+    {
+      "id": "native.apple.d648251591db5dec",
+      "source": "Close",
+      "translated": "Tutup"
+    },
+    {
+      "id": "native.apple.ba3963204bda5e84",
+      "source": "The full message is no longer available.",
+      "translated": "Pesan lengkap sudah tidak tersedia."
+    },
+    {
+      "id": "native.apple.8bb98bd86ae85c1c",
+      "source": "The full message has no readable text.",
+      "translated": "Pesan lengkap tidak memiliki teks yang dapat dibaca."
+    },
+    {
+      "id": "native.apple.2f43669d87c0e26d",
+      "source": "The full message could not be loaded.",
+      "translated": "Pesan lengkap tidak dapat dimuat."
+    },
+    {
       "id": "native.apple.2c865ac4a69645d3",
       "source": "Widget unavailable",
       "translated": "Widget tidak tersedia"
@@ -22749,11 +23104,6 @@
       "translated": "Avatar agen"
     },
     {
-      "id": "native.apple.8509385953c19619",
-      "source": "\\(display.emoji) \\(display.title)",
-      "translated": "\\(display.emoji) \\(display.title)"
-    },
-    {
       "id": "native.apple.6426e369511b043c",
       "source": "Message usage",
       "translated": "Penggunaan pesan"
@@ -22762,16 +23112,6 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
-    },
-    {
-      "id": "native.apple.aff6385b0a8dd0ac",
-      "source": "Show full output",
-      "translated": "Tampilkan output lengkap"
-    },
-    {
-      "id": "native.apple.b9c78020ae8be34a",
-      "source": "Show less",
-      "translated": "Tampilkan lebih sedikit"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -22799,9 +23139,9 @@
       "translated": "Berbicara, ketuk untuk berhenti"
     },
     {
-      "id": "native.apple.6b18ea1d85b5d3a2",
-      "source": "Running tools…",
-      "translated": "Menjalankan tools…"
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "Lainnya"
     },
     {
       "id": "native.apple.3b932a47b4223a43",
@@ -22814,9 +23154,324 @@
       "translated": "Luaskan rencana"
     },
     {
+      "id": "native.apple.da4494f9e875169d",
+      "source": "Other answer",
+      "translated": "Jawaban lain"
+    },
+    {
+      "id": "native.apple.e9c3855562d8e4e9",
+      "source": "Not selected",
+      "translated": "Tidak dipilih"
+    },
+    {
+      "id": "native.apple.bd4335213464d4be",
+      "source": "Selected",
+      "translated": "Dipilih"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "Kirim"
+    },
+    {
+      "id": "native.apple.6c1adc16e0a846e5",
+      "source": "Submitting…",
+      "translated": "Mengirim…"
+    },
+    {
+      "id": "native.apple.698bdb0d6537edb6",
+      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
+      "translated": "Kedaluwarsa dalam \\(seconds / 60)m \\(seconds % 60)s"
+    },
+    {
+      "id": "native.apple.30e1c342b3345290",
+      "source": "Expires in \\(seconds)s",
+      "translated": "Kedaluwarsa dalam \\(seconds)s"
+    },
+    {
       "id": "native.apple.7cd6fb01b9f5d14a",
       "source": "User",
       "translated": "Pengguna"
+    },
+    {
+      "id": "native.apple.b1cdcb906a43d5d6",
+      "source": "This session cannot be archived while it is active or running.",
+      "translated": "Sesi ini tidak dapat diarsipkan saat masih aktif atau berjalan."
+    },
+    {
+      "id": "native.apple.5817e3f3dab1ee19",
+      "source": "The main session cannot be deleted.",
+      "translated": "Sesi utama tidak dapat dihapus."
+    },
+    {
+      "id": "native.apple.a6b8df3f18171c91",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this session.",
+      "translated": "Hapus lampiran atau tunggu hingga pengiriman selesai sebelum mengarsipkan atau menghapus sesi ini."
+    },
+    {
+      "id": "native.apple.476b3862e0449857",
+      "source": "Running",
+      "translated": "Berjalan"
+    },
+    {
+      "id": "native.apple.83b41e41f428cffb",
+      "source": "Identity",
+      "translated": "Identitas"
+    },
+    {
+      "id": "native.apple.ba6710da42846eed",
+      "source": "Name",
+      "translated": "Nama"
+    },
+    {
+      "id": "native.apple.bdb1928f7e63c4c6",
+      "source": "Key",
+      "translated": "Kunci"
+    },
+    {
+      "id": "native.apple.7259d51423f8def0",
+      "source": "Copy session key",
+      "translated": "Salin kunci sesi"
+    },
+    {
+      "id": "native.apple.1494b638984ddca3",
+      "source": "Kind",
+      "translated": "Jenis"
+    },
+    {
+      "id": "native.apple.49cd6c21bdd0d8da",
+      "source": "Organization",
+      "translated": "Organisasi"
+    },
+    {
+      "id": "native.apple.83e2ae5c4c7dbb94",
+      "source": "Group",
+      "translated": "Grup"
+    },
+    {
+      "id": "native.apple.1ba465bfa16ed23b",
+      "source": "None",
+      "translated": "Tidak ada"
+    },
+    {
+      "id": "native.apple.2c7c9e5dc8ad574e",
+      "source": "Pinned",
+      "translated": "Disematkan"
+    },
+    {
+      "id": "native.apple.b0d3e265af9f562a",
+      "source": "Archived",
+      "translated": "Diarsipkan"
+    },
+    {
+      "id": "native.apple.de94ca2cf7d4d766",
+      "source": "Run",
+      "translated": "Proses"
+    },
+    {
+      "id": "native.apple.f7a51dca3268b26c",
+      "source": "Status",
+      "translated": "Status"
+    },
+    {
+      "id": "native.apple.12678de5fa43321d",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.8ec6bd6001df285d",
+      "source": "Provider",
+      "translated": "Penyedia"
+    },
+    {
+      "id": "native.apple.f43534cf1ee73605",
+      "source": "Runtime",
+      "translated": "Runtime"
+    },
+    {
+      "id": "native.apple.f0775e602bbe75ed",
+      "source": "Run duration",
+      "translated": "Durasi proses"
+    },
+    {
+      "id": "native.apple.ecde91d89eab026b",
+      "source": "Worktree",
+      "translated": "Worktree"
+    },
+    {
+      "id": "native.apple.1ef1698bb3ff7166",
+      "source": "ID",
+      "translated": "ID"
+    },
+    {
+      "id": "native.apple.69bc49f9663fa205",
+      "source": "Branch",
+      "translated": "Branch"
+    },
+    {
+      "id": "native.apple.aa430e81e52e2354",
+      "source": "Repository root",
+      "translated": "Root repositori"
+    },
+    {
+      "id": "native.apple.6e851b012a982d38",
+      "source": "Activity",
+      "translated": "Aktivitas"
+    },
+    {
+      "id": "native.apple.bf87c6fd92c9315a",
+      "source": "Updated",
+      "translated": "Diperbarui"
+    },
+    {
+      "id": "native.apple.dcb1734cba578b79",
+      "source": "Last activity",
+      "translated": "Aktivitas terakhir"
+    },
+    {
+      "id": "native.apple.58ca290e3f032865",
+      "source": "Last interaction",
+      "translated": "Interaksi terakhir"
+    },
+    {
+      "id": "native.apple.7020bd521499f3b8",
+      "source": "Run started",
+      "translated": "Proses dimulai"
+    },
+    {
+      "id": "native.apple.abb2b24d6378b605",
+      "source": "Run ended",
+      "translated": "Proses berakhir"
+    },
+    {
+      "id": "native.apple.cd7c3095a22f80a9",
+      "source": "Session Info",
+      "translated": "Info Sesi"
+    },
+    {
+      "id": "native.apple.e308b012d84b3b3e",
+      "source": "Groups",
+      "translated": "Grup"
+    },
+    {
+      "id": "native.apple.6438f66cfcaefaf7",
+      "source": "Rename…",
+      "translated": "Ubah nama…"
+    },
+    {
+      "id": "native.apple.58b0f1df4985b0d1",
+      "source": "Delete…",
+      "translated": "Hapus…"
+    },
+    {
+      "id": "native.apple.bc70cc0f0b882179",
+      "source": "No groups",
+      "translated": "Tidak ada grup"
+    },
+    {
+      "id": "native.apple.cb3e1fa7783a35d2",
+      "source": "Create Group",
+      "translated": "Buat Grup"
+    },
+    {
+      "id": "native.apple.4ac72aeb70f107d8",
+      "source": "Add Group",
+      "translated": "Tambahkan Grup"
+    },
+    {
+      "id": "native.apple.23d628606fe0734f",
+      "source": "Session Groups",
+      "translated": "Grup Sesi"
+    },
+    {
+      "id": "native.apple.7777b2d2ec43ed59",
+      "source": "Done",
+      "translated": "Selesai"
+    },
+    {
+      "id": "native.apple.0b0149661cacfe36",
+      "source": "Rename Group",
+      "translated": "Ubah Nama Grup"
+    },
+    {
+      "id": "native.apple.8cbd863aa4d0524f",
+      "source": "Group name",
+      "translated": "Nama grup"
+    },
+    {
+      "id": "native.apple.6021088d5ed9c301",
+      "source": "Rename",
+      "translated": "Ubah nama"
+    },
+    {
+      "id": "native.apple.e697417338a47751",
+      "source": "Cancel",
+      "translated": "Batal"
+    },
+    {
+      "id": "native.apple.cc89328a14af7a23",
+      "source": "Delete “%@”?",
+      "translated": "Hapus “%@”?"
+    },
+    {
+      "id": "native.apple.4c09741db2e6c624",
+      "source": "Delete group?",
+      "translated": "Hapus grup?"
+    },
+    {
+      "id": "native.apple.ddb1bbbd3c1a9c5e",
+      "source": "Delete Group",
+      "translated": "Hapus Grup"
+    },
+    {
+      "id": "native.apple.b049c8a4d2805e08",
+      "source": "Sessions in this group become ungrouped.",
+      "translated": "Sesi dalam grup ini tidak akan lagi dikelompokkan."
+    },
+    {
+      "id": "native.apple.5aa6082d78027c5f",
+      "source": "Gateway changed. Close and reopen Groups to continue.",
+      "translated": "Gateway berubah. Tutup dan buka kembali Grup untuk melanjutkan."
+    },
+    {
+      "id": "native.apple.bb4b44183929c881",
+      "source": "No agents are available on this gateway.",
+      "translated": "Tidak ada agen yang tersedia di gateway ini."
+    },
+    {
+      "id": "native.apple.6c89f35d53506406",
+      "source": "New Session Options",
+      "translated": "Opsi Sesi Baru"
+    },
+    {
+      "id": "native.apple.5b0cde807ccb4241",
+      "source": "Agent",
+      "translated": "Agen"
+    },
+    {
+      "id": "native.apple.124a640f9620d9cd",
+      "source": "Create in a worktree",
+      "translated": "Buat di worktree"
+    },
+    {
+      "id": "native.apple.632ce245d5575fea",
+      "source": "Base ref (optional)",
+      "translated": "Ref dasar (opsional)"
+    },
+    {
+      "id": "native.apple.fd81909fc9719a59",
+      "source": "Retry",
+      "translated": "Coba lagi"
+    },
+    {
+      "id": "native.apple.a085278be62286b2",
+      "source": "Create",
+      "translated": "Buat"
+    },
+    {
+      "id": "native.apple.795ba37f6782cf28",
+      "source": "The session could not be created.",
+      "translated": "Sesi tidak dapat dibuat."
     },
     {
       "id": "native.apple.8ec708a3605a2cc3",
@@ -22842,6 +23497,11 @@
       "id": "native.apple.66ba42960eb4135b",
       "source": "New session",
       "translated": "Sesi baru"
+    },
+    {
+      "id": "native.apple.2ef0e34db02ad255",
+      "source": "New session options",
+      "translated": "Opsi sesi baru"
     },
     {
       "id": "native.apple.36753ef2f1ed4264",
@@ -22892,6 +23552,11 @@
       "id": "native.apple.ac85292b16a7465f",
       "source": "Unread",
       "translated": "Belum dibaca"
+    },
+    {
+      "id": "native.apple.f57a4b9c14d31867",
+      "source": "Get Info…",
+      "translated": "Dapatkan Info…"
     },
     {
       "id": "native.apple.a174cb1027a9b881",
@@ -22954,6 +23619,11 @@
       "translated": "Menghubungkan…"
     },
     {
+      "id": "native.apple.79f708b3bc1d3a6c",
+      "source": "Retry session groups",
+      "translated": "Coba lagi grup sesi"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "Disematkan"
@@ -22999,6 +23669,41 @@
       "translated": "Batal"
     },
     {
+      "id": "native.apple.751e0f6b81cd374a",
+      "source": "Delete selected sessions?",
+      "translated": "Hapus sesi yang dipilih?"
+    },
+    {
+      "id": "native.apple.aa679276581b0058",
+      "source": "Delete Sessions",
+      "translated": "Hapus Sesi"
+    },
+    {
+      "id": "native.apple.f837129cbee23297",
+      "source": "Each selected session and its transcript will be removed from the gateway.",
+      "translated": "Setiap sesi yang dipilih beserta transkripnya akan dihapus dari Gateway."
+    },
+    {
+      "id": "native.apple.bf09df5e38a7a950",
+      "source": "Groups",
+      "translated": "Grup"
+    },
+    {
+      "id": "native.apple.64013cfee5e25305",
+      "source": "Manage session groups",
+      "translated": "Kelola grup sesi"
+    },
+    {
+      "id": "native.apple.185f4688f98e244e",
+      "source": "Done",
+      "translated": "Selesai"
+    },
+    {
+      "id": "native.apple.58133fc5791847e6",
+      "source": "Select",
+      "translated": "Pilih"
+    },
+    {
       "id": "native.apple.b67eaecec1b423ac",
       "source": "No archived sessions",
       "translated": "Tidak ada sesi yang diarsipkan"
@@ -23014,29 +23719,14 @@
       "translated": "Pulihkan"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "Arsipkan"
-    },
-    {
-      "id": "native.apple.05cb1fecc5844b69",
-      "source": "Pinned",
-      "translated": "Disematkan"
+      "id": "native.apple.158cfa096c57bcb9",
+      "source": "Get Info…",
+      "translated": "Dapatkan Info…"
     },
     {
       "id": "native.apple.080fce25e4a9bb61",
       "source": "Rename",
       "translated": "Ganti Nama"
-    },
-    {
-      "id": "native.apple.d148288258094aa6",
-      "source": "Pin",
-      "translated": "Sematkan"
-    },
-    {
-      "id": "native.apple.3c62aaf44e6ab4d4",
-      "source": "Unpin",
-      "translated": "Lepas Sematan"
     },
     {
       "id": "native.apple.6de479e9d780869a",
@@ -23054,6 +23744,31 @@
       "translated": "Tandai Belum Dibaca"
     },
     {
+      "id": "native.apple.05cb1fecc5844b69",
+      "source": "Pinned",
+      "translated": "Disematkan"
+    },
+    {
+      "id": "native.apple.d148288258094aa6",
+      "source": "Pin",
+      "translated": "Sematkan"
+    },
+    {
+      "id": "native.apple.3c62aaf44e6ab4d4",
+      "source": "Unpin",
+      "translated": "Lepas Sematan"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "Arsipkan"
+    },
+    {
+      "id": "native.apple.b09b91392835fe58",
+      "source": "Delete",
+      "translated": "Hapus"
+    },
+    {
       "id": "native.apple.946b677d8dbf0f37",
       "source": "Hide talk transcript",
       "translated": "Sembunyikan transkrip percakapan"
@@ -23067,6 +23782,31 @@
       "id": "native.apple.e7beeef6043ffd2a",
       "source": "System Default",
       "translated": "Default Sistem"
+    },
+    {
+      "id": "native.apple.f390b84397c0d240",
+      "source": "Running",
+      "translated": "Berjalan"
+    },
+    {
+      "id": "native.apple.e2e7faa7c9c5c61f",
+      "source": "Collapse tool result",
+      "translated": "Ciutkan hasil alat"
+    },
+    {
+      "id": "native.apple.4e7850fe95fcd898",
+      "source": "Expand tool result",
+      "translated": "Perluas hasil alat"
+    },
+    {
+      "id": "native.apple.d65ae0776d6b86ce",
+      "source": "Show less",
+      "translated": "Tampilkan lebih sedikit"
+    },
+    {
+      "id": "native.apple.065f4da5ddaf14a1",
+      "source": "Show all %lld lines",
+      "translated": "Tampilkan semua %lld baris"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
@@ -23114,9 +23854,24 @@
       "translated": "Dengarkan"
     },
     {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "Lompat ke balasan terbaru"
+    },
+    {
+      "id": "native.apple.9ab586b85834705c",
+      "source": "Refresh",
+      "translated": "Segarkan"
+    },
+    {
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "Salin Pesan"
+    },
+    {
+      "id": "native.apple.90bc8a8045e7017e",
+      "source": "Open Full Message",
+      "translated": "Buka Pesan Lengkap"
     },
     {
       "id": "native.apple.b37ec7bd7dc1579a",
@@ -23132,21 +23887,6 @@
       "id": "native.apple.3b44a67aa284886f",
       "source": "Assistant",
       "translated": "Asisten"
-    },
-    {
-      "id": "native.apple.f84b674ad395b694",
-      "source": "Jump to latest",
-      "translated": "Lompat ke terbaru"
-    },
-    {
-      "id": "native.apple.429d825201b2cb85",
-      "source": "Jump to latest reply",
-      "translated": "Lompat ke balasan terbaru"
-    },
-    {
-      "id": "native.apple.9ab586b85834705c",
-      "source": "Refresh",
-      "translated": "Segarkan"
     },
     {
       "id": "native.apple.28c2691c03030434",
@@ -23209,14 +23949,24 @@
       "translated": "diantrekan setelah perubahan rute"
     },
     {
-      "id": "native.apple.710c7bd117a7cc12",
-      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
-      "translated": "Hapus lampiran atau tunggu pengiriman selesai sebelum beralih obrolan."
+      "id": "native.apple.787047d0da6b8b9f",
+      "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
+      "translated": "Hapus lampiran atau tunggu hingga pengiriman selesai sebelum memulai obrolan baru."
+    },
+    {
+      "id": "native.apple.980f552bb0f96c0f",
+      "source": "Gateway changed before the session operation started.",
+      "translated": "Gateway berubah sebelum operasi sesi dimulai."
     },
     {
       "id": "native.apple.d93e6fe16ec1b0e5",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "translated": "Hapus lampiran atau tunggu pengiriman selesai sebelum memulai obrolan baru."
+    },
+    {
+      "id": "native.apple.710c7bd117a7cc12",
+      "source": "Remove attachments or wait for delivery to resolve before switching chats.",
+      "translated": "Hapus lampiran atau tunggu pengiriman selesai sebelum beralih obrolan."
     },
     {
       "id": "native.apple.87ba543b42696b92",
@@ -23264,6 +24014,11 @@
       "translated": "Sesi"
     },
     {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@ (ditimpa)"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "Berpikir"
@@ -23272,6 +24027,41 @@
       "id": "native.apple.48dde5fe65b841a3",
       "source": "Thinking level",
       "translated": "Tingkat berpikir"
+    },
+    {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "Penuh"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "Tingkat detail"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "Default (diwarisi)"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "Aktif"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "Nonaktif"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "Cepat"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "Respons cepat"
     },
     {
       "id": "native.apple.17ea1ddec4a7b7a8",
@@ -23284,19 +24074,24 @@
       "translated": "Terbaru"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "Model"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "Model"
     },
     {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "Default"
+    },
+    {
       "id": "native.apple.eb58552e43c8dde2",
       "source": "New Session",
       "translated": "Sesi Baru"
+    },
+    {
+      "id": "native.apple.a7119fbf9d25df5e",
+      "source": "New Session Options…",
+      "translated": "Opsi Sesi Baru…"
     },
     {
       "id": "native.apple.5361129a24118af6",
@@ -23359,9 +24154,14 @@
       "translated": "Ekspor Transkrip…"
     },
     {
-      "id": "native.apple.3294ababd29c4457",
-      "source": "Show reasoning & tool activity",
-      "translated": "Tampilkan penalaran & aktivitas alat"
+      "id": "native.apple.ebb130189022c7ec",
+      "source": "Show Reasoning",
+      "translated": "Tampilkan Penalaran"
+    },
+    {
+      "id": "native.apple.d0dba9aad550fa6e",
+      "source": "Show Tool Activity",
+      "translated": "Tampilkan Aktivitas Alat"
     },
     {
       "id": "native.apple.4b24d792545e5086",

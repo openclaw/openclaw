@@ -2996,7 +2996,12 @@ describe("CodexAppServerEventProjector", () => {
     ]);
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
-    expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("next");
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("[in_progress] patch");
+    expect(result.compactionCount).toBe(1);
+    expect(requireRecord(result.itemLifecycle, "item lifecycle")).not.toHaveProperty(
+      "compactionCount",
+    );
     expect(onContextCompacted).toHaveBeenCalledOnce();
   });
 
@@ -6322,6 +6327,8 @@ describe("CodexAppServerEventProjector", () => {
     const params = await createParams();
     const onPartialReply = vi.fn();
     const projector = await createProjector({ ...params, onPartialReply });
+    await projector.handleNotification(forCurrentTurn("thread/compacted", {}));
+    expect(warn).not.toHaveBeenCalled();
     const rawEventKind = "item/futureStatus/updated\nforged";
     const collidingSanitizedEventKind = "item/futureStatus/updated\\nforged";
     const notification = forCurrentTurn(rawEventKind, {

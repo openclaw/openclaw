@@ -143,6 +143,8 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** Model whose lean-mode default is owned by inference onboarding. */
+    localModelLeanAutoModel?: string;
     /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
     securityAcknowledgedAt?: string;
   };
@@ -185,6 +187,31 @@ export type OpenClawConfig = {
       name?: string;
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
+    };
+    /**
+     * Operator display preferences. Canonical config home so agents can
+     * change them through the approval gate and clients stay in sync; the
+     * Control UI mirrors them into browser storage for instant boot.
+     */
+    prefs?: {
+      /** Control UI theme. */
+      theme?: "claw" | "knot" | "dash" | "custom";
+      /** Light/dark preference. */
+      themeMode?: "light" | "dark" | "system";
+      /** Text scale percentage stop. */
+      textScale?: 90 | 100 | 110 | 125 | 140;
+      /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
+      locale?: string;
+      /** Show model thinking output in chat. */
+      chatShowThinking?: boolean;
+      /** Show tool call cards in chat. */
+      chatShowToolCalls?: boolean;
+      /** Keep model commentary visible in the transcript after a run. */
+      chatPersistCommentary?: boolean;
+      /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
+      chatSendShortcut?: "enter" | "modifier-enter";
+      /** Follow-up handling while a run is active; unset uses the server queue mode. */
+      chatFollowUpMode?: "steer" | "queue";
     };
   };
   /** Terminal UI display settings. */
