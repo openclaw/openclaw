@@ -1,6 +1,6 @@
 // Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -70,6 +70,7 @@ const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 
 type AgentCliOpts = {
   message?: string;
   messageFile?: string;
+  messageStdin?: boolean;
   agent?: string;
   model?: string;
   to?: string;
@@ -90,7 +91,7 @@ type AgentCliOpts = {
   extraSystemPrompt?: string;
   local?: boolean;
 };
-type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
+type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile" | "messageStdin"> & {
   message: string;
 };
 
@@ -101,6 +102,7 @@ type AgentCliProcessLike = {
 };
 type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
+  stdin?: NodeJS.ReadableStream;
 };
 type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
@@ -112,6 +114,8 @@ type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
 const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
 const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
+const MAX_AGENT_MESSAGE_INPUT_BYTES = 4 * 1024 * 1024;
+const AGENT_MESSAGE_INPUT_READ_CHUNK_BYTES = 64 * 1024;
 const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
@@ -178,8 +182,12 @@ function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
 
 function missingAgentMessageError(): Error {
   return new Error(
-    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
+    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')}, ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}, or ${formatCliCommand("openclaw agent --message-stdin --agent <id>")}.`,
   );
+}
+
+function formatMessageInputByteLimit(source: string): string {
+  return `${source} exceeds the maximum size of ${MAX_AGENT_MESSAGE_INPUT_BYTES} bytes.`;
 }
 
 function formatMessageFileReadFailure(messageFile: string, err: unknown): string {
@@ -195,29 +203,132 @@ function formatMessageFileReadFailure(messageFile: string, err: unknown): string
   return `Unable to read message file ${messageFile}: ${message}`;
 }
 
-async function readAgentMessageFile(messageFile: string): Promise<string> {
-  let buffer: Buffer;
+function assertAgentMessageInputLooksText(buffer: Buffer, source: string): void {
+  const scanLength = Math.min(buffer.length, 4096);
+  let binaryControlBytes = 0;
+  for (let index = 0; index < scanLength; index += 1) {
+    const byte = buffer[index];
+    if (byte === 0) {
+      throw new Error(`${source} must be text; NUL bytes are not allowed.`);
+    }
+    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 12 && byte !== 13) {
+      binaryControlBytes += 1;
+    }
+  }
+  if (scanLength > 0 && binaryControlBytes / scanLength > 0.3) {
+    throw new Error(`${source} looks like binary data; provide UTF-8 text input.`);
+  }
+}
+
+function decodeAgentMessageInput(buffer: Buffer, source: string): string {
+  assertAgentMessageInputLooksText(buffer, source);
   try {
-    buffer = await readFile(messageFile);
+    return MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
+  } catch {
+    throw new Error(`${source} must be valid UTF-8.`);
+  }
+}
+
+async function readBoundedAgentMessageFileBuffer(messageFile: string): Promise<Buffer> {
+  let fileStat: Awaited<ReturnType<typeof lstat>>;
+  try {
+    fileStat = await lstat(messageFile);
+  } catch (err) {
+    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  }
+  if (fileStat.isSymbolicLink()) {
+    throw new Error(`Message file must be a regular file, not a symlink: ${messageFile}`);
+  }
+  if (!fileStat.isFile()) {
+    throw new Error(`Message file must be a regular file: ${messageFile}`);
+  }
+  if (fileStat.size > MAX_AGENT_MESSAGE_INPUT_BYTES) {
+    throw new Error(formatMessageInputByteLimit(`Message file ${messageFile}`));
+  }
+
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(messageFile, "r");
   } catch (err) {
     throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
   }
   try {
-    return MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
-  } catch {
-    throw new Error(`Message file must be valid UTF-8: ${messageFile}`);
+    const readBuffer = Buffer.allocUnsafe(AGENT_MESSAGE_INPUT_READ_CHUNK_BYTES);
+    for (;;) {
+      const { bytesRead } = await handle.read(readBuffer, 0, readBuffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      totalBytes += bytesRead;
+      if (totalBytes > MAX_AGENT_MESSAGE_INPUT_BYTES) {
+        throw new Error(formatMessageInputByteLimit(`Message file ${messageFile}`));
+      }
+      chunks.push(Buffer.from(readBuffer.subarray(0, bytesRead)));
+    }
+  } finally {
+    await handle.close();
   }
+  return Buffer.concat(chunks, totalBytes);
 }
 
-async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatchOpts> {
-  const { messageFile: rawMessageFile, ...rest } = opts;
+async function readAgentMessageFile(messageFile: string): Promise<string> {
+  const buffer = await readBoundedAgentMessageFileBuffer(messageFile);
+  return decodeAgentMessageInput(buffer, `Message file ${messageFile}`);
+}
+
+async function readAgentMessageStdin(
+  stream: NodeJS.ReadableStream = process.stdin,
+): Promise<string> {
+  if ((stream as { isTTY?: unknown }).isTTY === true) {
+    throw new Error(
+      "--message-stdin refuses to read from an interactive terminal; pipe input instead.",
+    );
+  }
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  for await (const chunk of stream) {
+    let buffer: Buffer;
+    if (typeof chunk === "string") {
+      buffer = Buffer.from(chunk, "utf8");
+    } else if (chunk instanceof Uint8Array) {
+      buffer = Buffer.from(chunk);
+    } else {
+      buffer = Buffer.from(String(chunk), "utf8");
+    }
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_AGENT_MESSAGE_INPUT_BYTES) {
+      throw new Error(formatMessageInputByteLimit("--message-stdin input"));
+    }
+    chunks.push(buffer);
+  }
+  return decodeAgentMessageInput(Buffer.concat(chunks, totalBytes), "--message-stdin input");
+}
+
+async function resolveAgentMessageOpts(
+  opts: AgentCliOpts,
+  deps?: Pick<AgentCliDeps, "stdin">,
+): Promise<AgentDispatchOpts> {
+  const { messageFile: rawMessageFile, messageStdin: rawMessageStdin, ...rest } = opts;
   const messageFile = rawMessageFile?.trim();
   const hasInlineMessage = opts.message !== undefined;
-  if (hasInlineMessage && messageFile) {
-    throw new Error("Use either --message or --message-file, not both.");
+  const hasStdinMessage = rawMessageStdin === true;
+  const selectedSources = [hasInlineMessage, Boolean(messageFile), hasStdinMessage].filter(
+    Boolean,
+  ).length;
+  if (selectedSources > 1) {
+    throw new Error("Use only one of --message, --message-file, or --message-stdin.");
   }
   if (rawMessageFile !== undefined && !messageFile) {
     throw new Error("--message-file must not be empty.");
+  }
+  if (hasStdinMessage) {
+    const message = await readAgentMessageStdin(deps?.stdin);
+    if (!message.trim()) {
+      throw new Error("--message-stdin input is empty.");
+    }
+    return { ...rest, message };
   }
   if (messageFile) {
     const message = await readAgentMessageFile(messageFile);
@@ -922,7 +1033,7 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
-  const messageOpts = await resolveAgentMessageOpts(opts);
+  const messageOpts = await resolveAgentMessageOpts(opts, deps);
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).

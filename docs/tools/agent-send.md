@@ -32,6 +32,15 @@ programmatic delivery. Full flag and behavior reference:
 
   </Step>
 
+  <Step title="Pipe a prompt from another command">
+    ```bash
+    printf 'Summarize this build log' | openclaw agent --agent ops --message-stdin
+    ```
+
+    Reads valid UTF-8 stdin as the agent message body.
+
+  </Step>
+
   <Step title="Target a specific agent or session">
     ```bash
     # Target a specific agent
@@ -67,7 +76,8 @@ programmatic delivery. Full flag and behavior reference:
 | Flag                        | Description                                                          |
 | --------------------------- | -------------------------------------------------------------------- |
 | `--message <text>`          | Inline message to send                                               |
-| `--message-file <path>`     | Read the message from a valid UTF-8 file                             |
+| `--message-file <path>`     | Read the message from a regular UTF-8 text file                      |
+| `--message-stdin`           | Read the message from valid UTF-8 text stdin                         |
 | `--to <dest>`               | Derive session key from a target (phone, chat id)                    |
 | `--session-key <key>`       | Use an explicit session key                                          |
 | `--agent <id>`              | Target a configured agent (uses its `main` session)                  |
@@ -88,8 +98,11 @@ programmatic delivery. Full flag and behavior reference:
 
 - By default, the CLI goes **through the Gateway**. Add `--local` to force the
   embedded runtime on the current machine.
-- Pass exactly one of `--message` or `--message-file`. File messages preserve
-  multiline content after removing an optional UTF-8 BOM.
+- Pass exactly one of `--message`, `--message-file`, or `--message-stdin`.
+  File and stdin messages preserve multiline content after removing an
+  optional UTF-8 BOM. File/stdin input is capped at 4 MiB and rejects symlink
+  or non-regular files, invalid UTF-8, NUL bytes, and binary-looking data
+  before dispatch.
 - If the Gateway request fails, the CLI **falls back** to the local embedded
   run; a Gateway timeout falls back with a fresh session instead of racing the
   original transcript.
@@ -127,6 +140,9 @@ openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
 
 # Multiline prompt from a file
 openclaw agent --agent ops --message-file ./task.md
+
+# Prompt from stdin
+printf 'Summarize logs' | openclaw agent --agent ops --message-stdin
 
 # Exact session key
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
