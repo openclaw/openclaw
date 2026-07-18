@@ -596,6 +596,11 @@ describe("live model switch", () => {
         modelUsed: "claude-opus-4-6",
       });
 
+      // The derived agent must also target the store so agent-scoped store
+      // templates resolve the row that actually holds the pending flag.
+      expect(state.resolveStorePathMock).toHaveBeenCalledWith("/tmp/custom-store.json", {
+        agentId: "main",
+      });
       expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalled();
       expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
     });

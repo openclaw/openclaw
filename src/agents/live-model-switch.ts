@@ -257,21 +257,19 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
   if (!cfg || !sessionKey || !providerUsed || !modelUsed) {
     return;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: params.agentId?.trim(),
-  });
-  if (!storePath) {
-    return;
-  }
-  // Selection resolution needs the owning agent's configured default model;
-  // derive the agent from the session key when the caller has none, so a
-  // completed /model default still consolidates when config overrides the
-  // library-wide defaults.
+  // Store selection and default-model resolution both need the owning agent;
+  // derive it from the session key when the caller has none, so agent-scoped
+  // stores are targeted correctly and a completed /model default still
+  // consolidates when config overrides the library-wide defaults.
   const agentId = resolveSessionAgentId({
     sessionKey,
     config: cfg,
     agentId: params.agentId,
   });
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  if (!storePath) {
+    return;
+  }
   await patchSessionEntry(
     { storePath, sessionKey },
     (entry) => {
