@@ -86,6 +86,7 @@ type RuntimeWebProviderSelectionParams<
   }) => { path: string; value: unknown } | undefined;
   /** Resolves inline/env/SecretRef credentials and reports the winning source. */
   resolveSecretInput: (params: {
+    providerId: string;
     value: unknown;
     path: string;
     envVars: string[];
@@ -435,6 +436,7 @@ export async function resolveRuntimeWebProviderSelection<
         toolConfig: params.toolConfig,
       });
       const resolution = await params.resolveSecretInput({
+        providerId: provider.id,
         value,
         path,
         envVars: getProviderEnvVars(provider),
@@ -451,6 +453,7 @@ export async function resolveRuntimeWebProviderSelection<
         if (fallback?.value !== undefined) {
           selectedCandidatePath = fallback.path;
           selectedCandidateResolution = await params.resolveSecretInput({
+            providerId: provider.id,
             value: fallback.value,
             path: fallback.path,
             envVars: getProviderEnvVars(provider),
@@ -467,6 +470,7 @@ export async function resolveRuntimeWebProviderSelection<
           params.hasConfiguredSecretRef(fallback.value, params.defaults)
         ) {
           const fallbackResolution = await params.resolveSecretInput({
+            providerId: provider.id,
             value: fallback.value,
             path: fallback.path,
             envVars: getProviderEnvVars(provider),

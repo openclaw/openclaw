@@ -34,6 +34,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   hasSameSecretReloadContract,
   restoreSecretsRuntimeSnapshotStateIfCurrent,
+  setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
 
