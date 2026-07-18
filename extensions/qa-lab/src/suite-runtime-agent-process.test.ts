@@ -48,7 +48,6 @@ type MockChildProcess = MockEmitter & {
   stdout: MockEmitter;
   stderr: MockEmitter;
   kill: ReturnType<typeof vi.fn>;
-  unref: ReturnType<typeof vi.fn>;
 };
 
 function createMockEmitter() {
@@ -61,7 +60,6 @@ function createSpawnedProcess(params: { pid?: number } = {}) {
   child.stdout = createMockEmitter();
   child.stderr = createMockEmitter();
   child.kill = vi.fn();
-  child.unref = vi.fn();
   return child;
 }
 
@@ -124,7 +122,7 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "unrefs the detached child so it cannot keep the parent event loop alive",
+    "detaches stdout/stderr data listeners on close so the resolved stream is not retained",
     async () => {
       const child = createSpawnedProcess();
       spawnMock.mockReturnValue(child);
@@ -141,7 +139,6 @@ describe("qa suite runtime agent process helpers", () => {
       );
 
       await waitForSpawnCount(1);
-      expect(child.unref).toHaveBeenCalledTimes(1);
       child.stdout.emit("data", Buffer.from("ok\n"));
       child.emit("close", 0);
 

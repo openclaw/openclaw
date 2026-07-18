@@ -272,9 +272,6 @@ async function runQaCli(
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    // A detached child must not keep the parent's event loop alive once the
-    // promise settles; unref it so the caller can exit without reaping it.
-    child.unref();
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
     const timeout = setTimeout(() => {
       signalQaCliProcessTree(child, "SIGKILL");
