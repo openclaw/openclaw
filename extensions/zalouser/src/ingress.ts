@@ -230,15 +230,12 @@ export function createZalouserIngressMonitor(options: {
           resolveDeferredClaim = resolve;
         });
         let deferredClaimSettled = false;
-        let onLifecycleAbort: (() => void) | undefined;
         const settleDeferredClaim = () => {
           if (deferredClaimSettled) {
             return;
           }
           deferredClaimSettled = true;
-          if (onLifecycleAbort) {
-            lifecycle.abortSignal.removeEventListener("abort", onLifecycleAbort);
-          }
+          lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
           if (deferredClaims.get(claimed.id) === deferredClaim) {
             deferredClaims.delete(claimed.id);
           }
@@ -247,8 +244,7 @@ export function createZalouserIngressMonitor(options: {
         };
         // The drain can guillotine or dispose a deferred claim without invoking
         // the reply lifecycle again. Release local bookkeeping on that abort.
-        onLifecycleAbort = settleDeferredClaim;
-        lifecycle.abortSignal.addEventListener("abort", onLifecycleAbort, { once: true });
+        lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
         if (lifecycle.abortSignal.aborted) {
           settleDeferredClaim();
         }
