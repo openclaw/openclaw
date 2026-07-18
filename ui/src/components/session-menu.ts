@@ -2,10 +2,11 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+// Module import, not the protocol barrel — keeps TypeBox out of startup JS.
 import {
   normalizeSessionIconInput,
   parseSessionIcon,
-} from "../../../packages/gateway-protocol/src/index.js";
+} from "../../../packages/gateway-protocol/src/session-icon.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";

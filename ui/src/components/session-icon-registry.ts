@@ -1,12 +1,14 @@
 import { html, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+// Module import, not the protocol barrel: the barrel pulls TypeBox schemas
+// into the Control UI startup bundle and blows the perf budget.
 import {
   normalizeSessionIconInput,
   parseSessionIcon,
-} from "../../../packages/gateway-protocol/src/index.js";
+} from "../../../packages/gateway-protocol/src/session-icon.js";
 import { icons } from "./icons.ts";
 
-export const SESSION_ICON_REGISTRY = {
+const SESSION_ICON_REGISTRY = {
   bot: icons.bot,
   claw: icons.claw,
   spark: icons.spark,
@@ -21,7 +23,7 @@ export const SESSION_ICON_REGISTRY = {
   moon: icons.moon,
 } as const satisfies Record<string, TemplateResult>;
 
-export type CuratedSessionIconId = keyof typeof SESSION_ICON_REGISTRY;
+type CuratedSessionIconId = keyof typeof SESSION_ICON_REGISTRY;
 export const CURATED_SESSION_ICON_IDS = Object.keys(
   SESSION_ICON_REGISTRY,
 ) as CuratedSessionIconId[];
