@@ -27,6 +27,7 @@ describe("Microsoft Teams meeting runtime probes", () => {
       isReusable: () => false,
       join: vi.fn(async () => ({ session, spoken: true })),
       list: () => [],
+      refreshCaptionHealth: async () => {},
       refreshHealth,
       resolveAgentId: () => "main",
     } satisfies TeamsMeetingsProbeContext;

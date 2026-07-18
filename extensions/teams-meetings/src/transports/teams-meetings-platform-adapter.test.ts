@@ -860,7 +860,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       name === "aria-selected" ? "true" : name === "aria-label" ? "BlackHole 2ch (Virtual)" : null;
     const microphoneMenu = control({ label: "Microphone devices" });
     microphoneMenu.querySelector = (selector) =>
-      selector.includes('aria-selected="true"') ? selected : undefined;
+      selector?.includes('aria-selected="true"') ? selected : undefined;
     const { result } = await runStatusScript({
       allowMicrophone: true,
       devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
