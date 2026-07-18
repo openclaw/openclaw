@@ -243,6 +243,7 @@ export function createZalouserIngressMonitor(options: {
             deferredClaims.delete(claimed.id);
           }
           resolveDeferredClaim();
+          requestDrain();
         };
         // The drain can guillotine or dispose a deferred claim without invoking
         // the reply lifecycle again. Release local bookkeeping on that abort.
@@ -332,7 +333,6 @@ export function createZalouserIngressMonitor(options: {
         }
         const activeDrain = getDrain();
         const { started } = await activeDrain.drainOnce();
-        await activeDrain.waitForIdle();
         if (!running || (!requested && started === 0)) {
           break;
         }
@@ -347,13 +347,13 @@ export function createZalouserIngressMonitor(options: {
     }
   };
 
-  const requestDrain = (): void => {
+  function requestDrain(): void {
     requested = true;
     if (!running || pumping) {
       return;
     }
     pumping = runPump();
-  };
+  }
 
   const timer = setInterval(
     requestDrain,

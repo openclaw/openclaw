@@ -177,6 +177,7 @@ describe("Zalouser durable ingress", () => {
         runtime: runtime(),
         queue,
         dispatch,
+        pollIntervalMs: 60_000,
       });
       await ingress.receive(createRawZalouserMessage({ msgId: "lane-1" }));
       await ingress.receive(createRawZalouserMessage({ msgId: "lane-2" }));
@@ -184,6 +185,48 @@ describe("Zalouser durable ingress", () => {
 
       await firstLifecycle?.onAdopted();
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+      await ingress.stop();
+    });
+  });
+
+  it("dispatches another conversation while a deferred delivery is still active", async () => {
+    await withZalouserIngressTestQueue(async (queue) => {
+      let firstLifecycle: ZalouserIngressLifecycle | undefined;
+      let releaseFirst = () => {};
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const dispatch = vi.fn(
+        async (message, lifecycle: ZalouserIngressLifecycle): Promise<void> => {
+          if (message.msgId === "lane-active") {
+            firstLifecycle = lifecycle;
+            lifecycle.onDeferred();
+            await firstGate;
+            return;
+          }
+          await lifecycle.onAdopted();
+        },
+      );
+      const ingress = createZalouserIngressMonitor({
+        accountId: "default",
+        ownUserId: "owner-1",
+        runtime: runtime(),
+        queue,
+        dispatch,
+      });
+      await ingress.receive(
+        createRawZalouserMessage({ msgId: "lane-active", senderId: "sender-1" }),
+      );
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+
+      await ingress.receive(
+        createRawZalouserMessage({ msgId: "lane-independent", senderId: "sender-2" }),
+      );
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+      await waitForZalouserIngressVerdict(queue, "lane-independent", "completed");
+
+      releaseFirst();
+      await firstLifecycle?.onAdopted();
       await ingress.stop();
     });
   });
