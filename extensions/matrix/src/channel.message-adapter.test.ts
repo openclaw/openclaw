@@ -154,11 +154,6 @@ describe("matrix channel message adapter", () => {
     });
   });
 
-  it("declares a 20-option poll maximum matching the Matrix protocol limit on the static outbound adapter", () => {
-    const outbound = matrixPlugin.outbound;
-    expect(outbound?.pollMaxOptions).toBe(20);
-  });
-
   it("forwards presentation payload hooks through the registered outbound adapter", async () => {
     const outbound = matrixPlugin.outbound;
     expect(outbound?.presentationCapabilities?.supported).toBe(true);

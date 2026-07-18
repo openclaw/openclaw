@@ -340,7 +340,6 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
-  pollMaxOptions: 20,
   deliveryCapabilities: {
     durableFinal: {
       text: true,

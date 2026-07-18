@@ -389,13 +389,13 @@ function buildPollFallbackText(question: string, answers: string[]): string {
 }
 
 export function buildPollStartContent(poll: PollInput): PollStartContent {
-  // Truncate to the Matrix/discord option cap so existing callers with more
+  // Truncate to the Matrix MSC3381 cap so existing callers with more
   // than 20 options still produce a valid poll event instead of throwing.
   const capped: PollInput =
     poll.options && poll.options.length > MATRIX_POLL_MAX_OPTIONS
       ? { ...poll, options: poll.options.slice(0, MATRIX_POLL_MAX_OPTIONS) }
       : poll;
-  const normalized = normalizePollInput(capped, { maxOptions: MATRIX_POLL_MAX_OPTIONS });
+  const normalized = normalizePollInput(capped);
   const answers = normalized.options.map((option, idx) => ({
     id: `answer${idx + 1}`,
     ...buildTextContent(option),
