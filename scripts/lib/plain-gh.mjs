@@ -86,8 +86,8 @@ export function execPlainGh(args, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
-  killSignal: "SIGKILL",
-  timeout: PLAIN_GH_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    timeout: PLAIN_GH_TIMEOUT_MS,
   });
 }
 
@@ -99,8 +99,8 @@ export function execGhApiRead(endpoint, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
-  killSignal: "SIGKILL",
-  timeout: PLAIN_GH_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    timeout: PLAIN_GH_TIMEOUT_MS,
   });
 }
 
@@ -111,7 +111,7 @@ export function spawnPlainGh(args, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
-  killSignal: "SIGKILL",
-  timeout: PLAIN_GH_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    timeout: PLAIN_GH_TIMEOUT_MS,
   });
 }
