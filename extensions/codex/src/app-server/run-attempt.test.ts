@@ -4156,6 +4156,9 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     expect(result.assistantTexts).toEqual([]);
     expect(result.toolMediaUrls).toEqual(["/tmp/codex-home/generated_images/session-1/ig_123.png"]);
+    expect(result.hostOwnedToolMediaUrls).toEqual([
+      "/tmp/codex-home/generated_images/session-1/ig_123.png",
+    ]);
   });
 
   it("does not complete on unscoped turn/completed notifications", async () => {
