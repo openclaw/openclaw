@@ -95,11 +95,12 @@ struct DeviceIdentityStoreTests {
         let databaseURL = tempDir.appendingPathComponent("openclaw.sqlite", isDirectory: false)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let identity = try #require(DeviceIdentityStore.loadOrCreatePersisted(
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
-            profile: .primary))
-        let reloaded = try DeviceIdentityStore.loadOrCreate(
+            profile: .primary,
+            legacySources: [])
+        let reloaded = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary)
@@ -434,7 +435,7 @@ struct DeviceIdentityStoreTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let databaseURL = tempDir.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
-        _ = try DeviceIdentityStore.loadOrCreate(
+        _ = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary)
@@ -467,7 +468,7 @@ struct DeviceIdentityStoreTests {
         let databaseURL = tempDir.appendingPathComponent("destination/openclaw.sqlite", isDirectory: false)
         let destination = databaseURL.deletingLastPathComponent()
 
-        let identity = try DeviceIdentityStore.loadOrCreate(
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: destination,
             profile: .primary,
@@ -510,7 +511,7 @@ struct DeviceIdentityStoreTests {
         )
         """)
 
-        let identity = try DeviceIdentityStore.loadOrCreate(
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .node)
@@ -542,7 +543,7 @@ struct DeviceIdentityStoreTests {
             profile: .primary,
             contents: Self.nodePEMIdentityJSON())
 
-        let identity = try DeviceIdentityStore.loadOrCreate(
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary,
@@ -569,7 +570,7 @@ struct DeviceIdentityStoreTests {
         let databaseURL = tempDir.appendingPathComponent("destination/openclaw.sqlite")
 
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: databaseURL.deletingLastPathComponent(),
                 profile: .primary,
@@ -597,7 +598,7 @@ struct DeviceIdentityStoreTests {
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
                 profile: .primary,
@@ -654,7 +655,7 @@ struct DeviceIdentityStoreTests {
         let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
-        let identity = try DeviceIdentityStore.loadOrCreate(
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: destination,
             profile: .primary,
@@ -785,15 +786,13 @@ struct DeviceIdentityStoreTests {
             profile: .primary,
             contents: Self.nodePEMIdentityJSON())
         let symbolicRoot = root.appendingPathComponent("symbolic", isDirectory: true)
-        let symbolic = try #require(DeviceIdentityPaths.legacyIdentitySources(
-            stateDirURLs: [symbolicRoot],
-            profile: .primary).first)
+        let symbolic = Self.legacyIdentitySource(stateDirURL: symbolicRoot, profile: .primary)
         try FileManager.default.createDirectory(
             at: symbolic.identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: symbolic.identityURL, withDestinationURL: real.identityURL)
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: root.appendingPathComponent("symbolic.sqlite"),
                 destinationStateDirURL: root,
                 profile: .primary,
@@ -801,15 +800,13 @@ struct DeviceIdentityStoreTests {
         }
 
         let traversingRoot = root.appendingPathComponent("traversing", isDirectory: true)
-        let traversing = try #require(DeviceIdentityPaths.legacyIdentitySources(
-            stateDirURLs: [traversingRoot],
-            profile: .primary).first)
+        let traversing = Self.legacyIdentitySource(stateDirURL: traversingRoot, profile: .primary)
         try FileManager.default.createDirectory(at: traversingRoot, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(
             at: traversing.identityURL.deletingLastPathComponent(),
             withDestinationURL: real.identityURL.deletingLastPathComponent())
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: root.appendingPathComponent("traversing.sqlite"),
                 destinationStateDirURL: root,
                 profile: .primary,
@@ -817,15 +814,13 @@ struct DeviceIdentityStoreTests {
         }
 
         let hardRoot = root.appendingPathComponent("hard", isDirectory: true)
-        let hard = try #require(DeviceIdentityPaths.legacyIdentitySources(
-            stateDirURLs: [hardRoot],
-            profile: .primary).first)
+        let hard = Self.legacyIdentitySource(stateDirURL: hardRoot, profile: .primary)
         try FileManager.default.createDirectory(
             at: hard.identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         try FileManager.default.linkItem(at: real.identityURL, to: hard.identityURL)
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: root.appendingPathComponent("hard.sqlite"),
                 destinationStateDirURL: root,
                 profile: .primary,
@@ -842,7 +837,7 @@ struct DeviceIdentityStoreTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite")
-        let existing = try DeviceIdentityStore.loadOrCreate(
+        let existing = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: destination,
             profile: .primary)
@@ -852,14 +847,14 @@ struct DeviceIdentityStoreTests {
             contents: Self.nodePEMIdentityJSON())
 
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
                 profile: .primary,
                 legacySources: [source])
         }
         #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
-        #expect(try DeviceIdentityStore.loadOrCreate(
+        #expect(try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: destination,
             profile: .primary).deviceId == existing.deviceId)
@@ -880,7 +875,7 @@ struct DeviceIdentityStoreTests {
         let destination = tempDir.appendingPathComponent("legacy", isDirectory: true)
         let destinationAuthURL = destination.appendingPathComponent("identity/device-auth.json")
 
-        _ = try DeviceIdentityStore.loadOrCreate(
+        _ = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
             destinationStateDirURL: destination,
             profile: .primary,
@@ -912,7 +907,7 @@ struct DeviceIdentityStoreTests {
         try destinationAuth.write(to: destinationAuthURL, atomically: true, encoding: .utf8)
 
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
                 destinationStateDirURL: destination,
                 profile: .primary,
@@ -949,7 +944,7 @@ struct DeviceIdentityStoreTests {
         try destinationAuth.write(to: destinationAuthURL, atomically: true, encoding: .utf8)
 
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
                 destinationStateDirURL: destination,
                 profile: .primary,
@@ -987,7 +982,7 @@ struct DeviceIdentityStoreTests {
         """
         try destinationAuth.write(to: destinationAuthURL, atomically: true, encoding: .utf8)
 
-        _ = try DeviceIdentityStore.loadOrCreate(
+        _ = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
             destinationStateDirURL: destination,
             profile: .primary,
@@ -1009,7 +1004,7 @@ struct DeviceIdentityStoreTests {
         try Self.seedCanonicalSchema(databaseURL)
         #expect(try Self.scalarText(databaseURL, "PRAGMA journal_mode = WAL")?.lowercased() == "wal")
 
-        _ = try DeviceIdentityStore.loadOrCreate(
+        _ = try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary)
@@ -1027,7 +1022,7 @@ struct DeviceIdentityStoreTests {
         let missing = root.appendingPathComponent("missing.sqlite")
         try Self.execute(missing, "CREATE TABLE unrelated (id INTEGER PRIMARY KEY) STRICT")
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: missing,
                 destinationStateDirURL: root,
                 profile: .primary)
@@ -1042,7 +1037,7 @@ struct DeviceIdentityStoreTests {
         CREATE INDEX idx_device_identities_device ON device_identities(device_id);
         """)
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: wrong,
                 destinationStateDirURL: root,
                 profile: .primary)
@@ -1051,7 +1046,7 @@ struct DeviceIdentityStoreTests {
         let newer = root.appendingPathComponent("newer.sqlite")
         try Self.execute(newer, "PRAGMA user_version = 4")
         #expect(throws: DeviceIdentityStoreError.self) {
-            try DeviceIdentityStore.loadOrCreate(
+            try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: newer,
                 destinationStateDirURL: root,
                 profile: .primary)
@@ -1114,14 +1109,24 @@ extension DeviceIdentityStoreTests {
         profile: GatewayDeviceIdentityProfile,
         contents: String) throws -> DeviceIdentityPaths.LegacyIdentitySource
     {
-        let source = try #require(DeviceIdentityPaths.legacyIdentitySources(
-            stateDirURLs: [stateDirURL],
-            profile: profile).first)
+        let source = self.legacyIdentitySource(stateDirURL: stateDirURL, profile: profile)
         try FileManager.default.createDirectory(
             at: source.identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         try contents.write(to: source.identityURL, atomically: true, encoding: .utf8)
         return source
+    }
+
+    fileprivate static func legacyIdentitySource(
+        stateDirURL: URL,
+        profile: GatewayDeviceIdentityProfile) -> DeviceIdentityPaths.LegacyIdentitySource
+    {
+        let stateDirURL = stateDirURL.standardizedFileURL
+        let identityDirURL = stateDirURL.appendingPathComponent("identity", isDirectory: true)
+        return DeviceIdentityPaths.LegacyIdentitySource(
+            stateDirURL: stateDirURL,
+            identityURL: identityDirURL.appendingPathComponent(profile.identityFileName, isDirectory: false),
+            authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false))
     }
 
     fileprivate static func seedCanonicalSchema(_ databaseURL: URL, nodeOwned: Bool = false) throws {

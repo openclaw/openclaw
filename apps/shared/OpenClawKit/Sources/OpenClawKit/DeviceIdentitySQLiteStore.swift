@@ -82,7 +82,7 @@ enum DeviceIdentitySQLiteStore {
         databaseURL: URL,
         destinationStateDirURL: URL,
         profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
+        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = [],
         beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)? = nil,
         afterLegacyCommit: (() throws -> Void)? = nil) throws
         -> DeviceIdentity

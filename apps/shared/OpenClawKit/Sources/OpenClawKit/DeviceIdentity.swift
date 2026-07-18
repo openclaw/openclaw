@@ -175,28 +175,15 @@ enum DeviceIdentityPaths {
                 authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false))
         }
     }
-
-    static func legacyIdentitySources(
-        stateDirURLs: [URL],
-        profile: GatewayDeviceIdentityProfile) -> [LegacyIdentitySource]
-    {
-        var seen = Set<String>()
-        return stateDirURLs.compactMap { root in
-            let standardizedRoot = root.standardizedFileURL
-            guard seen.insert(standardizedRoot.path).inserted else { return nil }
-            let identityDirURL = standardizedRoot.appendingPathComponent("identity", isDirectory: true)
-            return LegacyIdentitySource(
-                stateDirURL: standardizedRoot,
-                identityURL: identityDirURL.appendingPathComponent(profile.identityFileName, isDirectory: false),
-                authURL: identityDirURL.appendingPathComponent(profile.authFileName, isDirectory: false))
-        }
-    }
 }
 
-public struct DeviceIdentityStoreError: Error, LocalizedError, Sendable {
-    public let message: String
+// periphery:ignore - Package tests assert the concrete storage failure category.
+struct DeviceIdentityStoreError: Error, LocalizedError, Sendable {
+    // periphery:ignore - LocalizedError exposes the storage detail through errorDescription.
+    let message: String
 
-    public var errorDescription: String? {
+    // periphery:ignore - Foundation reads this protocol witness dynamically.
+    var errorDescription: String? {
         self.message
     }
 
@@ -264,32 +251,6 @@ public enum DeviceIdentityStore {
             destinationStateDirURL: stateDirURL,
             profile: profile,
             legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
-    }
-
-    static func loadOrCreate(
-        databaseURL: URL,
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = []) throws -> DeviceIdentity
-    {
-        try DeviceIdentitySQLiteStore.loadOrCreate(
-            databaseURL: databaseURL,
-            destinationStateDirURL: destinationStateDirURL,
-            profile: profile,
-            legacySources: legacySources)
-    }
-
-    static func loadOrCreatePersisted(
-        databaseURL: URL,
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = []) -> DeviceIdentity?
-    {
-        try? self.loadOrCreate(
-            databaseURL: databaseURL,
-            destinationStateDirURL: destinationStateDirURL,
-            profile: profile,
-            legacySources: legacySources)
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
