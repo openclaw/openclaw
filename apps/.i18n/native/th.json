@@ -22554,11 +22554,6 @@
       "translated": "ใช้บริบทไปแล้ว %@%%"
     },
     {
-      "id": "native.apple.d3426c54f223c4d8",
-      "source": "Default (inherited)",
-      "translated": "ค่าเริ่มต้น (สืบทอด)"
-    },
-    {
       "id": "native.apple.e57eb66d14768bdb",
       "source": "%@ (override)",
       "translated": "%@ (แทนที่)"
@@ -22569,16 +22564,6 @@
       "translated": "กำลังคิด"
     },
     {
-      "id": "native.apple.75bebec90215a705",
-      "source": "Off",
-      "translated": "ปิด"
-    },
-    {
-      "id": "native.apple.575a78c2f3daf366",
-      "source": "On",
-      "translated": "เปิด"
-    },
-    {
       "id": "native.apple.e47fcaaf47e5d6bc",
       "source": "Full",
       "translated": "เต็ม"
@@ -22587,6 +22572,21 @@
       "id": "native.apple.f434793807b778ce",
       "source": "Verbosity",
       "translated": "ระดับรายละเอียด"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "ค่าเริ่มต้น (สืบทอด)"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "ปิด"
     },
     {
       "id": "native.apple.17481e3865493e34",
@@ -23364,11 +23364,6 @@
       "translated": "เซสชัน"
     },
     {
-      "id": "native.apple.b56645c4fa60fe23",
-      "source": "Default (inherited)",
-      "translated": "ค่าเริ่มต้น (สืบทอด)"
-    },
-    {
       "id": "native.apple.c13dbe6b5c01e9bd",
       "source": "%@ (override)",
       "translated": "%@ (แทนที่)"
@@ -23384,16 +23379,6 @@
       "translated": "ระดับการคิด"
     },
     {
-      "id": "native.apple.8f2830ece961d651",
-      "source": "Off",
-      "translated": "ปิด"
-    },
-    {
-      "id": "native.apple.17277ea10fd23846",
-      "source": "On",
-      "translated": "เปิด"
-    },
-    {
       "id": "native.apple.ca556b80c9adcae8",
       "source": "Full",
       "translated": "เต็ม"
@@ -23402,6 +23387,21 @@
       "id": "native.apple.1ae2d7073bba214b",
       "source": "Verbosity",
       "translated": "ระดับรายละเอียด"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "ค่าเริ่มต้น (สืบทอด)"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "ปิด"
     },
     {
       "id": "native.apple.0acac602f7cc68fc",
