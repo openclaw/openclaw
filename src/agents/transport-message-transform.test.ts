@@ -692,4 +692,123 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(displaced.toolCallId).toBe("n2_call_1");
     expect(displaced.content).toBe("displaced output");
   });
+
+  // Transports outside SYNTHETIC_TOOL_RESULT_APIS skip the shared pairing repair, so the
+  // rewrite mapping stays observable instead of being reconciled away.
+  it("reuses the most recent rewrite once queued occurrences are exhausted", () => {
+    let counter = 0;
+    const messages: Context["messages"] = [
+      assistantToolCall("call_1"),
+      assistantToolCall("call_1"),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "first output",
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "second output",
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "extra output",
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("openai-completions" as Api, "openai", "gpt-5.4"),
+      (id) => `n${++counter}_${id}`,
+    );
+
+    // The unmatched third result falls back to the newest consumed rewrite, not the oldest.
+    expect(toolResultSummaries(result.slice(2, 5))).toEqual([
+      { role: "toolResult", toolCallId: "n1_call_1", content: "first output" },
+      { role: "toolResult", toolCallId: "n2_call_1", content: "second output" },
+      { role: "toolResult", toolCallId: "n2_call_1", content: "extra output" },
+    ]);
+  });
+
+  it("keeps rewrite queues isolated across interleaved provider ids", () => {
+    let counter = 0;
+    const messages: Context["messages"] = [
+      assistantToolCall("call_1"),
+      assistantToolCall("call_2"),
+      assistantToolCall("call_1"),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "first output",
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "read",
+        content: "other output",
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "second output",
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+      (id) => `n${++counter}_${id}`,
+    );
+
+    expect(toolResultSummaries([result[1], result[3], result[5]] as Context["messages"])).toEqual([
+      { role: "toolResult", toolCallId: "n1_call_1", content: "first output" },
+      { role: "toolResult", toolCallId: "n2_call_2", content: "other output" },
+      { role: "toolResult", toolCallId: "n3_call_1", content: "second output" },
+    ]);
+  });
+
+  it("leaves a result that precedes every matching tool call unrewritten", () => {
+    let counter = 0;
+    const messages: Context["messages"] = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "orphan output",
+        timestamp: Date.now(),
+      },
+      assistantToolCall("call_1"),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "paired output",
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("openai-completions" as Api, "openai", "gpt-5.4"),
+      (id) => `n${++counter}_${id}`,
+    );
+
+    // The orphan consumes no rewrite, so the later real result still pairs with the call.
+    expect(toolResultSummaries([result[0], result[2]] as Context["messages"])).toEqual([
+      { role: "toolResult", toolCallId: "call_1", content: "orphan output" },
+      { role: "toolResult", toolCallId: "n1_call_1", content: "paired output" },
+    ]);
+  });
 });
