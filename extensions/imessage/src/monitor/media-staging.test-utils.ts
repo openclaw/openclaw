@@ -102,7 +102,7 @@ describe("stageIMessageAttachments", () => {
     expect(convertHeicToJpeg).toHaveBeenCalledOnce();
     const [convertedPath, convertedMaxBytes] = convertHeicToJpeg.mock.calls[0]!;
     expect(convertedPath).not.toBe(sourcePath);
-    expect(path.basename(String(convertedPath))).toBe("IMG_0001.HEIC");
+    expect(path.basename(convertedPath)).toBe("IMG_0001.HEIC");
     expect(convertedMaxBytes).toBe(1024);
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       Buffer.from("jpeg-bytes"),
