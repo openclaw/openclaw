@@ -621,6 +621,25 @@ describe("microsoft-foundry plugin", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "execAzAsync terminates a SIGTERM-immune subprocess via runExec two-phase kill (behavioral proof)",
+    async () => {
+      const real = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
+        "openclaw/plugin-sdk/process-runtime",
+      );
+      const start = Date.now();
+      await expect(
+        real.runExec(
+          process.execPath,
+          ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+          { timeoutMs: 500, logOutput: false },
+        ),
+      ).rejects.toThrow();
+      // Two-phase kill: 500ms timeout + 300ms force kill grace, well under 2000ms
+      expect(Date.now() - start).toBeLessThan(2000);
+    },
+  );
+
   it("retries Entra token refresh after a failed attempt", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
