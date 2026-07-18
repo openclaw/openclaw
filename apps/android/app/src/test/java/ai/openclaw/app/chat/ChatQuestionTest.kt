@@ -200,6 +200,44 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun replayedPendingEventCannotReopenResolvedQuestion() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = Long.MAX_VALUE)
+      val controller = ChatController(scope = this, json = json, requestGateway = { _, _ -> "{}" })
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      controller.handleGatewayEvent("question.resolved", """{"id":"ask_123","status":"answered"}""")
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+
+      assertEquals(ChatQuestionStatus.AnsweredElsewhere, controller.questions.value.single().status())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun pendingListRecordCannotReopenResolvedQuestion() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = Long.MAX_VALUE)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "question.list") json.encodeToString(QuestionListResult(listOf(pending))) else "{}"
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      controller.handleGatewayEvent("question.resolved", """{"id":"ask_123","status":"cancelled"}""")
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(ChatQuestionStatus.Cancelled, controller.questions.value.single().status())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun resolvedEventReconcilesAfterDiscardingOlderList() =
     runTest {
       val firstListStarted = CompletableDeferred<Unit>()

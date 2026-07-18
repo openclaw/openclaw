@@ -104,6 +104,17 @@ private func questionRecord(
 }
 
 @MainActor
+@Test func `question card preserves submitted answers across answerless refresh`() throws {
+    let model = OpenClawQuestionCardModel(record: questionRecord())
+    model.toggleOption(questionID: "meal", label: "Pizza")
+    let answers = try #require(model.beginSubmission())
+    model.markAnsweredLocally(answers: answers)
+
+    #expect(model.apply(record: questionRecord(createdAtMs: 2_000_000, status: .answered)))
+    #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Pizza")
+}
+
+@MainActor
 @Test func `question card locally expired state remains terminal`() {
     let expiresAt = Date(timeIntervalSince1970: 1500)
     let model = OpenClawQuestionCardModel(record: questionRecord(expiresAtMs: 1_500_000))

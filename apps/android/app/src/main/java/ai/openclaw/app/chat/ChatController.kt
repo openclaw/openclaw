@@ -2245,17 +2245,7 @@ class ChatController internal constructor(
       val next =
         records.map { record ->
           existing[record.id]?.let { prompt ->
-            prompt.copy(
-              record = record.copy(answers = record.answers ?: prompt.record.answers),
-              submitting = prompt.submitting && record.status == "pending",
-              answeredLocally = prompt.answeredLocally && record.status == "answered",
-              terminalObservedAtMs =
-                if (record.status == "pending" && nowMs < record.expiresAtMs) {
-                  null
-                } else {
-                  prompt.terminalObservedAtMs ?: nowMs
-                },
-            )
+            mergeQuestionPrompt(prompt, record, nowMs)
           } ?: ChatQuestionPrompt(
             record = record,
             terminalObservedAtMs = nowMs.takeIf { record.status != "pending" || nowMs >= record.expiresAtMs },
@@ -2289,15 +2279,7 @@ class ChatController internal constructor(
       if (prompts.any { it.record.id == record.id }) {
         prompts.map { prompt ->
           if (prompt.record.id == record.id) {
-            prompt.copy(
-              record = record,
-              submitting = prompt.submitting && record.status == "pending",
-              answeredLocally = prompt.answeredLocally && record.status == "answered",
-              // A replayed pending event must drop the stale terminal timestamp
-              // so inputs render again and expiry is rescheduled.
-              terminalObservedAtMs =
-                if (record.status == "pending") null else prompt.terminalObservedAtMs,
-            )
+            mergeQuestionPrompt(prompt, record, System.currentTimeMillis())
           } else {
             prompt
           }
@@ -2307,6 +2289,27 @@ class ChatController internal constructor(
       }
     }
     refreshQuestions()
+  }
+
+  private fun mergeQuestionPrompt(
+    prompt: ChatQuestionPrompt,
+    record: QuestionRecord,
+    nowMs: Long,
+  ): ChatQuestionPrompt {
+    // Gateway terminal state is monotonic. A delayed requested/list replay must not
+    // make an already resolved question actionable again.
+    if (prompt.record.status != "pending" && record.status == "pending") return prompt
+    return prompt.copy(
+      record = record.copy(answers = record.answers ?: prompt.record.answers),
+      submitting = prompt.submitting && record.status == "pending",
+      answeredLocally = prompt.answeredLocally && record.status == "answered",
+      terminalObservedAtMs =
+        if (record.status == "pending" && nowMs < record.expiresAtMs) {
+          null
+        } else {
+          prompt.terminalObservedAtMs ?: nowMs
+        },
+    )
   }
 
   private fun handleQuestionResolved(payloadJson: String) {

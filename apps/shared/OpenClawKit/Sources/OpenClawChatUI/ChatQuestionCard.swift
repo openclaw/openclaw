@@ -33,15 +33,32 @@ public final class OpenClawQuestionCardModel: Identifiable {
 
     @discardableResult
     public func apply(record: QuestionRecord) -> Bool {
+        let nextRecord = self.preservingKnownAnswers(in: record)
         guard record.id == self.id,
               !(self.record.status != .pending && record.status == .pending),
-              !Self.recordsMatch(self.record, record)
+              !Self.recordsMatch(self.record, nextRecord)
         else { return false }
-        self.record = record
-        self.isSubmitting = self.isSubmitting && record.status == .pending
-        self.isSkipping = self.isSkipping && record.status == .pending
+        self.record = nextRecord
+        self.isSubmitting = self.isSubmitting && nextRecord.status == .pending
+        self.isSkipping = self.isSkipping && nextRecord.status == .pending
         self.isLocallyExpired = false
         return true
+    }
+
+    private func preservingKnownAnswers(in record: QuestionRecord) -> QuestionRecord {
+        guard record.status == .answered, record.answers == nil, let answers = self.record.answers else {
+            return record
+        }
+        return QuestionRecord(
+            id: record.id,
+            questions: record.questions,
+            agentid: record.agentid,
+            sessionkey: record.sessionkey,
+            createdatms: record.createdatms,
+            expiresatms: record.expiresatms,
+            status: record.status,
+            answers: answers,
+            resolvedby: record.resolvedby)
     }
 
     public func status(at date: Date = Date()) -> OpenClawQuestionCardStatus {
@@ -614,18 +631,19 @@ extension OpenClawChatViewModel {
     }
 
     private func scheduleQuestionRefreshRetry(generation: UInt64, retryIndex: Int) {
-        guard generation == self.questionRefreshGeneration,
-              !self.questionRefreshRetryDelaysMs.isEmpty
-        else { return }
-        let delayIndex = min(retryIndex, self.questionRefreshRetryDelaysMs.count - 1)
-        let delayMs = self.questionRefreshRetryDelaysMs[delayIndex]
+        guard generation == self.questionRefreshGeneration else { return }
+        guard self.questionRefreshRetryDelaysMs.indices.contains(retryIndex) else {
+            self.questionRefreshRetryTask = nil
+            return
+        }
+        let delayMs = self.questionRefreshRetryDelaysMs[retryIndex]
         self.questionRefreshRetryTask?.cancel()
         self.questionRefreshRetryTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(delayMs))
             guard !Task.isCancelled, let self,
                   generation == self.questionRefreshGeneration
             else { return }
-            await self.refreshQuestions(generation: generation, retryIndex: delayIndex + 1)
+            await self.refreshQuestions(generation: generation, retryIndex: retryIndex + 1)
         }
     }
 
