@@ -106,6 +106,9 @@ export type ChatProps = {
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkVideoCapable?: boolean;
+  realtimeTalkVideoPending?: boolean;
+  realtimeTalkCameraError?: boolean;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -154,7 +157,7 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeVideo?: () => void;
+  onToggleRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -352,6 +355,9 @@ export function renderChat(props: ChatProps) {
     realtimeTalkInputLevel: props.realtimeTalkInputLevel,
     realtimeTalkConversation: props.realtimeTalkConversation,
     realtimeTalkVideoStream: props.realtimeTalkVideoStream,
+    realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
+    realtimeTalkVideoPending: props.realtimeTalkVideoPending,
+    realtimeTalkCameraError: props.realtimeTalkCameraError,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -361,7 +367,7 @@ export function renderChat(props: ChatProps) {
     onSend: props.onSend,
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
-    onToggleRealtimeVideo: props.onToggleRealtimeVideo,
+    onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,

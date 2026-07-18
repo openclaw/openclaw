@@ -3858,10 +3858,11 @@ export const en: TranslationMap = {
         limitHours: "{hours}-hour limit",
       },
       takePhoto: "Take photo",
+      cameraAccessFailed: "Unable to access the camera.",
       cameraBusy: "The camera is busy or unavailable to the browser.",
       cameraNoneFound: "No camera was found.",
       cameraPermissionBlocked:
-        "Camera access is blocked. Allow camera and microphone access in browser site settings.",
+        "Camera access is blocked. Allow camera access in browser site settings.",
       cameraPreview: "Camera preview",
       dismissVoiceInputError: "Dismiss voice input error",
       microphoneAccessFailed: "Unable to access microphone inputs.",
@@ -3878,10 +3879,11 @@ export const en: TranslationMap = {
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",
       startVoiceInput: "Start voice input",
-      startVideoTalk: "Start video talk",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
+      turnCameraOff: "Turn camera off",
+      turnCameraOn: "Turn camera on",
       voiceTranscript: "Voice transcript",
     },
     selectors: {
