@@ -778,16 +778,21 @@ function resolveReadySpeechProvider(params: {
       personaBinding: "missing",
     };
   }
-  if (
-    !resolvedProvider.isConfigured({
+  let providerConfigured: boolean | undefined;
+  try {
+    providerConfigured = resolvedProvider.isConfigured({
       cfg: params.cfg,
       providerConfig: merged.providerConfig,
       timeoutMs: resolveSpeechProviderTimeoutMs({
         config: params.config,
         provider: resolvedProvider,
       }),
-    })
-  ) {
+    });
+  } catch {
+    // A malformed provider config must not hide other usable providers
+    // (e.g. a provider whose isConfigured throws on an invalid baseUrl).
+  }
+  if (!providerConfigured) {
     return {
       kind: "skip",
       reasonCode: "not_configured",
