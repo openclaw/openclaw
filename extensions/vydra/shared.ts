@@ -38,6 +38,8 @@ type VydraAuthStore = Parameters<typeof resolveApiKeyForProvider>[0]["store"];
 
 type VydraMediaKind = "audio" | "image" | "video";
 
+class VydraDownloadBodyTimeoutError extends Error {}
+
 type VydraJobPayload = {
   id?: string;
   jobId?: string;
@@ -246,9 +248,13 @@ function resolveVydraDownloadBodyTimeout(params: {
     chunkTimeoutMs: params.timeoutMs,
     timeoutMs: Math.max(1, params.deadlineMs - Date.now()),
     onIdleTimeout: ({ chunkTimeoutMs }: { chunkTimeoutMs: number }) =>
-      new Error(`Vydra ${params.kind} download stalled after ${chunkTimeoutMs}ms`),
+      new VydraDownloadBodyTimeoutError(
+        `Vydra ${params.kind} download stalled after ${chunkTimeoutMs}ms`,
+      ),
     onTimeout: () =>
-      new Error(`Vydra ${params.kind} download timed out after ${params.timeoutMs}ms`),
+      new VydraDownloadBodyTimeoutError(
+        `Vydra ${params.kind} download timed out after ${params.timeoutMs}ms`,
+      ),
   };
 }
 
@@ -267,15 +273,27 @@ export async function downloadVydraAsset(params: {
   if (!response.ok) {
     // Shared assertOkOrThrowHttpError reads error detail without a wall-clock bound; a dripping
     // non-2xx body would hang before the success-path reader runs.
-    const prefix = await readResponseTextPrefix(
-      response,
-      16 * 1024,
-      resolveVydraDownloadBodyTimeout({ kind: params.kind, timeoutMs, deadlineMs }),
-    );
+    let errorBody: string | null = null;
+    try {
+      errorBody =
+        (
+          await readResponseTextPrefix(
+            response,
+            16 * 1024,
+            resolveVydraDownloadBodyTimeout({ kind: params.kind, timeoutMs, deadlineMs }),
+          )
+        ).text || null;
+    } catch (error) {
+      if (error instanceof VydraDownloadBodyTimeoutError) {
+        throw error;
+      }
+      // The shared formatter historically ignored unreadable error bodies. Preserve the known
+      // HTTP status and request id even when the provider closes a failed response mid-stream.
+    }
     // Re-run the bounded body through the shared formatter so provider error metadata and
     // sensitive-text redaction remain identical to the previous assertOkOrThrowHttpError path.
     throw await createProviderHttpError(
-      new Response(prefix.text || null, {
+      new Response(errorBody, {
         headers: response.headers,
         status: response.status,
         statusText: response.statusText,

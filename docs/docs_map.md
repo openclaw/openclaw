@@ -334,7 +334,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: The Activity says “Gateway offline”
   - H3: Discord opens a blank page or reports blocked:csp
-  - H3: “Not authorized”
   - H3: “Widget unavailable”
   - H3: “You cannot launch Activities in this channel”
 
@@ -859,6 +858,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Lifecycle status reactions
   - H2: Reactions (message tool)
   - H2: Approval reactions
+  - H2: Question reactions
   - H2: Delivery targets (CLI/cron)
   - H2: Aliases
   - H2: Troubleshooting
@@ -1053,6 +1053,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime model
   - H2: Call the current requester with MeowCaller (experimental)
   - H2: Approval prompts
+  - H2: Question reactions
   - H2: Plugin hooks and privacy
   - H2: Access control and activation
   - H2: Configured ACP bindings
@@ -2215,7 +2216,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /concepts/active-memory
 - Headings:
-  - H2: Quick start
+  - H2: Remember across conversations
+  - H2: Advanced Active Memory quick start
   - H2: How it works
   - H2: When it runs
   - H3: Session types
@@ -2227,7 +2229,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Speed recommendations
   - H4: Cerebras setup
   - H2: Memory tools
-  - H3: Built-in memory-core
+  - H3: Built-in memory
   - H3: LanceDB memory
   - H3: Lossless Claw
   - H2: Advanced escape hatches
@@ -2941,6 +2943,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How messages are routed
   - H2: DM isolation
   - H3: Dock linked channels
+  - H2: Remember across conversations
   - H2: Session lifecycle
   - H2: Where state lives
   - H2: Session maintenance
@@ -5124,6 +5127,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 8. Voice + expanded Android command surface
   - H3: 9. Workspace files (read-only)
   - H2: Review command approvals
+  - H2: Answer agent questions
   - H2: Assistant entrypoints
   - H2: Notification forwarding
   - H2: Related
@@ -5183,6 +5187,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start (pair + connect)
   - H2: Health summaries
   - H2: Review command approvals
+  - H2: Answer agent questions
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds
   - H2: Background alive beacons
@@ -8649,6 +8654,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Agent schema history
   - H2: State schema history
   - H2: Integrity checks
+  - H2: Troubleshooting
+  - H3: Why you cannot go back after updating to 2026.7.2
+  - H3: The Gateway refuses to start with a newer schema version error
+  - H3: A database is quarantined after integrity verification failed
   - H2: Downgrades are unsupported
   - H3: Example: agent schema 11 to 9
 
@@ -8677,6 +8686,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /reference/memory-config
 - Headings:
+  - H2: Remember across conversations
   - H2: Provider selection
   - H3: Custom provider ids
   - H3: API key resolution

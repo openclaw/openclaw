@@ -9,7 +9,10 @@ import {
 } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 
-function createAdapterDefinition(cleanup?: () => Promise<void>) {
+function createAdapterDefinition(
+  cleanup?: () => Promise<void>,
+  cleanupAfterGatewayStop?: () => Promise<void>,
+) {
   const state = createQaBusState();
   return {
     id: "selected",
@@ -31,6 +34,7 @@ function createAdapterDefinition(cleanup?: () => Promise<void>) {
     async handleAction() {},
     createReportNotes: () => [],
     ...(cleanup ? { cleanup } : {}),
+    ...(cleanupAfterGatewayStop ? { cleanupAfterGatewayStop } : {}),
   };
 }
 
@@ -58,7 +62,7 @@ describe("qa transport registry", () => {
     const created = await createQaTransportAdapter(createFactoryContext());
 
     expect(created.adapter.id).toBe("qa-channel");
-    await created.cleanup();
+    await created.cleanupWithoutGateway();
   });
 
   it("selects an injected matching factory", async () => {
@@ -85,7 +89,8 @@ describe("qa transport registry", () => {
 
   it("returns cleanup owned by the selected adapter", async () => {
     const cleanup = vi.fn(async () => undefined);
-    const definition = createAdapterDefinition(cleanup);
+    const cleanupAfterGatewayStop = vi.fn(async () => undefined);
+    const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
     const factory: QaTransportAdapterFactory = {
       id: "cleanup",
       matches: () => true,
@@ -98,9 +103,16 @@ describe("qa transport registry", () => {
       [factory],
     );
 
-    await created.cleanup();
+    await created.cleanupBeforeGatewayStop();
 
     expect(cleanup).toHaveBeenCalledOnce();
+    expect(cleanupAfterGatewayStop).not.toHaveBeenCalled();
+
+    await created.cleanupAfterGatewayStop();
+    await created.cleanupWithoutGateway();
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
   });
 
   it("reports no-match and startup failures with transport context", async () => {
