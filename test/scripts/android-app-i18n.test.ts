@@ -2,10 +2,12 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   checkAndroidAppI18n,
+  decodeAndroidResourceValue,
   findUnusedAndroidResourceKeys,
   findUnlocalizedAndroidUiLiterals,
   renderAndroidResourceValue,
   selectDeterministicTranslation,
+  selectGeneratedTranslation,
 } from "../../scripts/android-app-i18n.ts";
 
 describe("Android app i18n resources", () => {
@@ -100,6 +102,13 @@ describe("Android app i18n resources", () => {
       "Translated",
     );
     expect(selectDeterministicTranslation("Source", ["Source", "Source"])).toBe("Source");
+  });
+
+  it("preserves a localized resource when translation memory retires its UI source", () => {
+    expect(decodeAndroidResourceValue('"Sitzungen"')).toBe("Sitzungen");
+    expect(decodeAndroidResourceValue('"Sag \\"Hallo\\""')).toBe('Sag "Hallo"');
+    expect(selectGeneratedTranslation("Sessions", [], "Sitzungen")).toBe("Sitzungen");
+    expect(selectGeneratedTranslation("Sessions", ["Sesiones"], "Sitzungen")).toBe("Sesiones");
   });
 
   it("preserves source argument indexes when a translation reorders interpolations", () => {

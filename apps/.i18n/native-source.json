@@ -2253,9 +2253,9 @@
       "kind": "ui-call",
       "line": 95,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "Browse Sessions",
+      "source": "Browse Threads",
       "surface": "android",
-      "id": "native.android.5876e15e5e92fd45"
+      "id": "native.android.e2cf5a38587382cb"
     },
     {
       "kind": "ui-call",
@@ -2341,33 +2341,33 @@
       "kind": "ui-call",
       "line": 146,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "Try Chat, Voice, Sessions, Providers, or Settings.",
+      "source": "Try Chat, Voice, Threads, Providers, or Settings.",
       "surface": "android",
-      "id": "native.android.48ad0ae0e930e02b"
+      "id": "native.android.bc70a4ac965b82ba"
     },
     {
       "kind": "ui-call",
       "line": 155,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "android",
-      "id": "native.android.d4fbd1ee4f55a5db"
+      "id": "native.android.670121e54dbe286f"
     },
     {
       "kind": "ui-call",
       "line": 162,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "Connect the Gateway to search sessions.",
+      "source": "Connect the Gateway to search threads.",
       "surface": "android",
-      "id": "native.android.207c2170504e99e6"
+      "id": "native.android.d38be650b1bce4a0"
     },
     {
       "kind": "ui-call",
       "line": 162,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "No matching sessions yet.",
+      "source": "No matching threads yet.",
       "surface": "android",
-      "id": "native.android.25d2c2d792c952fe"
+      "id": "native.android.3d7754721f776ef8"
     },
     {
       "kind": "ui-call",
@@ -2381,17 +2381,17 @@
       "kind": "ui-call",
       "line": 177,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "OpenClaw session",
+      "source": "OpenClaw thread",
       "surface": "android",
-      "id": "native.android.8f8384286317f5c9"
+      "id": "native.android.9a839f6e3e05a744"
     },
     {
       "kind": "ui-call",
       "line": 310,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "Open session",
+      "source": "Open thread",
       "surface": "android",
-      "id": "native.android.15799e57704b20c6"
+      "id": "native.android.d83f82a1e4a5ed99"
     },
     {
       "kind": "ui-call",
@@ -2429,9 +2429,9 @@
       "kind": "ui-call",
       "line": 377,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
-      "source": "Main session",
+      "source": "Main thread",
       "surface": "android",
-      "id": "native.android.73e6ab1a168fd381"
+      "id": "native.android.8a1c5365c0538908"
     },
     {
       "kind": "ui-call",
@@ -5661,17 +5661,17 @@
       "kind": "ui-call",
       "line": 186,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "android",
-      "id": "native.android.0e3157c15c56944f"
+      "id": "native.android.a5845742daecb4ba"
     },
     {
       "kind": "ui-call",
       "line": 189,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Focus session search",
+      "source": "Focus thread search",
       "surface": "android",
-      "id": "native.android.70f5d0507d34b5c8"
+      "id": "native.android.439b324280869527"
     },
     {
       "kind": "ui-call",
@@ -5693,17 +5693,17 @@
       "kind": "ui-call",
       "line": 211,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Search sessions",
+      "source": "Search threads",
       "surface": "android",
-      "id": "native.android.b9cf34c137e4cf03"
+      "id": "native.android.03981341841b04ac"
     },
     {
       "kind": "ui-call",
       "line": 216,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Clear session search",
+      "source": "Clear thread search",
       "surface": "android",
-      "id": "native.android.10cb26723e9990fc"
+      "id": "native.android.99570c528a41fa72"
     },
     {
       "kind": "ui-call",
@@ -5733,9 +5733,9 @@
       "kind": "ui-call",
       "line": 285,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Toggle session layout",
+      "source": "Toggle thread layout",
       "surface": "android",
-      "id": "native.android.c6bf8751e2a7f5c7"
+      "id": "native.android.fd67be543e321cc9"
     },
     {
       "kind": "ui-call",
@@ -5757,17 +5757,17 @@
       "kind": "ui-call",
       "line": 300,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Searching sessions",
+      "source": "Searching threads",
       "surface": "android",
-      "id": "native.android.69b79a3c2c987cd4"
+      "id": "native.android.ebd17565e0ffd8eb"
     },
     {
       "kind": "ui-call",
       "line": 303,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "No matching sessions",
+      "source": "No matching threads",
       "surface": "android",
-      "id": "native.android.dd587d341af44212"
+      "id": "native.android.472d46ae8669f860"
     },
     {
       "kind": "ui-call",
@@ -5797,25 +5797,25 @@
       "kind": "ui-call",
       "line": 342,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Current session",
+      "source": "Current thread",
       "surface": "android",
-      "id": "native.android.f10d4df7cbc6df4f"
+      "id": "native.android.ff81ad1bee00d384"
     },
     {
       "kind": "ui-call",
       "line": 342,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "OpenClaw session",
+      "source": "OpenClaw thread",
       "surface": "android",
-      "id": "native.android.8f0482425838ae64"
+      "id": "native.android.fc145645b9620e57"
     },
     {
       "kind": "ui-call",
       "line": 397,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Rename session",
+      "source": "Rename thread",
       "surface": "android",
-      "id": "native.android.786774c8a76e50d7"
+      "id": "native.android.71cbb8dde8bf138b"
     },
     {
       "kind": "ui-call",
@@ -5861,25 +5861,25 @@
       "kind": "ui-call",
       "line": 477,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Sessions in \"$group\" are kept and move back to Ungrouped.",
+      "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
       "surface": "android",
-      "id": "native.android.3455fc2f77d564e3"
+      "id": "native.android.691e92cfe5cf106e"
     },
     {
       "kind": "ui-call",
       "line": 500,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Delete session?",
+      "source": "Delete thread?",
       "surface": "android",
-      "id": "native.android.4805fb9d6623e8c0"
+      "id": "native.android.d87a8217ab56999b"
     },
     {
       "kind": "ui-call",
       "line": 501,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "This permanently deletes the session and its transcript.",
+      "source": "This permanently deletes the thread and its transcript.",
       "surface": "android",
-      "id": "native.android.0c3283a2b2445eae"
+      "id": "native.android.930de97ff47113a8"
     },
     {
       "kind": "ui-call",
@@ -6077,25 +6077,25 @@
       "kind": "ui-call",
       "line": 958,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "No sessions yet",
+      "source": "No threads yet",
       "surface": "android",
-      "id": "native.android.db243d71d056afa4"
+      "id": "native.android.8e21a70428def6e0"
     },
     {
       "kind": "ui-call",
       "line": 959,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "No current session",
+      "source": "No current thread",
       "surface": "android",
-      "id": "native.android.5b4eee6a8092925e"
+      "id": "native.android.cda4c5ad8b17e394"
     },
     {
       "kind": "ui-call",
       "line": 960,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "No archived sessions",
+      "source": "No archived threads",
       "surface": "android",
-      "id": "native.android.acbcc9c9ea53d8c0"
+      "id": "native.android.be84f061047aa2da"
     },
     {
       "kind": "ui-call",
@@ -6109,17 +6109,17 @@
       "kind": "ui-call",
       "line": 967,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Open Chat to start or resume the current session.",
+      "source": "Open Chat to start or resume the current thread.",
       "surface": "android",
-      "id": "native.android.56fcd605dc7be3c0"
+      "id": "native.android.f289d03e1d3eee98"
     },
     {
       "kind": "ui-call",
       "line": 968,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Archived sessions will show up here.",
+      "source": "Archived threads will show up here.",
       "surface": "android",
-      "id": "native.android.085515989f8a2022"
+      "id": "native.android.504b71386e76c6ae"
     },
     {
       "kind": "ui-call",
@@ -6157,9 +6157,9 @@
       "kind": "ui-call",
       "line": 990,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Main session",
+      "source": "Main thread",
       "surface": "android",
-      "id": "native.android.3d4fa07acbc015c5"
+      "id": "native.android.ee4c727cdafbe963"
     },
     {
       "kind": "ui-call",
@@ -6381,9 +6381,9 @@
       "kind": "ui-call",
       "line": 594,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
-      "source": "Session Activity",
+      "source": "Thread Activity",
       "surface": "android",
-      "id": "native.android.2d8d049afe99f751"
+      "id": "native.android.da78209effb11cfd"
     },
     {
       "kind": "ui-call",
@@ -6453,17 +6453,17 @@
       "kind": "ui-call",
       "line": 636,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
-      "source": "Session activity",
+      "source": "Thread activity",
       "surface": "android",
-      "id": "native.android.dc3e7ca5a491103a"
+      "id": "native.android.f615712dfb56319a"
     },
     {
       "kind": "ui-call",
       "line": 637,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
-      "source": "Chat tool calls waiting in the active session remain visible here.",
+      "source": "Chat tool calls waiting in the active thread remain visible here.",
       "surface": "android",
-      "id": "native.android.8551e02b060bd7d8"
+      "id": "native.android.6c93973c13db43ae"
     },
     {
       "kind": "ui-call",
@@ -7893,9 +7893,9 @@
       "kind": "ui-call",
       "line": 2213,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
-      "source": "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.",
+      "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
       "surface": "android",
-      "id": "native.android.5a540761383fa474"
+      "id": "native.android.c971506716c96e91"
     },
     {
       "kind": "ui-call",
@@ -8741,9 +8741,9 @@
       "kind": "ui-call",
       "line": 927,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-      "source": "Recent Sessions",
+      "source": "Recent Threads",
       "surface": "android",
-      "id": "native.android.73f07a5d54915259"
+      "id": "native.android.36f78c8c85dc283f"
     },
     {
       "kind": "ui-call",
@@ -8837,17 +8837,17 @@
       "kind": "ui-call",
       "line": 1109,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "android",
-      "id": "native.android.16c3425d3a594481"
+      "id": "native.android.57177017a6a93826"
     },
     {
       "kind": "ui-call",
       "line": 1111,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-      "source": "No recent sessions",
+      "source": "No recent threads",
       "surface": "android",
-      "id": "native.android.a5c0f8b3112aa58c"
+      "id": "native.android.43320b54a68b00a1"
     },
     {
       "kind": "ui-call",
@@ -8909,17 +8909,17 @@
       "kind": "ui-call",
       "line": 1183,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-      "source": "Monitoring · 1 session",
+      "source": "Monitoring · 1 thread",
       "surface": "android",
-      "id": "native.android.2c89da708b12a522"
+      "id": "native.android.e24db059480f1e6a"
     },
     {
       "kind": "ui-call",
       "line": 1184,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-      "source": "Monitoring · $sessionCount sessions",
+      "source": "Monitoring · $sessionCount threads",
       "surface": "android",
-      "id": "native.android.8b6ee382dcb64e1f"
+      "id": "native.android.5a475f37d80e02bc"
     },
     {
       "kind": "ui-call",
@@ -8973,9 +8973,9 @@
       "kind": "ui-call",
       "line": 1487,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-      "source": "Open session",
+      "source": "Open thread",
       "surface": "android",
-      "id": "native.android.a65477861c7203aa"
+      "id": "native.android.358c5e0e838d5423"
     },
     {
       "kind": "ui-call",
@@ -9653,9 +9653,9 @@
       "kind": "ui-call",
       "line": 2055,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
-      "source": "Main session",
+      "source": "Main thread",
       "surface": "android",
-      "id": "native.android.22d755834386db07"
+      "id": "native.android.28a1a1acc5a0959f"
     },
     {
       "kind": "ui-call",
@@ -12037,9 +12037,9 @@
       "kind": "ui-call",
       "line": 1144,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-      "source": "Loading session",
+      "source": "Loading thread",
       "surface": "android",
-      "id": "native.android.882cc14a58e7e105"
+      "id": "native.android.0c74bc30a994dd33"
     },
     {
       "kind": "ui-call",
@@ -12109,17 +12109,17 @@
       "kind": "ui-call",
       "line": 1299,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-      "source": "Summarize recent sessions and next steps.",
+      "source": "Summarize recent threads and next steps.",
       "surface": "android",
-      "id": "native.android.1e5add56e48c99f9"
+      "id": "native.android.cf40df9739f78f27"
     },
     {
       "kind": "ui-call",
       "line": 1300,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
-      "source": "Catch me up on my recent OpenClaw sessions and suggest next steps.",
+      "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
       "surface": "android",
-      "id": "native.android.06d515351bb79576"
+      "id": "native.android.ebe49a8b8df80bd3"
     },
     {
       "kind": "ui-call",
@@ -12661,9 +12661,9 @@
       "kind": "ui-named-argument",
       "line": 615,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "android",
-      "id": "native.android.81931886b9caf3ab"
+      "id": "native.android.6cf5d6fa8a4186d5"
     },
     {
       "kind": "ui-named-argument",
@@ -16925,9 +16925,9 @@
       "kind": "ui-call",
       "line": 223,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
-      "source": "The session attaches once the gateway is ready.",
+      "source": "The thread attaches once the gateway is ready.",
       "surface": "apple",
-      "id": "native.apple.32179ce0b6d4543f"
+      "id": "native.apple.4da775013ac9b123"
     },
     {
       "kind": "conditional-branch",
@@ -16997,9 +16997,9 @@
       "kind": "ui-localized-call",
       "line": 571,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
-      "source": "Sessions…",
+      "source": "Threads…",
       "surface": "apple",
-      "id": "native.apple.a1b0d289758e2213"
+      "id": "native.apple.003b25ddafeb18e9"
     },
     {
       "kind": "ui-call",
@@ -17261,17 +17261,17 @@
       "kind": "ui-modifier",
       "line": 209,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
-      "source": "Delete Session?",
+      "source": "Delete Thread?",
       "surface": "apple",
-      "id": "native.apple.f488b9caf6e51ac3"
+      "id": "native.apple.31d5c7287cfb3abe"
     },
     {
       "kind": "ui-call",
       "line": 216,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
-      "source": "Delete Session",
+      "source": "Delete Thread",
       "surface": "apple",
-      "id": "native.apple.8634b17be9b111bc"
+      "id": "native.apple.d3395564809f1120"
     },
     {
       "kind": "ui-call",
@@ -17285,9 +17285,9 @@
       "kind": "ui-call",
       "line": 224,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
-      "source": "This permanently deletes the session and its transcript.",
+      "source": "This permanently deletes the thread and its transcript.",
       "surface": "apple",
-      "id": "native.apple.4a9568ac9b18d8d3"
+      "id": "native.apple.092659256d26cb03"
     },
     {
       "kind": "ui-call",
@@ -17333,9 +17333,9 @@
       "kind": "ui-localized-call",
       "line": 269,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
-      "source": "Rename Session",
+      "source": "Rename Thread",
       "surface": "apple",
-      "id": "native.apple.5bccdc23a1640895"
+      "id": "native.apple.683032464c497bbd"
     },
     {
       "kind": "ui-localized-call",
@@ -17349,9 +17349,9 @@
       "kind": "ui-localized-call",
       "line": 275,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
-      "source": "Session name",
+      "source": "Thread name",
       "surface": "apple",
-      "id": "native.apple.af789b2d2fda0f67"
+      "id": "native.apple.f887aa956588f237"
     },
     {
       "kind": "ui-call",
@@ -17413,17 +17413,17 @@
       "kind": "ui-named-argument",
       "line": 219,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Agent session",
+      "source": "Agent thread",
       "surface": "apple",
-      "id": "native.apple.a3bde8045fe9224a"
+      "id": "native.apple.7c8231b7b1ca480f"
     },
     {
       "kind": "ui-named-argument",
       "line": 234,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Recent sessions",
+      "source": "Recent threads",
       "surface": "apple",
-      "id": "native.apple.27f775de30b37ff8"
+      "id": "native.apple.b3c553614f762a58"
     },
     {
       "kind": "conditional-branch",
@@ -17437,9 +17437,9 @@
       "kind": "conditional-branch",
       "line": 239,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "No recent sessions",
+      "source": "No recent threads",
       "surface": "apple",
-      "id": "native.apple.28c97cf23665ee01"
+      "id": "native.apple.5aa32afda85064ea"
     },
     {
       "kind": "conditional-branch",
@@ -17597,17 +17597,17 @@
       "kind": "ui-call",
       "line": 797,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "apple",
-      "id": "native.apple.9f2fd65953013b7c"
+      "id": "native.apple.b6855cf19a50f477"
     },
     {
       "kind": "ui-localized-call",
       "line": 812,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Archived sessions",
+      "source": "Archived threads",
       "surface": "apple",
-      "id": "native.apple.0422818cc95d5071"
+      "id": "native.apple.9b1d0ef27a1333b0"
     },
     {
       "kind": "ui-call",
@@ -17621,49 +17621,49 @@
       "kind": "ui-named-argument",
       "line": 836,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Sessions unavailable",
+      "source": "Threads unavailable",
       "surface": "apple",
-      "id": "native.apple.b272115c83f7ef58"
+      "id": "native.apple.98167401c7267735"
     },
     {
       "kind": "ui-localized-call",
       "line": 875,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Loading archived sessions",
+      "source": "Loading archived threads",
       "surface": "apple",
-      "id": "native.apple.54f8260c9b863087"
+      "id": "native.apple.4d28a7def2337b9f"
     },
     {
       "kind": "ui-localized-call",
       "line": 876,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Loading recent sessions",
+      "source": "Loading recent threads",
       "surface": "apple",
-      "id": "native.apple.9b305868873dade2"
+      "id": "native.apple.777d7b706933bd7b"
     },
     {
       "kind": "ui-localized-call",
       "line": 883,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "^[\\(count) session](inflect: true)",
+      "source": "^[\\(count) thread](inflect: true)",
       "surface": "apple",
-      "id": "native.apple.207dad20d09f3160"
+      "id": "native.apple.22f81ea94bef8410"
     },
     {
       "kind": "ui-localized-call",
       "line": 913,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "No archived sessions",
+      "source": "No archived threads",
       "surface": "apple",
-      "id": "native.apple.1f4501a6bf2bae4c"
+      "id": "native.apple.1cad51e14db59bf9"
     },
     {
       "kind": "ui-localized-call",
       "line": 919,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Archived sessions will appear here.",
+      "source": "Archived threads will appear here.",
       "surface": "apple",
-      "id": "native.apple.2a1ba7a5e1979c9e"
+      "id": "native.apple.18ef832d3a7ddcf8"
     },
     {
       "kind": "ui-call",
@@ -17797,9 +17797,9 @@
       "kind": "ui-named-argument",
       "line": 115,
       "path": "apps/ios/Sources/Design/IPadActivityScreen.swift",
-      "source": "Loading sessions",
+      "source": "Loading threads",
       "surface": "apple",
-      "id": "native.apple.2360d25fe6ae9946"
+      "id": "native.apple.21d9208d86a4d1fe"
     },
     {
       "kind": "ui-named-argument",
@@ -17813,25 +17813,25 @@
       "kind": "ui-named-argument",
       "line": 125,
       "path": "apps/ios/Sources/Design/IPadActivityScreen.swift",
-      "source": "Sessions unavailable",
+      "source": "Threads unavailable",
       "surface": "apple",
-      "id": "native.apple.c334f2e86702a7b8"
+      "id": "native.apple.4be1f79aa2b230ff"
     },
     {
       "kind": "conditional-branch",
       "line": 135,
       "path": "apps/ios/Sources/Design/IPadActivityScreen.swift",
-      "source": "No recent sessions",
+      "source": "No recent threads",
       "surface": "apple",
-      "id": "native.apple.6cc6efb7a03960b6"
+      "id": "native.apple.98b348873556bc46"
     },
     {
       "kind": "conditional-branch",
       "line": 135,
       "path": "apps/ios/Sources/Design/IPadActivityScreen.swift",
-      "source": "Session activity offline",
+      "source": "Thread activity offline",
       "surface": "apple",
-      "id": "native.apple.08483af2d043bee6"
+      "id": "native.apple.7396d205574d279f"
     },
     {
       "kind": "conditional-branch",
@@ -18565,9 +18565,9 @@
       "kind": "ui-call",
       "line": 1319,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
-      "source": "Open Session",
+      "source": "Open Thread",
       "surface": "apple",
-      "id": "native.apple.93eeaedb2ff61043"
+      "id": "native.apple.c9ec1b0e18074d8a"
     },
     {
       "kind": "ui-call",
@@ -20949,9 +20949,9 @@
       "kind": "ui-call",
       "line": 1048,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "Used for new Chat and Talk sessions.",
+      "source": "Used for new Chat threads and Talk sessions.",
       "surface": "apple",
-      "id": "native.apple.3de045f17ea3c6d0"
+      "id": "native.apple.f4ae5664c3eda95d"
     },
     {
       "kind": "ui-named-argument",
@@ -24797,9 +24797,9 @@
       "kind": "ui-localized-call",
       "line": 69,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "apple",
-      "id": "native.apple.3579cf2750470a22"
+      "id": "native.apple.11fe8b9941954dfb"
     },
     {
       "kind": "ui-localized-call",
@@ -30093,9 +30093,9 @@
       "kind": "ui-named-argument",
       "line": 109,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "source": "Global shortcut that opens a floating chat bar for the main thread.",
       "surface": "apple",
-      "id": "native.apple.6ae77665b5f4490f"
+      "id": "native.apple.94dd793cd7d7d555"
     },
     {
       "kind": "ui-call",
@@ -31021,9 +31021,9 @@
       "kind": "ui-call",
       "line": 106,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
-      "source": "New Session",
+      "source": "New Thread",
       "surface": "apple",
-      "id": "native.apple.75102378a6775180"
+      "id": "native.apple.13f96467014cf344"
     },
     {
       "kind": "ui-call",
@@ -34685,9 +34685,9 @@
       "kind": "ui-call",
       "line": 39,
       "path": "apps/macos/Sources/OpenClaw/SessionsSettings.swift",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "apple",
-      "id": "native.apple.1ff8aec0044934c3"
+      "id": "native.apple.3ec2afcbc298c673"
     },
     {
       "kind": "ui-call",
@@ -34701,9 +34701,9 @@
       "kind": "ui-call",
       "line": 56,
       "path": "apps/macos/Sources/OpenClaw/SessionsSettings.swift",
-      "source": "No sessions yet. They appear after the first inbound message or heartbeat.",
+      "source": "No threads yet. They appear after the first inbound message or heartbeat.",
       "surface": "apple",
-      "id": "native.apple.bab897f3252b134c"
+      "id": "native.apple.14ccb32cd8ed1c81"
     },
     {
       "kind": "ui-call",
@@ -34837,9 +34837,9 @@
       "kind": "conditional-branch",
       "line": 483,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "apple",
-      "id": "native.apple.64a6dc7d49e8fb57"
+      "id": "native.apple.52e37e3a44ae516c"
     },
     {
       "kind": "conditional-branch",
@@ -36445,9 +36445,9 @@
       "kind": "ui-localized-call",
       "line": 849,
       "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift",
-      "source": "Summarize what happened in my sessions since yesterday.",
+      "source": "Summarize what happened in my threads since yesterday.",
       "surface": "apple",
-      "id": "native.apple.234ec45f4231edc4"
+      "id": "native.apple.fc4ce810900ec0b6"
     },
     {
       "kind": "conditional-branch",
@@ -36661,9 +36661,9 @@
       "kind": "ui-call",
       "line": 575,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
-      "source": "Session",
+      "source": "Thread",
       "surface": "apple",
-      "id": "native.apple.5dfc0700d8dff8de"
+      "id": "native.apple.4edb66657f5aca1f"
     },
     {
       "kind": "ui-modifier",
@@ -37189,25 +37189,25 @@
       "kind": "ui-localized-call",
       "line": 30,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "This session cannot be archived while it is active or running.",
+      "source": "This thread cannot be archived while it is active or running.",
       "surface": "apple",
-      "id": "native.apple.b1cdcb906a43d5d6"
+      "id": "native.apple.9d0cba09d92ee669"
     },
     {
       "kind": "ui-localized-call",
       "line": 32,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "The main session cannot be deleted.",
+      "source": "The main thread cannot be deleted.",
       "surface": "apple",
-      "id": "native.apple.5817e3f3dab1ee19"
+      "id": "native.apple.8952a111a1075051"
     },
     {
       "kind": "ui-localized-call",
       "line": 34,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "Remove attachments or wait for delivery before archiving or deleting this session.",
+      "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
       "surface": "apple",
-      "id": "native.apple.a6b8df3f18171c91"
+      "id": "native.apple.90d0ccf80ca28717"
     },
     {
       "kind": "ui-localized-call",
@@ -37429,9 +37429,9 @@
       "kind": "ui-modifier",
       "line": 244,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "Session Info",
+      "source": "Thread Info",
       "surface": "apple",
-      "id": "native.apple.cd7c3095a22f80a9"
+      "id": "native.apple.bbccb4c8db5cac12"
     },
     {
       "kind": "ui-call",
@@ -37485,9 +37485,9 @@
       "kind": "ui-modifier",
       "line": 412,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "Session Groups",
+      "source": "Thread Groups",
       "surface": "apple",
-      "id": "native.apple.23d628606fe0734f"
+      "id": "native.apple.7b641fed5bace855"
     },
     {
       "kind": "ui-call",
@@ -37557,9 +37557,9 @@
       "kind": "ui-call",
       "line": 453,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "Sessions in this group become ungrouped.",
+      "source": "Threads in this group become ungrouped.",
       "surface": "apple",
-      "id": "native.apple.b049c8a4d2805e08"
+      "id": "native.apple.56401c79410a310d"
     },
     {
       "kind": "ui-localized-call",
@@ -37581,9 +37581,9 @@
       "kind": "ui-call",
       "line": 570,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "New Session Options",
+      "source": "New Thread Options",
       "surface": "apple",
-      "id": "native.apple.6c89f35d53506406"
+      "id": "native.apple.2d96aa7d3d12f85b"
     },
     {
       "kind": "ui-call",
@@ -37629,25 +37629,25 @@
       "kind": "ui-localized-call",
       "line": 618,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift",
-      "source": "The session could not be created.",
+      "source": "The thread could not be created.",
       "surface": "apple",
-      "id": "native.apple.795ba37f6782cf28"
+      "id": "native.apple.87ef57319d1ddc85"
     },
     {
       "kind": "ui-localized-call",
       "line": 64,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Search sessions",
+      "source": "Search threads",
       "surface": "apple",
-      "id": "native.apple.8ec708a3605a2cc3"
+      "id": "native.apple.6bd91c435b69d638"
     },
     {
       "kind": "ui-localized-call",
       "line": 69,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "No Sessions",
+      "source": "No Threads",
       "surface": "apple",
-      "id": "native.apple.23b069b4e7f97039"
+      "id": "native.apple.6fde4bdf9d5b9191"
     },
     {
       "kind": "ui-localized-call",
@@ -37661,41 +37661,41 @@
       "kind": "ui-call",
       "line": 81,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "New Session",
+      "source": "New Thread",
       "surface": "apple",
-      "id": "native.apple.0058923f2ce8a3ec"
+      "id": "native.apple.a02fd99740d29bd3"
     },
     {
       "kind": "ui-localized-call",
       "line": 83,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "New session",
+      "source": "New thread",
       "surface": "apple",
-      "id": "native.apple.66ba42960eb4135b"
+      "id": "native.apple.b625801dd04b09f2"
     },
     {
       "kind": "ui-localized-call",
       "line": 89,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "New session options",
+      "source": "New thread options",
       "surface": "apple",
-      "id": "native.apple.2ef0e34db02ad255"
+      "id": "native.apple.851be81fcc933608"
     },
     {
       "kind": "ui-localized-call",
       "line": 117,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Rename Session",
+      "source": "Rename Thread",
       "surface": "apple",
-      "id": "native.apple.36753ef2f1ed4264"
+      "id": "native.apple.9ce8a4aba7b444b2"
     },
     {
       "kind": "ui-localized-call",
       "line": 120,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Session name",
+      "source": "Thread name",
       "surface": "apple",
-      "id": "native.apple.c9de0a1510ef475f"
+      "id": "native.apple.1dd067c44511c7f0"
     },
     {
       "kind": "ui-localized-call",
@@ -37717,17 +37717,17 @@
       "kind": "ui-localized-call",
       "line": 132,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Delete Session",
+      "source": "Delete Thread",
       "surface": "apple",
-      "id": "native.apple.afb4e6c99c63a28d"
+      "id": "native.apple.618073d6ab3f2721"
     },
     {
       "kind": "ui-localized-call",
       "line": 139,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "The session and its transcript are removed from the gateway.",
+      "source": "The thread and its transcript are removed from the gateway.",
       "surface": "apple",
-      "id": "native.apple.3d4ef32e42f136a4"
+      "id": "native.apple.10a5e72bba3cbccc"
     },
     {
       "kind": "ui-localized-call",
@@ -37741,17 +37741,17 @@
       "kind": "ui-localized-call",
       "line": 215,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Session running",
+      "source": "Thread running",
       "surface": "apple",
-      "id": "native.apple.9a7dca238fba628d"
+      "id": "native.apple.ac71e3b2aa496a2c"
     },
     {
       "kind": "ui-localized-call",
       "line": 220,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Session failed",
+      "source": "Thread failed",
       "surface": "apple",
-      "id": "native.apple.fcfbfe5e97a95e9c"
+      "id": "native.apple.c775e87f997278b2"
     },
     {
       "kind": "ui-localized-call",
@@ -37845,9 +37845,9 @@
       "kind": "ui-localized-call",
       "line": 292,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Delete Session…",
+      "source": "Delete Thread…",
       "surface": "apple",
-      "id": "native.apple.4aeb7c14c26dabac"
+      "id": "native.apple.f4998cfb572f23ff"
     },
     {
       "kind": "ui-localized-call",
@@ -37869,9 +37869,9 @@
       "kind": "ui-localized-call",
       "line": 346,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar.swift",
-      "source": "Retry session groups",
+      "source": "Retry thread groups",
       "surface": "apple",
-      "id": "native.apple.79f708b3bc1d3a6c"
+      "id": "native.apple.8802e9576ffd0f65"
     },
     {
       "kind": "ui-named-argument",
@@ -37909,33 +37909,33 @@
       "kind": "ui-named-argument",
       "line": 88,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Search sessions",
+      "source": "Search threads",
       "surface": "apple",
-      "id": "native.apple.2c37581c7b88f741"
+      "id": "native.apple.b313b80def4bda52"
     },
     {
       "kind": "ui-modifier",
       "line": 89,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "apple",
-      "id": "native.apple.43be8a2336e42faf"
+      "id": "native.apple.c0cc6acc36f413ce"
     },
     {
       "kind": "ui-modifier",
       "line": 146,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Rename Session",
+      "source": "Rename Thread",
       "surface": "apple",
-      "id": "native.apple.0b379cdfcbd3247f"
+      "id": "native.apple.854d3928fe5a557c"
     },
     {
       "kind": "ui-call",
       "line": 152,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Session name",
+      "source": "Thread name",
       "surface": "apple",
-      "id": "native.apple.54b6fbd9e41db009"
+      "id": "native.apple.9d0d3f20096cc4da"
     },
     {
       "kind": "ui-call",
@@ -37949,25 +37949,25 @@
       "kind": "ui-modifier",
       "line": 178,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Delete selected sessions?",
+      "source": "Delete selected threads?",
       "surface": "apple",
-      "id": "native.apple.751e0f6b81cd374a"
+      "id": "native.apple.dc00eb94f33bae15"
     },
     {
       "kind": "ui-call",
       "line": 183,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Delete Sessions",
+      "source": "Delete Threads",
       "surface": "apple",
-      "id": "native.apple.aa679276581b0058"
+      "id": "native.apple.2053fc9f74dc3158"
     },
     {
       "kind": "ui-call",
       "line": 187,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Each selected session and its transcript will be removed from the gateway.",
+      "source": "Each selected thread and its transcript will be removed from the gateway.",
       "surface": "apple",
-      "id": "native.apple.f837129cbee23297"
+      "id": "native.apple.0970247871a834a0"
     },
     {
       "kind": "ui-call",
@@ -37981,9 +37981,9 @@
       "kind": "ui-modifier",
       "line": 222,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "Manage session groups",
+      "source": "Manage thread groups",
       "surface": "apple",
-      "id": "native.apple.64013cfee5e25305"
+      "id": "native.apple.6f8acab2256728b5"
     },
     {
       "kind": "conditional-branch",
@@ -38005,17 +38005,17 @@
       "kind": "conditional-branch",
       "line": 241,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "No archived sessions",
+      "source": "No archived threads",
       "surface": "apple",
-      "id": "native.apple.b67eaecec1b423ac"
+      "id": "native.apple.692972314d04b184"
     },
     {
       "kind": "conditional-branch",
       "line": 241,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
-      "source": "No sessions found",
+      "source": "No threads found",
       "surface": "apple",
-      "id": "native.apple.b2435a79abf0c794"
+      "id": "native.apple.d6a4b5711dcd26e7"
     },
     {
       "kind": "ui-localized-call",
@@ -38429,9 +38429,9 @@
       "kind": "ui-localized-call",
       "line": 229,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift",
-      "source": "Gateway changed before the session operation started.",
+      "source": "Gateway changed before the thread operation started.",
       "surface": "apple",
-      "id": "native.apple.980f552bb0f96c0f"
+      "id": "native.apple.e0f045151c8d3137"
     },
     {
       "kind": "ui-localized-call",
@@ -38445,9 +38445,9 @@
       "kind": "ui-modifier",
       "line": 78,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Clear this session's history?",
+      "source": "Clear this thread's history?",
       "surface": "apple",
-      "id": "native.apple.87ba543b42696b92"
+      "id": "native.apple.0a5c4e15466c3acc"
     },
     {
       "kind": "ui-call",
@@ -38469,17 +38469,17 @@
       "kind": "ui-localized-call",
       "line": 95,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Rename Session",
+      "source": "Rename Thread",
       "surface": "apple",
-      "id": "native.apple.a92e96bed98bd553"
+      "id": "native.apple.67ac221dbe7179f0"
     },
     {
       "kind": "ui-localized-call",
       "line": 96,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Session name",
+      "source": "Thread name",
       "surface": "apple",
-      "id": "native.apple.848e2388f3466f40"
+      "id": "native.apple.cf0f7e049603f518"
     },
     {
       "kind": "ui-localized-call",
@@ -38509,9 +38509,9 @@
       "kind": "ui-call",
       "line": 152,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Sessions",
+      "source": "Threads",
       "surface": "apple",
-      "id": "native.apple.4af0f566d39d7041"
+      "id": "native.apple.c0ada47504425f23"
     },
     {
       "kind": "ui-localized-call",
@@ -38629,17 +38629,17 @@
       "kind": "ui-call",
       "line": 348,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "New Session",
+      "source": "New Thread",
       "surface": "apple",
-      "id": "native.apple.eb58552e43c8dde2"
+      "id": "native.apple.1a765291943599e5"
     },
     {
       "kind": "ui-call",
       "line": 355,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "New Session Options…",
+      "source": "New Thread Options…",
       "surface": "apple",
-      "id": "native.apple.a7119fbf9d25df5e"
+      "id": "native.apple.c7a3a6d5e43dd98f"
     },
     {
       "kind": "ui-call",
@@ -38653,25 +38653,25 @@
       "kind": "ui-call",
       "line": 369,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Sessions…",
+      "source": "Threads…",
       "surface": "apple",
-      "id": "native.apple.2bcff4a8fa503739"
+      "id": "native.apple.0e710b81808e5dcf"
     },
     {
       "kind": "ui-localized-call",
       "line": 381,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Rename Session…",
+      "source": "Rename Thread…",
       "surface": "apple",
-      "id": "native.apple.c36e008b051adb38"
+      "id": "native.apple.faad8f92b6bef166"
     },
     {
       "kind": "ui-localized-call",
       "line": 389,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Fork Session",
+      "source": "Fork",
       "surface": "apple",
-      "id": "native.apple.ea0ef95a159bffe0"
+      "id": "native.apple.23b61d6cd26ac112"
     },
     {
       "kind": "ui-localized-call",
@@ -38765,33 +38765,33 @@
       "kind": "ui-call",
       "line": 492,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Session",
+      "source": "Thread",
       "surface": "apple",
-      "id": "native.apple.920fe8a7a33f9e92"
+      "id": "native.apple.8b4f1c5107ea8a0e"
     },
     {
       "kind": "ui-modifier",
       "line": 500,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Session actions",
+      "source": "Thread actions",
       "surface": "apple",
-      "id": "native.apple.185a401f78328b0f"
+      "id": "native.apple.4d7750c9bf699469"
     },
     {
       "kind": "ui-localized-call",
       "line": 534,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Session cost %@",
+      "source": "Thread cost %@",
       "surface": "apple",
-      "id": "native.apple.9f9dedf599b2619b"
+      "id": "native.apple.bb2f22cc43c97f8e"
     },
     {
       "kind": "ui-call",
       "line": 540,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWindowShell.swift",
-      "source": "Compact Session",
+      "source": "Compact Thread",
       "surface": "apple",
-      "id": "native.apple.f0a4720df5f5f403"
+      "id": "native.apple.6239ced0b86e86f8"
     },
     {
       "kind": "ui-call",
