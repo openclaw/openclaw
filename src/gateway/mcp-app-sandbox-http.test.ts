@@ -48,7 +48,10 @@ describe("MCP App sandbox HTTP origin", () => {
 
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
-    expect(request(`${buildMcpAppSandboxPath()}?csp=not-json`).res.statusCode).toBe(400);
+    // Malformed CSP metadata is deliberately non-fatal since #108883: the decoder
+    // treats it as absent and the sandbox serves with the default policy.
+    const malformedCsp = request(`${buildMcpAppSandboxPath()}?csp=not-json`);
+    expect(malformedCsp.res.statusCode).toBe(200);
     expect(request("http://[", "GET").res.statusCode).toBe(400);
   });
 });
