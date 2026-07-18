@@ -5,7 +5,9 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
+import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import {
   readSessionMessageByIdAsync,
   type SessionTranscriptReadScope,
@@ -111,13 +113,26 @@ export async function resolveChatSendReplyContext(params: {
     if (!resolved.found) {
       return fields;
     }
-    const body = extractReplyTargetText(resolved.message)?.trim();
+    // Hydrate only what webchat displays: project the stored message through the
+    // same chat.history display normalization so envelope wrappers, runtime
+    // context, tool payloads, and reasoning-only content stay out of the prompt.
+    const displayMessage = projectChatDisplayMessage(resolved.message);
+    if (!displayMessage) {
+      return fields;
+    }
+    const rawBody = extractReplyTargetText(displayMessage)?.trim();
+    // Assistant targets additionally scrub tool-call markers, thinking tags,
+    // and internal scaffolding, matching stored-message history text handling.
+    const body =
+      rawBody && displayMessage.role === "assistant"
+        ? sanitizeAssistantVisibleTextWithProfile(rawBody, "history").trim()
+        : rawBody;
     if (!body) {
       return fields;
     }
     fields.ReplyToBody = truncateUtf16Safe(body, REPLY_CONTEXT_BODY_MAX_CHARS);
     fields.ReplyToSender = resolveReplyTargetSenderLabel({
-      message: resolved.message,
+      message: displayMessage,
       cfg: params.cfg,
       agentId: params.agentId,
       userSenderLabel: params.userSenderLabel,
