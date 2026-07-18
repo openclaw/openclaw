@@ -332,6 +332,14 @@ describe("resolveClientIp", () => {
       allowRealIpFallback: true,
       expected: undefined,
     },
+    {
+      name: "rejects realIp with unmatched opening bracket (stripOptionalPort path)",
+      remoteAddr: "127.0.0.1",
+      realIp: "[::1",
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      expected: undefined,
+    },
   ])("$name", (testCase) => {
     const ip = resolveClientIp({
       remoteAddr: testCase.remoteAddr,
