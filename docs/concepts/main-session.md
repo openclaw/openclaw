@@ -49,9 +49,11 @@ world converges:
 The rolling conversation is bounded by the model's context window, so
 continuity comes from layers around it:
 
-- The agent's workspace memory (`MEMORY.md` plus daily notes) is loaded when a
-  session starts and captured before compaction, so long-running conversations
-  do not silently lose durable facts.
+- `MEMORY.md`, the agent's curated long-term memory, is loaded into every
+  fresh session. Daily notes (`memory/YYYY-MM-DD.md`) are searchable on demand
+  and recent ones are re-primed after a `/new` or `/reset`. Before compaction,
+  the agent flushes durable facts into the daily notes so long conversations
+  do not silently lose them.
 - **Memory recall across conversations** lets the agent recall content from
   its other private sessions. On personal setups — global
   `session.dmScope` resolving to `main` with no per-binding DM overrides — it
@@ -64,8 +66,9 @@ The main session rolls forward through resets and compaction rather than
 growing forever:
 
 - By default the session resets daily at 04:00 local time (configurable, or
-  idle-based; see [Session management](/concepts/session)). Pre-reset context
-  is captured into daily memory notes and re-primed after the reset.
+  idle-based; see [Session management](/concepts/session)). On `/new` and
+  `/reset`, the tail of the ending conversation is saved to daily memory
+  notes, and the next session re-primes recent notes.
 - When the conversation approaches the context window, compaction summarizes
   and continues in place — the transcript history stays in the session store.
 - The per-agent session store keeps archived transcripts until a disk budget
