@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -31,7 +32,8 @@ vi.mock("node:child_process", async () => {
 });
 
 vi.mock("../../scripts/lib/managed-child-process.mjs", () => ({
-  signalExitCode: (signal: NodeJS.Signals) => (signal === "SIGINT" ? 130 : 143),
+  signalExitCode: (signal: NodeJS.Signals) =>
+    signal === "SIGINT" ? 130 : signal === "SIGQUIT" ? 131 : 143,
   terminateManagedChild: terminateManagedChildMock,
 }));
 
@@ -214,6 +216,34 @@ describe("test-update-cli-startup-bench", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")(
+    "forwards SIGQUIT to the benchmark driver and exits 131",
+    async () => {
+      const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-sigquit-"));
+      const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+      const child = Object.assign(new EventEmitter(), { pid: 123_456, kill: vi.fn() });
+      spawnMock.mockReturnValue(child);
+      setSuccessfulUpdateArgv(outputPath);
+      const updatePromise = import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+
+      try {
+        await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+
+        process.emit("SIGQUIT");
+        expect(terminateManagedChildMock).toHaveBeenCalledWith(child, "SIGQUIT");
+        child.emit("close", null, "SIGQUIT");
+        await updatePromise;
+
+        expect(process.exitCode).toBe(131);
+        expect(existsSync(outputPath)).toBe(false);
+      } finally {
+        child.emit("close", 1, null);
+        await updatePromise.catch(() => undefined);
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("exits before a hanging benchmark driver can block fixture refresh forever", async () => {
     const actualChildProcess =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -342,8 +372,10 @@ describe("test-update-cli-startup-bench", () => {
       const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
       const intermediateLinkPath = path.join(targetRoot, "fixture-link.json");
       const targetPath = path.join(targetRoot, "fixture.json");
+      const hardLinkPath = path.join(targetRoot, "fixture-hard-link.json");
       mkdirSync(targetRoot, { recursive: true });
       writeFileSync(targetPath, "existing\n", "utf8");
+      linkSync(targetPath, hardLinkPath);
       chmodSync(targetPath, 0o600);
       symlinkSync(path.basename(targetPath), intermediateLinkPath);
       symlinkSync(path.relative(fixtureRoot, intermediateLinkPath), outputPath);
@@ -360,6 +392,8 @@ describe("test-update-cli-startup-bench", () => {
         expect(lstatSync(intermediateLinkPath).isSymbolicLink()).toBe(true);
         expect(readlinkSync(intermediateLinkPath)).toBe(intermediateLinkTarget);
         expect(readFileSync(targetPath, "utf8")).toBe("replacement\n");
+        expect(readFileSync(hardLinkPath, "utf8")).toBe("replacement\n");
+        expect(statSync(targetPath).ino).toBe(statSync(hardLinkPath).ino);
         expect(statSync(targetPath).mode & 0o777).toBe(0o600);
       } finally {
         rmSync(fixtureRoot, { recursive: true, force: true });
@@ -410,4 +444,61 @@ describe("test-update-cli-startup-bench", () => {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a FIFO output without replacing it",
+    async () => {
+      const actualChildProcess =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-fifo-"));
+      const outputPath = path.join(fixtureRoot, "cli-startup-bench.fifo");
+      expect(actualChildProcess.spawnSync("mkfifo", [outputPath]).status).toBe(0);
+      process.argv = [process.execPath, UPDATE_SCRIPT_PATH, "--out", outputPath];
+
+      try {
+        await expect(import(pathToFileURL(UPDATE_SCRIPT_PATH).href)).rejects.toThrow(
+          "CLI startup benchmark output must be a regular file or missing",
+        );
+        expect(lstatSync(outputPath).isFIFO()).toBe(true);
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a device output without replacing it",
+    async () => {
+      process.argv = [process.execPath, UPDATE_SCRIPT_PATH, "--out", "/dev/null"];
+
+      await expect(import(pathToFileURL(UPDATE_SCRIPT_PATH).href)).rejects.toThrow(
+        "CLI startup benchmark output must be a regular file or missing: /dev/null",
+      );
+      expect(lstatSync("/dev/null").isCharacterDevice()).toBe(true);
+      expect(spawnMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a read-only regular output before starting the benchmark",
+    async () => {
+      const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-read-only-"));
+      const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+      writeFileSync(outputPath, "existing\n", "utf8");
+      chmodSync(outputPath, 0o400);
+      process.argv = [process.execPath, UPDATE_SCRIPT_PATH, "--out", outputPath];
+
+      try {
+        await expect(import(pathToFileURL(UPDATE_SCRIPT_PATH).href)).rejects.toThrow(
+          "CLI startup benchmark output is not writable",
+        );
+        expect(readFileSync(outputPath, "utf8")).toBe("existing\n");
+        expect(statSync(outputPath).mode & 0o777).toBe(0o400);
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });

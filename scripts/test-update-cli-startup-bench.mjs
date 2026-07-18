@@ -1,6 +1,15 @@
 // Refreshes the checked-in CLI startup benchmark fixture.
 import { spawn } from "node:child_process";
-import { chmodSync, lstatSync, readlinkSync, renameSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
 import { signalExitCode, terminateManagedChild } from "./lib/managed-child-process.mjs";
@@ -8,7 +17,10 @@ import { signalExitCode, terminateManagedChild } from "./lib/managed-child-proce
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
 const DEFAULT_BENCHMARK_TIMEOUT_KILL_GRACE_MS = 1_000;
 const DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS = 5_000;
-const FORWARDED_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
+const FORWARDED_SIGNALS =
+  process.platform === "win32"
+    ? ["SIGHUP", "SIGINT", "SIGTERM"]
+    : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
 const ACTIVE_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-active-sample";
 const CLEARED_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-cleared-sample";
 // A timed-out sample can spend one grace before SIGKILL and another reaping its process group.
@@ -53,8 +65,8 @@ function resolveTemporaryOutputPath(outputPath) {
   return path.join(parsed.dir, `.${parsed.base}.tmp-${process.pid}`);
 }
 
-// Direct benchmark writes followed output symlinks and retained target permissions.
-// Resolve that same destination before staging so atomic promotion preserves both.
+// Direct benchmark writes followed output symlinks and retained target metadata.
+// Resolve that same destination for staging, but never rename over a special file.
 function resolveOutputDestination(outputPath) {
   let destinationPath = outputPath;
   const visitedPaths = new Set();
@@ -77,7 +89,23 @@ function resolveOutputDestination(outputPath) {
     }
 
     if (!stats.isSymbolicLink()) {
-      return { mode: stats.mode & 0o777, path: destinationPath };
+      if (!stats.isFile()) {
+        throw new Error(
+          `CLI startup benchmark output must be a regular file or missing: ${destinationPath}`,
+        );
+      }
+      // Verify the existing inode is writable before spending the benchmark budget.
+      // Successful publication writes this inode in place, preserving links and metadata.
+      let handle;
+      try {
+        handle = openSync(destinationPath, "r+");
+      } catch (error) {
+        throw new Error(`CLI startup benchmark output is not writable: ${destinationPath}`, {
+          cause: error,
+        });
+      }
+      closeSync(handle);
+      return { exists: true, path: destinationPath };
     }
 
     const targetPath = readlinkSync(destinationPath);
@@ -85,6 +113,14 @@ function resolveOutputDestination(outputPath) {
       ? targetPath
       : path.resolve(path.dirname(destinationPath), targetPath);
   }
+}
+
+function publishBenchmarkOutput(temporaryOutputPath, outputDestination) {
+  if (outputDestination.exists) {
+    writeFileSync(outputDestination.path, readFileSync(temporaryOutputPath));
+    return;
+  }
+  renameSync(temporaryOutputPath, outputDestination.path);
 }
 
 async function runBenchmarkDriver(args, opts) {
@@ -296,10 +332,7 @@ try {
         ? signalExitCode(run.receivedSignal)
         : (run.status ?? 1);
   } else {
-    if (outputDestination.mode !== undefined) {
-      chmodSync(temporaryOutputPath, outputDestination.mode);
-    }
-    renameSync(temporaryOutputPath, outputDestination.path);
+    publishBenchmarkOutput(temporaryOutputPath, outputDestination);
     console.log(`[test-update-cli-startup-bench] wrote fixture to ${opts.out}`);
   }
 } finally {

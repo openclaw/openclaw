@@ -110,7 +110,10 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
 const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
-const TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+const TERMINATION_SIGNALS: NodeJS.Signals[] =
+  process.platform === "win32"
+    ? ["SIGHUP", "SIGINT", "SIGTERM"]
+    : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
 const ACTIVE_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-active-sample";
 const CLEARED_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-cleared-sample";
 const DEFAULT_ENTRY = "openclaw.mjs";

@@ -229,7 +229,7 @@ describe("bench-cli-startup", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "cleans the active benchmark process group when the driver is terminated",
+    "cleans the active benchmark process group when the driver receives SIGQUIT",
     async () => {
       const tempDirs = createTempDirTracker();
       const tmpDir = tempDirs.make("openclaw-cli-startup-driver-termination-");
@@ -291,7 +291,7 @@ describe("bench-cli-startup", () => {
         await waitForFile(descendantPidPath, 5_000);
         samplePid = Number(readFileSync(samplePidPath, "utf8"));
         descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        runningDriver.kill("SIGTERM");
+        runningDriver.kill("SIGQUIT");
         const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolveResult, rejectResult) => {
             runningDriver.once("error", rejectResult);
@@ -299,7 +299,8 @@ describe("bench-cli-startup", () => {
           },
         );
 
-        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(131);
+        expect(result.signal).toBeNull();
         expect(isProcessAlive(samplePid)).toBe(false);
         expect(isProcessAlive(descendantPid)).toBe(false);
       } finally {
