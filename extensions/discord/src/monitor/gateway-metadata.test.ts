@@ -2,7 +2,6 @@
 import { createServer, type Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  fetchDiscordGatewayInfo,
   fetchDiscordGatewayInfoWithTimeout,
   fetchDiscordGatewayMetadataGuarded,
   resolveDiscordGatewayInfoTimeoutMs,
@@ -116,7 +115,7 @@ describe("Discord gateway metadata", () => {
   });
 });
 
-describe("fetchDiscordGatewayInfo bounded reads", () => {
+describe("fetchDiscordGatewayInfoWithTimeout bounded reads", () => {
   const validPayload = JSON.stringify({
     url: "wss://gateway.discord.gg/",
     shards: 1,
@@ -138,7 +137,7 @@ describe("fetchDiscordGatewayInfo bounded reads", () => {
   }
 
   it("returns parsed gateway info when response body is within the 4 MiB cap", async () => {
-    const info = await fetchDiscordGatewayInfo({
+    const info = await fetchDiscordGatewayInfoWithTimeout({
       token: "test",
       fetchImpl: async () => bodyLessMock(validPayload),
     });
@@ -148,12 +147,16 @@ describe("fetchDiscordGatewayInfo bounded reads", () => {
     expect(info.session_start_limit.total).toBe(1000);
   });
 
-  it("rejects oversized response via loopback HTTP (streaming pre-read bound)", async () => {
-    const oversizedPayloadBytes = DISCORD_GATEWAY_METADATA_MAX_BYTES + 256 * 1024;
+  it("falls back on oversized loopback HTTP responses after streaming rejection", async () => {
+    const oversizedPayloadBytes = 32 * 1024 * 1024;
     let streamedBytes = 0;
+    let responseClosed = false;
     const server = createServer((_request, res) => {
       const chunk = Buffer.alloc(64 * 1024, 0x78);
       res.writeHead(200, { "content-type": "application/json" });
+      res.once("close", () => {
+        responseClosed = true;
+      });
       const writeMore = () => {
         while (streamedBytes < oversizedPayloadBytes) {
           if (res.destroyed) {
@@ -172,44 +175,46 @@ describe("fetchDiscordGatewayInfo bounded reads", () => {
     const port = await listenLoopbackServer(server);
     try {
       const rawResponse = await fetch(`http://127.0.0.1:${port}`);
-      await expect(
-        fetchDiscordGatewayInfo({
-          token: "test",
-          fetchImpl: async () => rawResponse,
-        }),
-      ).rejects.toMatchObject({
-        message: expect.stringMatching(
-          `Failed to get gateway information from Discord: Discord gateway metadata response body too large: \\d+ bytes \\(limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes\\)`,
-        ) as unknown as string,
+      const error = await fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () => rawResponse,
+      }).catch((cause: unknown) => cause);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      const resolved = resolveGatewayInfoWithFallback({ runtime, error });
+
+      expect(resolved).toMatchObject({
+        usedFallback: true,
+        info: { url: "wss://gateway.discord.gg/" },
       });
+      expect(String(runtime.log.mock.calls[0]?.[0])).toMatch(
+        new RegExp(
+          `Discord gateway metadata response body too large: \\d+ bytes \\(limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes\\)`,
+        ),
+      );
+      await vi.waitFor(() => expect(responseClosed).toBe(true));
+      expect(streamedBytes).toBeGreaterThan(DISCORD_GATEWAY_METADATA_MAX_BYTES);
+      expect(streamedBytes).toBeLessThan(oversizedPayloadBytes);
     } finally {
       await closeServer(server);
     }
   });
 
-  it("rejects oversized body-less response via post-hoc fallback guard", async () => {
+  it("falls back on oversized body-less responses after the post-hoc guard", async () => {
     const body = "x".repeat(DISCORD_GATEWAY_METADATA_MAX_BYTES + 1024);
-    await expect(
-      fetchDiscordGatewayInfo({
-        token: "test",
-        fetchImpl: async () => bodyLessMock(body),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringMatching(
-        `Failed to get gateway information from Discord: Discord gateway metadata response body too large: \\d+ bytes \\(limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes\\)`,
-      ) as unknown as string,
-    });
-  });
-
-  it("mutation: removing both guards causes over-cap bodies to be accepted silently", async () => {
-    const body = Buffer.alloc(DISCORD_GATEWAY_METADATA_MAX_BYTES + 1, 0x78).toString();
-    const error = await fetchDiscordGatewayInfo({
+    const error = await fetchDiscordGatewayInfoWithTimeout({
       token: "test",
       fetchImpl: async () => bodyLessMock(body),
-    }).catch((err: unknown) => err);
+    }).catch((cause: unknown) => cause);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/Discord gateway metadata response body too large:/);
+    expect(resolveGatewayInfoWithFallback({ runtime, error })).toMatchObject({
+      usedFallback: true,
+      info: { url: "wss://gateway.discord.gg/" },
+    });
+    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
+      `Discord gateway metadata response body too large: ${Buffer.byteLength(body)} bytes (limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes)`,
+    );
   });
 });
 

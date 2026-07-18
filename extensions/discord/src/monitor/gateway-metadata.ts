@@ -37,6 +37,8 @@ type DiscordGatewayMetadataFetchOptions = {
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 
+class DiscordGatewayMetadataTooLargeError extends Error {}
+
 const discordGatewayBotInfoSchema = Type.Object({
   url: Type.String({ minLength: 1 }),
   shards: Type.Integer({ minimum: 1 }),
@@ -49,6 +51,15 @@ const discordGatewayBotInfoSchema = Type.Object({
 });
 
 const gatewayMetadataFallbackLogLastAt = new WeakMap<RuntimeEnv, number>();
+
+function createGatewayMetadataTooLargeError(
+  size: number,
+  maxBytes: number,
+): DiscordGatewayMetadataTooLargeError {
+  return new DiscordGatewayMetadataTooLargeError(
+    `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+  );
+}
 
 function resolveFetchInputUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
@@ -63,10 +74,7 @@ function resolveFetchInputUrl(input: RequestInfo | URL): string {
 async function materializeGuardedResponse(response: Response): Promise<Response> {
   const body = new Uint8Array(
     await readResponseWithLimit(response, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
-      onOverflow: ({ size, maxBytes }) =>
-        new Error(
-          `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-        ),
+      onOverflow: ({ size, maxBytes }) => createGatewayMetadataTooLargeError(size, maxBytes),
     }),
   );
   return new Response(body, {
@@ -174,7 +182,7 @@ function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
   return parsed;
 }
 
-export async function fetchDiscordGatewayInfo(params: {
+async function fetchDiscordGatewayInfo(params: {
   token: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
@@ -205,22 +213,18 @@ export async function fetchDiscordGatewayInfo(params: {
         response as Response,
         DISCORD_GATEWAY_METADATA_MAX_BYTES,
         {
-          onOverflow: ({ size, maxBytes }) =>
-            new Error(
-              `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-            ),
+          onOverflow: ({ size, maxBytes }) => createGatewayMetadataTooLargeError(size, maxBytes),
         },
       );
       body = bounded.toString("utf8");
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.includes("Discord gateway metadata response body too large")
-      ) {
-        // Size overflow is not transient — retrying will not help.
+      if (error instanceof DiscordGatewayMetadataTooLargeError) {
+        // The response is bounded, but fallback eligibility is a shipped
+        // availability contract for abnormal proxy and upstream responses.
         throw createGatewayMetadataError({
           detail: error.message,
-          transient: false,
+          transient: true,
+          cause: error,
         });
       }
       throw createGatewayMetadataError({
@@ -243,9 +247,14 @@ export async function fetchDiscordGatewayInfo(params: {
     // Post-hoc guard for the body-less fallback path.
     const byteLength = Buffer.byteLength(body, "utf8");
     if (byteLength > DISCORD_GATEWAY_METADATA_MAX_BYTES) {
+      const error = createGatewayMetadataTooLargeError(
+        byteLength,
+        DISCORD_GATEWAY_METADATA_MAX_BYTES,
+      );
       throw createGatewayMetadataError({
-        detail: `Discord gateway metadata response body too large: ${byteLength} bytes (limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes)`,
-        transient: false,
+        detail: error.message,
+        transient: true,
+        cause: error,
       });
     }
   }
