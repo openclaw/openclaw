@@ -372,13 +372,13 @@ struct RootTabsPresentationTests {
     @Test func `chat keeps active voice capture stoppable while attachment ownership is pinned`() {
         #expect(ChatProTab.shouldExposeCaptureControl(
             isAttachmentOwnerPinned: true,
-            isCaptureActive: true))
+            isCaptureInFlight: true))
         #expect(!ChatProTab.shouldExposeCaptureControl(
             isAttachmentOwnerPinned: true,
-            isCaptureActive: false))
+            isCaptureInFlight: false))
         #expect(ChatProTab.shouldExposeCaptureControl(
             isAttachmentOwnerPinned: false,
-            isCaptureActive: false))
+            isCaptureInFlight: false))
     }
 
     @Test func `chat view model rebuilds only when its transport owner changes`() {

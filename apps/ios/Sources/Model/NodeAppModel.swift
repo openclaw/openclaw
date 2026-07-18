@@ -561,6 +561,7 @@ final class NodeAppModel {
     private var chatDictationCaptureId: String?
     private var talkPttCommandEpoch: UInt64 = 0
     private var chatDictationCommandEpoch: UInt64 = 0
+    private(set) var isChatDictationPending = false
     private var talkPreparationInFlight = false
     private var auxiliaryAudioCapture: AuxiliaryAudioCapture?
     private var foregroundCaptureCancellations: [UUID: @MainActor () -> Void] = [:]
@@ -2901,7 +2902,9 @@ final class NodeAppModel {
     /// Captures one locally recognized utterance for the chat draft. Unlike
     /// remote PTT, this returns text without starting an agent turn or TTS.
     func transcribeChatDraft() async throws -> String? {
-        guard self.chatDictationCaptureId == nil else { return nil }
+        guard !self.isChatDictationPending, self.chatDictationCaptureId == nil else { return nil }
+        self.isChatDictationPending = true
+        defer { self.isChatDictationPending = false }
 
         let commandEpoch = self.chatDictationCommandEpoch
         var reservedCaptureId: String?
@@ -2918,6 +2921,7 @@ final class NodeAppModel {
                         self.chatDictationCommandEpoch == commandEpoch && !self.isBackgrounded
                     },
                     onCaptureReserved: { captureId in
+                        self.isChatDictationPending = false
                         reservedCaptureId = captureId
                         self.chatDictationCaptureId = captureId
                         self.acquirePttVoiceWakeLease(for: captureId)
