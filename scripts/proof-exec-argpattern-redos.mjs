@@ -1,10 +1,8 @@
-import { createRequire } from "node:module";
 /**
  * Exact-head live proof for openclaw/openclaw#82950.
  * Validates unsafe nested-repetition is rejected, safe patterns match, and
  * whitespace-sensitive patterns keep original (non-trimmed) semantics.
  */
-import { pathToFileURL } from "node:url";
 
 // Use vitest-compatible dynamic import through tsx
 const { matchAllowlist } = await import("../src/infra/exec-command-resolution.ts");
