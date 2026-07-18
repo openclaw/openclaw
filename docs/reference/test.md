@@ -116,6 +116,30 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>`, verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.
 
+## Git and pnpm memory diagnostics
+
+Use the bounded diagnostic when checkout or dependency installation appears to
+consume abnormal memory:
+
+```bash
+node scripts/diagnose-git-pnpm-memory.mjs
+```
+
+The entry runs the production GitHub partial-clone command, immutable base/head
+fetches, explicit checkouts, Corepack, and `pnpm install --frozen-lockfile` in
+separate Docker cgroups. The clone phase intentionally includes Git's default
+checkout so it remains identical to the production command. Each phase gets an
+8 GiB memory/swap limit, four CPUs, 1024 PIDs, a 10-minute timeout, and no retry
+by default. It also demonstrates the unsafe shallow local-bare shape under a
+shorter timeout, while the required local regression uses a tiny,
+object-complete fixture.
+
+Results are written below `.artifacts/git-pnpm-memory/`. `summary.json` includes
+wall time, process RSS/thread peaks, cgroup memory and PID events, disk and Git
+pack sizes, filter negotiation, exit status, and cleanup state. Run
+`node scripts/diagnose-git-pnpm-memory.mjs --help` for resource overrides,
+install-script isolation, build measurement, and more examples.
+
 ## Full Docker suite (`pnpm test:docker:all`)
 
 Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes through a weighted scheduler. `scripts/package-openclaw-for-docker.mjs` is the single local/CI package packer and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it.
