@@ -2647,6 +2647,26 @@ describe("skills-clawhub", () => {
       baseUrl: undefined,
     });
   });
+
+  it("forwards a valid skill search limit unchanged to the transport", async () => {
+    searchClawHubSkillsMock.mockResolvedValueOnce([]);
+    await searchSkillsFromClawHub({ limit: 5 });
+    expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
+      query: "*",
+      limit: 5,
+      baseUrl: undefined,
+    });
+  });
+
+  it("omits skill search limit when none is provided", async () => {
+    searchClawHubSkillsMock.mockResolvedValueOnce([]);
+    await searchSkillsFromClawHub({});
+    expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
+      query: "*",
+      limit: undefined,
+      baseUrl: undefined,
+    });
+  });
 });
 
 describe("ClawHub origin provenance readback", () => {
