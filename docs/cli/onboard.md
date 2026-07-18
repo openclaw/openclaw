@@ -46,6 +46,7 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
 openclaw onboard recommendations --json
 openclaw onboard recommendations acknowledge
+openclaw onboard recommendations refresh
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
@@ -55,8 +56,9 @@ the first-run bootstrap. The command does not rescan installed apps or call a
 model. Its output contains only validated install IDs, source, and tier; it
 intentionally omits untrusted marketplace prose, model reasons, and local app
 labels. After the recommendation offer has been answered, the command returns
-an empty list and future onboarding runs skip the step entirely. A future
-explicit refresh command can clear that accepted state and run discovery again.
+an empty list and future onboarding runs skip the step entirely.
+`openclaw onboard recommendations refresh` clears the stored offer so the next
+onboarding run rescans installed apps and creates a new offer.
 
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,

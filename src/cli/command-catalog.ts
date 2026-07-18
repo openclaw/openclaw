@@ -403,6 +403,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
   },
   {
+    commandPath: ["onboard", "recommendations", "refresh"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["channels", "add"],
     exact: true,
     policy: { loadPlugins: "never", networkProxy: "bypass" },

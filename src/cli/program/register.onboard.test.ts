@@ -6,6 +6,7 @@ import { registerOnboardCommand } from "./register.onboard.js";
 const mocks = vi.hoisted(() => ({
   acknowledgeOnboardRecommendationsCommand: vi.fn(),
   onboardRecommendationsCommand: vi.fn(),
+  refreshOnboardRecommendationsCommand: vi.fn(),
   runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
@@ -54,6 +55,7 @@ vi.mock("../../commands/onboard.js", () => ({
 vi.mock("../../commands/onboard-recommendations.js", () => ({
   acknowledgeOnboardRecommendationsCommand: mocks.acknowledgeOnboardRecommendationsCommand,
   onboardRecommendationsCommand: mocks.onboardRecommendationsCommand,
+  refreshOnboardRecommendationsCommand: mocks.refreshOnboardRecommendationsCommand,
 }));
 
 vi.mock("../../commands/system-agent-with-inference.js", () => ({
@@ -97,6 +99,13 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard", "recommendations", "acknowledge"]);
 
     expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations refresh subcommand", async () => {
+    await runCli(["onboard", "recommendations", "refresh"]);
+
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
