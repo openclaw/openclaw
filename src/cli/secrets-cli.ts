@@ -348,9 +348,7 @@ export function registerSecretsCli(program: Command): void {
         // The missing-plan wrapper already carries a user-facing message. Keep its
         // ENOENT cause available to diagnostics without rendering the raw filesystem error.
         const message =
-          err instanceof SecretsPlanFileNotFoundError
-            ? err.message
-            : formatErrorMessage(err);
+          err instanceof SecretsPlanFileNotFoundError ? err.message : formatErrorMessage(err);
         defaultRuntime.error(
           danger(
             `Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
