@@ -21124,6 +21124,101 @@
       "translated": "जारी रखें"
     },
     {
+      "id": "native.apple.0a4fcdf09c5e7b3f",
+      "source": "Capture Window…",
+      "translated": "विंडो कैप्चर करें…"
+    },
+    {
+      "id": "native.apple.d7ac1580e29304af",
+      "source": "Capture Area…",
+      "translated": "क्षेत्र कैप्चर करें…"
+    },
+    {
+      "id": "native.apple.33adb82aa3c53c00",
+      "source": "focused app",
+      "translated": "फ़ोकस किया गया ऐप"
+    },
+    {
+      "id": "native.apple.5d20c8bd1235a43c",
+      "source": "No focused application is available.",
+      "translated": "कोई फ़ोकस किया गया एप्लिकेशन उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.apple.3c1a2f1ac3b50de0",
+      "source": "Focused app",
+      "translated": "फ़ोकस किया गया ऐप"
+    },
+    {
+      "id": "native.apple.511248f39affffc4",
+      "source": "Focus another app before attaching its text.",
+      "translated": "उसका टेक्स्ट अटैच करने से पहले किसी अन्य ऐप पर फ़ोकस करें।"
+    },
+    {
+      "id": "native.apple.1c94e8c0010021d9",
+      "source": "Accessibility access is required to attach text from \\(appName).",
+      "translated": "\\(appName) से टेक्स्ट अटैच करने के लिए Accessibility एक्सेस आवश्यक है।"
+    },
+    {
+      "id": "native.apple.a3e3d4b0ab6e94d9",
+      "source": "No focused window is available in \\(appName).",
+      "translated": "\\(appName) में कोई फ़ोकस की गई विंडो उपलब्ध नहीं है।"
+    },
+    {
+      "id": "native.apple.a2a454a96a011397",
+      "source": "Focused Window",
+      "translated": "फ़ोकस की गई विंडो"
+    },
+    {
+      "id": "native.apple.67d183bf2f9e4c2c",
+      "source": "\\(appName) is not responding to Accessibility requests.",
+      "translated": "\\(appName) Accessibility अनुरोधों का जवाब नहीं दे रहा है।"
+    },
+    {
+      "id": "native.apple.2f56bc484453a456",
+      "source": "No readable text was found in \\(appName).",
+      "translated": "\\(appName) में कोई पठनीय टेक्स्ट नहीं मिला।"
+    },
+    {
+      "id": "native.apple.507c2d9c7e94716f",
+      "source": "Allow OpenClaw to read text from \\(appName)",
+      "translated": "OpenClaw को \\(appName) से टेक्स्ट पढ़ने की अनुमति दें"
+    },
+    {
+      "id": "native.apple.c5313d544a833af0",
+      "source": "Attaching focused-window text uses macOS Accessibility access.",
+      "translated": "फ़ोकस की गई विंडो का टेक्स्ट अटैच करने के लिए macOS Accessibility एक्सेस का उपयोग होता है।"
+    },
+    {
+      "id": "native.apple.e68aeef0995a7d00",
+      "source": "Grant Access",
+      "translated": "एक्सेस दें"
+    },
+    {
+      "id": "native.apple.43dd985a6d9ec004",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
+      "id": "native.apple.a8880557335b5a25",
+      "source": "focused app",
+      "translated": "फ़ोकस किया गया ऐप"
+    },
+    {
+      "id": "native.apple.6af15237e49bd0bd",
+      "source": "Couldn't capture that image.",
+      "translated": "उस इमेज को कैप्चर नहीं किया जा सका।"
+    },
+    {
+      "id": "native.apple.b31041aa0da3768c",
+      "source": "Screenshot: \\(label)",
+      "translated": "स्क्रीनशॉट: \\(label)"
+    },
+    {
+      "id": "native.apple.72e5bffb7ee89f19",
+      "source": "Context from \\(context.appName) — \\(context.windowTitle)",
+      "translated": "\\(context.appName) से संदर्भ — \\(context.windowTitle)"
+    },
+    {
       "id": "native.apple.b5524e37a230e571",
       "source": "New message to \\(agentName)",
       "translated": "\\(agentName) को नया संदेश"
@@ -21144,9 +21239,14 @@
       "translated": "हाल की बातचीत जारी रखें"
     },
     {
-      "id": "native.apple.edf12ff583307f43",
-      "source": "Send a window screenshot",
-      "translated": "विंडो का स्क्रीनशॉट भेजें"
+      "id": "native.apple.c76e52d21bef75ba",
+      "source": "Attach text from \\(self.model.frontmostAppName)",
+      "translated": "\\(self.model.frontmostAppName) से टेक्स्ट अटैच करें"
+    },
+    {
+      "id": "native.apple.aedd7e9870c3579a",
+      "source": "Capture a screenshot",
+      "translated": "स्क्रीनशॉट कैप्चर करें"
     },
     {
       "id": "native.apple.136cef9f750d3803",
@@ -21167,6 +21267,46 @@
       "id": "native.apple.a3332fa4db187973",
       "source": "Not now",
       "translated": "अभी नहीं"
+    },
+    {
+      "id": "native.apple.1962232c9bc52e12",
+      "source": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) chars)",
+      "translated": "\\(context.appName) — \\(context.windowTitle) (\\(context.characterCount) वर्ण)"
+    },
+    {
+      "id": "native.apple.66ec93e9eefd9bd7",
+      "source": "Remove attached text context",
+      "translated": "संलग्न टेक्स्ट संदर्भ हटाएँ"
+    },
+    {
+      "id": "native.apple.88d0123c86b06144",
+      "source": "Allow OpenClaw to capture windows",
+      "translated": "OpenClaw को विंडो कैप्चर करने की अनुमति दें"
+    },
+    {
+      "id": "native.apple.677c5733cd132aed",
+      "source": "Allow OpenClaw to capture a screen area",
+      "translated": "OpenClaw को स्क्रीन का क्षेत्र कैप्चर करने की अनुमति दें"
+    },
+    {
+      "id": "native.apple.529a6fc5aeba03b0",
+      "source": "Sending a screenshot uses macOS Screen Recording access.",
+      "translated": "स्क्रीनशॉट भेजने के लिए macOS Screen Recording एक्सेस का उपयोग किया जाता है।"
+    },
+    {
+      "id": "native.apple.615245bf05ed3234",
+      "source": "Grant Access",
+      "translated": "एक्सेस दें"
+    },
+    {
+      "id": "native.apple.2a64131ba32d175d",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
+      "id": "native.apple.6521871fc0ddc987",
+      "source": "Selected area",
+      "translated": "चयनित क्षेत्र"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22849,11 +22989,6 @@
       "translated": "एजेंट का अवतार"
     },
     {
-      "id": "native.apple.8509385953c19619",
-      "source": "\\(display.emoji) \\(display.title)",
-      "translated": "\\(display.emoji) \\(display.title)"
-    },
-    {
       "id": "native.apple.6426e369511b043c",
       "source": "Message usage",
       "translated": "संदेश उपयोग"
@@ -22862,16 +22997,6 @@
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
       "translated": "Voice note"
-    },
-    {
-      "id": "native.apple.aff6385b0a8dd0ac",
-      "source": "Show full output",
-      "translated": "पूरा आउटपुट दिखाएँ"
-    },
-    {
-      "id": "native.apple.b9c78020ae8be34a",
-      "source": "Show less",
-      "translated": "कम दिखाएँ"
     },
     {
       "id": "native.apple.e9914cfc93a514cb",
@@ -22897,11 +23022,6 @@
       "id": "native.apple.142c01bf6b97e380",
       "source": "Speaking, tap to stop",
       "translated": "बोला जा रहा है, रोकने के लिए टैप करें"
-    },
-    {
-      "id": "native.apple.6b18ea1d85b5d3a2",
-      "source": "Running tools…",
-      "translated": "टूल चल रहे हैं…"
     },
     {
       "id": "native.apple.51ef5e41f9124819",
@@ -23547,6 +23667,31 @@
       "id": "native.apple.e7beeef6043ffd2a",
       "source": "System Default",
       "translated": "सिस्टम डिफ़ॉल्ट"
+    },
+    {
+      "id": "native.apple.f390b84397c0d240",
+      "source": "Running",
+      "translated": "चल रहा है"
+    },
+    {
+      "id": "native.apple.e2e7faa7c9c5c61f",
+      "source": "Collapse tool result",
+      "translated": "टूल परिणाम संक्षिप्त करें"
+    },
+    {
+      "id": "native.apple.4e7850fe95fcd898",
+      "source": "Expand tool result",
+      "translated": "टूल परिणाम विस्तृत करें"
+    },
+    {
+      "id": "native.apple.d65ae0776d6b86ce",
+      "source": "Show less",
+      "translated": "कम दिखाएँ"
+    },
+    {
+      "id": "native.apple.065f4da5ddaf14a1",
+      "source": "Show all %lld lines",
+      "translated": "सभी %lld पंक्तियाँ दिखाएँ"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",

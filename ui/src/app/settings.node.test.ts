@@ -703,6 +703,47 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
   });
 
+  it("persists the last dashboard face and active tab per session", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    const settings = loadSettings();
+    const boardSessionViews = {
+      "agent:main:main": {
+        face: "dashboard" as const,
+        activeTabId: "research",
+        reopenDockByTab: { research: "left" as const },
+      },
+      "agent:main:plain": { face: "chat" as const },
+    };
+
+    saveSettings({ ...settings, boardSessionViews });
+
+    expect(loadSettings().boardSessionViews).toEqual(boardSessionViews);
+  });
+
+  it("drops invalid stored dashboard view settings", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        boardSessionViews: {
+          "agent:main:main": { face: "grid", activeTabId: "research" },
+        },
+      }),
+    );
+
+    expect(loadSettings().boardSessionViews).toEqual({});
+  });
+
   it("omits an invalid stored chat split layout", () => {
     setTestLocation({
       protocol: "https:",

@@ -41,6 +41,7 @@ import {
   submitQuestionPrompt,
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -49,8 +50,23 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
+import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
+import "../../components/modal-dialog.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  boardExists,
+  boardProviderForSession,
+  type BoardCommandEvent,
+  type BoardProvider,
+  type BoardViewCallbacks,
+} from "../../lib/board/provider.ts";
+import {
+  updateBoardSessionView,
+  type BoardFace,
+  type BoardSessionView,
+} from "../../lib/board/settings.ts";
+import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
@@ -75,6 +91,7 @@ import {
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
@@ -83,6 +100,14 @@ import {
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  ensureBoardViewElement,
+  renderBoardDockMenu,
+  renderBoardFaceToggle,
+  renderBoardSessionSurface,
+  type BoardChatDockSize,
+} from "./board-session-surface.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -126,7 +151,12 @@ import {
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
-import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import {
+  renderChat,
+  renderChatResizableDivider,
+  resetChatViewState,
+  type ChatProps,
+} from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
@@ -185,6 +215,26 @@ import { configureToolTitleFetcher } from "./tool-titles.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
+type VisibleBoardDock = Exclude<BoardTab["chatDock"], "hidden">;
+type ResolvedBoardView = {
+  provider: BoardProvider;
+  snapshot: BoardSnapshot;
+  hasBoard: boolean;
+  face: BoardFace;
+  activeTabId: string;
+  dock: BoardTab["chatDock"];
+  reopenDock: VisibleBoardDock;
+};
+
+const boardChatDockLayout = createDockPanelLayout({
+  storageKey: "openclaw.control.board-chat-dock.v1",
+  minHeight: 180,
+  minWidth: 320,
+  defaultDock: "right",
+  supportedDocks: ["bottom", "left", "right"],
+  defaultHeight: 320,
+  defaultWidth: 420,
+});
 const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 const CHAT_HISTORY_INTENT_EDGE_PX = 300;
 const CHAT_HISTORY_INTENT_IDLE_MS = 200;
@@ -314,6 +364,7 @@ class ChatPane extends OpenClawLightDomElement {
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
+  @property({ attribute: false }) boardProvider?: BoardProvider;
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private readonly transcript = new ChatTranscriptController(this);
@@ -333,10 +384,38 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private headerRenameValue = "";
   @litState() private headerPlatform: string | null = null;
   @litState() private headerCopiedAction: ChatPaneHeaderAction | null = null;
+  @litState() private boardCommandDock: {
+    sessionKey: string;
+    tabId: string;
+    dock: BoardTab["chatDock"];
+  } | null = null;
+  @litState() private boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
+  @litState() private resetConfirmationOpen = false;
+  private resetConfirmation:
+    | {
+        sessionKey: string;
+        promise: Promise<boolean>;
+        resolve: (confirmed: boolean) => void;
+      }
+    | undefined;
+  private readonly lastVisibleBoardDock = new Map<string, VisibleBoardDock>();
   private headerRenameInitialLabel: string | null = null;
   private headerRenameInitialValue = "";
   private headerRenameSessionKey = "";
   private headerCopiedTimer: number | null = null;
+
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .watch(
+        () => this.resolveBoardProvider(),
+        (provider, notify) => provider.snapshot$.subscribe(notify),
+      )
+      .effect(
+        () => this.resolveBoardProvider(),
+        (provider) => provider.events.subscribe((event) => this.handleBoardCommand(event)),
+      );
+  }
   /** Checkout paths keyed by worktree id — stable for a worktree's lifetime,
    * so reused session keys can never inherit another checkout's path. */
   private readonly headerWorktreePaths = new Map<
@@ -1381,6 +1460,286 @@ class ChatPane extends OpenClawLightDomElement {
     );
   }
 
+  private resolveBoardProvider(): BoardProvider {
+    const sessionKey = resolveSessionKey(
+      this.state?.sessionKey ?? this.sessionKey,
+      this.context?.gateway.snapshot.hello,
+    );
+    return this.boardProvider ?? boardProviderForSession(sessionKey);
+  }
+
+  private resolveBoardSessionKey(snapshotSessionKey = ""): string {
+    const resolved = resolveSessionKey(
+      snapshotSessionKey || this.state?.sessionKey || this.sessionKey,
+      this.context?.gateway.snapshot.hello,
+    );
+    const normalized = normalizeSessionKeyForUiComparison(resolved);
+    return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
+  }
+
+  private resolveBoardView(): ResolvedBoardView {
+    const provider = this.resolveBoardProvider();
+    const snapshot = provider.snapshot$.value;
+    const hasBoard = boardExists(snapshot);
+    const sessionKey = this.resolveBoardSessionKey(snapshot.sessionKey);
+    const saved =
+      loadSettings().boardSessionViews?.[sessionKey] ??
+      this.state?.settings?.boardSessionViews?.[sessionKey];
+    const savedTab = snapshot.tabs.some((tab) => tab.tabId === saved?.activeTabId)
+      ? saved?.activeTabId
+      : undefined;
+    const activeTabId = savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
+    const tab = snapshot.tabs.find((candidate) => candidate.tabId === activeTabId);
+    const commandDock =
+      this.boardCommandDock?.sessionKey === sessionKey &&
+      this.boardCommandDock.tabId === activeTabId
+        ? this.boardCommandDock.dock
+        : undefined;
+    const dock = commandDock ?? tab?.chatDock ?? "right";
+    const dockKey = `${sessionKey}:${activeTabId}`;
+    if (dock !== "hidden") {
+      this.lastVisibleBoardDock.set(dockKey, dock);
+    }
+    return {
+      provider,
+      snapshot,
+      hasBoard,
+      face: hasBoard ? (saved?.face ?? "chat") : "chat",
+      activeTabId,
+      dock,
+      reopenDock:
+        this.lastVisibleBoardDock.get(dockKey) ?? saved?.reopenDockByTab?.[activeTabId] ?? "right",
+    };
+  }
+
+  private persistBoardSessionView(patch: Partial<BoardSessionView>): void {
+    const board = this.resolveBoardView();
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    if (!sessionKey) {
+      return;
+    }
+    const settings = this.state?.settings;
+    const persistedSettings = loadSettings();
+    const boardSessionViews = {
+      ...settings?.boardSessionViews,
+      ...persistedSettings.boardSessionViews,
+    };
+    const next = patchSettings({
+      boardSessionViews: updateBoardSessionView(boardSessionViews, sessionKey, patch),
+    });
+    if (this.state) {
+      this.state.settings = next;
+    }
+    this.requestUpdate();
+  }
+
+  private persistBoardReopenDock(board: ResolvedBoardView, dock: VisibleBoardDock): void {
+    if (!board.activeTabId) {
+      return;
+    }
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const saved =
+      loadSettings().boardSessionViews?.[sessionKey] ??
+      this.state?.settings?.boardSessionViews?.[sessionKey];
+    this.persistBoardSessionView({
+      reopenDockByTab: {
+        ...saved?.reopenDockByTab,
+        [board.activeTabId]: dock,
+      },
+    });
+  }
+
+  private handleBoardCommand(event: BoardCommandEvent): void {
+    const board = this.resolveBoardView();
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    if (!sessionKey || this.resolveBoardSessionKey(event.sessionKey) !== sessionKey) {
+      return;
+    }
+    const command = event.command;
+    if (command.kind === "focus_tab") {
+      if (board.snapshot.tabs.some((tab) => tab.tabId === command.tabId)) {
+        this.boardCommandDock = null;
+        this.persistBoardSessionView({ face: "dashboard", activeTabId: command.tabId });
+      }
+      return;
+    }
+    if (!board.activeTabId) {
+      return;
+    }
+    const reopenDock = command.dock === "hidden" ? board.reopenDock : command.dock;
+    this.persistBoardReopenDock(board, reopenDock);
+    this.boardCommandDock = {
+      sessionKey,
+      tabId: board.activeTabId,
+      dock: command.dock,
+    };
+    if (command.dock !== "hidden") {
+      this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, command.dock);
+    }
+  }
+
+  private handleBoardDockChange(dock: BoardTab["chatDock"]): void {
+    const board = this.resolveBoardView();
+    if (!board.activeTabId) {
+      return;
+    }
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    this.boardCommandDock = null;
+    const reopenDock = dock === "hidden" ? board.reopenDock : dock;
+    this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, reopenDock);
+    this.persistBoardReopenDock(board, reopenDock);
+    void board.provider
+      .applyOps([{ kind: "tab_update", tabId: board.activeTabId, chatDock: dock }])
+      .catch((error: unknown) => this.publishHeaderError(error));
+  }
+
+  private renderBoardDivider(dock: VisibleBoardDock) {
+    return renderChatResizableDivider({
+      className: "board-session-surface__divider",
+      orientation: dock === "bottom" ? "horizontal" : "vertical",
+      splitRatio: 0.5,
+      minRatio: 0.2,
+      maxRatio: 0.8,
+      label: t("chat.board.resizeDock"),
+      onElement: (element) => {
+        if (!(element instanceof HTMLElement)) {
+          return;
+        }
+        queueMicrotask(() => {
+          const previous = element.previousElementSibling?.getBoundingClientRect();
+          const next = element.nextElementSibling?.getBoundingClientRect();
+          const previousSize = dock === "bottom" ? (previous?.height ?? 0) : (previous?.width ?? 0);
+          const nextSize = dock === "bottom" ? (next?.height ?? 0) : (next?.width ?? 0);
+          const total = previousSize + nextSize;
+          if (total > 0) {
+            (element as HTMLElement & { splitRatio: number }).splitRatio =
+              (dock === "left" ? nextSize : previousSize) / total;
+          }
+        });
+      },
+      onResize: (event) => this.handleBoardDockResize(dock, event),
+    });
+  }
+
+  private handleBoardDockResize(
+    dock: VisibleBoardDock,
+    event: CustomEvent<{ splitRatio: number }>,
+  ): void {
+    const divider = event.currentTarget as HTMLElement | null;
+    const previous = divider?.previousElementSibling?.getBoundingClientRect();
+    const next = divider?.nextElementSibling?.getBoundingClientRect();
+    const total =
+      dock === "bottom"
+        ? (previous?.height ?? 0) + (next?.height ?? 0)
+        : (previous?.width ?? 0) + (next?.width ?? 0);
+    if (total <= 0) {
+      return;
+    }
+    if (dock === "bottom") {
+      this.boardChatDockSize = {
+        ...this.boardChatDockSize,
+        height: Math.min(
+          boardChatDockLayout.maxHeight(),
+          Math.max(boardChatDockLayout.minHeight, total * (1 - event.detail.splitRatio)),
+        ),
+      };
+    } else {
+      const dockRatio = dock === "left" ? event.detail.splitRatio : 1 - event.detail.splitRatio;
+      this.boardChatDockSize = {
+        ...this.boardChatDockSize,
+        width: Math.min(
+          boardChatDockLayout.maxWidth(),
+          Math.max(boardChatDockLayout.minWidth, total * dockRatio),
+        ),
+      };
+    }
+    boardChatDockLayout.save({
+      ...this.boardChatDockSize,
+      open: true,
+      dock,
+    });
+  }
+
+  private confirmConversationReset(): Promise<boolean> {
+    const board = this.resolveBoardView();
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const pending = this.resetConfirmation;
+    if (pending && !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
+      this.settleResetConfirmation(false);
+    }
+    if (!board.hasBoard) {
+      return Promise.resolve(true);
+    }
+    if (this.resetConfirmation) {
+      return this.resetConfirmation.promise;
+    }
+    let resolve!: (confirmed: boolean) => void;
+    const promise = new Promise<boolean>((next) => {
+      resolve = next;
+    });
+    this.resetConfirmation = { sessionKey, promise, resolve };
+    this.resetConfirmationOpen = true;
+    return promise;
+  }
+
+  private cancelResetConfirmationForSessionChange(): void {
+    const pending = this.resetConfirmation;
+    if (pending && !areUiSessionKeysEquivalent(pending.sessionKey, this.resolveBoardSessionKey())) {
+      this.settleResetConfirmation(false);
+    }
+  }
+
+  private settleResetConfirmation(confirmed: boolean): void {
+    const pending = this.resetConfirmation;
+    if (!pending) {
+      return;
+    }
+    this.resetConfirmation = undefined;
+    this.resetConfirmationOpen = false;
+    pending.resolve(confirmed);
+  }
+
+  private renderResetConfirmation() {
+    if (!this.resetConfirmationOpen) {
+      return nothing;
+    }
+    const title = t("chat.board.resetTitle");
+    const description = t("chat.board.resetDescription");
+    return html`
+      <openclaw-modal-dialog
+        label=${title}
+        description=${description}
+        @modal-cancel=${() => this.settleResetConfirmation(false)}
+      >
+        <div class="exec-approval-card board-reset-confirmation">
+          <div class="exec-approval-header">
+            <div>
+              <div class="exec-approval-title">${title}</div>
+              <div class="exec-approval-sub">${description}</div>
+            </div>
+          </div>
+          <div class="exec-approval-actions">
+            <button
+              class="btn primary"
+              type="button"
+              @click=${() => this.settleResetConfirmation(true)}
+            >
+              ${t("common.confirm")}
+            </button>
+            <button
+              class="btn"
+              type="button"
+              autofocus
+              @click=${() => this.settleResetConfirmation(false)}
+            >
+              ${t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      </openclaw-modal-dialog>
+    `;
+  }
+
   private readonly createSession = async (): Promise<boolean> => {
     const state = this.state;
     if (!state || !state.client || !state.connected) {
@@ -1389,6 +1748,8 @@ class ChatPane extends OpenClawLightDomElement {
     const context = this.context;
     const sessions = context.sessions;
     const client = state.client;
+    const previousSessionKey = state.sessionKey;
+    const preservesBoard = this.resolveBoardView().hasBoard;
     const connectionGeneration = this.connectionGeneration;
     const isCurrent = () =>
       this.isConnected &&
@@ -1413,10 +1774,26 @@ class ChatPane extends OpenClawLightDomElement {
       state.requestUpdate?.();
       return false;
     }
+    if (
+      !(await this.confirmConversationReset()) ||
+      !isCurrent() ||
+      !areUiSessionKeysEquivalent(state.sessionKey, previousSessionKey)
+    ) {
+      return false;
+    }
+    if (!canCreateChatSession(state)) {
+      state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
+      state.chatError = state.lastError;
+      state.requestUpdate?.();
+      return false;
+    }
 
     state.lastError = null;
     state.chatError = null;
-    const previousSessionKey = state.sessionKey;
+    if (preservesBoard) {
+      const resetResult = await clearChatHistory(state);
+      return resetResult !== "failed";
+    }
     const nextSessionKey = await sessions.create({
       currentSessionKey: previousSessionKey,
       agentId:
@@ -1640,9 +2017,8 @@ class ChatPane extends OpenClawLightDomElement {
       this.chatMessagesBySession,
     );
     pageState.chatScrollToEnd = (options) => this.transcript.scrollToEnd(options);
-    pageState.createChatSession = async () => {
-      await this.createSession();
-    };
+    pageState.createChatSession = () => this.createSession();
+    pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
     pageState.refreshCurrentSessionTools = async () => {
@@ -1752,10 +2128,24 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   override updated() {
+    this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
+    const board = this.resolveBoardView();
+    if (
+      board.hasBoard &&
+      board.face === "dashboard" &&
+      !customElements.get("openclaw-board-view")
+    ) {
+      void ensureBoardViewElement().then((loaded) => {
+        if (loaded) {
+          this.requestUpdate();
+        }
+      });
+    }
   }
 
   override disconnectedCallback() {
+    this.settleResetConfirmation(false);
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
@@ -2216,6 +2606,7 @@ class ChatPane extends OpenClawLightDomElement {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) {
+    const board = this.resolveBoardView();
     const workspace = resolveChatPaneWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
@@ -2261,6 +2652,12 @@ class ChatPane extends OpenClawLightDomElement {
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
+      faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
+        this.persistBoardSessionView({ face });
+      }),
+      boardDockAction: renderBoardDockMenu(board.hasBoard, board.face, board.dock, (dock) =>
+        this.handleBoardDockChange(dock),
+      ),
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;
@@ -2292,6 +2689,7 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const board = this.resolveBoardView();
     const runtimeConfigState = this.context.runtimeConfig.state;
     const configSnapshot = runtimeConfigState.configSnapshot;
     const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
@@ -2636,6 +3034,30 @@ class ChatPane extends OpenClawLightDomElement {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       basePath: state.basePath,
     };
+    const chat = renderChat(props);
+    const content =
+      board.hasBoard && board.face === "dashboard"
+        ? renderBoardSessionSurface({
+            snapshot: board.snapshot,
+            activeTabId: board.activeTabId,
+            dock: board.dock,
+            reopenDock: board.reopenDock,
+            dockSize: this.boardChatDockSize,
+            chat,
+            divider: this.renderBoardDivider(
+              board.dock === "hidden" ? board.reopenDock : board.dock,
+            ),
+            callbacks: {
+              applyOps: (ops) => board.provider.applyOps(ops),
+              grant: (name, decision) => board.provider.grant(name, decision),
+              selectTab: (tabId) => {
+                this.boardCommandDock = null;
+                this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
+              },
+            } satisfies BoardViewCallbacks,
+            onDockChange: (dock) => this.handleBoardDockChange(dock),
+          })
+        : chat;
     return html`${this.renderPaneHeader(
       sessionWorkspace,
       backgroundTasks,
@@ -2643,7 +3065,7 @@ class ChatPane extends OpenClawLightDomElement {
       Boolean(catalogKey),
       selectedAgent?.workspace,
       selectedAgent?.workspaceGit === true,
-    )}${renderChat(props)}`;
+    )}${content}${this.renderResetConfirmation()}`;
   }
 }
 

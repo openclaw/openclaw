@@ -2,6 +2,7 @@
 import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
@@ -39,6 +40,7 @@ import {
   canonicalLobsterLook,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
+import { highlightJsonHtml } from "../../components/markdown.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
@@ -865,7 +867,9 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
    back to the spark icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if (id === "custom" && activeTheme !== "custom") {
-    return html`<span class="settings-theme-card__icon" aria-hidden="true">${icons.spark}</span>`;
+    return html`<span class="settings-theme-card__icon" aria-hidden="true"
+      >${icons.download}</span
+    >`;
   }
   return html`
     <span class="settings-theme-card__palette" aria-hidden="true">
@@ -2026,7 +2030,8 @@ export function renderConfig(props: ConfigProps) {
               })()}
       ${props.issues.length > 0
         ? html`<div class="callout danger" style="margin-top: 12px;">
-            <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+            <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.issues, null, 2)))}</pre>
           </div>`
         : nothing}
     </div>

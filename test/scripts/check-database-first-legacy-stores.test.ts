@@ -8707,6 +8707,33 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([]);
   });
 
+  it("blocks runtime writes to the retired device identity file", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs";
+        fs.writeFileSync(path.join(stateDir, "identity/device.json"), "{}\\n");
+      `,
+      "src/infra/device-identity.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
+  });
+
+  it("allows only the device identity migration owner to retire its legacy source", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs";
+        fs.renameSync(
+          path.join(stateDir, "identity/device.json"),
+          path.join(stateDir, "identity/device.json.doctor-importing"),
+        );
+      `,
+      "src/infra/state-migrations.device-identity.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
   it("allows the workspace Doctor migration owner to claim legacy sidecars", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
