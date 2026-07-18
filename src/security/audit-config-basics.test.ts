@@ -230,6 +230,33 @@ describe("security audit config basics", () => {
     }
   });
 
+  it("does not inspect a malformed mcporter registry without relevant agent skill scopes", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-unused-"));
+    try {
+      await fs.mkdir(path.join(stateDir, "skills", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "skills", "config", "mcporter.json"),
+        "{ not json",
+        "utf8",
+      );
+
+      const report = await runSecurityAudit({
+        config: {},
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(report.findings.map((finding) => finding.checkId)).not.toContain(
+        "tools.exec.mcporter_registry_inspection_incomplete",
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("warns when the global mcporter registry path is not a regular file", async () => {
     const stateDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-audit-mcporter-non-regular-"),

@@ -1180,6 +1180,11 @@ async function collectAgentSkillMcpBoundaryFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
 }): Promise<SecurityAuditFinding[]> {
+  const scopes = collectAgentSkillMcpBoundaryScopes(params.cfg);
+  if (scopes.length === 0) {
+    return [];
+  }
+
   const findings: SecurityAuditFinding[] = [];
   const sources: McpServerSourceSummary[] = [];
   const configServerNames = listConfiguredMcpServerNames(params.cfg);
@@ -1204,11 +1209,6 @@ async function collectAgentSkillMcpBoundaryFindings(params: {
     sources.push(globalMcporterRegistry.summary);
   }
   if (sources.length === 0) {
-    return findings;
-  }
-
-  const scopes = collectAgentSkillMcpBoundaryScopes(params.cfg);
-  if (scopes.length === 0) {
     return findings;
   }
 
