@@ -120,17 +120,6 @@ export function validateCandidateCheckout({
   toolingSha: unknown;
   workflowRef: unknown;
 };
-export function validateTrustedToolingPin({
-  toolingSha,
-  pinnedToolingSha,
-  latestTrustedToolingSha,
-  isAncestor,
-}: {
-  toolingSha: string;
-  pinnedToolingSha: string;
-  latestTrustedToolingSha: string;
-  isAncestor?: (ancestor: string, target: string) => boolean;
-}): string;
 export function candidateCumulativeShippedPullRequests(
   changelog: string,
   label: string,
@@ -221,17 +210,6 @@ export function validateNpmPreflightRunSource({
   headSha: string;
   workflowRef: string;
 };
-export function validateTrustedToolingPin({
-  toolingSha,
-  pinnedToolingSha,
-  latestTrustedToolingSha,
-  isAncestor,
-}: {
-  toolingSha: string;
-  pinnedToolingSha: string;
-  latestTrustedToolingSha: string;
-  isAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
-}): string;
 export function candidateParallelsArgs(
   tarballPath: unknown,
   dependencyTarballPaths?: unknown[],
