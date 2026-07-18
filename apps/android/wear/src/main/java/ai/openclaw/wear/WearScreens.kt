@@ -44,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -73,6 +74,7 @@ import androidx.wear.compose.material3.HorizontalPagerScaffold
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -430,6 +432,8 @@ private fun VoicePage(
         else ->
           ThreadVoiceMode(
             conversation = realtimeTalk.conversation,
+            thinking =
+              realtimeThinkingOverride || realtimeTalk.status == WearRealtimeTalkStatus.THINKING,
             realtimeActive = realtimeTalk.active || realtimeCapturing,
             actionBusy = actionBusy,
             inputEnabled = inputEnabled,
@@ -695,6 +699,7 @@ private fun VoiceGestureLabel(
 @Composable
 private fun ThreadVoiceMode(
   conversation: List<WearRealtimeTalkEntry>,
+  thinking: Boolean,
   realtimeActive: Boolean,
   actionBusy: Boolean,
   inputEnabled: Boolean,
@@ -703,6 +708,35 @@ private fun ThreadVoiceMode(
 ) {
   val colors = OpenClawWearTheme.colors
   val listState = rememberTransformingLazyColumnState()
+  val coroutineScope = rememberCoroutineScope()
+  val visibleConversation = conversation.takeLast(VISIBLE_REALTIME_ENTRY_COUNT)
+  val contentRevision = wearThreadContentRevision(visibleConversation, thinking)
+  val latestItemIndex = visibleConversation.size + (if (thinking) 1 else 0) - 1
+  var followState by remember { mutableStateOf(WearThreadFollowState()) }
+
+  LaunchedEffect(listState) {
+    snapshotFlow {
+      WearThreadViewport(
+        atLatest = !listState.canScrollForward,
+        scrollingBackward = listState.isScrollInProgress && listState.lastScrolledBackward,
+      )
+    }.collect { viewport ->
+      followState =
+        nextWearThreadFollowForViewport(
+          state = followState,
+          atLatest = viewport.atLatest,
+          scrollingBackward = viewport.scrollingBackward,
+        )
+    }
+  }
+  LaunchedEffect(contentRevision) {
+    val update = nextWearThreadFollowForContent(followState, contentRevision)
+    followState = update.state
+    if (update.scrollToLatest && latestItemIndex >= 0) {
+      listState.animateScrollToItem(latestItemIndex)
+    }
+  }
+
   Box(modifier = Modifier.fillMaxSize()) {
     TransformingLazyColumn(
       modifier =
@@ -714,7 +748,7 @@ private fun ThreadVoiceMode(
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-      if (conversation.isEmpty()) {
+      if (visibleConversation.isEmpty() && !thinking) {
         item {
           Text(
             text = stringResource(R.string.no_live_conversation),
@@ -726,13 +760,42 @@ private fun ThreadVoiceMode(
           )
         }
       } else {
-        conversation
-          .takeLast(VISIBLE_REALTIME_ENTRY_COUNT)
-          .forEach { entry ->
-            item(key = entry.id) {
-              RealtimeTalkBubble(entry)
-            }
+        visibleConversation.forEach { entry ->
+          item(key = entry.id) {
+            RealtimeTalkBubble(entry)
           }
+        }
+        if (thinking) {
+          item(key = "realtime-thinking") {
+            WearThreadThinking()
+          }
+        }
+      }
+    }
+    if (followState.hasNewContent) {
+      Box(
+        modifier =
+          Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 44.dp)
+            .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
+            .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
+            .clickable(role = Role.Button) {
+              followState = wearThreadFollowLatest(followState)
+              if (latestItemIndex >= 0) {
+                coroutineScope.launch {
+                  listState.animateScrollToItem(latestItemIndex)
+                }
+              }
+            }.padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = "${stringResource(R.string.new_messages)} ↓",
+          color = colors.voiceAccent,
+          fontSize = 9.sp,
+          fontWeight = FontWeight.Bold,
+        )
       }
     }
     Row(
@@ -795,6 +858,95 @@ private fun ThreadVoiceMode(
     }
   }
 }
+
+@Composable
+private fun WearThreadThinking() {
+  val colors = OpenClawWearTheme.colors
+  Box(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .padding(start = 12.dp, end = 28.dp)
+        .background(colors.surfaceRaised, RoundedCornerShape(14.dp))
+        .border(1.dp, colors.borderStrong, RoundedCornerShape(14.dp))
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+  ) {
+    Text(
+      text = "${stringResource(R.string.thinking)}…",
+      color = colors.textMuted,
+      fontSize = 10.sp,
+      fontWeight = FontWeight.SemiBold,
+    )
+  }
+}
+
+internal data class WearThreadContentRevision(
+  val entryCount: Int,
+  val latestEntryId: String?,
+  val latestText: String?,
+  val latestStreaming: Boolean,
+  val thinking: Boolean,
+)
+
+internal data class WearThreadFollowState(
+  val contentRevision: WearThreadContentRevision? = null,
+  val followingLatest: Boolean = true,
+  val hasNewContent: Boolean = false,
+)
+
+internal data class WearThreadFollowUpdate(
+  val state: WearThreadFollowState,
+  val scrollToLatest: Boolean,
+)
+
+private data class WearThreadViewport(
+  val atLatest: Boolean,
+  val scrollingBackward: Boolean,
+)
+
+internal fun wearThreadContentRevision(
+  conversation: List<WearRealtimeTalkEntry>,
+  thinking: Boolean,
+): WearThreadContentRevision {
+  val latest = conversation.lastOrNull()
+  return WearThreadContentRevision(
+    entryCount = conversation.size,
+    latestEntryId = latest?.id,
+    latestText = latest?.text,
+    latestStreaming = latest?.streaming == true,
+    thinking = thinking,
+  )
+}
+
+internal fun nextWearThreadFollowForContent(
+  state: WearThreadFollowState,
+  contentRevision: WearThreadContentRevision,
+): WearThreadFollowUpdate {
+  if (state.contentRevision == contentRevision) {
+    return WearThreadFollowUpdate(state = state, scrollToLatest = false)
+  }
+  return WearThreadFollowUpdate(
+    state =
+      state.copy(
+        contentRevision = contentRevision,
+        hasNewContent = !state.followingLatest,
+      ),
+    scrollToLatest = state.followingLatest,
+  )
+}
+
+internal fun nextWearThreadFollowForViewport(
+  state: WearThreadFollowState,
+  atLatest: Boolean,
+  scrollingBackward: Boolean,
+): WearThreadFollowState =
+  when {
+    atLatest -> state.copy(followingLatest = true, hasNewContent = false)
+    scrollingBackward -> state.copy(followingLatest = false)
+    else -> state
+  }
+
+internal fun wearThreadFollowLatest(state: WearThreadFollowState): WearThreadFollowState = state.copy(followingLatest = true, hasNewContent = false)
 
 @Composable
 private fun VoiceOrb(
