@@ -14,6 +14,45 @@ const OVERSIZED_IGNORE_FILE = Symbol("oversizedIgnoreFile");
 
 export type IgnoreMatcher = ReturnType<typeof ignore>;
 
+const literalExcludedSubtrees = new WeakMap<IgnoreMatcher, Set<string>>();
+
+function isInLiteralSubtree(pathname: string, subtrees: Set<string>): boolean {
+  const normalized = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  for (const subtree of subtrees) {
+    if (!subtree || normalized === subtree || normalized.startsWith(`${subtree}/`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function excludeLiteralSubtree(matcher: IgnoreMatcher, subtree: string): void {
+  const existing = literalExcludedSubtrees.get(matcher);
+  if (existing) {
+    existing.add(subtree);
+    return;
+  }
+
+  const subtrees = new Set([subtree]);
+  literalExcludedSubtrees.set(matcher, subtrees);
+  const originalIgnores = matcher.ignores.bind(matcher);
+  const originalTest = matcher.test.bind(matcher);
+  const originalCheckIgnore = matcher.checkIgnore.bind(matcher);
+
+  matcher.ignores = (pathname) =>
+    isInLiteralSubtree(pathname, subtrees) || originalIgnores(pathname);
+  matcher.test = (pathname) =>
+    isInLiteralSubtree(pathname, subtrees)
+      ? { ignored: true, unignored: false }
+      : originalTest(pathname);
+  matcher.checkIgnore = (pathname) =>
+    isInLiteralSubtree(pathname, subtrees)
+      ? { ignored: true, unignored: false }
+      : originalCheckIgnore(pathname);
+  matcher.filter = (pathnames) => pathnames.filter((pathname) => !matcher.ignores(pathname));
+  matcher.createFilter = () => (pathname) => !matcher.ignores(pathname);
+}
+
 export const toPosixPath = (pathValue: string) => pathValue.split(sep).join("/");
 
 /** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
@@ -33,7 +72,11 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()): Ign
       // the scan surface files the user asked to hide. Stop here so a later
       // ignore file in this directory cannot negate the exclusion and reopen a
       // subtree whose policy could not be parsed.
-      ig.add(`${prefix}**`);
+      // Filesystem paths are literal, but gitignore patterns treat characters
+      // such as #, !, [, *, and ? specially. Keep the fail-closed subtree as a
+      // literal path predicate so unusual directory names cannot reopen it.
+      const subtree = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+      excludeLiteralSubtree(ig, subtree);
       break;
     }
     if (content === null) {

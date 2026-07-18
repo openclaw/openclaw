@@ -62,6 +62,23 @@ describe("addIgnoreRules", () => {
     expect(ig.ignores("secret.txt")).toBe(true);
   });
 
+  it("treats fail-closed subtree paths literally", () => {
+    const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
+    const unusualNames = ["#private", "!private", "[private]", "private?docs", "private*docs"];
+    let ig = ignore();
+
+    for (const name of unusualNames) {
+      const nestedDir = path.join(tempDir, name);
+      fs.mkdirSync(nestedDir);
+      fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversized, "utf-8");
+      ig = addIgnoreRules(nestedDir, tempDir, ig);
+
+      expect(ig.ignores(`${name}/secret.txt`)).toBe(true);
+    }
+
+    expect(ig.ignores("public/secret.txt")).toBe(false);
+  });
+
   it("follows a symlinked .gitignore to a regular file", () => {
     const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-real-"));
     try {
