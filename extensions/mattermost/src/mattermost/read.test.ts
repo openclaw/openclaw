@@ -131,7 +131,30 @@ describe("readMattermostMessages", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("fails closed when trusted current targets disagree on conversation kind", async () => {
+  it("uses the trusted native channel ID for the current DM", async () => {
+    const fetchImpl = createReadFetch();
+
+    const result = await readMattermostMessages({
+      cfg: createMattermostTestConfig("read-current-dm"),
+      channelId: "CURRENT",
+      accountId: "default",
+      context: {
+        ...delegatedContext(),
+        toolContext: {
+          currentChannelProvider: "mattermost",
+          currentChannelId: "channel:CURRENT",
+          currentMessagingTarget: "user:PEER",
+        },
+      },
+      fetchImpl,
+    });
+
+    expect(result.messages.map((message) => message.id)).toEqual(["post-2", "post-1"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(requestUrl(fetchImpl.mock.calls[0]![0])).toContain("/channels/CURRENT/posts?");
+  });
+
+  it("fails closed when the trusted native channel ID names another conversation", async () => {
     const fetchImpl = createReadFetch();
 
     await expect(
@@ -143,8 +166,8 @@ describe("readMattermostMessages", () => {
           ...delegatedContext(),
           toolContext: {
             currentChannelProvider: "mattermost",
-            currentChannelId: "channel:CURRENT",
-            currentMessagingTarget: "user:CURRENT",
+            currentChannelId: "channel:OTHER",
+            currentMessagingTarget: "channel:CURRENT",
           },
         },
         fetchImpl,
