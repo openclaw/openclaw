@@ -15,14 +15,13 @@ import {
   formatLocationText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
   parseStrictFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
@@ -57,20 +56,15 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
-import {
-  isRecentOutboundMessage,
-  rememberRecentOutboundMessage,
-  WhatsAppRetryableInboundError,
-  whatsAppInboundReplayGuard,
-} from "./dedupe.js";
+import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
-  createWhatsAppDurableInboundStores,
+  createWhatsAppDurableInboundQueue,
   createWhatsAppIngressDrain,
-  deserializeWhatsAppDurableInboundMessage,
-  serializeWhatsAppDurableInboundMessage,
-  type WhatsAppDurableInboundMetadata,
+  enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
+  type WhatsAppDurableInboundQueue,
+  type WhatsAppIngressLifecycle,
   type WhatsAppReadReceiptTarget,
 } from "./durable-receive.js";
 import {
@@ -83,6 +77,7 @@ import {
   extractText,
   hasInboundUserContent,
 } from "./extract.js";
+import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 import {
@@ -110,7 +105,7 @@ const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+const WHATSAPP_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
@@ -118,23 +113,6 @@ type WhatsAppGroupMetadataCacheEntry = {
   expires: number;
 };
 
-function resolveRetryableWhatsAppInboundError(
-  error: unknown,
-): WhatsAppRetryableInboundError | null {
-  if (error instanceof WhatsAppRetryableInboundError) {
-    return error;
-  }
-  const hasSessionInitConflict = collectErrorGraphCandidates(error, (current) => [
-    current.cause,
-    current.error,
-  ]).some((candidate) =>
-    REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
-  );
-  if (!hasSessionInitConflict) {
-    return null;
-  }
-  return new WhatsAppRetryableInboundError(formatErrorMessage(error), { cause: error });
-}
 export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
 type WhatsAppBaileysCacheEntry<T> = {
   expiresAt: number;
@@ -305,10 +283,6 @@ function shouldClearSocketRefAfterSendFailure(err: unknown): boolean {
   return /closed|reset|disconnect|no active socket/i.test(formatError(err));
 }
 
-function isNonEmptyString(value: string | undefined): value is string {
-  return Boolean(value);
-}
-
 type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
   admission: AdmittedWebInboundMessage["admission"];
 };
@@ -357,6 +331,7 @@ type MonitorWebInboxOptions = {
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
+  durableInboundQueue?: WhatsAppDurableInboundQueue;
 };
 
 type AttachWebInboxToSocketOptions = Omit<
@@ -452,62 +427,14 @@ export async function attachWebInboxToSocket(
   };
   type QueuedInboundMessageMetadata = {
     admission: AdmittedWebInboundCallbackMessage["admission"];
-    replayClaim?: ChannelReplayClaimHandle;
     debounceKey?: string;
-    durableId?: string;
+    turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
   };
   type QueuedInboundMessage = AdmittedWebInboundCallbackMessage & QueuedInboundMessageMetadata;
-  const { journal: durableInboundJournal, queue: durableInboundQueue } =
-    createWhatsAppDurableInboundStores(options.accountId);
-  // Drain-owned claims: finalize skips journal complete/release; drain tombstones on return.
-  const drainOwnedDurableIds = new Set<string>();
-  // Per-claim flush waiters so processClaimed sees retryable flush failures the
-  // debouncer would otherwise swallow (onFlush catch + non-throwing chain).
-  type ClaimFlushWaiter = {
-    promise: Promise<void>;
-    resolve: () => void;
-    reject: (error: unknown) => void;
-    settled: boolean;
-  };
-  const claimFlushWaiters = new Map<string, ClaimFlushWaiter>();
-  /** Set when enqueue schedules a flush that must settle the claim waiter. */
-  const claimIdsEnqueuedForFlush = new Set<string>();
-  const ensureClaimFlushWaiter = (durableId: string): ClaimFlushWaiter => {
-    const existing = claimFlushWaiters.get(durableId);
-    if (existing) {
-      return existing;
-    }
-    let resolve!: () => void;
-    let reject!: (error: unknown) => void;
-    const promise = new Promise<void>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
-    // Prevent unhandled rejection until processClaimed awaits.
-    void promise.catch(() => undefined);
-    const waiter: ClaimFlushWaiter = { promise, resolve, reject, settled: false };
-    claimFlushWaiters.set(durableId, waiter);
-    return waiter;
-  };
-  const settleClaimFlushWaiters = (entries: QueuedInboundMessage[], error?: unknown) => {
-    for (const entry of entries) {
-      if (!isNonEmptyString(entry.durableId)) {
-        continue;
-      }
-      const waiter = claimFlushWaiters.get(entry.durableId);
-      if (!waiter || waiter.settled) {
-        continue;
-      }
-      waiter.settled = true;
-      if (error !== undefined) {
-        waiter.reject(error);
-      } else {
-        waiter.resolve();
-      }
-    }
-  };
+  const durableInboundQueue =
+    options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
@@ -575,49 +502,63 @@ export async function attachWebInboxToSocket(
       return (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
 
-  const finalizeInboundDelivery = async (
-    entries: QueuedInboundMessage[],
-    error?: unknown,
-  ): Promise<void> => {
-    const replayClaims = entries
-      .map((entry) => entry.replayClaim)
-      .filter((claim): claim is ChannelReplayClaimHandle => claim !== undefined);
-    const durableEntries = entries.filter(
-      (entry): entry is QueuedInboundMessage & { durableId: string } =>
-        isNonEmptyString(entry.durableId) && !drainOwnedDurableIds.has(entry.durableId),
-    );
-    const readReceiptEntries = entries.filter(
-      (entry): entry is QueuedInboundMessage & { readReceipt: WhatsAppReadReceiptTarget } =>
-        Boolean(entry.readReceipt),
-    );
-    const retryableError = resolveRetryableWhatsAppInboundError(error);
-    if (retryableError) {
-      for (const claim of replayClaims) {
-        claim.release({ error: retryableError });
-      }
-      await Promise.all(
-        durableEntries.map((entry) =>
-          durableInboundJournal.release(entry.durableId, {
-            lastError: formatError(retryableError),
-          }),
-        ),
-      );
-      // Drain-owned failures: throw so dispatchClaimedEvent returns failed-retryable.
-      if (entries.some((entry) => entry.durableId && drainOwnedDurableIds.has(entry.durableId))) {
-        throw retryableError;
-      }
-      return;
+  const buildFlushIngressLifecycle = (entries: QueuedInboundMessage[]) => {
+    const lifecycles = entries
+      .map((entry) => entry.turnAdoptionLifecycle)
+      .filter((lifecycle) => lifecycle !== undefined);
+    const [firstLifecycle] = lifecycles;
+    if (!firstLifecycle) {
+      return {
+        lifecycle: undefined,
+        settle: async () => {},
+        abandon: async () => {},
+      };
     }
-    await Promise.all([
-      ...replayClaims.map((claim) => claim.commit()),
-      ...durableEntries.map((entry) =>
-        durableInboundJournal.complete(
-          entry.durableId,
-          entry.readReceipt ? { metadata: { readReceipt: entry.readReceipt } } : undefined,
-        ),
-      ),
-    ]);
-    await Promise.all(readReceiptEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)));
+    let handedOff = false;
+    const adoptAll = async () => {
+      for (const lifecycle of lifecycles) {
+        await lifecycle.onAdopted();
+      }
+    };
+    return {
+      lifecycle: {
+        abortSignal:
+          lifecycles.length === 1
+            ? firstLifecycle.abortSignal
+            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+        onAdopted: async () => {
+          handedOff = true;
+          await adoptAll();
+        },
+        onDeferred: () => {
+          handedOff = true;
+          for (const lifecycle of lifecycles) {
+            lifecycle.onDeferred();
+          }
+        },
+        onAdoptionFinalizing: () => {
+          for (const lifecycle of lifecycles) {
+            lifecycle.onAdoptionFinalizing();
+          }
+        },
+        onAbandoned: async () => {
+          handedOff = true;
+          await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAbandoned()));
+        },
+      } satisfies WhatsAppIngressLifecycle,
+      // Gated or otherwise terminal no-dispatch turns still own every merged claim.
+      settle: async () => {
+        if (!handedOff) {
+          await adoptAll();
+        }
+      },
+      abandon: async () => {
+        if (!handedOff) {
+          handedOff = true;
+          await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAbandoned()));
+        }
+      },
+    };
   };
 
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
@@ -632,19 +573,20 @@ export async function attachWebInboxToSocket(
       activeInboundFlushes.add(flushTask);
       publishPendingWorkState();
       notifyDebounceWork();
-      let flushError: unknown;
       try {
         const orderedEntries = orderDebouncedInboundEntries(entries);
         const last = orderedEntries.at(-1);
         if (!last) {
-          settleClaimFlushWaiters(entries);
           return;
         }
+        const { lifecycle, settle, abandon } = buildFlushIngressLifecycle(orderedEntries);
         try {
           if (orderedEntries.length === 1) {
-            await options.onMessage(last);
-            await finalizeInboundDelivery(orderedEntries);
-            settleClaimFlushWaiters(orderedEntries);
+            await options.onMessage(attachWhatsAppIngressLifecycle(last, lifecycle));
+            await settle();
+            await Promise.all(
+              orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
+            );
             return;
           }
           const mentioned = new Set<string>();
@@ -675,38 +617,33 @@ export async function attachWebInboxToSocket(
                   mentions: combinedMentions,
                 }
               : undefined;
-          const combinedMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
-            ...last,
-            payload: {
-              ...last.payload,
-              body: combinedBody,
-              commandBody: combinedCommandBody,
-            },
-            group: combinedGroup,
-            event: {
-              ...last.event,
-              isBatched: true,
-            },
-          });
+          const combinedMessage: QueuedInboundMessage = attachWhatsAppIngressLifecycle(
+            withDeprecatedWebInboundMessageFlatAliases({
+              ...last,
+              ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
+              payload: {
+                ...last.payload,
+                body: combinedBody,
+                commandBody: combinedCommandBody,
+              },
+              group: combinedGroup,
+              event: {
+                ...last.event,
+                isBatched: true,
+              },
+            }),
+            lifecycle,
+          );
           await options.onMessage(combinedMessage);
-          await finalizeInboundDelivery(orderedEntries);
-          settleClaimFlushWaiters(orderedEntries);
+          await settle();
+          await Promise.all(
+            orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
+          );
         } catch (error) {
-          flushError = error;
-          try {
-            await finalizeInboundDelivery(orderedEntries, error);
-          } catch (finalizeError) {
-            // Drain-owned retryable path rethrows from finalize — that is the
-            // authoritative outcome for claim waiters.
-            flushError = finalizeError;
-            throw finalizeError;
-          }
+          await abandon();
           throw error;
         }
       } finally {
-        if (flushError !== undefined) {
-          settleClaimFlushWaiters(entries, flushError);
-        }
         for (const entry of entries) {
           if (entry.debounceKey) {
             pendingDebounceKeys.delete(entry.debounceKey);
@@ -1063,6 +1000,28 @@ export async function attachWebInboxToSocket(
     access: AcceptedInboundAccessControlResult;
   };
 
+  const shouldSkipRecentOutboundEcho = (msg: WAMessage): boolean => {
+    const id = msg.key?.id ?? undefined;
+    const remoteJid = msg.key?.remoteJid;
+    if (
+      !msg.key?.fromMe ||
+      !id ||
+      !remoteJid ||
+      !isRecentOutboundMessage({
+        accountId: options.accountId,
+        remoteJid,
+        messageId: id,
+      })
+    ) {
+      return false;
+    }
+    logWhatsAppVerbose(
+      options.verbose,
+      `Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`,
+    );
+    return true;
+  };
+
   const normalizeInboundMessage = async (
     msg: WAMessage,
   ): Promise<NormalizedInboundMessage | null> => {
@@ -1079,19 +1038,7 @@ export async function attachWebInboxToSocket(
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
     // Applies to both groups and DMs/self-chat — without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.
-    if (
-      Boolean(msg.key?.fromMe) &&
-      id &&
-      isRecentOutboundMessage({
-        accountId: options.accountId,
-        remoteJid,
-        messageId: id,
-      })
-    ) {
-      logWhatsAppVerbose(
-        options.verbose,
-        `Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`,
-      );
+    if (shouldSkipRecentOutboundEcho(msg)) {
       return null;
     }
     // Gate pairing access-control on extractable inbound user content. Baileys
@@ -1215,28 +1162,6 @@ export async function attachWebInboxToSocket(
     await maybeMarkInboundAsRead(target);
   };
 
-  const completeUndeliverableDurableInbound = async (
-    durableId: string | undefined,
-    metadata: WhatsAppDurableInboundMetadata | undefined,
-  ) => {
-    if (!durableId) {
-      return;
-    }
-    await durableInboundJournal.complete(
-      durableId,
-      metadata?.readReceipt ? { metadata: { readReceipt: metadata.readReceipt } } : undefined,
-    );
-  };
-
-  const buildDurableInboundPayload = (
-    msg: WAMessage,
-    upsertType: string | undefined,
-  ): WhatsAppDurableInboundPayload => ({
-    message: serializeWhatsAppDurableInboundMessage(msg),
-    ...(upsertType ? { upsertType } : {}),
-    receivedAt: Date.now(),
-  });
-
   const shouldSkipStaleAppend = (msg: WAMessage, upsertType: string | undefined): boolean => {
     if (upsertType !== "append") {
       return false;
@@ -1254,203 +1179,10 @@ export async function attachWebInboxToSocket(
     return msgTsMs < appendAfterMs;
   };
 
-  // Accept-time normalization carried to the drain dispatch. Live delivery must
-  // not re-derive transient facts (LID mappings, group state) that resolved at
-  // receive time — a second lookup can fail and silently drop the message.
-  // Restart replay finds no entry and re-normalizes from the persisted payload.
-  const preparedInboundByDurableId = new Map<
-    string,
-    NonNullable<Awaited<ReturnType<typeof normalizeInboundMessage>>>
-  >();
-
-  const processDurableInboundMessage = async (
-    msg: WAMessage,
-    upsertType: string | undefined,
-    receiveOrder: number | undefined,
-    stored?: {
-      id: string;
-      payload: WhatsAppDurableInboundPayload;
-      metadata?: WhatsAppDurableInboundMetadata;
-    },
-  ) => {
-    const prepared = stored ? preparedInboundByDurableId.get(stored.id) : undefined;
-    if (stored) {
-      preparedInboundByDurableId.delete(stored.id);
-    }
-    const inbound = prepared ?? (await normalizeInboundMessage(msg));
-    if (!inbound) {
-      if (stored) {
-        await completeUndeliverableDurableInbound(stored.id, stored.metadata);
-      }
-      return;
-    }
-
-    const readReceipt = stored?.metadata?.readReceipt ?? buildReadReceiptTarget(inbound);
-    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
-
-    if (!stored && shouldSkipStaleAppend(msg, upsertType)) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
-      return;
-    }
-
-    let durableId =
-      stored?.id ??
-      (inbound.id
-        ? createWhatsAppDurableInboundMessageId({
-            remoteJid: inbound.remoteJid,
-            id: inbound.id,
-          })
-        : undefined);
-    const durableMetadata: WhatsAppDurableInboundMetadata | undefined = deliveryReadReceipt
-      ? { readReceipt: deliveryReadReceipt }
-      : undefined;
-
-    if (durableId && !stored) {
-      try {
-        const accepted = await durableInboundJournal.accept(
-          durableId,
-          buildDurableInboundPayload(msg, upsertType),
-          {
-            metadata: durableMetadata,
-            receivedAt: inbound.messageTimestampMs,
-          },
-        );
-        if (accepted.kind === "completed") {
-          await maybeMarkNonSelfChatReadReceipt(
-            inbound,
-            accepted.record.metadata?.readReceipt ?? deliveryReadReceipt,
-          );
-          return;
-        }
-        // Enqueued (new or retryable). Hand the accept-time normalization to the
-        // drain dispatch (consumed once; crash replay re-normalizes), then kick
-        // the drain without awaiting idle — a pending handler must not block
-        // later messages in this upsert; the claim guarantees exactly-once.
-        preparedInboundByDurableId.set(durableId, inbound);
-        void pumpDurableInboundDrain().catch((err: unknown) => {
-          inboundLogger.warn(
-            { error: formatError(err) },
-            "whatsapp durable inbound drain pump failed",
-          );
-        });
-        return;
-      } catch (err) {
-        durableId = undefined;
-        const error = formatError(err);
-        inboundLogger.warn(
-          { error },
-          "failed persisting durable WhatsApp inbound; delivering live",
-        );
-        inboundConsoleLog.warn(
-          `Failed persisting durable WhatsApp inbound; delivering live: ${error}`,
-        );
-      }
-    }
-
-    // Stored (drain claim) or live fallback without durable journal.
-    const enriched = await enrichInboundMessage(msg);
-    if (!enriched) {
-      // Pre-migration replay completed undeliverable rows AND sent the receipt.
-      // Drain still tombstones via dispatch return; receipt must not be skipped.
-      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      if (stored) {
-        return;
-      }
-      await completeUndeliverableDurableInbound(durableId, durableMetadata);
-      return;
-    }
-
-    const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
-    const dedupeClaim = dedupeKey
-      ? await whatsAppInboundReplayGuard.claim(dedupeKey)
-      : ({ kind: "invalid" } as const);
-    if (dedupeClaim.kind === "duplicate" || dedupeClaim.kind === "inflight") {
-      if (dedupeClaim.kind === "duplicate") {
-        // Drain-claimed rows tombstone via the dispatch return; completing here
-        // would double-settle the claim (pre-migration live path still completes).
-        if (!stored) {
-          await completeUndeliverableDurableInbound(durableId, durableMetadata);
-        }
-        await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-        return;
-      }
-      // "inflight": another delivery holds the dedupe claim — keep durable row
-      // pending for replay (pre-migration). Do not complete the drain claim.
-      if (stored) {
-        throw new Error("whatsapp inbound dedupe claim contended (inflight)");
-      }
-      return;
-    }
-
-    recordAcceptedInboundActivity(options.accountId);
-    // Keep durableId on the entry so finalize can rethrow drain-owned failures.
-    // drainOwnedDurableIds only suppresses inline journal complete/release.
-    if (durableId && drainOwnedDurableIds.has(durableId)) {
-      ensureClaimFlushWaiter(durableId);
-      claimIdsEnqueuedForFlush.add(durableId);
-    }
-    await enqueueInboundMessage(msg, inbound, enriched, {
-      durableId,
-      readReceipt: deliveryReadReceipt,
-      receiveOrder,
-      ...(dedupeClaim.kind === "claimed" ? { replayClaim: dedupeClaim.handle } : {}),
-    });
-  };
-
-  const processClaimedDurableInbound = async (claim: {
-    id: string;
-    payload: WhatsAppDurableInboundPayload;
-    metadata?: WhatsAppDurableInboundMetadata;
-  }) => {
-    drainOwnedDurableIds.add(claim.id);
-    // Register before process so flush can settle even if it races enqueue.
-    const flushWaiter = ensureClaimFlushWaiter(claim.id);
-    try {
-      await processDurableInboundMessage(
-        deserializeWhatsAppDurableInboundMessage(claim.payload.message),
-        claim.payload.upsertType,
-        claim.payload.receivedAt,
-        {
-          id: claim.id,
-          payload: claim.payload,
-          metadata: claim.metadata,
-        },
-      );
-      // Undeliverable/duplicate early returns never enqueue — complete the waiter.
-      // Enqueued paths wait for this claim's own flush only (preserve debounce window).
-      if (!claimIdsEnqueuedForFlush.has(claim.id) && !flushWaiter.settled) {
-        flushWaiter.settled = true;
-        flushWaiter.resolve();
-      }
-      await flushWaiter.promise;
-    } finally {
-      claimIdsEnqueuedForFlush.delete(claim.id);
-      claimFlushWaiters.delete(claim.id);
-      drainOwnedDurableIds.delete(claim.id);
-    }
-  };
-
-  const durableInboundDrain = createWhatsAppIngressDrain({
-    queue: durableInboundQueue,
-    processClaimed: processClaimedDurableInbound,
-    onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
-  });
-
-  const pumpDurableInboundDrain = async () => {
-    const pumpTask = (async () => {
-      await durableInboundDrain.recoverStaleClaims();
-      await durableInboundDrain.drainOnce();
-      await durableInboundDrain.waitForIdle();
-    })();
-    pendingMessageHandlers.add(pumpTask);
-    publishPendingWorkState();
-    try {
-      await pumpTask;
-    } finally {
-      pendingMessageHandlers.delete(pumpTask);
-      publishPendingWorkState();
-    }
-  };
+  // Live rows keep receive-time identity facts until their first drain attempt.
+  // Restart replay has no entry and re-normalizes from the persisted payload.
+  type PreparedInbound = NonNullable<Awaited<ReturnType<typeof normalizeInboundMessage>>>;
+  const preparedInboundByDurableId = new Map<string, Promise<PreparedInbound | null | undefined>>();
 
   type EnrichedInboundMessage = {
     body: string;
@@ -1542,10 +1274,9 @@ export async function attachWebInboxToSocket(
     inbound: NormalizedInboundMessage,
     enriched: EnrichedInboundMessage,
     durable: {
-      durableId?: string;
       readReceipt?: WhatsAppReadReceiptTarget;
       receiveOrder?: number;
-      replayClaim?: ChannelReplayClaimHandle;
+      turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     },
   ) => {
     const chatJid = inbound.remoteJid;
@@ -1685,8 +1416,7 @@ export async function attachWebInboxToSocket(
           }
         : undefined,
       group,
-      replayClaim: durable.replayClaim,
-      durableId: durable.durableId,
+      turnAdoptionLifecycle: durable.turnAdoptionLifecycle,
       readReceipt: durable.readReceipt,
       receiveOrder: durable.receiveOrder,
     });
@@ -1716,17 +1446,150 @@ export async function attachWebInboxToSocket(
         },
       );
     }
-    try {
-      const task = Promise.resolve(debouncer.enqueue(inboundMessage));
-      void task.catch((err: unknown) => {
-        inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
-        inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
-      });
-    } catch (err) {
-      inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
-      inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
-    }
+    await debouncer.enqueue(inboundMessage);
   };
+
+  const dispatchInboundMessage = async (
+    msg: WAMessage,
+    context: Pick<
+      WhatsAppDurableInboundPayload,
+      "upsertType" | "skipStaleAppend" | "skipRecentOutboundEcho" | "receivedAt" | "receiveOrder"
+    > & {
+      eventId?: string;
+      lifecycle?: WhatsAppIngressLifecycle;
+    },
+  ): Promise<"completed" | "deferred"> => {
+    rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+    if (context.skipRecentOutboundEcho === true) {
+      return "completed";
+    }
+    const preparation = context.eventId
+      ? preparedInboundByDurableId.get(context.eventId)
+      : undefined;
+    if (context.eventId) {
+      preparedInboundByDurableId.delete(context.eventId);
+    }
+    const prepared = await preparation;
+    if (prepared === null) {
+      return "completed";
+    }
+    const inbound = prepared ?? (await normalizeInboundMessage(msg));
+    if (!inbound) {
+      return "completed";
+    }
+    const readReceipt = buildReadReceiptTarget(inbound);
+    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
+    if (context.skipStaleAppend === true) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
+      return "completed";
+    }
+
+    const enriched = await enrichInboundMessage(msg);
+    if (!enriched) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+      return "completed";
+    }
+
+    recordAcceptedInboundActivity(options.accountId);
+    await enqueueInboundMessage(msg, inbound, enriched, {
+      readReceipt: deliveryReadReceipt,
+      receiveOrder: context.receiveOrder ?? context.receivedAt,
+      turnAdoptionLifecycle: context.lifecycle,
+    });
+    return "deferred";
+  };
+
+  let durableInboundDrain!: ReturnType<typeof createWhatsAppIngressDrain>;
+  let durableDrainPass: Promise<void> | undefined;
+  let durableDrainRequested = false;
+  let durableDrainClosed = false;
+  const requestDurableInboundDrain = (): Promise<void> => {
+    if (durableDrainClosed) {
+      return Promise.resolve();
+    }
+    durableDrainRequested = true;
+    if (!durableDrainPass) {
+      let passFailed = false;
+      const task = (async () => {
+        await durableInboundDrain.recoverStaleClaims();
+        while (durableDrainRequested) {
+          durableDrainRequested = false;
+          const result = await durableInboundDrain.drainOnce();
+          if (result.started > 0) {
+            await durableInboundDrain.waitForIdle();
+            durableDrainRequested = true;
+          }
+        }
+      })().catch((error: unknown) => {
+        passFailed = true;
+        throw error;
+      });
+      durableDrainPass = task;
+      pendingMessageHandlers.add(task);
+      publishPendingWorkState();
+      void task
+        .finally(() => {
+          if (durableDrainPass === task) {
+            durableDrainPass = undefined;
+          }
+          pendingMessageHandlers.delete(task);
+          publishPendingWorkState();
+          if (durableDrainRequested && !passFailed) {
+            void requestDurableInboundDrain().catch((error: unknown) => {
+              inboundLogger.error(
+                { error: formatError(error) },
+                "whatsapp durable inbound drain failed",
+              );
+            });
+          }
+        })
+        .catch(() => undefined);
+    }
+    return durableDrainPass;
+  };
+  const requestDrainAfterLaneSettlement = () => {
+    void requestDurableInboundDrain().catch((error: unknown) => {
+      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed");
+    });
+  };
+  const continueDrainAfterLaneSettlement = (
+    lifecycle: WhatsAppIngressLifecycle,
+  ): WhatsAppIngressLifecycle => ({
+    abortSignal: lifecycle.abortSignal,
+    onAdopted: async () => {
+      await lifecycle.onAdopted();
+      requestDrainAfterLaneSettlement();
+    },
+    onDeferred: lifecycle.onDeferred,
+    onAdoptionFinalizing: lifecycle.onAdoptionFinalizing,
+    onAbandoned: async () => {
+      await lifecycle.onAbandoned();
+      requestDrainAfterLaneSettlement();
+    },
+  });
+  durableInboundDrain = createWhatsAppIngressDrain({
+    queue: durableInboundQueue,
+    dispatch: async (msg, payload, lifecycle) => {
+      const remoteJid = msg.key?.remoteJid;
+      const id = msg.key?.id;
+      return {
+        kind: await dispatchInboundMessage(msg, {
+          ...payload,
+          ...(remoteJid && id
+            ? { eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }) }
+            : {}),
+          lifecycle: continueDrainAfterLaneSettlement(lifecycle),
+        }),
+      };
+    },
+    onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
+  });
+  const durableDrainTimer = setInterval(() => {
+    void requestDurableInboundDrain().catch((error: unknown) => {
+      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed");
+    });
+  }, WHATSAPP_INGRESS_DRAIN_INTERVAL_MS);
+  durableDrainTimer.unref?.();
 
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
@@ -1751,7 +1614,88 @@ export async function attachWebInboxToSocket(
         continue;
       }
 
-      await processDurableInboundMessage(msg, upsert.type, receiveOrder);
+      const receivedAt = Date.now();
+      const skipStaleAppend = shouldSkipStaleAppend(msg, upsert.type);
+      const skipRecentOutboundEcho = shouldSkipRecentOutboundEcho(msg);
+      const remoteJid = msg.key?.remoteJid;
+      const id = msg.key?.id;
+      const durableId =
+        remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
+      let resolvePrepared: ((inbound: PreparedInbound | null | undefined) => void) | undefined;
+      if (durableId) {
+        preparedInboundByDurableId.set(
+          durableId,
+          new Promise((resolve) => {
+            resolvePrepared = resolve;
+          }),
+        );
+      }
+      const finishPreparation = (
+        inbound: PreparedInbound | null | undefined,
+        keepForDrain = false,
+      ) => {
+        resolvePrepared?.(inbound);
+        if (!keepForDrain && durableId) {
+          preparedInboundByDurableId.delete(durableId);
+        }
+      };
+      let result: Awaited<ReturnType<typeof enqueueWhatsAppDurableInbound>>;
+      try {
+        result = await enqueueWhatsAppDurableInbound({
+          queue: durableInboundQueue,
+          message: msg,
+          upsertType: upsert.type,
+          skipStaleAppend,
+          skipRecentOutboundEcho,
+          receivedAt,
+          receiveOrder,
+        });
+      } catch (error) {
+        finishPreparation(undefined);
+        const formattedError = formatError(error);
+        inboundLogger.warn(
+          { error: formattedError },
+          "failed persisting durable WhatsApp inbound; delivering live",
+        );
+        inboundConsoleLog.warn(
+          `Failed persisting durable WhatsApp inbound; delivering live: ${formattedError}`,
+        );
+        await dispatchInboundMessage(msg, {
+          upsertType: upsert.type,
+          skipStaleAppend,
+          skipRecentOutboundEcho,
+          receivedAt,
+          receiveOrder,
+        });
+        continue;
+      }
+      if (result.kind === "completed") {
+        finishPreparation(undefined);
+        const inbound = await normalizeInboundMessage(msg);
+        if (inbound) {
+          await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
+        }
+      } else {
+        if (result.kind === "accepted" || result.kind === "pending") {
+          try {
+            finishPreparation(
+              skipRecentOutboundEcho ? null : await normalizeInboundMessage(msg),
+              true,
+            );
+          } catch (error) {
+            finishPreparation(undefined);
+            throw error;
+          }
+        } else {
+          finishPreparation(undefined);
+        }
+        void requestDurableInboundDrain().catch((error: unknown) => {
+          inboundLogger.error(
+            { error: formatError(error) },
+            "whatsapp durable inbound drain failed",
+          );
+        });
+      }
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
@@ -1783,10 +1727,9 @@ export async function attachWebInboxToSocket(
   };
   const drainInboundBeforeSocketClose = async () => {
     groupMetadataCacheClosed = true;
-    // Durable pumps (via upsert handlers) park on claim flush waiters until the
-    // debouncer flushes. Interleave force-flush with event-driven wait for
-    // debounce enqueue so close cannot deadlock and stays fake-timer safe.
-    // Debounce-window parity preserved: flushKey, not cancel.
+    clearInterval(durableDrainTimer);
+    // Interleave force-flush with event-driven wait for drain dispatch so close
+    // cannot deadlock inside the debounce window. Debounce semantics stay intact.
     for (;;) {
       await drainDebouncedInboundMessages();
       if (pendingMessageHandlers.size === 0) {
@@ -1803,10 +1746,11 @@ export async function attachWebInboxToSocket(
       }
     }
     await drainDebouncedInboundMessages();
-    // Drain-owned claims must finish (or release) before a successor monitor starts.
+    // Claims must finish (or release) before a successor monitor starts.
     try {
       await durableInboundDrain.waitForIdle();
     } finally {
+      durableDrainClosed = true;
       durableInboundDrain.dispose();
     }
   };
@@ -1929,15 +1873,9 @@ export async function attachWebInboxToSocket(
     forgetFullGroupMetadata(update.id);
   }) as unknown as (...args: unknown[]) => void);
 
-  const replayTask = pumpDurableInboundDrain().catch((err: unknown) => {
+  void requestDurableInboundDrain().catch((err: unknown) => {
     inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
     inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
-  });
-  pendingMessageHandlers.add(replayTask);
-  publishPendingWorkState();
-  void replayTask.finally(() => {
-    pendingMessageHandlers.delete(replayTask);
-    publishPendingWorkState();
   });
 
   const groupHydrationTask = (async () => {
