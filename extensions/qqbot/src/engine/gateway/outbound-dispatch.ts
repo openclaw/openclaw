@@ -437,7 +437,11 @@ export async function dispatchOutbound(
         cfg: openClawCfg,
         channel: "qqbot",
         accountId: inbound.route.accountId,
-        route: { agentId: routeAgentId, sessionKey: inbound.route.sessionKey },
+        route: {
+          agentId: routeAgentId,
+          dmScope: inbound.route.dmScope,
+          sessionKey: inbound.route.sessionKey,
+        },
         ctxPayload,
         record: {
           onRecordError: (err: unknown) => {
@@ -774,6 +778,7 @@ async function buildCtxPayload(
     },
     route: {
       agentId: inbound.route.agentId ?? resolveDefaultAgentId(cfg as OpenClawConfig),
+      dmScope: inbound.route.dmScope,
       routeSessionKey: inbound.route.sessionKey,
       accountId: inbound.route.accountId,
     },
