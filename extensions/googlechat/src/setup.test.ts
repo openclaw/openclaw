@@ -1,4 +1,6 @@
 // Googlechat tests cover setup plugin behavior.
+import fs from "node:fs";
+import path from "node:path";
 import {
   createStartAccountContext,
   expectLifecyclePatch,
@@ -15,6 +17,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,
@@ -458,6 +461,32 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("resolves user-relative service-account files before checking availability", () => {
+    const homeDir = tempDirs.make("openclaw-googlechat-home-");
+    fs.writeFileSync(path.join(homeDir, "service-account.json"), "{}", { mode: 0o600 });
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+    try {
+      const resolved = resolveGoogleChatAccount({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccountFile: "~/service-account.json",
+            },
+          },
+        },
+        accountId: "default",
+      });
+
+      expect(resolved.credentialSource).toBe("file");
+      expect(resolved.credentialsFile).toBe("~/service-account.json");
+      expect(resolved.tokenStatus).toBe("available");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("parses default-account env JSON credentials only when they decode to an object", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
 

@@ -192,7 +192,7 @@ export function resolveLineAccount(params: {
     signingSecretSource: secret.source,
     tokenStatus: token.status,
     signingSecretStatus: secret.status,
-    ...([token.diagnostic, secret.diagnostic].filter(Boolean).length > 0
+    ...([token.diagnostic, secret.diagnostic].some(Boolean)
       ? {
           credentialDiagnostics: [token.diagnostic, secret.diagnostic].filter(
             (diagnostic): diagnostic is LineCredentialUnavailableDiagnostic => Boolean(diagnostic),

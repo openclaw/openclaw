@@ -12,6 +12,7 @@ import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-ru
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { isSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
 import type { GoogleChatAccountConfig } from "./types.config.js";
@@ -147,8 +148,9 @@ function resolveCredentialsFromConfig(params: {
 
   const file = normalizeOptionalString(account.serviceAccountFile);
   if (file) {
+    const resolvedFile = resolveUserPath(file);
     const result = tryReadSecretFileSync(
-      file,
+      resolvedFile,
       "Google Chat service account file",
       {
         maxBytes: MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES,
@@ -175,8 +177,9 @@ function resolveCredentialsFromConfig(params: {
     }
     const envFile = normalizeOptionalString(process.env[ENV_SERVICE_ACCOUNT_FILE]);
     if (envFile) {
+      const resolvedEnvFile = resolveUserPath(envFile);
       const result = tryReadSecretFileSync(
-        envFile,
+        resolvedEnvFile,
         "Google Chat service account file",
         {
           maxBytes: MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES,
