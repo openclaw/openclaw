@@ -49,7 +49,7 @@ async function fetchLineContentWhenReady(
         return Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
       }
 
-      await response.body?.cancel();
+      await response.body?.cancel().catch(() => undefined);
       if (response.status !== 202) {
         throw new Error(
           `LINE media download failed for message ${messageId} (HTTP ${response.status})`,
