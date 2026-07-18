@@ -31,6 +31,7 @@ import { isRecord } from "../utils.js";
 import {
   setActiveDegradedSecretOwners,
   type DegradedSecretOwner,
+  type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
@@ -47,8 +48,53 @@ export type PreparedSecretsRuntimeSnapshot = {
   authStoreCredentialsRevision: number;
   warnings: SecretResolverWarning[];
   degradedOwners?: DegradedSecretOwner[];
+  secretOwners?: SecretOwnerRefState[];
   webTools: RuntimeWebToolsMetadata;
 };
+
+type LocatedSecretRef = {
+  path: Array<string | number>;
+  ref: SecretRef;
+};
+
+function listLocatedSecretRefs(
+  value: unknown,
+  path: Array<string | number> = [],
+  refs: LocatedSecretRef[] = [],
+): LocatedSecretRef[] {
+  if (isSecretRef(value)) {
+    refs.push({ path, ref: value });
+    return refs;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      listLocatedSecretRefs(entry, [...path, index], refs);
+    }
+    return refs;
+  }
+  if (isRecord(value)) {
+    for (const key of Object.keys(value).toSorted()) {
+      listLocatedSecretRefs(value[key], [...path, key], refs);
+    }
+  }
+  return refs;
+}
+
+/** Whether two configs resolve the same SecretRefs through the same provider contracts. */
+export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
+  return isDeepStrictEqual(
+    {
+      refs: listLocatedSecretRefs(left),
+      defaults: left.secrets?.defaults,
+      providers: left.secrets?.providers,
+    },
+    {
+      refs: listLocatedSecretRefs(right),
+      defaults: right.secrets?.defaults,
+      providers: right.secrets?.providers,
+    },
+  );
+}
 
 /** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
 export type SecretsRuntimeRefreshContext = {
@@ -140,6 +186,11 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
       paths: [...owner.paths],
       refKeys: [...owner.refKeys],
       reason: owner.reason,
+    })),
+    secretOwners: (snapshot.secretOwners ?? []).map((owner) => ({
+      ownerKind: owner.ownerKind,
+      ownerId: owner.ownerId,
+      refKeys: [...owner.refKeys],
     })),
     webTools: structuredClone(snapshot.webTools),
   };
@@ -281,7 +332,10 @@ function mergeRollbackValue(previous: unknown, candidate: unknown, current: unkn
   return merged;
 }
 
-function hasSameSecretProviderDefinition(ref: SecretRef, configs: OpenClawConfig[]): boolean {
+export function hasSameSecretProviderDefinition(
+  ref: SecretRef,
+  configs: OpenClawConfig[],
+): boolean {
   const definition = configs[0]?.secrets?.providers?.[ref.provider];
   if (
     !configs.every((config) =>
@@ -790,6 +844,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
   snapshot: PreparedSecretsRuntimeSnapshot;
   refreshContext: SecretsRuntimeRefreshContext | null;
   refreshHandler: RuntimeConfigSnapshotRefreshHandler | null;
+  runtimeSourceConfig?: OpenClawConfig;
   mergeLiveAuthBookkeeping?: boolean;
   preserveActivationLineage?: boolean;
 }): void {
@@ -812,7 +867,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
   const nextRefreshContext = params.refreshContext
     ? cloneSecretsRuntimeRefreshContext(params.refreshContext)
     : null;
-  setRuntimeConfigSnapshot(next.config, next.sourceConfig);
+  setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   const previousLineageStartRevision = activeSnapshotLineageStartRevision;

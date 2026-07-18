@@ -91,10 +91,11 @@ export async function checkGatewayHealth(params: {
         status.degradedSecretOwners
           .map(
             (owner) =>
-              `- ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${owner.reason}`,
+              `- cold ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${owner.reason}` +
+              "\n  Retry: openclaw secrets reload",
           )
           .join("\n"),
-        "Secret owners unavailable",
+        "Secret runtime degradation",
       );
     }
     if (status.degradedPlugins && status.degradedPlugins.length > 0) {

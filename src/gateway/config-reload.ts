@@ -175,7 +175,11 @@ export function startGatewayConfigReloader(opts: {
     nextConfig: OpenClawConfig,
     ownership: GatewayConfigReloadTransactionOwnership,
     sourceConfig: OpenClawConfig,
-  ) => Promise<() => Promise<void>>;
+  ) => Promise<{
+    rollback: () => Promise<void>;
+    /** Runs only when this exact source publication can no longer roll back. */
+    commit?: () => void;
+  }>;
   onNoopConfigCommit: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -497,16 +501,27 @@ export function startGatewayConfigReloader(opts: {
       }
     };
     if (changedPaths.length === 0) {
+      let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
       let publishedSourceRollback: (() => Promise<void>) | undefined;
+      let publishedSourceRolledBack = false;
       const publishSource = opts.onEffectiveConfigUnchanged
-        ? async () =>
-            (publishedSourceRollback ??= await opts.onEffectiveConfigUnchanged!(
+        ? async () => {
+            publishedSource ??= await opts.onEffectiveConfigUnchanged!(
               nextConfig,
               ownership,
               nextSourceConfig,
-            ))
+            );
+            publishedSourceRollback ??= async () => {
+              publishedSourceRolledBack = true;
+              await publishedSource?.rollback();
+            };
+            return publishedSourceRollback;
+          }
         : undefined;
       await commitReloadBaseline(publishSource ? { publishSource } : {});
+      if (!publishedSourceRolledBack) {
+        publishedSource?.commit?.();
+      }
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       return;
     }

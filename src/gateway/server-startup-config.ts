@@ -20,6 +20,12 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  classifySecretResolutionErrorDegradations,
+  redactSecretDegradationReason,
+  SECRET_DEGRADATION_RETRY_HINT,
+  type SecretDegradation,
+} from "../secrets/runtime-degraded-state.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../secrets/runtime-fast-path.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
@@ -30,6 +36,7 @@ import {
   graftActiveSecretsRuntimeAuthState,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
+  hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -48,7 +55,7 @@ import {
 
 type GatewayStartupLog = {
   info: (message: string) => void;
-  warn: (message: string) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
   error?: (message: string) => void;
 };
 
@@ -63,8 +70,16 @@ type PreparedRuntimeSecretsSnapshot = Awaited<ReturnType<PrepareRuntimeSecretsSn
 type RuntimeSecretsActivationParams = {
   reason: "startup" | "reload" | "restart-check";
   activate: boolean;
+  /** This preparation belongs to a live reload; publish failure against the active snapshot. */
+  publishFailureAsDegraded?: boolean;
+  /** Reject warning publication after a speculative reload loses transaction ownership. */
+  canPublishFailureAsDegraded?: () => boolean;
   env?: NodeJS.ProcessEnv;
   includeAuthStoreRefs?: boolean;
+  /** Raw config source paired with an otherwise fully activated prepared snapshot. */
+  runtimeSourceConfig?: OpenClawConfig;
+  /** Defer recovery until a larger transaction can no longer roll activation back. */
+  publishRecovery?: boolean;
 };
 
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
@@ -85,6 +100,20 @@ export type ActivateRuntimeSecrets = ((
   ) => Promise<PreparedRuntimeSecretsSnapshot | null>;
 };
 
+const runtimeSecretsRecoveryPublishers = new WeakMap<
+  ActivateRuntimeSecrets,
+  (snapshot: PreparedRuntimeSecretsSnapshot, options?: { sourceOnly?: boolean }) => void
+>();
+
+/** Publishes recovery after a prepared source-only snapshot wins its commit CAS. */
+export function publishRuntimeSecretsRecovery(
+  activateRuntimeSecrets: ActivateRuntimeSecrets,
+  snapshot: PreparedRuntimeSecretsSnapshot,
+  options?: { sourceOnly?: boolean },
+): void {
+  runtimeSecretsRecoveryPublishers.get(activateRuntimeSecrets)?.(snapshot, options);
+}
+
 type GatewayStartupConfigOverrides = {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
@@ -95,6 +124,22 @@ type GatewayStartupConfigMeasure = <T>(
   run: () => T | Promise<T>,
   options?: { omitErrorMessage?: boolean },
 ) => Promise<T>;
+
+function logSecretDegradation(log: GatewayStartupLog, degradation: SecretDegradation): void {
+  const reason = redactSecretDegradationReason(degradation.reason);
+  log.warn(
+    `[SECRETS_DEGRADED] ${degradation.state} ${degradation.kind}:${degradation.id}: ` +
+      `${reason}. Retry: ${degradation.retryHint}.`,
+    {
+      event: "secrets.degraded",
+      ownerKind: degradation.kind,
+      ownerId: degradation.id,
+      reason,
+      state: degradation.state,
+      retryHint: degradation.retryHint,
+    },
+  );
+}
 
 /** Config snapshot plus optional plugin metadata loaded before Gateway startup auth. */
 export type GatewayStartupConfigSnapshotLoadResult = {
@@ -186,6 +231,10 @@ export function createRuntimeSecretsActivator(params: {
   channelAutostartSuppression?: ChannelAutostartSuppression | null;
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
+  let degradationGeneration = 0;
+  let activeDegradationGeneration: number | null = null;
+  let activeDegradationConfig: OpenClawConfig | null = null;
+  const deferredRecoveryGenerations = new WeakMap<object, number>();
   let secretsActivationTail: Promise<void> = Promise.resolve();
   const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
     cacheRejections: true,
@@ -213,6 +262,22 @@ export function createRuntimeSecretsActivator(params: {
     return (await loadSecretsRuntime()).activateSecretsRuntimeSnapshot;
   };
 
+  const publishRecovery = (config: OpenClawConfig, expectedGeneration?: number) => {
+    if (
+      !secretsDegraded ||
+      (expectedGeneration !== undefined && activeDegradationGeneration !== expectedGeneration)
+    ) {
+      return;
+    }
+    const recoveredMessage =
+      "Secret resolution recovered; runtime remained on last-known-good during the outage.";
+    params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
+    params.emitStateEvent("SECRETS_RELOADER_RECOVERED", recoveredMessage, config);
+    secretsDegraded = false;
+    activeDegradationGeneration = null;
+    activeDegradationConfig = null;
+  };
+
   const finishPreparedSnapshot = async (
     prepared: PreparedRuntimeSecretsSnapshot,
     activationParams: RuntimeSecretsActivationParams,
@@ -234,13 +299,30 @@ export function createRuntimeSecretsActivator(params: {
     for (const warning of prepared.warnings) {
       params.logSecrets.warn(`[${warning.code}] ${warning.message}`);
     }
-    if (secretsDegraded) {
-      const recoveredMessage =
-        "Secret resolution recovered; runtime remained on last-known-good during the outage.";
-      params.logSecrets.info(`[SECRETS_RELOADER_RECOVERED] ${recoveredMessage}`);
-      params.emitStateEvent("SECRETS_RELOADER_RECOVERED", recoveredMessage, prepared.config);
+    if (
+      activationParams.reason === "startup" &&
+      activationParams.activate &&
+      (prepared.degradedOwners?.length ?? 0) > 0
+    ) {
+      for (const owner of prepared.degradedOwners ?? []) {
+        logSecretDegradation(params.logSecrets, {
+          kind: owner.ownerKind,
+          id: owner.ownerId,
+          reason: owner.reason,
+          state: "cold",
+          retryHint: SECRET_DEGRADATION_RETRY_HINT,
+        });
+      }
     }
-    secretsDegraded = false;
+    if (activationParams.activate && secretsDegraded) {
+      if (activationParams.publishRecovery === false) {
+        if (activeDegradationGeneration !== null) {
+          deferredRecoveryGenerations.set(prepared, activeDegradationGeneration);
+        }
+      } else {
+        publishRecovery(prepared.config);
+      }
+    }
     return prepared;
   };
 
@@ -249,22 +331,35 @@ export function createRuntimeSecretsActivator(params: {
     activationParams: RuntimeSecretsActivationParams,
     eventConfig: OpenClawConfig,
   ): never => {
-    const details = String(err);
-    if (!secretsDegraded) {
-      params.logSecrets.error?.(`[SECRETS_RELOADER_DEGRADED] ${details}`);
-      if (activationParams.reason !== "startup") {
-        params.emitStateEvent(
-          "SECRETS_RELOADER_DEGRADED",
-          `Secret resolution failed; runtime remains on last-known-good snapshot. ${details}`,
-          eventConfig,
-        );
+    const mayPublishReloadDegradation =
+      (activationParams.activate || activationParams.publishFailureAsDegraded === true) &&
+      (activationParams.canPublishFailureAsDegraded?.() ?? true);
+    const degradations = classifySecretResolutionErrorDegradations(err);
+    if (
+      degradations.length > 0 &&
+      (activationParams.reason === "startup" || mayPublishReloadDegradation)
+    ) {
+      for (const degradation of degradations) {
+        logSecretDegradation(params.logSecrets, degradation);
       }
-    } else {
-      params.logSecrets.warn(`[SECRETS_RELOADER_DEGRADED] ${details}`);
+      if (activationParams.reason !== "startup") {
+        if (!secretsDegraded) {
+          params.emitStateEvent(
+            "SECRETS_RELOADER_DEGRADED",
+            "Secret resolution failed; runtime remains on the last-known-good snapshot.",
+            eventConfig,
+          );
+        }
+        secretsDegraded = true;
+        activeDegradationGeneration = ++degradationGeneration;
+        activeDegradationConfig = structuredClone(eventConfig);
+      }
     }
-    secretsDegraded = true;
     if (activationParams.reason === "startup") {
-      throw new Error(`Startup failed: required secrets are unavailable. ${details}`, {
+      if (degradations.length > 0) {
+        throw new Error("Startup failed: required secrets are unavailable.");
+      }
+      throw new Error(`Startup failed: required secrets are unavailable. ${String(err)}`, {
         cause: err,
       });
     }
@@ -273,6 +368,7 @@ export function createRuntimeSecretsActivator(params: {
 
   const activateRuntimeSecrets = (async (config, activationParams) =>
     await runWithSecretsActivationLock(async () => {
+      let activationSourceConfig = config;
       try {
         const { sourceConfig, assignmentConfig } = resolveGatewayStartupSecretProjection({
           config,
@@ -280,6 +376,7 @@ export function createRuntimeSecretsActivator(params: {
           channelAutostartSuppression: params.channelAutostartSuppression,
           ...(activationParams.env ? { env: activationParams.env } : {}),
         });
+        activationSourceConfig = sourceConfig;
         const startupPreflight =
           activationParams.reason === "startup" || activationParams.reason === "restart-check";
         if (
@@ -358,7 +455,7 @@ export function createRuntimeSecretsActivator(params: {
         }
         return await finishPreparedSnapshot(prepared, activationParams);
       } catch (err) {
-        return handleSecretsActivationError(err, activationParams, config);
+        return handleSecretsActivationError(err, activationParams, activationSourceConfig);
       }
     })) as ActivateRuntimeSecrets;
 
@@ -380,8 +477,17 @@ export function createRuntimeSecretsActivator(params: {
   ) => {
     // Resolve the lazy activator before entering the compare-and-activate
     // section so no await separates revision ownership from state publication.
+    const runtimeSourceConfig = activationParams.runtimeSourceConfig;
     const activateRuntimeSecretsSnapshot = activationParams.activate
-      ? await loadActivateRuntimeSecretsSnapshot()
+      ? runtimeSourceConfig
+        ? (
+            (runtime) => (preparedSnapshot: PreparedRuntimeSecretsSnapshot) =>
+              runtime.activateSecretsRuntimeSnapshotWithSource(
+                preparedSnapshot,
+                runtimeSourceConfig,
+              )
+          )(await loadSecretsRuntime())
+        : await loadActivateRuntimeSecretsSnapshot()
       : undefined;
     return await runWithSecretsActivationLock(async () => {
       if (
@@ -417,6 +523,18 @@ export function createRuntimeSecretsActivator(params: {
       return activated;
     });
   };
+
+  runtimeSecretsRecoveryPublishers.set(activateRuntimeSecrets, (snapshot, options) => {
+    const expectedGeneration = deferredRecoveryGenerations.get(snapshot);
+    deferredRecoveryGenerations.delete(snapshot);
+    const sourceOnlyContractRecovered =
+      options?.sourceOnly !== true ||
+      (activeDegradationConfig !== null &&
+        !hasSameSecretReloadContract(activeDegradationConfig, snapshot.sourceConfig));
+    if (expectedGeneration !== undefined && sourceOnlyContractRecovered) {
+      publishRecovery(snapshot.config, expectedGeneration);
+    }
+  });
 
   return activateRuntimeSecrets;
 }
