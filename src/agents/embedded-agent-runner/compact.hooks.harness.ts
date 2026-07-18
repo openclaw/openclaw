@@ -735,6 +735,13 @@ export async function loadCompactHooksHarness(): Promise<{
     ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
+  vi.doMock("../prepared-model-runtime.js", () => ({
+    activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+  }));
+
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),

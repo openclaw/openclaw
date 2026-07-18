@@ -20,8 +20,11 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentId,
+} from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -59,11 +62,14 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 import {
   isOpenAIProvider,
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "./openai-routing.js";
+import {
+  prepareModelRuntimeSnapshot,
+  type PreparedModelRuntimeStores,
+} from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import {
   protectPreparedProviderRuntimeAuth,
@@ -398,8 +404,8 @@ type BtwRuntimeModelMaterialization = {
   modelId: string;
   agentDir: string;
   workspaceDir?: string;
-  authStorage: ReturnType<typeof discoverAuthStorage>;
-  modelRegistry: ReturnType<typeof discoverModels>;
+  authStorage: PreparedModelRuntimeStores["authStorage"];
+  modelRegistry: PreparedModelRuntimeStores["modelRegistry"];
 };
 
 async function materializeBtwRuntimeModel(
@@ -483,19 +489,16 @@ async function resolveRuntimeModel(params: {
   authProfileIdSource?: "auto" | "user";
   authProfileStore: AuthProfileStore;
   runtimeAuthPreparation: BtwRuntimeAuthPreparation;
-  authStorage: ReturnType<typeof discoverAuthStorage>;
-  modelRegistry: ReturnType<typeof discoverModels>;
+  authStorage: PreparedModelRuntimeStores["authStorage"];
+  modelRegistry: PreparedModelRuntimeStores["modelRegistry"];
 }> {
-  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir, {
+  const preparedModelRuntime = await prepareModelRuntimeSnapshot({
     config: params.cfg,
+    agentDir: params.agentDir,
+    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  const modelRegistry = discoverModels(authStorage, params.agentDir, {
-    config: params.cfg,
-    ...modelsOptions,
-  });
+  const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
   let model = resolveModelWithRegistry({
     provider: params.provider,
     modelId: params.model,

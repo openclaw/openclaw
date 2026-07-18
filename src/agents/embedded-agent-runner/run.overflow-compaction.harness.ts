@@ -876,6 +876,13 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
+  vi.doMock("../prepared-model-runtime.js", () => ({
+    activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+  }));
+
   vi.doMock("../context-window-guard.js", () => ({
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,

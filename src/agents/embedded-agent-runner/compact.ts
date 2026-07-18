@@ -64,6 +64,7 @@ import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-set
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
+  resolveDefaultAgentDir,
   resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
@@ -118,8 +119,8 @@ import {
   runWithModelFallback,
 } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import { prepareModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import {
@@ -675,15 +676,25 @@ async function compactEmbeddedAgentSessionDirectOnce(
         : undefined,
     };
   };
-  await ensureOpenClawModelsJson(params.config, agentDir, {
+  const snapshotConfig = params.config ?? {};
+  const preparedModelRuntime = await prepareModelRuntimeSnapshot({
+    config: snapshotConfig,
+    agentDir,
+    inheritedAuthDir: resolveDefaultAgentDir(snapshotConfig),
     workspaceDir: resolvedWorkspace,
   });
+  const preparedStores = preparedModelRuntime.createStores();
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     runtimeProvider,
     modelId,
     agentDir,
     params.config,
-    initialModelAuth,
+    {
+      ...initialModelAuth,
+      authStorage: preparedStores.authStorage,
+      modelRegistry: preparedStores.modelRegistry,
+      workspaceDir: resolvedWorkspace,
+    },
   );
   if (!model) {
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;

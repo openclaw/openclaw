@@ -87,6 +87,32 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
 }));
 
+vi.mock("./prepared-model-runtime.js", () => ({
+  prepareModelRuntimeSnapshot: async (params: {
+    agentDir: string;
+    config: unknown;
+    inheritedAuthDir?: string;
+    workspaceDir?: string;
+  }) => {
+    const workspaceOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : {};
+    await ensureOpenClawModelsJsonMock(params.config, params.agentDir, workspaceOptions);
+    const authStorage = discoverAuthStorageMock(params.agentDir, {
+      config: params.config,
+      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
+      ...workspaceOptions,
+    });
+    const modelRegistry = discoverModelsMock(authStorage, params.agentDir, {
+      config: params.config,
+      ...workspaceOptions,
+    });
+    return { createStores: () => ({ authStorage, modelRegistry }) };
+  },
+}));
+
+vi.mock("./model-discovery-context.js", () => ({
+  resolveModelPluginMetadataSnapshot: () => undefined,
+}));
+
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
   resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
@@ -174,6 +200,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveDefaultAgentDir: () => "/tmp/agent",
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({

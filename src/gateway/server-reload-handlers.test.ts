@@ -173,6 +173,7 @@ const hoisted = vi.hoisted(() => ({
   reloadEvents: [] as string[],
   loadModelCatalog: vi.fn(async (_params: { config: OpenClawConfig }) => []),
   resetModelCatalogCache: vi.fn(() => {}),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(async (_cfg: OpenClawConfig) => {}),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
@@ -252,6 +253,11 @@ vi.mock("../agents/model-catalog.js", () => ({
     hoisted.reloadEvents.push("reset-model-catalog");
     hoisted.resetModelCatalogCache();
   },
+}));
+
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  refreshPreparedModelRuntimeSnapshots: (cfg: OpenClawConfig) =>
+    hoisted.refreshPreparedModelRuntimeSnapshots(cfg),
 }));
 
 vi.mock("../agents/context.js", () => ({
@@ -741,6 +747,7 @@ afterEach(() => {
   hoisted.reloadEvents.length = 0;
   hoisted.loadModelCatalog.mockClear();
   hoisted.resetModelCatalogCache.mockClear();
+  hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();

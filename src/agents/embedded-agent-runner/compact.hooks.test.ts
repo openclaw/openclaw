@@ -1515,7 +1515,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result.ok).toBe(true);
     expect(mockCallArg(resolveModelMock)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
-    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toEqual({
+    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
       authProfileMode: "api_key",
     });
   });

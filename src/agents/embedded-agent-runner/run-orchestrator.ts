@@ -4,6 +4,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -21,7 +22,12 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+} from "../agent-scope.js";
+import { activateStandalonePreparedModelRuntime } from "../prepared-model-runtime.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -55,6 +61,8 @@ import { createRecoveryMessageActionTurnCapability } from "./run/recovery-messag
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
+
+const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
@@ -218,6 +226,14 @@ async function runEmbeddedAgentInternal(
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
+      const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
+      const agentDir = params.agentDir ?? resolveAgentDir(config, workspaceResolution.agentId);
+      const standalonePreparedModelRuntime = await activateStandalonePreparedModelRuntime({
+        config,
+        agentDir,
+        inheritedAuthDir: resolveDefaultAgentDir(config),
+        workspaceDir: resolvedWorkspace,
+      });
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
@@ -227,8 +243,6 @@ async function runEmbeddedAgentInternal(
         provider: params.provider,
         model: params.model,
       });
-      const agentDir =
-        params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
       const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
         cfg: params.config,
@@ -303,6 +317,9 @@ async function runEmbeddedAgentInternal(
         laneController,
         lifecycleGeneration,
         suspendForFailure,
+        ...(standalonePreparedModelRuntime
+          ? { preparedModelRuntime: standalonePreparedModelRuntime }
+          : {}),
       });
     });
   }).finally(() => {

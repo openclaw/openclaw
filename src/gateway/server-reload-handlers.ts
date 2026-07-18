@@ -9,6 +9,7 @@ import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../agents/model-provider-auth.js";
+import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -1151,6 +1152,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
       }
     });
+    await refreshPreparedModelRuntimeSnapshots(nextConfig);
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
