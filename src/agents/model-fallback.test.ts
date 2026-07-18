@@ -2353,6 +2353,7 @@ describe("runWithModelFallback", () => {
             primary: "openai/gpt-4.1-mini",
             fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
           },
+          modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
         },
       },
     });

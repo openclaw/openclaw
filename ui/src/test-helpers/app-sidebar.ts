@@ -28,6 +28,8 @@ export type SidebarLifecycleState = HTMLElement & {
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
+  sidebarEntries: readonly string[];
+  onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
   onNavigate: (routeId: string, options?: { search?: string }) => void;
@@ -351,6 +353,7 @@ export function setupSidebarTest() {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     document.body.replaceChildren();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);

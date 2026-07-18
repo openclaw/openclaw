@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import { resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
+import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -252,11 +253,15 @@ export async function createGatewayRuntimeState(params: {
     const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
       return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
     };
-    const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) =>
-      // Capability routes are selected from the current pinned registry so auth decisions and
-      // node-capability dispatch agree when plugin routes are reloaded.
-      findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
+    const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) => {
+      const coreCanvasCapability = resolveCanvasNodeCapability(pathContext.candidates);
+      if (coreCanvasCapability) {
+        return coreCanvasCapability;
+      }
+      // Plugin capability routes follow the current pinned registry so auth and dispatch agree.
+      return findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
         ?.nodeCapability;
+    };
 
     const bindHosts = await resolveGatewayListenHosts(params.bindHost);
     if (!isLoopbackHost(params.bindHost)) {

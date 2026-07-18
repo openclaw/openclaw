@@ -12,7 +12,7 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar update card wiring", () => {
-  it("shows OpenClaw in the default pinned routes", async () => {
+  it("shows OpenClaw in the default sidebar entries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
@@ -43,7 +43,7 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar brand actions", () => {
-  it("starts a session for the active agent from the Threads header", async () => {
+  it("starts a thread for the expanded agent from the brand action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
@@ -53,26 +53,48 @@ describe("AppSidebar brand actions", () => {
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
       gateway,
-      createSessions("research", ["agent:research:main"]),
+      createSessions("research", ["agent:research:main", "agent:research:task"]),
       "panel",
       agentsList,
     );
     const onOpenNewSession = vi.fn();
-    sidebar.connected = true;
+    sidebar.connected = false;
     sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
-    // The new-session affordance moved off the brand row onto Threads.
-    expect(sidebar.querySelector(".sidebar-brand .sidebar-new-session")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-recent-sessions__head--root")).toBeNull();
-    const button = sidebar.querySelector<HTMLButtonElement>(
+    const actions = sidebar.querySelector(".sidebar-brand__actions");
+    const brandButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__new-thread");
+    expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(
+      brandButton,
+    );
+    expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(brandButton?.disabled).toBe(true);
+
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    expect(brandButton?.disabled).toBe(false);
+    brandButton?.click();
+    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+
+    const headerButton = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
-    expect(button?.getAttribute("aria-label")).toBe("New session");
-    expect(button?.disabled).toBe(false);
+    expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
+  });
 
-    button?.click();
-    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+  it("opens the archived Sessions view from the sessions-zone footer", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:work"]),
+    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-view-archived")?.click();
+
+    expect(onNavigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
   });
 });
 
@@ -146,15 +168,52 @@ describe("AppSidebar agent chip", () => {
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
 
-  it("shows offline in the chip subtitle when disconnected", async () => {
+  it("shows connection exceptions only after a sustained disconnect", async () => {
+    vi.useFakeTimers();
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.connected = false;
+    const presence = () => sidebar.querySelector(".sidebar-agent-card__presence");
+    const offlinePill = () => sidebar.querySelector(".sidebar-footer-bar__status");
+    const expectQuiet = () => {
+      expect(presence()).toBeNull();
+      expect(offlinePill()).toBeNull();
+    };
+    sidebar.connected = true;
     await sidebar.updateComplete;
 
+    expectQuiet();
+    expect(
+      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+    ).toContain("Online");
+
+    sidebar.connected = false;
+    await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
       "Offline",
     );
+    await vi.advanceTimersByTimeAsync(1_999);
+    expectQuiet();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await sidebar.updateComplete;
+    const pill = offlinePill();
+    expect(pill?.textContent?.trim()).toBe("Offline");
+    expect(pill?.getAttribute("aria-live")).toBe("polite");
+    expect(pill?.getAttribute("title")).toContain("Offline");
+    expect(pill?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
+    expect(presence()).not.toBeNull();
+
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    expectQuiet();
+
+    sidebar.connected = false;
+    await sidebar.updateComplete;
+    await vi.advanceTimersByTimeAsync(1_000);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expectQuiet();
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {
@@ -209,7 +268,7 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults,
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5 }],
+        sessions: [{ key: "agent:main:main", kind: "direct", label: "Main task", updatedAt: 5 }],
       },
       agentId: "main",
     });
@@ -217,6 +276,9 @@ describe("AppSidebar agent chip", () => {
 
     // No per-agent sections: the card switcher owns agent switching now, and
     // the main session lives behind the identity card instead of the list.
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
+      "Main task",
+    );
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
     expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull();

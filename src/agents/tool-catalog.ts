@@ -220,7 +220,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_spawn",
     description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -228,7 +228,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_yield",
     description: "End turn to receive sub-agent results",
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -236,7 +236,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "subagents",
     description: "Background work: subagents, media gen, cron runs. list/cancel.",
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -293,6 +293,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Control node Canvas surfaces when the Canvas plugin is enabled",
     sectionId: "ui",
     profiles: [],
+  },
+  {
+    id: "show_widget",
+    label: "show_widget",
+    description: "Show an interactive widget on supported chat surfaces",
+    sectionId: "ui",
+    profiles: [],
+    includeInOpenClawGroup: true,
   },
   {
     id: "message",
