@@ -219,6 +219,34 @@ describe("mirrorCopilotTranscript", () => {
     expect((await readMirrorMessages(target)).filter((message) => message.role)).toHaveLength(2);
   });
 
+  it("serializes concurrent mirrors with the same supplied identity", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-copilot-mirror-concurrent-");
+    const message = attachCopilotMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "append once" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:assistant",
+    );
+
+    await Promise.all([
+      mirrorCopilotTranscript({
+        ...target,
+        messages: [message],
+        idempotencyScope: "copilot:session-1",
+      }),
+      mirrorCopilotTranscript({
+        ...target,
+        messages: [message],
+        idempotencyScope: "copilot:session-1",
+      }),
+    ]);
+
+    expect((await readMirrorMessages(target)).filter((entry) => entry.role)).toEqual([
+      { role: "assistant", text: "append once" },
+    ]);
+  });
+
   it("runs before_message_write before appending mirrored messages", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

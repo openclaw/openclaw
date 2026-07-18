@@ -688,6 +688,87 @@ describe("session transcript runtime SDK", () => {
     ]);
   });
 
+  it("reads indexed message facts from the current transcript generation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "indexed-facts-session",
+      sessionKey: "agent:main:indexed-facts",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await withSessionTranscriptWriteLock(scope, async (locked) => {
+      await locked.appendMessage({
+        message: {
+          role: "user",
+          content: "persisted user",
+          idempotencyKey: "user-key",
+          timestamp: 1,
+        },
+      });
+      await locked.appendMessage({
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "persisted assistant" }],
+          idempotencyKey: "assistant-key",
+          timestamp: 2,
+        },
+      });
+    });
+
+    await withSessionTranscriptWriteLock(scope, async (locked) => {
+      const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
+        "user-key",
+        "assistant-key",
+        "missing-key",
+        "user-key",
+        ...Array.from({ length: 1_000 }, (_, index) => `missing-key-${index}`),
+      ]);
+      const userMessagesByIdempotencyKey = await locked.readUserMessagesByIdempotencyKey([
+        "user-key",
+        "assistant-key",
+        ...Array.from({ length: 1_000 }, (_, index) => `missing-user-key-${index}`),
+      ]);
+      expect(existingIdempotencyKeys).toEqual(new Set(["user-key", "assistant-key"]));
+      expect(userMessagesByIdempotencyKey.get("user-key")).toMatchObject({
+        content: "persisted user",
+        idempotencyKey: "user-key",
+        role: "user",
+      });
+      expect(userMessagesByIdempotencyKey.has("assistant-key")).toBe(false);
+      expect(await locked.readMessageEventCount()).toBe(2);
+    });
+
+    await replaceTranscriptEvents(scope, [
+      { id: "replacement-metadata", type: "custom" },
+      {
+        id: "replacement-message",
+        type: "message",
+        message: {
+          role: "user",
+          content: "replacement user",
+          idempotencyKey: "replacement-key",
+          timestamp: 3,
+        },
+      },
+    ]);
+    await withSessionTranscriptWriteLock(scope, async (locked) => {
+      const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
+        "user-key",
+        "replacement-key",
+      ]);
+      const userMessagesByIdempotencyKey = await locked.readUserMessagesByIdempotencyKey([
+        "user-key",
+        "replacement-key",
+      ]);
+      expect(existingIdempotencyKeys).toEqual(new Set(["replacement-key"]));
+      expect(userMessagesByIdempotencyKey.get("replacement-key")).toMatchObject({
+        content: "replacement user",
+        role: "user",
+      });
+      expect(await locked.readMessageEventCount()).toBe(1);
+    });
+  });
+
   it("serializes caller-checked idempotency inside scoped locked appends", async () => {
     const scope = {
       agentId: "main",

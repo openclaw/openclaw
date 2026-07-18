@@ -329,5 +329,46 @@ describe("sqlite hot query plans", () => {
     );
     expect(historyAnchorPlan).toContain("sqlite_autoindex_transcript_event_identities_1");
     expect(historyAnchorPlan).toContain("idx_agent_transcript_active_event_seq");
+
+    const mirrorExistencePlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT message_idempotency_key
+          FROM transcript_event_identities
+         WHERE session_id = ? AND message_idempotency_key IN (?, ?)
+      `,
+      ["session-1", "existing-user", "existing-assistant"],
+    );
+    expect(mirrorExistencePlan).toContain("idx_agent_transcript_message_idempotency");
+    expect(mirrorExistencePlan).not.toContain("SCAN transcript_event_identities");
+
+    const mirrorUserMessagePlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT identity.message_idempotency_key, event.event_json
+          FROM transcript_event_identities AS identity
+          JOIN transcript_events AS event
+            ON event.session_id = identity.session_id AND event.seq = identity.seq
+         WHERE identity.session_id = ?
+           AND identity.message_idempotency_key IN (?, ?)
+      `,
+      ["session-1", "existing-user", "existing-assistant"],
+    );
+    expect(mirrorUserMessagePlan).toContain("idx_agent_transcript_message_idempotency");
+    expect(mirrorUserMessagePlan).toContain("sqlite_autoindex_transcript_events_1");
+    expect(mirrorUserMessagePlan).not.toContain("SCAN transcript_event_identities");
+    expect(mirrorUserMessagePlan).not.toContain("SCAN transcript_events");
+
+    const mirrorMessageCountPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT COUNT(seq)
+          FROM transcript_event_identities
+         WHERE session_id = ? AND event_type = 'message'
+      `,
+      ["session-1"],
+    );
+    expect(mirrorMessageCountPlan).toContain("idx_agent_transcript_event_sequence");
+    expect(mirrorMessageCountPlan).not.toContain("SCAN transcript_event_identities");
   });
 });

@@ -146,6 +146,14 @@ export type SessionTranscriptWriteLockContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
+  /** Reads supplied keys that already identify a persisted message event. */
+  readExistingMessageIdempotencyKeys: (idempotencyKeys: readonly string[]) => Promise<Set<string>>;
+  /** Counts raw persisted message events for sequence assignment. */
+  readMessageEventCount: () => Promise<number>;
+  /** Reads persisted user messages among the supplied message keys. */
+  readUserMessagesByIdempotencyKey: (
+    idempotencyKeys: readonly string[],
+  ) => Promise<Map<string, Extract<AgentMessage, { role: "user" }>>>;
   target: SessionTranscriptTarget;
 };
 
@@ -394,6 +402,21 @@ export async function withSessionTranscriptWriteLock<T>(
       await run({
         target,
         readEvents: locked.readEvents,
+        readExistingMessageIdempotencyKeys: locked.readExistingMessageIdempotencyKeys,
+        readMessageEventCount: locked.readMessageEventCount,
+        readUserMessagesByIdempotencyKey: async (idempotencyKeys) => {
+          const messages = await locked.readUserMessagesByIdempotencyKey(idempotencyKeys);
+          const userMessagesByIdempotencyKey = new Map<
+            string,
+            Extract<AgentMessage, { role: "user" }>
+          >();
+          for (const [idempotencyKey, message] of messages) {
+            if (isAgentMessageRecord(message) && message.role === "user") {
+              userMessagesByIdempotencyKey.set(idempotencyKey, message);
+            }
+          }
+          return userMessagesByIdempotencyKey;
+        },
         appendMessage: (options) =>
           locked.appendMessage({
             ...options,

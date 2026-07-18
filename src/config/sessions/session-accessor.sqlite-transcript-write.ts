@@ -45,9 +45,12 @@ import {
   appendTranscriptEventInTransaction,
   ensureTranscriptHeader,
   readActiveTranscriptAppendParentId,
+  readExistingTranscriptMessageIdempotencyKeys,
   readMessageIdempotencyKey,
+  readTranscriptMessageEventCount,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
+  readTranscriptUserMessagesByIdempotencyKey,
   redactTranscriptMessageForStorage,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
@@ -102,6 +105,11 @@ type SqliteTranscriptWriteLockContext = {
     options: TranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   readEvents: () => Promise<TranscriptEvent[]>;
+  readExistingMessageIdempotencyKeys: (idempotencyKeys: readonly string[]) => Promise<Set<string>>;
+  readMessageEventCount: () => Promise<number>;
+  readUserMessagesByIdempotencyKey: (
+    idempotencyKeys: readonly string[],
+  ) => Promise<Map<string, unknown>>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 
@@ -419,6 +427,12 @@ export async function withSqliteTranscriptWriteLock<T>(
         transcriptSnapshot = { kind: "current", rows: snapshot.rows };
         return snapshot.events;
       },
+      readExistingMessageIdempotencyKeys: async (idempotencyKeys) =>
+        readExistingTranscriptMessageIdempotencyKeys(database, resolved.sessionId, idempotencyKeys),
+      readMessageEventCount: async () =>
+        readTranscriptMessageEventCount(database, resolved.sessionId),
+      readUserMessagesByIdempotencyKey: async (idempotencyKeys) =>
+        readTranscriptUserMessagesByIdempotencyKey(database, resolved.sessionId, idempotencyKeys),
       replaceEvents: async (events) => {
         if (transcriptSnapshot?.kind === "stale") {
           throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
