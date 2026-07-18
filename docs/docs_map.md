@@ -10445,6 +10445,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Choosing a provider
   - H3: Provider comparison
+  - H2: Result shape
   - H2: Auto-detection
   - H2: Native OpenAI web search
   - H2: Native Codex web search

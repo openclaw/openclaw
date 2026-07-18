@@ -92,7 +92,7 @@ export const WebSearchOutputSchema = Type.Union([
   ),
 ]);
 
-export type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
+type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
 
 // Matches well-formed envelope framing from wrapExternalContent. Provider text
 // is stripped of any existing (or forged) envelopes before the boundary applies
@@ -148,12 +148,11 @@ function normalizeCitations(value: unknown): Array<{ url: string; title?: string
     if (!isRecord(entry) || !url) {
       return [];
     }
-    return [
-      {
-        url,
-        ...(typeof entry.title === "string" ? { title: wrapProse(entry.title) } : {}),
-      },
-    ];
+    const citation: Static<typeof WebSearchCitationSchema> = { url };
+    if (typeof entry.title === "string") {
+      citation.title = wrapProse(entry.title);
+    }
+    return [citation];
   });
 }
 
@@ -221,13 +220,20 @@ export function normalizeWebSearchOutput(params: {
         typeof row.published === "string" && PUBLISHED_RE.test(row.published)
           ? row.published
           : undefined;
-      return {
+      const normalizedRow: Static<typeof WebSearchResultSchema> = {
         title: wrapProse(row.title as string),
         url: toHttpUrl(row.url as string) as string,
-        ...(snippet !== undefined ? { snippet: wrapProse(snippet) } : {}),
-        ...(published !== undefined ? { published } : {}),
-        ...(typeof row.siteName === "string" ? { siteName: wrapProse(row.siteName) } : {}),
       };
+      if (snippet !== undefined) {
+        normalizedRow.snippet = wrapProse(snippet);
+      }
+      if (published !== undefined) {
+        normalizedRow.published = published;
+      }
+      if (typeof row.siteName === "string") {
+        normalizedRow.siteName = wrapProse(row.siteName);
+      }
+      return normalizedRow;
     });
     return {
       kind: "results",

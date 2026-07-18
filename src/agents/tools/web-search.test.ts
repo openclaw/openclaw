@@ -738,7 +738,7 @@ describe("web_search normalized output contract", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-demo",
       query: "sparse",
-      result: { results: new Array(1) },
+      result: { results: Object.assign([], { length: 1 }) as unknown[] },
     });
 
     expect(normalized.kind).toBe("raw");
