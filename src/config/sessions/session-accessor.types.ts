@@ -204,6 +204,11 @@ export type SessionTranscriptEventRow = {
   seq: number;
 };
 
+export type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+} from "./session-accessor.sqlite-contract.js";
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Runtime config used for message redaction and transcript header metadata. */
   config?: OpenClawConfig;

@@ -4,6 +4,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   publishTranscriptUpdate,
+  readTranscriptRawDelta,
   readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
@@ -11,6 +12,8 @@ import {
   type TranscriptMessageAppendOptions,
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
+  type SessionTranscriptRawDeltaLimits,
+  type SessionTranscriptRawDeltaResult,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import {
@@ -57,6 +60,11 @@ export type {
 export type SessionTranscriptEvent = unknown;
 
 export type SessionTranscriptTargetParams = SessionTranscriptReadParams;
+
+/** Scoped target and bounds for one raw generation-aware transcript page. */
+export type SessionTranscriptRawDeltaParams = SessionTranscriptTargetParams &
+  SessionTranscriptRawDeltaLimits;
+export type { SessionTranscriptRawDeltaResult };
 
 export type SessionTranscriptMessageEntry = {
   /** Stable transcript event id for this message entry. */
@@ -145,6 +153,18 @@ export async function readSessionTranscriptEvents(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptEvent[]> {
   return await loadTranscriptEvents(params);
+}
+
+/** Reads one bounded raw page; the opaque cursor survives append and resets after replacement. */
+export async function readSessionTranscriptRawDelta(
+  params: SessionTranscriptRawDeltaParams,
+): Promise<SessionTranscriptRawDeltaResult> {
+  const { cursor, maxBytes, maxEvents, ...target } = params;
+  return readTranscriptRawDelta(target, {
+    ...(cursor !== undefined ? { cursor } : {}),
+    ...(maxBytes !== undefined ? { maxBytes } : {}),
+    ...(maxEvents !== undefined ? { maxEvents } : {}),
+  });
 }
 
 /**
