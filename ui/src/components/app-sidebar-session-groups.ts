@@ -113,12 +113,17 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
 
   protected handleSidebarZoneDrop(event: DragEvent, targetEntry?: string) {
     const entry = this.draggedSidebarEntry(event.dataTransfer);
-    if (!entry || (targetEntry === entry && targetEntry !== undefined)) {
+    if (!entry) {
+      return;
+    }
+    // Consume before the self-drop bailout: an unhandled drop would bubble to
+    // the zone container and append the entry at the end.
+    event.preventDefault();
+    event.stopPropagation();
+    if (targetEntry === entry) {
       this.finishSidebarEntryDrag();
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
     const position = this.sidebarZoneDropTarget?.position;
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
