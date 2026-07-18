@@ -246,7 +246,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     });
   });
 
-  it("shows a 1/2 stepper with answered-elsewhere and expired summaries", async () => {
+  it("shows a 1/2 stepper with answered and expired summaries", async () => {
     const { gateway, page } = await openQuestionPage();
     const elsewhere = questionRecord("question-external-answer", [
       {
@@ -301,7 +301,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await expect.poll(() => panel.getByText("1/2", { exact: true }).count()).toBe(1);
     await expect
       .poll(() =>
-        page.locator(".chat-question-summary").filter({ hasText: "Answered elsewhere" }).count(),
+        page.locator(".chat-question-summary").filter({ hasText: "Release manager" }).count(),
       )
       .toBe(1);
     await expect
