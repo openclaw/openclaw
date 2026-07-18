@@ -124,6 +124,7 @@ type QuickSettingsProps = {
   lobsterPetSounds: boolean;
   setLobsterPetSounds: (enabled: boolean) => void;
   userAvatar?: string | null;
+  userAvatarError?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
   // Config staging state (quick edits auto-save through the shared draft)
@@ -987,6 +988,11 @@ function renderPersonalSection(props: QuickSettingsProps) {
             <div class="config-identity__hint muted">
               ${t("quickSettings.personal.browserOnly")}
             </div>
+            ${props.userAvatarError
+              ? html`<div class="config-identity__error" role="alert">
+                  ${props.userAvatarError}
+                </div>`
+              : nothing}
           </div>
         </div>
       </section>

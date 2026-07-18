@@ -21,6 +21,7 @@ import {
   normalizeChatSendShortcut,
   patchSettings,
   saveLocalUserIdentity,
+  type LocalUserIdentity,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -243,6 +244,7 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   @state() private settings = loadSettings();
   @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
+  @state() private userAvatarError: string | null = null;
   @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
@@ -329,11 +331,23 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private setLocalUserAvatar(avatar: string | null) {
-    const identity = saveLocalUserIdentity({
-      ...loadLocalUserIdentity(),
-      avatar,
-    });
+    let identity: LocalUserIdentity;
+    try {
+      identity = saveLocalUserIdentity({
+        ...loadLocalUserIdentity(),
+        avatar,
+      });
+    } catch (error) {
+      // Persistence failures (e.g. storage quota or security restrictions)
+      // must not be swallowed: surface them and keep the prior avatar so the
+      // UI does not claim a save that did not happen. The reporter saw the
+      // avatar silently fail to appear after reload with no error (#110662).
+      this.userAvatarError = error instanceof Error ? error.message : "Failed to save user avatar";
+      this.requestUpdate();
+      return;
+    }
     this.userAvatar = identity.avatar;
+    this.userAvatarError = null;
   }
 
   override disconnectedCallback() {
@@ -945,6 +959,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
       assistantAvatarOverride: null,
       userAvatar: this.userAvatar,
+      userAvatarError: this.userAvatarError,
       onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
       basePath: this.context.basePath,
     });
