@@ -30,8 +30,8 @@ vi.mock("../config/config.js", async () => {
   return { getRuntimeConfig: () => ({}) };
 });
 
-import { Command } from "commander";
 import os from "node:os";
+import { Command } from "commander";
 import { registerDnsCli } from "./dns-cli.js";
 
 describe("dns-cli probe bounds", () => {
@@ -66,12 +66,20 @@ describe("dns-cli probe bounds", () => {
     program.exitOverride();
     registerDnsCli(program);
 
-    await program.parseAsync(["node", "openclaw", "dns", "setup", "--domain", "openclaw.internal", "--apply"]);
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "dns",
+      "setup",
+      "--domain",
+      "openclaw.internal",
+      "--apply",
+    ]);
 
     const spawned = spawnSyncMock.mock.calls;
     expect(spawned.length).toBeGreaterThan(0);
-    for (const [, , opts] of spawned) {
-      expect(opts?.timeout).toBeGreaterThan(0);
+    for (const call of spawned) {
+      expect(call[2]?.timeout).toBeGreaterThan(0);
     }
   });
 });
