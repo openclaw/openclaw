@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import net from "node:net";
 import { Readable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -166,7 +167,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
         purpose: "control-ui",
       },
     });
@@ -265,7 +266,9 @@ describe("registerTelegramMiniAppRoutes", () => {
       });
     });
     try {
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("expected TCP server address");
@@ -292,7 +295,7 @@ describe("registerTelegramMiniAppRoutes", () => {
           );
         });
         socket.on("data", (chunk) => {
-          raw += chunk;
+          raw += typeof chunk === "string" ? chunk : chunk.toString("utf8");
         });
         socket.on("error", reject);
         socket.on("close", () => {
@@ -305,9 +308,15 @@ describe("registerTelegramMiniAppRoutes", () => {
       expect(response).toContain("Connection: close");
       expect(response).toContain("Request body timeout");
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
     }
   });
 });
