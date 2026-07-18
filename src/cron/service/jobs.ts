@@ -8,6 +8,7 @@ import {
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { isCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
@@ -634,7 +635,8 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     }
     if (
       job.state.runningAtMs !== undefined &&
-      !isQueuedForceCronRun(state, job.id, job.state.runningAtMs)
+      !isQueuedForceCronRun(state, job.id, job.state.runningAtMs) &&
+      !isCronJobActive(job.id)
     ) {
       job.state.runningAtMs = undefined;
       changed = true;
@@ -1364,12 +1366,24 @@ function mergeCronFailureAlert(
   return next;
 }
 
+/**
+ * Covers both durable reservations and the process marker that survives mutable job state.
+ * Every timer/manual admission path must use this or disable/re-enable can duplicate a run.
+ */
+export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">) {
+  return (
+    typeof job.state.queuedAtMs === "number" ||
+    typeof job.state.runningAtMs === "number" ||
+    isCronJobActive(job.id)
+  );
+}
+
 /** Returns whether a cron job should execute at `nowMs`, honoring force mode and active runs. */
 export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
   if (!job.state) {
     job.state = {};
   }
-  if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+  if (hasActiveCronRun(job)) {
     return false;
   }
   if (opts.forced) {
