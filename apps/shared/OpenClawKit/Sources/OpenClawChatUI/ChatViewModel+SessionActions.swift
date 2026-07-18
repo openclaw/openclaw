@@ -393,9 +393,9 @@ extension OpenClawChatViewModel {
         }
     }
 
-    // Dispatch parity with forkSession(key:): per-request server-lease guards in the
-    // transport plus post-RPC staleness re-checks, not the patch-flow route lease,
-    // which does not expose fork/rewind and would widen the lease API for no sibling.
+    /// Dispatch parity with forkSession(key:): per-request server-lease guards in the
+    /// transport plus post-RPC staleness re-checks, not the patch-flow route lease,
+    /// which does not expose fork/rewind and would widen the lease API for no sibling.
     public func forkAtMessage(_ message: OpenClawChatMessage) async {
         guard let entryID = Self.sessionMutationEntryID(for: message) else { return }
         guard !self.hasBlockingRunActivity, !self.isSending, !self.isAborting else { return }
