@@ -1,6 +1,6 @@
+import { constants as fsConstants } from "node:fs";
 // Memory Wiki tests cover cli plugin behavior.
 import fs from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";

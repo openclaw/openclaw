@@ -61,8 +61,7 @@ const GATEWAY_RESPONSE_MAX_STRING_CHARS = 10_000;
 const GATEWAY_RESPONSE_MAX_CODE_CHARS = 256;
 const WIKI_APPLY_BODY_FILE_MAX_BYTES = 1_048_576;
 // Open non-blocking so FIFO swaps do not stall before descriptor validation.
-const WIKI_APPLY_BODY_FILE_OPEN_FLAGS =
-  fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+const WIKI_APPLY_BODY_FILE_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
 const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
   String.raw`(?:\x1B\[[0-?]*[ -/]*[@-~]|\x1B[@-Z\\-_]|\x9B[0-?]*[ -/]*[@-~])`,
   "g",
