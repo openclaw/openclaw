@@ -11,17 +11,20 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 
 ## Available tools
 
-| Tool               | What it does                                                                |
-| ------------------ | --------------------------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, label, agent, archive, preview)  |
-| `sessions_history` | Read the transcript of a specific session                                   |
-| `sessions_send`    | Send a message to another session and optionally wait                       |
-| `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
-| `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
-| `subagents`        | List spawned sub-agent status for this session                              |
-| `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
+| Tool                 | What it does                                                                |
+| -------------------- | --------------------------------------------------------------------------- |
+| `sessions_list`      | List sessions with optional filters (kind, label, agent, archive, preview)  |
+| `sessions_history`   | Read the transcript of a specific session                                   |
+| `sessions_send`      | Run another session on the same Gateway and optionally wait                 |
+| `conversations_list` | List stable external conversation addresses                                 |
+| `conversations_send` | Send to one exact external conversation without running a local session     |
+| `conversations_turn` | Send to one exact external conversation and wait for its correlated reply   |
+| `sessions_spawn`     | Spawn an isolated sub-agent session for background work                     |
+| `sessions_yield`     | End the current turn and wait for follow-up sub-agent results               |
+| `subagents`          | List spawned sub-agent status for this session                              |
+| `session_status`     | Show a `/status`-style card and optionally set a per-session model override |
 
-These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set, including `sessions_spawn`, `sessions_yield`, and `subagents`. `tools.profile: "messaging"` includes cross-session messaging tools (`sessions_list`, `sessions_history`, `sessions_send`, `session_status`) but does not include sub-agent spawning. To keep a messaging profile and still allow native delegation, add:
+These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set, including `sessions_spawn`, `sessions_yield`, and `subagents`. `tools.profile: "messaging"` includes cross-session and external-conversation tools (`sessions_list`, `sessions_history`, `sessions_send`, `conversations_list`, `conversations_send`, `conversations_turn`, `session_status`) but does not include sub-agent spawning. To keep a messaging profile and still allow native delegation, add:
 
 ```json5
 {
@@ -58,9 +61,19 @@ Both tools accept either a **session key** (like `"main"`) or a **session ID** f
 
 If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
+## Sessions versus conversations
+
+A **session** is local model context. A **conversation** is an exact external address such as one peer, channel, or thread. The two are linked, but they are not interchangeable: direct messages can share one `main` session while retaining separate conversation addresses.
+
+`conversations_list` returns opaque `conversationRef` values for the active agent. With an explicit `channel`, the Gateway also refreshes addresses from that channel's local directory, such as approved Reef peers; use `query` to find a specific peer beyond the current result page. Discovery catalogs the address without creating a model-context session; the backing session is created only when delivery or inbound context needs it. Conversation discovery and delivery are owner-only because they use the Gateway's channel credentials. Use `conversations_send` for fire-and-forget delivery. Use `conversations_turn` when the remote reply belongs to the current model turn: the Gateway reserves one transport message ID, persists a delivery operation and queue intent before transport I/O, and returns the correlated reply from the tool instead of starting a second local agent turn. Delivery operations live outside model transcripts; a captured reply is retained only as a side artifact while the tool result owns model context. If the Gateway restarts after queueing, delivery can recover but a later reply follows ordinary inbound dispatch because the process-local waiter is gone. Unsolicited inbound messages always continue through the normal channel dispatch path.
+
+Use the shared `message` tool when you already have an explicit raw channel target or need a channel-specific action. Conversation references are scoped to the active agent and should be obtained through `conversations_list`, not constructed from session keys.
+
+In Code Mode, the conversation tools reuse their exact Gateway output contracts. A single `exec` cell can list addresses, select a returned `conversationRef`, and call `conversations_send` or `conversations_turn`; normal tool policy and approvals still apply to the nested calls.
+
 ## Sending cross-session messages
 
-`sessions_send` delivers a message to another session and optionally waits for the response:
+`sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. The resulting reply can still be announced through the established requester or target delivery context; that existing behavior is unchanged. For exact external delivery, use a conversation tool or `message` with an explicit channel and target.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.

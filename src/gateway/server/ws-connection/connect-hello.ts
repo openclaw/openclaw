@@ -71,7 +71,9 @@ export async function sendGatewayHello(
     snapshot.stateVersion.health = getHealthVersion();
   }
   const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
-  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes);
+  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
+    requireGatewayAuthGrant: resolvedAuth.mode !== "none",
+  });
   const helloOk = {
     type: "hello-ok",
     protocol: PROTOCOL_VERSION,
@@ -84,7 +86,7 @@ export async function sendGatewayHello(
       events,
       capabilities: [
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
-        GATEWAY_SERVER_CAPS.CRESTODIAN_SETUP_MODEL_REF,
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       ],
     },
     snapshot,

@@ -52,6 +52,7 @@ describe("method scope resolution", () => {
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.dispatch", ["operator.admin"]],
+    ["sessions.reclaim", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
@@ -104,6 +105,10 @@ describe("method scope resolution", () => {
     ["exec.approvals.set", ["operator.admin"]],
     ["exec.approvals.node.get", ["operator.admin"]],
     ["exec.approvals.node.set", ["operator.admin"]],
+    ["conversations.list", ["operator.admin"]],
+    ["conversations.send", ["operator.admin"]],
+    ["conversations.turn", ["operator.admin"]],
+    ["conversations.turn.cancel", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });
@@ -186,6 +191,7 @@ describe("method scope resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -384,6 +390,7 @@ describe("method scope resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -491,6 +498,7 @@ describe("operator scope authorization", () => {
 
   it.each([
     "approval.get",
+    "approval.history",
     "approval.resolve",
     "exec.approval.get",
     "exec.approval.list",
@@ -501,6 +509,22 @@ describe("operator scope authorization", () => {
       missingScope: "operator.approvals",
     });
     expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: true,
+    });
+  });
+
+  it.each([
+    "question.request",
+    "question.waitAnswer",
+    "question.resolve",
+    "question.get",
+    "question.list",
+  ])("requires questions scope for %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.questions",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.questions"])).toEqual({
       allowed: true,
     });
   });
@@ -635,5 +659,6 @@ describe("CLI default operator scopes", () => {
   it("includes operator.talk.secrets for node-role device pairing approvals", async () => {
     const { CLI_DEFAULT_OPERATOR_SCOPES } = await import("./method-scopes.js");
     expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.talk.secrets");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.questions");
   });
 });

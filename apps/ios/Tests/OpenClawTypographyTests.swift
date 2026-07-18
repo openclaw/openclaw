@@ -169,6 +169,9 @@ struct OpenClawTypographyTests {
         let privacyAccess = try String(
             contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
             encoding: .utf8)
+        let appleHealthAccess = try String(
+            contentsOf: Self.sourceURL("Health/AppleHealthAccessSectionView.swift"),
+            encoding: .utf8)
         let skillWorkshop = try String(
             contentsOf: Self.sourceURL("Design/IPadSkillWorkshopScreen.swift"),
             encoding: .utf8)
@@ -326,6 +329,8 @@ struct OpenClawTypographyTests {
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
+        #expect(appleHealthAccess.contains("Text(healthError)"))
+        #expect(appleHealthAccess.contains(".font(OpenClawType.footnote)"))
         let permissionRow = try String(
             contentsOf: Self.sourceURL("Permissions/DevicePermissionRow.swift"),
             encoding: .utf8)

@@ -439,7 +439,10 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
-    const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+    const detected = await detectLegacyStateMigrations({
+      cfg: ctx.cfg,
+      doctorOnlyStateMigrations: true,
+    });
     return [
       ...detected.preview.map(
         (line): HealthFinding => ({
@@ -754,9 +757,9 @@ const codexSessionRoutesCheck: HealthCheck = {
         path: issue.path,
         target: issue.canonicalModel,
         requirement: "Codex plugin enabled for routes that use the Codex runtime.",
-        fixHint: issue.blockedOutsideEntry
+        fixHint: issue.repairBlocked
           ? [
-              "Enable plugin loading and remove codex from plugins.deny,",
+              "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny;",
               "or set the affected OpenAI models to an OpenClaw runtime policy.",
             ].join(" ")
           : [

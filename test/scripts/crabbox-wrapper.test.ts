@@ -56,9 +56,14 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
 
   if (process.platform !== "win32") {
     const signalIgnoringDescendantScript = [
+      "import fs from 'node:fs';",
       "process.on('SIGHUP', () => {});",
       "process.on('SIGINT', () => {});",
       "process.on('SIGTERM', () => {});",
+      "const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH;",
+      "const pidTmpPath = `${pidPath}.tmp.${process.pid}`;",
+      "fs.writeFileSync(pidTmpPath, String(process.pid));",
+      "fs.renameSync(pidTmpPath, pidPath);",
       "setInterval(() => {}, 1000);",
     ].join("");
     const script = [
@@ -145,8 +150,9 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  cd "$deleted_cwd" || exit 1',
       "fi",
       'if [ -n "${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}" ]; then',
+      // The descendant publishes its own PID only after its signal handlers exist.
+      // Atomic rename makes path existence a complete readiness handshake.
       `  ${shellSingleQuote(process.execPath)} --input-type=module --eval ${shellSingleQuote(signalIgnoringDescendantScript)} &`,
-      '  printf "%s" "$!" > "$OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH"',
       '  trap "exit 0" INT TERM HUP',
       "  while :; do sleep 1; done",
       "fi",
@@ -585,7 +591,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 8_000): Pr
     if (predicate()) {
       return;
     }
-    await delay(50);
+    await delay(10);
   }
   throw new Error("timed out waiting for condition");
 }
@@ -599,7 +605,7 @@ async function waitForProcessExit(
       child.once("error", reject);
       child.once("exit", (status, signal) => resolve({ status, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for wrapper process exit");
     }),
   ]);
@@ -640,7 +646,9 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
     const runnerExit = waitForProcessExit(runner);
     await sendSignals(runner.pid!);
     await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
-    await waitForCondition(() => !isProcessAlive(descendantPid));
+    // The wrapper waits for the detached process group to disappear before exit.
+    // A live PID here would expose the cleanup-ordering regression this proves.
+    expect(isProcessAlive(descendantPid)).toBe(false);
   } finally {
     if (runner.pid && isProcessAlive(runner.pid)) {
       runner.kill("SIGKILL");
@@ -3352,11 +3360,11 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("retries a cold Crabbox whose run --help is slower than the default probe timeout", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
-    // First probe is SIGKILLed at 150ms; the retry gets the full generous timeout
-    // and reads the (600ms) stderr help, so the wrapper must not hard-fail.
+    // First probe is SIGKILLed at 25ms; the retry gets the full generous timeout
+    // and reads the (80ms) stderr help, so the wrapper must not hard-fail.
     const result = runWrapper(helpText, ["--version"], {
-      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "150" },
-      extraPathEntries: [makeSlowHelpCrabbox(helpText, 600)],
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
+      extraPathEntries: [makeSlowHelpCrabbox(helpText, 80)],
     });
 
     expect(result.error).toBeUndefined();
@@ -4470,7 +4478,7 @@ describe("scripts/crabbox-wrapper", () => {
     async () => {
       await runSignalCleanupProof(async (runnerPid) => {
         process.kill(runnerPid, "SIGTERM");
-        await delay(50);
+        await delay(20);
         process.kill(runnerPid, "SIGTERM");
       });
     },

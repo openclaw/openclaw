@@ -1,4 +1,5 @@
 // Reconciles configured plugin installs after the core package update has completed.
+import path from "node:path";
 import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/shared/missing-configured-plugin-install.js";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -48,6 +49,19 @@ type PostCoreConvergenceResult = {
 const REPAIR_GUIDANCE = "Run `openclaw update repair` to retry plugin repair.";
 const inspectGuidance = (pluginId: string) =>
   `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
+
+function smokeFailureGuidance(failure: PluginPayloadSmokeFailure): string[] {
+  if (failure.reason !== "unreadable-package-json") {
+    return [REPAIR_GUIDANCE, inspectGuidance(failure.pluginId)];
+  }
+  const packageJsonPath = failure.installPath
+    ? path.join(failure.installPath, "package.json")
+    : "the plugin package.json";
+  return [
+    `Fix file access for ${packageJsonPath} so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.`,
+    inspectGuidance(failure.pluginId),
+  ];
+}
 
 async function repairManagedNpmOpenClawPeerLinks(params: {
   env: NodeJS.ProcessEnv;
@@ -156,7 +170,7 @@ export async function runPostCorePluginConvergence(params: {
       pluginId: failure.pluginId,
       reason: `${failure.reason}: ${failure.detail}`,
       message: `Plugin "${failure.pluginId}" failed post-core payload smoke check (${failure.reason}): ${failure.detail}`,
-      guidance: [REPAIR_GUIDANCE, inspectGuidance(failure.pluginId)],
+      guidance: smokeFailureGuidance(failure),
     });
   }
 

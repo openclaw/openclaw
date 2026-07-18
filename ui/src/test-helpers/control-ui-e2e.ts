@@ -15,6 +15,7 @@ import {
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
+import type { ControlUiBuildInfo } from "../build-info.ts";
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
@@ -60,6 +61,7 @@ export type ControlUiMockGatewayScenario = {
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
+  /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
   models?: Array<{
     id: string;
@@ -140,7 +142,16 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
   return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
 }
 
-export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
+export async function startControlUiE2eServer(
+  buildInfo: ControlUiBuildInfo = {
+    version: "2026.7.10",
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    builtAt: "2026-07-10T12:34:56.000Z",
+    branch: null,
+    dirty: false,
+    buildId: "e2e",
+  },
+): Promise<ControlUiE2eServer> {
   const { createServer } = await import("vite");
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
@@ -151,12 +162,7 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     clearScreen: false,
     configFile: false,
     define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
-        version: "2026.7.10",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        builtAt: "2026-07-10T12:34:56.000Z",
-        buildId: "e2e",
-      }),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
     },
     logLevel: "error",
     optimizeDeps: {
@@ -300,6 +306,9 @@ function installControlUiMockGateway(input: {
   type BrowserMethodResponseCases = {
     cases?: BrowserMethodResponseCase[];
   };
+  type BrowserMethodResponseSequence = {
+    sequence?: unknown[];
+  };
   type DeferredResponse = {
     id: string;
     method: string;
@@ -347,6 +356,7 @@ function installControlUiMockGateway(input: {
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
+  const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const sockets: Array<{ readonly url: string }> = [];
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
@@ -515,6 +525,14 @@ function installControlUiMockGateway(input: {
     return Array.isArray(maybeCases) ? maybeCases : null;
   }
 
+  function responseSequence(value: unknown): unknown[] | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+    const maybeSequence = (value as BrowserMethodResponseSequence).sequence;
+    return Array.isArray(maybeSequence) ? maybeSequence : null;
+  }
+
   function configuredResponse(
     method: string,
     params: unknown,
@@ -523,6 +541,16 @@ function installControlUiMockGateway(input: {
       return { found: false };
     }
     const configured = scenario.methodResponses[method];
+    const sequence = responseSequence(configured);
+    if (sequence) {
+      if (sequence.length === 0) {
+        return { found: false };
+      }
+      const index = methodResponseSequenceIndexes.get(method) ?? 0;
+      methodResponseSequenceIndexes.set(method, index + 1);
+      // Keep the final response stable so harmless UI retries remain deterministic.
+      return { found: true, value: sequence[Math.min(index, sequence.length - 1)] };
+    }
     const cases = responseCases(configured);
     if (!cases) {
       return { found: true, value: configured };
@@ -1067,6 +1095,7 @@ function installControlUiMockGateway(input: {
     },
     setMethodResponse(method, payload) {
       scenario.methodResponses[method] = payload;
+      methodResponseSequenceIndexes.delete(method);
       methodResponseOverrides[method] = payload;
       try {
         window.sessionStorage.setItem(

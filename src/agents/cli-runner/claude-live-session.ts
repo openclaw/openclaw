@@ -30,6 +30,7 @@ import {
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliUsage,
   type CliStreamJsonOutputLimits,
   type CliStreamingDelta,
   type CliThinkingDelta,
@@ -68,9 +69,20 @@ type ClaudeLiveTurn = {
   timeoutTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
   observedStdout: boolean;
+  /**
+   * Claude consumed queued session notifications before processing this turn.
+   * The following empty result is provisional; the same process can emit the
+   * real answer later, so a bounded grace observes whether output continues.
+   */
+  pendingSyntheticPlaceholder: boolean;
+  allowSyntheticContinuationGrace: boolean;
+  deferredSyntheticOutput: CliOutput | null;
+  syntheticContinuationTimer: NodeJS.Timeout | null;
   completedToolCallIds: Set<string>;
   toolEventCount: number;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
@@ -129,6 +141,17 @@ type ClaudeLiveToolTerminalOutcome =
   | { outcome: "cancelled" | "failed" | "timed_out" | "unknown" };
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
+// The observed queued-notification resume emits new process activity within
+// seconds. Cap this below the normal resumed no-output watchdog so terminal
+// placeholders still reach existing empty-response handling promptly.
+const CLAUDE_LIVE_SYNTHETIC_CONTINUATION_GRACE_MS = 30_000;
+// Claude Code uses these exact <synthetic> messages while draining internal
+// session work. Matching both the model sentinel and full text avoids treating
+// user-authored lookalikes as lifecycle signals.
+const CLAUDE_LIVE_PROVISIONAL_SYNTHETIC_PLACEHOLDERS = new Set([
+  "No response requested.",
+  "Continue from where you left off.",
+]);
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
 
@@ -137,7 +160,7 @@ function sha256(value: string): string {
 }
 
 /** Closes all live Claude CLI sessions and clears creation promises for tests. */
-export function resetClaudeLiveSessionsForTest(): void {
+function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     closeLiveSession(session, "restart");
   }
@@ -259,7 +282,7 @@ function stripLiveProcessArgs(
 }
 
 /** Builds Claude CLI args for stream-json live sessions, stripping one-shot session flags. */
-export function buildClaudeLiveArgs(params: {
+function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -291,6 +314,13 @@ export function buildClaudeLiveArgs(params: {
   return params.permissionMode
     ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
     : liveArgs;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveSessionTestApi")] = {
+    buildClaudeLiveArgs,
+    resetClaudeLiveSessionsForTest,
+  };
 }
 
 type ClaudeLiveSessionOwner = {
@@ -430,6 +460,11 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
     clearTimeout(turn.timeoutTimer);
     turn.timeoutTimer = null;
   }
+  if (turn.syntheticContinuationTimer) {
+    clearTimeout(turn.syntheticContinuationTimer);
+    turn.syntheticContinuationTimer = null;
+  }
+  turn.deferredSyntheticOutput = null;
 }
 
 function clearOutstandingBackgroundTasks(session: ClaudeLiveSession): void {
@@ -810,6 +845,87 @@ function applyBackgroundTasksChanged(
   }
 }
 
+function isClaudeLiveProvisionalSyntheticPlaceholder(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
+    return false;
+  }
+  const message = parsed.message;
+  if (message.model !== "<synthetic>") {
+    return false;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  const text = content
+    .flatMap((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
+    )
+    .join("")
+    .trim();
+  return CLAUDE_LIVE_PROVISIONAL_SYNTHETIC_PLACEHOLDERS.has(text);
+}
+
+function isClaudeLiveSubstantiveAssistantProgress(parsed: Record<string, unknown>): boolean {
+  if (parsed.type === "assistant" && isRecord(parsed.message)) {
+    return parsed.message.model !== "<synthetic>";
+  }
+  if (parsed.type !== "stream_event" || !isRecord(parsed.event)) {
+    return false;
+  }
+  const event = parsed.event;
+  return (
+    event.type === "content_block_delta" &&
+    isRecord(event.delta) &&
+    event.delta.type === "text_delta" &&
+    typeof event.delta.text === "string" &&
+    event.delta.text.length > 0
+  );
+}
+
+function deferClaudeLiveSyntheticResult(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+  output: CliOutput,
+): void {
+  turn.pendingSyntheticPlaceholder = false;
+  turn.deferredSyntheticOutput = output;
+  if (turn.noOutputTimer) {
+    clearTimeout(turn.noOutputTimer);
+    turn.noOutputTimer = null;
+  }
+  if (turn.syntheticContinuationTimer) {
+    clearTimeout(turn.syntheticContinuationTimer);
+  }
+  const graceMs = Math.min(CLAUDE_LIVE_SYNTHETIC_CONTINUATION_GRACE_MS, session.noOutputTimeoutMs);
+  turn.syntheticContinuationTimer = setTimeout(() => {
+    if (session.currentTurn !== turn || !turn.deferredSyntheticOutput) {
+      return;
+    }
+    const terminalOutput = turn.deferredSyntheticOutput;
+    turn.syntheticContinuationTimer = null;
+    turn.deferredSyntheticOutput = null;
+    emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_grace_expired");
+    finishTurn(session, terminalOutput);
+  }, graceMs);
+  emitClaudeLiveProgress(turn, "cli_live:result_deferred_synthetic_placeholder");
+}
+
+function noteClaudeLiveContinuationAfterSyntheticPlaceholder(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+): void {
+  if (!turn.deferredSyntheticOutput) {
+    return;
+  }
+  if (turn.syntheticContinuationTimer) {
+    clearTimeout(turn.syntheticContinuationTimer);
+    turn.syntheticContinuationTimer = null;
+  }
+  turn.deferredSyntheticOutput = null;
+  armNoOutputTimer(session, turn, session.noOutputTimeoutMs);
+  emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_continuation");
+}
+
 function resetNoOutputTimer(session: ClaudeLiveSession): void {
   const turn = session.currentTurn;
   if (!turn) {
@@ -967,6 +1083,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (!turn) {
     return;
   }
+  noteClaudeLiveContinuationAfterSyntheticPlaceholder(session, turn);
   turn.rawChars += trimmed.length + 1;
   if (
     turn.rawChars > turn.outputLimits.maxTurnRawChars ||
@@ -981,6 +1098,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   }
   turn.rawLines.push(trimmed);
   applyBackgroundTasksChanged(session, parsed);
+  if (turn.allowSyntheticContinuationGrace && isClaudeLiveProvisionalSyntheticPlaceholder(parsed)) {
+    turn.pendingSyntheticPlaceholder = true;
+  } else if (turn.pendingSyntheticPlaceholder && isClaudeLiveSubstantiveAssistantProgress(parsed)) {
+    turn.pendingSyntheticPlaceholder = false;
+  }
   const toolEventCountBefore = turn.toolEventCount;
   turn.streamingParser.push(`${trimmed}\n`);
   turn.sessionId = parsedSessionId ?? turn.sessionId;
@@ -989,6 +1111,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (parsed.type !== "result") {
     return;
   }
+  turn.onPhase?.("resolve");
   const raw = turn.rawLines.join("\n");
   // Reuse the parser that classified pre-tool text as commentary. Reparsing the
   // transcript loses that boundary when Claude's terminal result is empty.
@@ -1019,13 +1142,23 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   // outstanding subagent/workflow tasks: keep the turn open for the final
   // post-drain result. Other listed types (e.g. local_bash) do not hold it.
   if (session.outstandingBackgroundTaskIds.size > 0) {
+    // An interim result is not terminal; background work returns the run to send.
+    turn.onPhase?.("send");
     emitClaudeLiveProgress(turn, "cli_live:result_deferred_background_tasks");
+    return;
+  }
+  // A resumed Claude session can first consume queued task notifications and
+  // emit an empty synthetic result, then continue the same user turn. Keep the
+  // live process and watchdogs authoritative instead of racing it with fallback.
+  if (turn.pendingSyntheticPlaceholder && !output.text.trim()) {
+    deferClaudeLiveSyntheticResult(session, turn, output);
     return;
   }
   finishTurn(session, output);
 }
 
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
+  session.currentTurn?.onCliOutput?.(chunk, "stdout");
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
   const maxPendingLineChars =
@@ -1124,13 +1257,13 @@ function createClaudeUserInputMessage(content: string): string {
   })}\n`;
 }
 
-async function writeTurnInput(session: ClaudeLiveSession, prompt: string): Promise<void> {
+async function writeTurnInput(session: ClaudeLiveSession, payload: string): Promise<void> {
   const stdin = session.managedRun.stdin;
   if (!stdin) {
     throw new Error("Claude CLI live session stdin is unavailable");
   }
   await new Promise<void>((resolve, reject) => {
-    stdin.write(createClaudeUserInputMessage(prompt), (error) => {
+    stdin.write(payload, (error) => {
       if (error) {
         reject(error);
         return;
@@ -1179,6 +1312,7 @@ async function createClaudeLiveSession(params: {
       },
       onStderr: (chunk) => {
         if (session) {
+          session.currentTurn?.onCliOutput?.(chunk, "stderr");
           session.stderr += chunk;
           if (session.stderr.length > LIVE_SESSION_LIMITS.maxStderrChars) {
             closeLiveSession(
@@ -1235,6 +1369,7 @@ async function createClaudeLiveSession(params: {
 function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
+  allowSyntheticContinuationGrace: boolean;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
@@ -1245,6 +1380,10 @@ function createTurn(params: {
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   session: ClaudeLiveSession;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -1268,6 +1407,10 @@ function createTurn(params: {
     timeoutTimer: null,
     activeTools: new Map(),
     observedStdout: false,
+    pendingSyntheticPlaceholder: false,
+    allowSyntheticContinuationGrace: params.allowSyntheticContinuationGrace,
+    deferredSyntheticOutput: null,
+    syntheticContinuationTimer: null,
     completedToolCallIds: new Set(),
     toolEventCount: 0,
     streamingParser: createCliJsonlStreamingParser({
@@ -1286,7 +1429,11 @@ function createTurn(params: {
       },
       onCommentaryText: params.onCommentaryText,
       onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
     }),
+    onCliOutput: params.onCliOutput,
+    onPhase: params.onPhase,
     execPermission: params.execPermission,
     resolve: params.resolve,
     reject: params.reject,
@@ -1373,6 +1520,11 @@ export async function runClaudeLiveSessionTurn(params: {
   onCommentaryText?: (text: string) => void;
   onMcpCaptureReady?: (captureKey: string) => void;
   onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onRequestPayload?: (payload: string) => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
@@ -1395,6 +1547,7 @@ export async function runClaudeLiveSessionTurn(params: {
     env: params.env,
   });
   let cleanupDone = false;
+  let createdSessionForTurn = false;
   const cleanup = async () => {
     if (cleanupDone) {
       return;
@@ -1545,6 +1698,7 @@ export async function runClaudeLiveSessionTurn(params: {
       liveSessionCreates.set(key, { generation, promise: createSession });
       try {
         session = await createSession;
+        createdSessionForTurn = true;
       } catch (error) {
         await cleanup();
         throw error;
@@ -1586,6 +1740,7 @@ export async function runClaudeLiveSessionTurn(params: {
     liveSession.currentTurn = createTurn({
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
+      allowSyntheticContinuationGrace: params.useResume && createdSessionForTurn,
       onAssistantDelta: params.onAssistantDelta,
       onThinkingDelta: params.onThinkingDelta,
       onThinkingProgress: params.onThinkingProgress,
@@ -1594,6 +1749,10 @@ export async function runClaudeLiveSessionTurn(params: {
       resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
       onCommentaryText: params.onCommentaryText,
       onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
+      onCliOutput: params.onCliOutput,
+      onPhase: params.onPhase,
       session: liveSession,
       execPermission,
       resolve,
@@ -1622,7 +1781,9 @@ export async function runClaudeLiveSessionTurn(params: {
       abort();
     } else {
       try {
-        await Promise.race([writeTurnInput(liveSession, params.prompt), outputPromise]);
+        const requestPayload = createClaudeUserInputMessage(params.prompt);
+        params.onRequestPayload?.(requestPayload);
+        await Promise.race([writeTurnInput(liveSession, requestPayload), outputPromise]);
       } catch (error) {
         closeLiveSession(liveSession, "abort", error);
       }

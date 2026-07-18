@@ -21,6 +21,10 @@ export type OpenClawPluginToolOptions = {
   agentChannel?: GatewayMessageChannel;
   agentAccountId?: string;
   agentTo?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
+  /** Current routable conversation target when no explicit agent target is available. */
+  currentChannelId?: string;
   agentThreadId?: string | number;
   nativeChannelId?: string;
   agentDir?: string;
@@ -43,6 +47,7 @@ export type OpenClawPluginToolOptions = {
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
   allowGatewaySubagentBinding?: boolean;
+  toolBindings?: Readonly<Record<string, unknown>>;
 };
 
 /** Resolves plugin-tool context inputs from runtime options and config state. */
@@ -77,7 +82,7 @@ export function resolveOpenClawPluginToolInputs(params: {
   // channel/account/thread shape as gateway-delivered agent tools.
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
-    to: options?.agentTo,
+    to: options?.agentTo ?? options?.currentMessagingTarget ?? options?.currentChannelId,
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
@@ -93,6 +98,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      toolBindings: options?.toolBindings,
       activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,

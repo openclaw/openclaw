@@ -3,6 +3,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
+  custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
   agents: { path: "/settings/agents", aliases: ["/agents"] },
@@ -12,11 +13,13 @@ const APP_ROUTE_DEFINITIONS = {
   profile: { path: "/settings/profile", aliases: ["/profile"] },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
   appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
+  approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
+  "model-setup": { path: "/settings/model-setup", aliases: ["/model-setup"] },
   "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
   "memory-import": { path: "/settings/memory-import", aliases: ["/memory-import"] },
   workboard: { path: "/workboard" },

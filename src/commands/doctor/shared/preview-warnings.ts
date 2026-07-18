@@ -20,6 +20,8 @@ import type {
 } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
+import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -707,6 +709,7 @@ export async function collectDoctorPreviewNotes(params: {
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
   allowExec?: boolean;
+  blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): Promise<DoctorPreviewNotes> {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
@@ -717,10 +720,6 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
-  const { collectBlockedLegacyOpenAICodexProviderWarnings } =
-    await import("./legacy-config-migrations.runtime.models.js");
-  warnings.push(...collectBlockedLegacyOpenAICodexProviderWarnings(params.cfg));
-
   const { collectActiveToolSchemaProjectionWarnings } =
     await import("./active-tool-schema-warnings.js");
   warnings.push(...collectActiveToolSchemaProjectionWarnings({ cfg: params.cfg, env }));
@@ -777,20 +776,28 @@ export async function collectDoctorPreviewNotes(params: {
     } = await import("./stale-plugin-config.js");
     const stalePluginHits = scanStalePluginConfig(params.cfg, env);
     if (stalePluginHits.length > 0) {
-      warnings.push(
-        collectStalePluginConfigWarnings({
-          hits: stalePluginHits,
-          doctorFixCommand: params.doctorFixCommand,
-          autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, env),
-        }).join("\n"),
-      );
+      const stalePluginWarnings = collectStalePluginConfigWarnings({
+        hits: stalePluginHits,
+        doctorFixCommand: params.doctorFixCommand,
+        autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, env),
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
+      });
+      if (stalePluginWarnings.length > 0) {
+        warnings.push(stalePluginWarnings.join("\n"));
+      }
     }
   }
 
-  if (hasPluginConfig) {
-    const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
-    warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
+  const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
+  warnings.push(
+    ...collectCodexRouteWarnings({
+      cfg: params.cfg,
+      env,
+      blockedProviderPlan: params.blockedCodexProviderPlan,
+    }),
+  );
 
+  if (hasPluginConfig) {
     const { collectContextEngineHostCompatibilityWarnings } =
       await import("./context-engine-host-compat.js");
     warnings.push(

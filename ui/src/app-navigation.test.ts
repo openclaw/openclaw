@@ -25,6 +25,7 @@ import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/p
 const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>([
     "chat",
+    "custodian",
     ...SIDEBAR_NAV_ROUTES,
     "skills",
     "skill-workshop",
@@ -60,6 +61,11 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
+    routeId: "model-setup",
+    path: "/settings/model-setup",
+    alias: "/model-setup",
+  },
+  {
     routeId: "model-providers",
     path: "/settings/model-providers",
     alias: "/model-providers",
@@ -72,7 +78,9 @@ describe("navigationIconForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, navigationIconForRoute(routeId)])),
     ).toEqual({
       chat: "messageSquare",
+      custodian: "lobster",
       activity: "activity",
+      approvals: "shieldCheck",
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
@@ -95,6 +103,7 @@ describe("navigationIconForRoute", () => {
       infrastructure: "globe",
       about: "fileText",
       "ai-agents": "brain",
+      "model-setup": "spark",
       "model-providers": "plug",
       "memory-import": "download",
       debug: "bug",
@@ -123,7 +132,9 @@ describe("titleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),
     ).toEqual({
       chat: "Chat",
+      custodian: "OpenClaw",
       activity: "Activity",
+      approvals: "Approvals",
       workboard: "Workboard",
       worktrees: "Worktrees",
       channels: "Channels",
@@ -146,6 +157,7 @@ describe("titleForRoute", () => {
       infrastructure: "Infrastructure",
       about: "About",
       "ai-agents": "AI & Agents",
+      "model-setup": "Model Setup",
       "model-providers": "Model Providers",
       "memory-import": "Import Memory",
       debug: "Debug",
@@ -160,7 +172,9 @@ describe("subtitleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, subtitleForRoute(routeId)])),
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
+      custodian: "System setup and care.",
       activity: "Browser-local tool activity summaries.",
+      approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
@@ -183,6 +197,7 @@ describe("subtitleForRoute", () => {
       infrastructure: "Gateway, web, browser, and media settings.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Agents, models, skills, tools, memory, session.",
+      "model-setup": "Connect a verified AI model",
       "model-providers": "Configured providers with plan, quota, and cost.",
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       debug: "Snapshots, events, RPC.",
@@ -194,10 +209,12 @@ describe("subtitleForRoute", () => {
 describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
+    expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
+    expect(pathForRoute("approvals")).toBe("/settings/approvals");
   });
 
   it("prepends base path", () => {
@@ -220,6 +237,7 @@ describe("route path normalization", () => {
 describe("routeIdFromPath", () => {
   it("returns tab for valid path", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
+    expect(routeIdFromPath("/custodian")).toBe("custodian");
     expect(routeIdFromPath("/new")).toBe("new-session");
     expect(routeIdFromPath("/overview")).toBeNull();
     expect(routeIdFromPath("/settings/connection")).toBe("connection");
@@ -294,6 +312,7 @@ describe("inferBasePathFromPathname", () => {
   it("handles direct routes, nested mounts, mount roots, and index.html", () => {
     expect(inferBasePathFromPathname("/")).toBe("");
     expect(inferBasePathFromPathname("/chat")).toBe("");
+    expect(inferBasePathFromPathname("/custodian")).toBe("");
     expect(inferBasePathFromPathname("/settings/connection")).toBe("");
     expect(inferBasePathFromPathname("/ui/chat")).toBe("/ui");
     expect(inferBasePathFromPathname("/apps/openclaw/sessions")).toBe("/apps/openclaw");
@@ -357,11 +376,13 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "ai-agents",
       "sessions",
       "memory-import",
+      "model-setup",
       "model-providers",
       "automation",
       "mcp",
       "infrastructure",
       "nodes",
+      "approvals",
       "worktrees",
       "debug",
       "logs",

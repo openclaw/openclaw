@@ -34,7 +34,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { getSlashCommands } from "./commands.js";
+import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
@@ -45,6 +45,7 @@ import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
+  formatModelFooter,
   formatRemoteConnectionHostFooter,
   sanitizeRenderableText,
   formatTokens,
@@ -804,19 +805,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const applyAutocompleteProvider = () => {
     const dynamicKey = resolveDynamicSlashCommandsKey();
+    const slashCommands = getSlashCommands({
+      cfg: config,
+      local: isLocalMode,
+      provider: sessionInfo.modelProvider,
+      model: sessionInfo.model,
+      agentRuntime: sessionInfo.agentRuntime?.id,
+      thinkingLevels: sessionInfo.thinkingLevels,
+      dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
+    });
+    editor.shouldSubmitAutocomplete = (text) =>
+      shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(
-        getSlashCommands({
-          cfg: config,
-          local: isLocalMode,
-          provider: sessionInfo.modelProvider,
-          model: sessionInfo.model,
-          agentRuntime: sessionInfo.agentRuntime?.id,
-          thinkingLevels: sessionInfo.thinkingLevels,
-          dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
-        }),
-        resolveUsableCwd(),
-      ),
+      new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
     );
   };
 
@@ -1229,13 +1230,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = sessionInfo.model
-      ? sessionInfo.modelProvider
-        ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
-        : sessionInfo.model
-      : "unknown";
+    const modelLabel = formatModelFooter(sessionInfo);
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const think = sessionInfo.thinkingLevel ?? "off";
     const fastLabel =
       sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
     const verbose = sessionInfo.verboseLevel ?? "off";
@@ -1249,7 +1245,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       `session ${sessionLabel}`,
       modelLabel,
       formatGoalFooter(sessionInfo.goal),
-      think !== "off" ? `think ${think}` : null,
       fastLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
@@ -1368,7 +1363,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     exitRequested = true;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
-      ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
+      ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();

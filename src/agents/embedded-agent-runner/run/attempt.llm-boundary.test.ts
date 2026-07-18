@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
+  installRuntimeContextMessageForPrompt,
   installModelPromptTransform,
-  insertRuntimeContextMessageForPrompt,
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
@@ -743,7 +743,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     );
   });
 
-  it("keeps overflow retry runtime context immediately before the active user", () => {
+  it("keeps overflow retry runtime context immediately before the active user", async () => {
     const rebuiltAfterOverflow = [
       {
         role: "user",
@@ -769,15 +769,27 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timestamp: 3,
     };
 
-    const retryMessages = insertRuntimeContextMessageForPrompt({
+    const messages = rebuiltAfterOverflow as Parameters<typeof normalizeMessagesForLlmBoundary>[0];
+    const session = {
+      messages,
+      agent: {
+        state: { messages },
+        continue: async () => undefined,
+      },
+    };
+    const cleanup = installRuntimeContextMessageForPrompt({
+      session,
       message: runtimeContext as Parameters<
-        typeof insertRuntimeContextMessageForPrompt
+        typeof installRuntimeContextMessageForPrompt
       >[0]["message"],
-      messages: rebuiltAfterOverflow as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
     });
-    const retryInput = normalizeMessagesForLlmBoundary(retryMessages) as unknown as Array<
-      Record<string, unknown>
-    >;
+    // Pi overflow recovery rebuilds the agent state before invoking continue.
+    session.agent.state.messages = messages;
+    await session.agent.continue();
+    const retryInput = normalizeMessagesForLlmBoundary(
+      session.agent.state.messages,
+    ) as unknown as Array<Record<string, unknown>>;
+    cleanup();
 
     expect(retryInput.map((message) => message.role)).toEqual([
       "user",

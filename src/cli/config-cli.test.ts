@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { applyCliProfileEnv } from "./profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
@@ -310,14 +311,18 @@ function makeInvalidSnapshot(params: {
   issues: ConfigFileSnapshot["issues"];
   warnings?: ConfigFileSnapshot["warnings"];
   path?: string;
+  raw?: string;
+  parsed?: unknown;
+  sourceConfig?: OpenClawConfig;
 }): ConfigFileSnapshot {
+  const parsed = params.parsed ?? {};
   return {
     path: params.path ?? "/tmp/custom-openclaw.json",
     exists: true,
-    raw: "{}",
-    parsed: {},
-    sourceConfig: {},
-    resolved: {},
+    raw: params.raw ?? "{}",
+    parsed,
+    sourceConfig: params.sourceConfig ?? (parsed as OpenClawConfig),
+    resolved: parsed as OpenClawConfig,
     valid: false,
     runtimeConfig: {},
     config: {},
@@ -416,6 +421,7 @@ function requireResolveSecretRefCall(index: number): [unknown, unknown] {
 }
 
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
+let parseConfigSetPath: typeof import("./config-cli.js").parseConfigSetPath;
 let sharedProgram: Command;
 
 async function runConfigCommand(args: string[]) {
@@ -424,7 +430,7 @@ async function runConfigCommand(args: string[]) {
 
 describe("config cli", () => {
   beforeAll(async () => {
-    ({ registerConfigCli } = await import("./config-cli.js"));
+    ({ parseConfigSetPath, registerConfigCli } = await import("./config-cli.js"));
     const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
     resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
@@ -1163,6 +1169,47 @@ describe("config cli", () => {
         "openclaw doctor --fix",
       );
       expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("prints line numbers, bracket array paths, and safe received values", async () => {
+      const parsed = {
+        agents: {
+          list: [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d", tools: { profile: "none" } }],
+        },
+      };
+      const raw = [
+        "{",
+        '  "agents": {',
+        '    "list": [',
+        '      { "id": "a" },',
+        '      { "id": "b" },',
+        '      { "id": "c" },',
+        '      { "id": "d", "tools": { "profile": "none" } }',
+        "    ]",
+        "  }",
+        "}",
+      ].join("\n");
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          raw,
+          parsed,
+          path: "/tmp/openclaw.json",
+          issues: [
+            {
+              path: "agents.list.3.tools.profile",
+              pathSegments: ["agents", "list", 3, "tools", "profile"],
+              message: 'Invalid input (allowed: "minimal", "coding", "messaging", "full")',
+              allowedValues: ["minimal", "coding", "messaging", "full"],
+            },
+          ],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+
+      expectErrorIncludes(
+        'openclaw.json:7 — agents.list[3].tools.profile: Invalid input (allowed: "minimal", "coding", "messaging", "full"), got: "none"',
+      );
     });
 
     it("returns machine-readable JSON with --json for invalid config", async () => {
@@ -2323,6 +2370,32 @@ describe("config cli", () => {
       expect(resolveOptions).toBeTypeOf("object");
     });
 
+    it("emits the resolved config path in config patch JSON", async () => {
+      const home = path.join(os.tmpdir(), "openclaw-home-token-config-patch");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      const snapshot = buildSnapshot({ resolved, config: resolved });
+      snapshot.path = configPath;
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+      vi.stubEnv("OPENCLAW_HOME", home);
+
+      const patch = writeTempJson5File("openclaw-config-patch-resolved-path", {
+        gateway: { port: 18790 },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", patch, "--dry-run", "--json"]);
+      } finally {
+        fs.rmSync(patch, { force: true });
+        vi.unstubAllEnvs();
+      }
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as { configPath: string };
+      expect(payload.configPath).toBe(configPath);
+      expect(path.isAbsolute(payload.configPath)).toBe(true);
+      expect(payload.configPath).not.toContain("$OPENCLAW_HOME");
+      expect(payload.configPath).not.toContain("~");
+    });
+
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
@@ -3138,22 +3211,46 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before a dot", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] .id"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] .id",
+    it.each([
+      "agents.list[0]id",
+      "agents.list[0] id",
+      "agents.list[0]\\id",
+      "agents.list[0] .id",
+      "agents.list[0] [1]",
+    ])("rejects malformed post-bracket path %s", (configPath) => {
+      expect(() => parseConfigSetPath(configPath)).toThrow(
+        `Invalid path (missing separator after bracket): ${configPath}`,
+      );
+    });
+
+    it.each([
+      ["get", ["config", "get", "agents.list[0]id"]],
+      ["set", ["config", "set", "agents.list[0]id", '"renamed"']],
+      ["unset", ["config", "unset", "agents.list[0]id"]],
+      [
+        "batch set",
+        [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([{ path: "agents.list[0]id", value: "renamed" }]),
+        ],
+      ],
+    ])("rejects malformed bracket paths for config %s", async (_command, args) => {
+      await expect(runConfigCommand(args)).rejects.toThrow(
+        "Invalid path (missing separator after bracket): agents.list[0]id",
       );
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before another bracket", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] [1]"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] [1]",
-      );
-
-      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    it.each([
+      ["agents.list[0].id", ["agents", "list", "0", "id"]],
+      ["agents.list[0][1]", ["agents", "list", "0", "1"]],
+      ["[0]", ["0"]],
+    ])("preserves valid bracket path %s", (configPath, expected) => {
+      expect(parseConfigSetPath(configPath)).toEqual(expected);
     });
 
     it("preserves valid bracket path forms", async () => {
@@ -3798,25 +3895,39 @@ describe("config cli", () => {
   });
 
   describe("config file", () => {
-    it("prints the active config file path", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      setSnapshot(resolved, resolved);
+    it("resolves the active path without initializing state", async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-file-"));
+      const profile = "configfile-probe";
+      const stateDir = path.join(home, `.openclaw-${profile}`);
+      const configPath = path.join(stateDir, "openclaw.json");
+      vi.stubEnv("OPENCLAW_HOME", home);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", "");
+      vi.stubEnv("OPENCLAW_PROFILE", "");
+      vi.stubEnv("OPENCLAW_STATE_DIR", "");
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      applyCliProfileEnv({ profile });
+      mockReadConfigFileSnapshot.mockImplementationOnce(async () => {
+        fs.mkdirSync(path.join(stateDir, "state"), { recursive: true });
+        fs.writeFileSync(path.join(stateDir, "state", "openclaw.sqlite"), "initialized");
+        const snapshot = buildSnapshot({ resolved: {}, config: {} });
+        snapshot.path = configPath;
+        return snapshot;
+      });
 
-      await runConfigCommand(["config", "file"]);
-
-      expect(mockLog).toHaveBeenCalledWith("/tmp/openclaw.json");
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-    });
-
-    it("handles config file path with home directory", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      const snapshot = buildSnapshot({ resolved, config: resolved });
-      snapshot.path = "/home/user/.openclaw/openclaw.json";
-      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
-
-      await runConfigCommand(["config", "file"]);
-
-      expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+      try {
+        await runConfigCommand(["config", "file"]);
+        const output = String(lastMockArg(mockLog));
+        expect(output).toBe(configPath);
+        expect(path.isAbsolute(output)).toBe(true);
+        expect(output).not.toContain("$OPENCLAW_HOME");
+        expect(output).not.toContain("~");
+        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+      } finally {
+        vi.unstubAllEnvs();
+        fs.rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 });

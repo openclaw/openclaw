@@ -43,18 +43,24 @@ export async function spawnTerminalPty(params: {
   rows: number;
 }): Promise<TerminalPtyHandle> {
   const { spawn } = await import("@lydell/node-pty");
-  const comSpec = params.env.ComSpec ?? params.env.COMSPEC;
+  const env = { ...params.env };
+  // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
+  // Passing it through makes interactive CLIs refuse to start in the web terminal.
+  const inheritedTerm = env.TERM?.trim();
+  env.TERM =
+    !inheritedTerm || inheritedTerm.toLowerCase() === "dumb" ? "xterm-256color" : inheritedTerm;
+  const comSpec = env.ComSpec ?? env.COMSPEC;
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
     ...(comSpec ? { comSpec } : {}),
   });
   const pty = spawn(invocation.file, invocation.args, {
-    name: params.env.TERM ?? "xterm-256color",
+    name: env.TERM,
     cols: params.cols,
     rows: params.rows,
     cwd: params.cwd,
-    env: params.env,
+    env,
   });
   return {
     get pid() {
@@ -80,7 +86,9 @@ function killPtyTree(pty: Pick<IPty, "pid" | "kill">, signal?: string): void {
   const sig = (signal ?? "SIGKILL") as NodeJS.Signals;
   try {
     if ((sig === "SIGKILL" || sig === "SIGTERM") && typeof pty.pid === "number" && pty.pid > 0) {
-      signalProcessTree(pty.pid, sig);
+      // forkpty creates a new session/process group; retain descendant cleanup
+      // after the shell exits and only its group remains.
+      signalProcessTree(pty.pid, sig, { detached: true });
     } else if (process.platform === "win32") {
       pty.kill();
     } else {

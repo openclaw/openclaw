@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { WebSocket } from "ws";
 import type {
+  ClickClackBotCommand,
   ClickClackChannel,
   ClickClackEvent,
   ClickClackMessage,
@@ -64,6 +65,10 @@ const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
 // accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
 // valid frame can exceed 1 MiB before ws hands it to the event parser.
 const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
+// Match Slack relay / Mattermost / Signal channel gateway handshake floors.
+// Without this, gateway.ts waits forever for close/error when TCP accepts but
+// never upgrades, pinning the monitor reconnect loop.
+const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 class ClickClackHttpError extends Error {
   constructor(
@@ -155,6 +160,18 @@ export function createClickClackClient(options: ClientOptions) {
     me: async (): Promise<ClickClackUser> => {
       const data = await request<{ user: ClickClackUser }>("/api/me");
       return data.user;
+    },
+    setBotCommands: async (
+      commands: { command: string; description: string; args_hint?: string }[],
+    ): Promise<ClickClackBotCommand[]> => {
+      const data = await request<{ bot_commands: ClickClackBotCommand[] }>(
+        "/api/bots/self/commands",
+        {
+          method: "PUT",
+          body: JSON.stringify({ commands }),
+        },
+      );
+      return data.bot_commands;
     },
     workspaces: async (): Promise<ClickClackWorkspace[]> => {
       const data = await request<{ workspaces: ClickClackWorkspace[] }>("/api/workspaces");
@@ -397,6 +414,7 @@ export function createClickClackClient(options: ClientOptions) {
         headers: {
           Authorization: `Bearer ${options.token}`,
         },
+        handshakeTimeout: CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
         maxPayload: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
       });
     },

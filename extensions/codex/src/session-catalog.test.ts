@@ -17,16 +17,16 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError } from "./session-catalog-parsing.js";
+import { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_TERMINAL_RESUME_COMMAND,
   codexSessionCatalogRuntime,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
 } from "./session-catalog.js";
-import { classifyCodexUpstreamTurns } from "./session-upstream-activity.js";
 
 const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
@@ -78,10 +78,29 @@ vi.mock("./app-server/shared-client.js", () => ({
 vi.mock("./app-server/transcript-mirror.js", () => ({
   importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
 }));
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>()),
-  runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-}));
+vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveNodeHostExecutable: (
+      command: string,
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+      },
+    ) => {
+      const env = options.env ?? process.env;
+      return actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+    },
+  };
+});
 
 type CreateSessionEntryParams = Parameters<
   PluginRuntime["agent"]["session"]["createSessionEntry"]
@@ -429,9 +448,8 @@ describe("Codex supervision catalog", () => {
         archived: false,
         limit: 25,
         modelProviders: [],
-        sortKey: "recency_at",
+        sortKey: "updated_at",
         sortDirection: "desc",
-        sourceKinds: ["cli", "vscode"],
         cwd: "/workspace/one",
       },
       {
@@ -625,11 +643,13 @@ describe("Codex supervision catalog", () => {
     },
   );
 
-  it("omits noninteractive sources when App Server ignores the requested source kinds", async () => {
+  it("keeps every Codex interactive source while omitting other custom sources", async () => {
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [
         idleThread({ id: "cli", source: "cli" }),
         idleThread({ id: "vscode", source: "vscode" }),
+        idleThread({ id: "atlas", source: { custom: "atlas" } }),
+        idleThread({ id: "chatgpt", source: { custom: "chatgpt" } }),
         idleThread({ id: "exec", source: "exec" }),
         idleThread({ id: "app-server", source: "appServer" }),
         idleThread({ id: "subagent", source: { subAgent: "review" } }),
@@ -645,8 +665,18 @@ describe("Codex supervision catalog", () => {
 
     const page = await control.listPage({});
 
-    expect(page.sessions.map((session) => session.threadId)).toEqual(["cli", "vscode"]);
-    expect(page.sessions.map((session) => session.source)).toEqual(["cli", "vscode"]);
+    expect(page.sessions.map((session) => session.threadId)).toEqual([
+      "cli",
+      "vscode",
+      "atlas",
+      "chatgpt",
+    ]);
+    expect(page.sessions.map((session) => session.source)).toEqual([
+      "cli",
+      "vscode",
+      "atlas",
+      "chatgpt",
+    ]);
   });
 
   it("keeps takeover forking out of the passive catalog control", async () => {
@@ -966,6 +996,82 @@ describe("Codex supervision catalog", () => {
     expect(JSON.stringify(result)).not.toContain("private transcript");
   });
 
+  it("bounds how long a hung paired-node catalog can delay the caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(
+        async () => await new Promise<never>(() => {}),
+      );
+      const pending = listPairedNode({
+        runtime: { nodes: { invoke } } as unknown as PluginRuntime,
+        node: {
+          nodeId: "slow-node",
+          displayName: "Slow node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        query: { limitPerHost: 40 },
+        adoptedSessions: new Map(),
+      });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      await expect(pending).resolves.toMatchObject({
+        hostId: "node:slow-node",
+        connected: true,
+        sessions: [],
+        error: { code: "NODE_INVOKE_FAILED" },
+      });
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 65_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes a paired-node page that finishes after the fail-soft response", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInvoke!: (value: unknown) => void;
+      const invokeResult = new Promise<unknown>((resolve) => {
+        resolveInvoke = resolve;
+      });
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
+      const onHost = vi.fn();
+      const pending = listPairedNode({
+        runtime: { nodes: { invoke } } as unknown as PluginRuntime,
+        node: {
+          nodeId: "slow-node",
+          displayName: "Slow node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        query: { limitPerHost: 40 },
+        adoptedSessions: new Map(),
+        onHost,
+      });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(pending).resolves.toMatchObject({ error: { code: "NODE_INVOKE_FAILED" } });
+      expect(onHost).not.toHaveBeenCalled();
+
+      resolveInvoke({
+        payloadJSON: JSON.stringify({
+          sessions: [{ threadId: "late-thread", status: "idle", archived: false }],
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          sessions: [expect.objectContaining({ threadId: "late-thread" })],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("serves one bounded transcript page from the node host command", async () => {
     const listTurnPage = vi.fn(async () => ({
       data: [
@@ -1039,7 +1145,7 @@ describe("Codex supervision catalog", () => {
             {
               threadId,
               status: "idle",
-              source: "cli",
+              source: "atlas",
               cwd: "/node/catalog/cwd",
               archived: false,
             },
@@ -1588,25 +1694,6 @@ describe("Codex supervision actions", () => {
         userMessageCount: 2,
       },
     ]);
-    const baseline = baselines[0];
-    if (!baseline) {
-      throw new Error("expected canonical upstream baseline");
-    }
-    expect(
-      classifyCodexUpstreamTurns({
-        probe: {
-          sessionKey,
-          agentId: "main",
-          threadId: "thread-1",
-          hostId: CODEX_LOCAL_SESSION_HOST_ID,
-          upstreamKind: "codex-app-server",
-          upstreamRef: { connectionFingerprint: "catalog-connection" },
-          marker: baseline,
-          ownRecentUserTexts: [],
-        },
-        turns: [canonicalTurn],
-      }),
-    ).toBeUndefined();
   });
 
   it("keeps adopted sessions discoverable when the configured default agent changes", async () => {
@@ -2416,9 +2503,9 @@ describe("Codex supervision actions", () => {
         control,
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("not a non-archived interactive CLI or VS Code session");
+    ).rejects.toThrow("not a non-archived interactive Codex session");
     await expect(archiveTestSession({ control })).rejects.toThrow(
-      "not a non-archived interactive CLI or VS Code session",
+      "not a non-archived interactive Codex session",
     );
     expect(control.readThread).not.toHaveBeenCalled();
     expect(createSessionEntry).not.toHaveBeenCalled();
@@ -2449,9 +2536,9 @@ describe("Codex supervision actions", () => {
         control,
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("not a non-archived interactive CLI or VS Code session");
+    ).rejects.toThrow("not a non-archived interactive Codex session");
     await expect(archiveTestSession({ control })).rejects.toThrow(
-      "not a non-archived interactive CLI or VS Code session",
+      "not a non-archived interactive Codex session",
     );
     expect(control.readThread).not.toHaveBeenCalled();
   });
@@ -2842,6 +2929,7 @@ describe("Codex supervision actions", () => {
     const sourceByNode = new Map([
       ["ready-cli", { status: "idle", source: "cli" }],
       ["ready-vscode", { status: "notLoaded", source: "vscode" }],
+      ["ready-atlas", { status: "notLoaded", source: "atlas" }],
       ["missing-run", { status: "idle", source: "cli" }],
       ["active", { status: "active", source: "cli" }],
       ["noninteractive", { status: "idle", source: "exec" }],
@@ -2896,6 +2984,10 @@ describe("Codex supervision actions", () => {
       canArchive: false,
     });
     expect(sessionByHost.get("node:ready-vscode")).toMatchObject({
+      canContinue: true,
+      canArchive: false,
+    });
+    expect(sessionByHost.get("node:ready-atlas")).toMatchObject({
       canContinue: true,
       canArchive: false,
     });
