@@ -3,7 +3,6 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import {
