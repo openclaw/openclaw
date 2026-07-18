@@ -28,7 +28,9 @@ async function listen(server: http.Server): Promise<string> {
 
 async function close(server: http.Server): Promise<void> {
   server.closeAllConnections?.();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 }
 
 function client(relayUrl: string): ReefTransportClient {
