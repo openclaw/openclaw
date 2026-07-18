@@ -36778,14 +36778,6 @@
       "id": "native.apple.b34cd890366824f0"
     },
     {
-      "kind": "ui-call",
-      "line": 342,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",
-      "source": "\\(question.header):",
-      "surface": "apple",
-      "id": "native.apple.009d113b4d9a7855"
-    },
-    {
       "kind": "ui-modifier",
       "line": 355,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatQuestionCard.swift",

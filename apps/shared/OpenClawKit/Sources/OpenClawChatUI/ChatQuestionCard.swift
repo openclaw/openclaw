@@ -339,7 +339,7 @@ struct OpenClawQuestionCard: View {
         VStack(alignment: .leading, spacing: 5) {
             ForEach(self.model.record.questions, id: \.id) { question in
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text("\(question.header):")
+                    Text(verbatim: "\(question.header):")
                         .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
                     Text(self.model.terminalSummaryText(for: question))
                         .font(OpenClawChatTypography.body(size: 14, weight: .regular, relativeTo: .callout))
@@ -539,63 +539,20 @@ extension OpenClawChatViewModel {
         let stateRevision = self.questionStateRevision
         do {
             let records = try await self.transport.listQuestions()
-            guard refreshGeneration == self.questionRefreshGeneration else { return }
-            guard stateRevision == self.questionStateRevision else {
-                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
-                return
-            }
+            guard self.questionRefreshSnapshotIsCurrent(
+                generation: refreshGeneration,
+                stateRevision: stateRevision)
+            else { return }
             let listedIDs = Set(records.map(\.id))
             let missingPending = self.questionCards.filter { model in
                 model.record.status == .pending && !listedIDs.contains(model.id)
             }
-
-            var lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)] = []
-            for model in missingPending {
-                do {
-                    let record = try await self.transport.getQuestion(id: model.id)
-                    lookups.append((model, .record(record)))
-                } catch let error as GatewayResponseError where Self.questionIsNotFound(error) {
-                    lookups.append((model, .notFound))
-                } catch {
-                    lookups.append((model, .failed))
-                }
-            }
-
-            guard refreshGeneration == self.questionRefreshGeneration else { return }
-            guard stateRevision == self.questionStateRevision else {
-                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
-                return
-            }
-
-            var changed = false
-            for record in records {
-                if let model = self.questionCards.first(where: { $0.id == record.id }) {
-                    changed = model.apply(record: record) || changed
-                } else {
-                    self.questionCards.append(OpenClawQuestionCardModel(record: record))
-                    changed = true
-                }
-            }
-            var complete = true
-            for (model, result) in lookups {
-                guard self.questionCards.contains(where: { $0 === model }) else { continue }
-                switch result {
-                case let .record(record):
-                    changed = model.apply(record: record) || changed
-                case .notFound:
-                    // Match the Control UI recovery contract: after the gateway's terminal
-                    // grace window, authoritative absence means the prompt is no longer actionable.
-                    model.markAnsweredElsewhere()
-                    changed = true
-                case .failed:
-                    complete = false
-                }
-            }
-            self.syncQuestionExpirations()
-            if changed {
-                self.questionStateRevision &+= 1
-                self.markTimelineChanged()
-            }
+            let lookups = await self.fetchMissingQuestionLookups(missingPending)
+            guard self.questionRefreshSnapshotIsCurrent(
+                generation: refreshGeneration,
+                stateRevision: stateRevision)
+            else { return }
+            let complete = self.applyQuestionRefresh(records: records, lookups: lookups)
             if complete {
                 self.questionRefreshRetryTask = nil
             } else {
@@ -604,31 +561,96 @@ extension OpenClawChatViewModel {
                     retryIndex: retryIndex)
             }
         } catch let error as GatewayResponseError where Self.questionListIsUnavailable(error) {
-            guard refreshGeneration == self.questionRefreshGeneration else { return }
-            guard stateRevision == self.questionStateRevision else {
-                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
-                return
-            }
-            let previousCount = self.questionCards.count
-            self.questionCards.removeAll {
-                let status = $0.status()
-                return status == .pending || status == .submitting
-            }
-            self.syncQuestionExpirations()
-            if self.questionCards.count != previousCount {
-                self.questionStateRevision &+= 1
-                self.markTimelineChanged()
-            }
+            guard self.questionRefreshSnapshotIsCurrent(
+                generation: refreshGeneration,
+                stateRevision: stateRevision)
+            else { return }
+            self.clearPendingQuestionsForUnavailableList()
         } catch {
-            guard refreshGeneration == self.questionRefreshGeneration else { return }
-            guard stateRevision == self.questionStateRevision else {
-                self.restartQuestionRefreshAfterStateChange(generation: refreshGeneration)
-                return
-            }
+            guard self.questionRefreshSnapshotIsCurrent(
+                generation: refreshGeneration,
+                stateRevision: stateRevision)
+            else { return }
             self.scheduleQuestionRefreshRetry(
                 generation: refreshGeneration,
                 retryIndex: retryIndex)
         }
+    }
+
+    private func fetchMissingQuestionLookups(
+        _ models: [OpenClawQuestionCardModel]) async
+        -> [(OpenClawQuestionCardModel, QuestionLookupResult)]
+    {
+        var lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)] = []
+        for model in models {
+            do {
+                let record = try await self.transport.getQuestion(id: model.id)
+                lookups.append((model, .record(record)))
+            } catch let error as GatewayResponseError where Self.questionIsNotFound(error) {
+                lookups.append((model, .notFound))
+            } catch {
+                lookups.append((model, .failed))
+            }
+        }
+        return lookups
+    }
+
+    private func applyQuestionRefresh(
+        records: [QuestionRecord],
+        lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)]) -> Bool
+    {
+        var changed = false
+        for record in records {
+            if let model = self.questionCards.first(where: { $0.id == record.id }) {
+                changed = model.apply(record: record) || changed
+            } else {
+                self.questionCards.append(OpenClawQuestionCardModel(record: record))
+                changed = true
+            }
+        }
+        var complete = true
+        for (model, result) in lookups {
+            guard self.questionCards.contains(where: { $0 === model }) else { continue }
+            switch result {
+            case let .record(record):
+                changed = model.apply(record: record) || changed
+            case .notFound:
+                // Match the Control UI recovery contract: after the gateway's terminal
+                // grace window, authoritative absence means the prompt is no longer actionable.
+                model.markAnsweredElsewhere()
+                changed = true
+            case .failed:
+                complete = false
+            }
+        }
+        self.syncQuestionExpirations()
+        if changed {
+            self.questionStateRevision &+= 1
+            self.markTimelineChanged()
+        }
+        return complete
+    }
+
+    private func clearPendingQuestionsForUnavailableList() {
+        let previousCount = self.questionCards.count
+        self.questionCards.removeAll {
+            let status = $0.status()
+            return status == .pending || status == .submitting
+        }
+        self.syncQuestionExpirations()
+        if self.questionCards.count != previousCount {
+            self.questionStateRevision &+= 1
+            self.markTimelineChanged()
+        }
+    }
+
+    private func questionRefreshSnapshotIsCurrent(generation: UInt64, stateRevision: UInt64) -> Bool {
+        guard generation == self.questionRefreshGeneration else { return false }
+        guard stateRevision == self.questionStateRevision else {
+            self.restartQuestionRefreshAfterStateChange(generation: generation)
+            return false
+        }
+        return true
     }
 
     private nonisolated static func questionListIsUnavailable(_ error: GatewayResponseError) -> Bool {
