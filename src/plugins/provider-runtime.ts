@@ -1115,31 +1115,53 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   context: ProviderAugmentModelCatalogContext;
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
-  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
-    const timedOut = Symbol("provider-model-catalog-augment-timeout");
+  const pending = resolveProviderPluginsForCatalogHooks(params).map((plugin) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const next = await Promise.race([
-      Promise.resolve().then(() => plugin.augmentModelCatalog?.(params.context)),
-      new Promise<typeof timedOut>((resolve) => {
-        timer = setTimeout(() => resolve(timedOut), PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS);
-        timer.unref?.();
-      }),
-    ]).finally(() => {
+    const clearTimer = () => {
       if (timer) {
         clearTimeout(timer);
+        timer = undefined;
       }
-    });
-    if (next === timedOut) {
-      const pluginId = plugin.pluginId ?? plugin.id;
-      log.warn(
-        `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
-      );
-      continue;
+    };
+    const result = Promise.race([
+      Promise.resolve()
+        .then(() => plugin.augmentModelCatalog?.(params.context))
+        .then(
+          (value) => ({ status: "fulfilled", value }) as const,
+          (error: unknown) => ({ status: "rejected", error }) as const,
+        ),
+      new Promise<{ status: "timed-out" }>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ status: "timed-out" }),
+          PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS,
+        );
+      }),
+    ]).finally(clearTimer);
+    return { plugin, result, clearTimer };
+  });
+  try {
+    for (const { plugin, result } of pending) {
+      const outcome = await result;
+      if (outcome.status === "rejected") {
+        throw outcome.error;
+      }
+      if (outcome.status === "timed-out") {
+        const pluginId = plugin.pluginId ?? plugin.id;
+        log.warn(
+          `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
+        );
+        continue;
+      }
+      const next = outcome.value;
+      if (!next || next.length === 0) {
+        continue;
+      }
+      supplemental.push(...next);
     }
-    if (!next || next.length === 0) {
-      continue;
+  } finally {
+    for (const item of pending) {
+      item.clearTimer();
     }
-    supplemental.push(...next);
   }
   return supplemental;
 }

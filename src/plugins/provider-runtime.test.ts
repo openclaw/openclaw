@@ -1095,18 +1095,29 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
-  it("continues catalog augmentation after a plugin times out", async () => {
+  it("starts catalog hooks together and continues after multiple plugins time out", async () => {
     vi.useFakeTimers();
     try {
       const augmentHealthyCatalog = vi.fn(() => [
         { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
       ]);
-      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["hung-plugin", "healthy-plugin"]);
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue([
+        "hung-plugin-one",
+        "hung-plugin-two",
+        "healthy-plugin",
+      ]);
       resolvePluginProvidersMock.mockReturnValue([
         {
-          id: "hung",
-          pluginId: "hung-plugin\nWARN forged",
-          label: "Hung Provider",
+          id: "hung-one",
+          pluginId: "hung-plugin-one\nWARN forged",
+          label: "First Hung Provider",
+          auth: [],
+          augmentModelCatalog: () => new Promise(() => {}),
+        },
+        {
+          id: "hung-two",
+          pluginId: "hung-plugin-two",
+          label: "Second Hung Provider",
           auth: [],
           augmentModelCatalog: () => new Promise(() => {}),
         },
@@ -1123,27 +1134,58 @@ describe("provider-runtime", () => {
         env: process.env,
         context: { env: process.env, entries: [] },
       });
-      const outcome = Promise.race([
-        catalogLoad.then((entries) => ({ status: "resolved", entries }) as const),
-        new Promise<{ status: "blocked" }>((resolve) => {
-          setTimeout(() => resolve({ status: "blocked" }), 60_000);
-        }),
-      ]);
 
-      await vi.runAllTimersAsync();
-
-      await expect(outcome).resolves.toEqual({
-        status: "resolved",
-        entries: [{ provider: "healthy", id: "healthy-model", name: "Healthy Model" }],
-      });
+      await vi.advanceTimersByTimeAsync(0);
       expect(augmentHealthyCatalog).toHaveBeenCalledTimes(1);
-      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(catalogLoad).resolves.toEqual([
+        { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
+      ]);
+      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(2);
       const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
-      expect(warning).toContain('Provider plugin "hung-pluginWARN forged"');
+      expect(warning).toContain('Provider plugin "hung-plugin-oneWARN forged"');
       expect(warning).toContain(
         "augmentModelCatalog hook timed out after 15000ms; skipping hook and continuing catalog discovery",
       );
       expect(warning).not.toContain("\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates catalog hook errors without leaving later deadline timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const failure = new Error("catalog hook failed");
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["broken-plugin", "hung-plugin"]);
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "broken",
+          pluginId: "broken-plugin",
+          label: "Broken Provider",
+          auth: [],
+          augmentModelCatalog: async () => {
+            throw failure;
+          },
+        },
+        {
+          id: "hung",
+          pluginId: "hung-plugin",
+          label: "Hung Provider",
+          auth: [],
+          augmentModelCatalog: () => new Promise(() => {}),
+        },
+      ]);
+
+      await expect(
+        augmentModelCatalogWithProviderPlugins({
+          env: process.env,
+          context: { env: process.env, entries: [] },
+        }),
+      ).rejects.toBe(failure);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
