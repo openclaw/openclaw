@@ -32,6 +32,7 @@ import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
+  wrapStreamResultRepairDoubleEscapedCodeStrings,
 } from "./attempt.tool-call-argument-repair.js";
 import {
   sanitizeOpenAIResponsesReplayForStream,
@@ -231,6 +232,11 @@ export function installEmbeddedAttemptStreamGuards(input: {
   if (resolveToolCallArgumentsEncoding(attempt.model) === "html-entities") {
     session.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(session.agent.streamFn);
   }
+
+  // Repair double-escaped JSON strings in tool call arguments (#109478).
+  // Some models output \\n (literal backslash-n) instead of \n (newline)
+  // in code-like argument values. Applied unconditionally for all providers.
+  session.agent.streamFn = wrapStreamResultRepairDoubleEscapedCodeStrings(session.agent.streamFn);
 
   // Tool-call repair can replace structured arguments from fragmented deltas.
   // Restore provider-masked text afterward so executable args stay canonical.

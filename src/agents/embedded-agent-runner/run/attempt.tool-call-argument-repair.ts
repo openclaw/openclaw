@@ -73,6 +73,42 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   old_string: "new_string",
   oldText: "newText",
 };
+
+// Pattern: colon followed by literal \n then indent — fingerprint of
+// double-escaped JSON in code blocks (issue #109478).
+// Models sometimes output \\n (JSON literal backslash-n) instead of \n
+// (JSON-escaped newline) in tool call arguments. After JSON.parse, the
+// string value contains literal \n where a real newline was intended.
+// The colon-then-indent signature is highly specific to Python block
+// structure and avoids false positives on legitimate \n usage.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE = /:\s*\\n\s+\S/s;
+
+/** Fix double-escaped JSON strings in code-like tool call argument values. */
+function repairDoubleEscapedCodeStrings(args: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      if (
+        TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(key) &&
+        TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE.test(value)
+      ) {
+        args[key] = value.replace(/\\([nrt])/g, (_match, char) => {
+          switch (char) {
+            case "n":
+              return "\n";
+            case "r":
+              return "\r";
+            case "t":
+              return "\t";
+            default:
+              return char;
+          }
+        });
+      }
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      repairDoubleEscapedCodeStrings(value as Record<string, unknown>);
+    }
+  }
+}
 const TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS = new Map<
   string,
   ReadonlyMap<string, readonly string[]>
@@ -666,6 +702,34 @@ function repairMalformedToolCallArgumentsInMessage(
   }
 }
 
+/** Walk message content blocks and repair double-escaped code strings in
+ *  tool call arguments that were already valid JSON (unrepaired path). */
+function repairDoubleEscapedCodeStringsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; arguments?: unknown };
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    if (
+      typedBlock.arguments !== null &&
+      typeof typedBlock.arguments === "object" &&
+      !Array.isArray(typedBlock.arguments)
+    ) {
+      repairDoubleEscapedCodeStrings(typedBlock.arguments as Record<string, unknown>);
+    }
+  }
+}
+
 function wrapStreamRepairMalformedToolCallArguments(
   stream: MutableAssistantMessageEventStream,
 ): MutableAssistantMessageEventStream {
@@ -678,6 +742,7 @@ function wrapStreamRepairMalformedToolCallArguments(
   stream.result = async () => {
     const message = await originalResult();
     repairMalformedToolCallArgumentsInMessage(message, repairedArgsByIndex);
+    repairDoubleEscapedCodeStringsInMessage(message);
     partialJsonByIndex.clear();
     repairedArgsByIndex.clear();
     hadPreexistingArgsByIndex.clear();
@@ -721,6 +786,7 @@ function wrapStreamRepairMalformedToolCallArguments(
           ) {
             hadPreexistingArgsByIndex.add(event.contentIndex);
           }
+          repairDoubleEscapedCodeStrings(repair.args);
           repairedArgsByIndex.set(event.contentIndex, repair.args);
           repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
           repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
@@ -753,6 +819,7 @@ function wrapStreamRepairMalformedToolCallArguments(
     ) {
       const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
       if (repairedArgs) {
+        repairDoubleEscapedCodeStrings(repairedArgs);
         if (event.toolCall && typeof event.toolCall === "object") {
           (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
         }
@@ -795,5 +862,36 @@ export function shouldRepairMalformedToolCallArguments(params: {
 
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
+}
+
+/**
+ * Wraps a stream function so double-escaped JSON strings in tool call
+ * arguments are repaired before tool execution (#109478). Some models
+ * output \\\\n (JSON literal backslash-n) instead of \\n (JSON-escaped
+ * newline) in code-like argument values. This wrapper applies the repair
+ * unconditionally for all providers.
+ */
+export function wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => {
+        const originalResult = stream.result.bind(stream);
+        stream.result = async () => {
+          const message = await originalResult();
+          repairDoubleEscapedCodeStringsInMessage(message);
+          return message;
+        };
+        return stream;
+      });
+    }
+    const originalResult = maybeStream.result.bind(maybeStream);
+    maybeStream.result = async () => {
+      const message = await originalResult();
+      repairDoubleEscapedCodeStringsInMessage(message);
+      return message;
+    };
+    return maybeStream;
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
