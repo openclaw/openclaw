@@ -12,6 +12,9 @@ const LIST_ITEM_LINK_RE = /^\s*(?:[-*]|\d+\.)\s+\[([^\]]+)\]\((\/[^)]+)\)/;
 const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
 const MAX_TERM_LENGTH = 80;
+const DEFAULT_GIT_TIMEOUT_MS = 60_000;
+const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
+const GIT_TIMEOUT_ENV = "OPENCLAW_DOCS_I18N_GLOSSARY_GIT_TIMEOUT_MS";
 
 /**
  * @typedef {{
@@ -47,12 +50,48 @@ export function parseArgs(argv) {
   return args;
 }
 
+function resolveGitTimeoutMs(env = process.env) {
+  const raw = env[GIT_TIMEOUT_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  return Math.min(parsed, MAX_GIT_TIMEOUT_MS);
+}
+
+const gitTimeoutMs = resolveGitTimeoutMs();
+
+function formatGitArgs(args) {
+  return args.join(" ");
+}
+
+function createGitError(args, error) {
+  const timedOut =
+    error?.code === "ETIMEDOUT" ||
+    error?.signal === "SIGTERM" ||
+    /timed out|timeout/i.test(String(error?.message ?? ""));
+  const message = timedOut
+    ? `docs:check-i18n-glossary: git ${formatGitArgs(args)} timed out after ${gitTimeoutMs}ms.`
+    : `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed.`;
+  const wrapped = new Error(message, { cause: error });
+  wrapped.timedOut = timedOut;
+  return wrapped;
+}
+
 function runGit(args) {
-  return execFileSync("git", args, {
-    cwd: ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  }).trim();
+  try {
+    return execFileSync("git", args, {
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      timeout: gitTimeoutMs,
+    }).trim();
+  } catch (error) {
+    throw createGitError(args, error);
+  }
 }
 
 function resolveBase(explicitBase) {
@@ -68,7 +107,10 @@ function resolveBase(explicitBase) {
   for (const candidate of ["origin/main", "fork/main", "main"]) {
     try {
       return runGit(["merge-base", candidate, "HEAD"]);
-    } catch {
+    } catch (error) {
+      if (error?.timedOut) {
+        throw error;
+      }
       // Try the next candidate.
     }
   }
@@ -244,5 +286,10 @@ function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  main();
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
