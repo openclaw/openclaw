@@ -160,12 +160,13 @@ function buildAskUserPromptPayload(
   args: unknown,
 ) {
   try {
-    const { questions } = normalizeAskUserParams(args);
+    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
     const reservation = reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
       runId,
       questions,
+      timeoutSeconds,
     });
     if (!reservation) {
       return undefined;

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt.queue-message.js";
 import {
+  cancelAskUserPromptDelivery,
   createAskUserTool,
   isAskUserPromptActive,
   isAskUserPromptPending,
@@ -143,7 +144,7 @@ describe("ask_user prompt delivery", () => {
     await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(false);
   });
 
-  it("retains an active prompt when Gateway revalidation fails transiently", async () => {
+  it("retries a transient Gateway revalidation failure before delivering", async () => {
     const questions = normalizeAskUserParams(validArgs).questions;
     const reservation = reserveAskUserPromptDelivery({
       toolCallId: "call-revalidation-failure",
@@ -153,11 +154,56 @@ describe("ask_user prompt delivery", () => {
     if (!reservation) {
       throw new Error("expected prompt reservation");
     }
+    let attempts = 0;
     const gateway = gatewayStub(async () => {
-      throw new Error("temporary Gateway disconnect");
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("temporary Gateway disconnect");
+      }
+      return { questions: [{ id: reservation.questionId, status: "pending" }] };
     });
 
     await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(true);
+    expect(attempts).toBe(2);
+  });
+
+  it("drops a prompt when local terminalization wins during Gateway revalidation", async () => {
+    const questions = normalizeAskUserParams(validArgs).questions;
+    const toolCallId = "call-revalidation-terminal";
+    const sessionKey = "agent:main:revalidation-terminal";
+    const reservation = reserveAskUserPromptDelivery({ toolCallId, sessionKey, questions });
+    if (!reservation) {
+      throw new Error("expected prompt reservation");
+    }
+    const gateway = gatewayStub(async () => {
+      cancelAskUserPromptDelivery(toolCallId, sessionKey);
+      return { questions: [{ id: reservation.questionId, status: "pending" }] };
+    });
+
+    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(false);
+  });
+
+  it("expires prompt revalidation while the Gateway lookup remains stalled", async () => {
+    vi.useFakeTimers();
+    try {
+      const questions = normalizeAskUserParams(validArgs).questions;
+      const reservation = reserveAskUserPromptDelivery({
+        toolCallId: "call-revalidation-stalled",
+        sessionKey: "agent:main:revalidation-stalled",
+        questions,
+        timeoutSeconds: 30,
+      });
+      if (!reservation) {
+        throw new Error("expected prompt reservation");
+      }
+      const gateway = gatewayStub(async () => await new Promise(() => {}));
+
+      const pending = isAskUserPromptPending(reservation.questionId, gateway.call);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shares prompt readiness across bundled module instances", async () => {

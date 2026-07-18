@@ -123,11 +123,11 @@ flow:
           saveAs: finalMessage
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate !== promptMessage && candidate.text.includes(config.expectedFinal))"
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate !== promptMessage && candidate.text === config.expectedFinal)"
             - expr: liveTurnTimeoutMs(env, 45000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:
-            expr: "finalMessage.text.includes(config.expectedFinal)"
+            expr: "finalMessage.text === config.expectedFinal"
             message:
               expr: "`ask_user resumed with unexpected final text: ${JSON.stringify(finalMessage.text)}`"
         - set: terminalQuestion

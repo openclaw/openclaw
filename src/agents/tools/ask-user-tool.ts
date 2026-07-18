@@ -16,6 +16,7 @@ const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
 const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 const ASK_USER_RPC_GRACE_MS = 10_000;
+const ASK_USER_PROMPT_RECHECK_MS = 50;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]*$/;
 const TERMINAL_QUESTION_ERROR_REASONS = new Set([
   "QUESTION_ALREADY_TERMINAL",
@@ -80,6 +81,7 @@ type AskUserQuestionState = {
   questionId: string;
   sessionKey: string;
   questions: QuestionRequestQuestion[];
+  expiresAtMs: number;
   phase: AskUserQuestionPhase;
   gatewayCall?: AskUserGatewayCall;
   answer?: Promise<QuestionWaitAnswerResult>;
@@ -269,6 +271,7 @@ export function reserveAskUserPromptDelivery(params: {
   sessionKey?: string;
   runId?: string;
   questions: QuestionRequestQuestion[];
+  timeoutSeconds?: number;
 }): { questionId: string } | undefined {
   const sessionKey = askUserSessionKey(params.sessionKey);
   if (findAskUserQuestionForSession(sessionKey)) {
@@ -282,6 +285,7 @@ export function reserveAskUserPromptDelivery(params: {
     questionId,
     sessionKey,
     questions: params.questions,
+    expiresAtMs: Date.now() + (params.timeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS) * 1_000,
     phase: { kind: "reserved" },
     waiters: new Set(),
   });
@@ -350,6 +354,38 @@ async function readAskUserQuestionStatus(
   return typeof status === "string" ? status : undefined;
 }
 
+type AskUserPromptStatusRead =
+  | { kind: "status"; status: string | undefined }
+  | { kind: "error" }
+  | { kind: "expired" };
+
+async function readAskUserQuestionStatusBeforeExpiry(
+  questionId: string,
+  expiresAtMs: number,
+  gatewayCall: AskUserGatewayCall,
+): Promise<AskUserPromptStatusRead> {
+  const remainingMs = expiresAtMs - Date.now();
+  if (remainingMs <= 0) {
+    return { kind: "expired" };
+  }
+  return await new Promise<AskUserPromptStatusRead>((resolve) => {
+    let settled = false;
+    const finish = (result: AskUserPromptStatusRead) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(expiryTimer);
+      resolve(result);
+    };
+    const expiryTimer = setTimeout(() => finish({ kind: "expired" }), remainingMs);
+    void readAskUserQuestionStatus(questionId, gatewayCall).then(
+      (status) => finish({ kind: "status", status }),
+      () => finish({ kind: "error" }),
+    );
+  });
+}
+
 /** Opens prompt delivery after question.request succeeds. */
 function markAskUserPromptReady(questionId: string, questions: QuestionRequestQuestion[]): void {
   const state = askUserQuestions.get(questionId);
@@ -382,16 +418,50 @@ export async function isAskUserPromptPending(
   questionId: string,
   gatewayCall: AskUserGatewayCall = callGatewayTool,
 ): Promise<boolean> {
-  if (!isAskUserPromptActive(questionId)) {
+  const state = askUserQuestions.get(questionId);
+  if (!state) {
     return false;
   }
-  try {
-    return (await readAskUserQuestionStatus(questionId, gatewayCall)) === "pending";
-  } catch {
-    // A transient lookup failure must not strand the blocking tool. The local
-    // reservation remains the fallback; only a confirmed terminal record drops it.
-    return isAskUserPromptActive(questionId);
+  while (askUserQuestions.get(questionId) === state) {
+    if (state.phase.kind === "resolving" || state.phase.kind === "prompt-failed") {
+      return false;
+    }
+    const read = await readAskUserQuestionStatusBeforeExpiry(
+      questionId,
+      state.expiresAtMs,
+      gatewayCall,
+    );
+    if (read.kind === "expired") {
+      return false;
+    }
+    // Cancellation can win while the Gateway request is in flight. Recheck local
+    // ownership before trusting an older remote `pending` snapshot.
+    if (
+      askUserQuestions.get(questionId) !== state ||
+      state.phase.kind === "resolving" ||
+      state.phase.kind === "prompt-failed"
+    ) {
+      return false;
+    }
+    if (read.kind === "status" && read.status === "pending") {
+      return true;
+    }
+    if (read.kind === "status" && typeof read.status === "string") {
+      return false;
+    }
+    if (read.kind === "error") {
+      // Keep the prompt private until Gateway state is authoritative again.
+      // Failing open here can expose a stale question after remote terminalization.
+    }
+    const remainingMs = state.expiresAtMs - Date.now();
+    if (remainingMs <= 0) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(ASK_USER_PROMPT_RECHECK_MS, remainingMs));
+    });
   }
+  return false;
 }
 
 /** Releases a tool-start reservation when policy rejects execution. */
@@ -511,12 +581,14 @@ export function createAskUserTool(params: {
           questionId,
           sessionKey,
           questions: normalized.questions,
+          expiresAtMs: Date.now() + timeoutMs,
           phase: { kind: "registering" },
           gatewayCall,
           waiters: new Set(),
         } satisfies AskUserQuestionState);
       state.sessionKey = sessionKey;
       state.questions = normalized.questions;
+      state.expiresAtMs = Date.now() + timeoutMs;
       state.gatewayCall = gatewayCall;
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
