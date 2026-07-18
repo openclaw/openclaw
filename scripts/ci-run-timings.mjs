@@ -239,7 +239,11 @@ function getLatestCiRunId() {
 }
 
 function getRemoteMainSha() {
-  const raw = execFileSync("git", ["ls-remote", "origin", "main"], { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS, killSignal: "SIGKILL" }).trim();
+  const raw = execFileSync("git", ["ls-remote", "origin", "main"], {
+    encoding: "utf8",
+    timeout: CI_RUN_TIMINGS_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  }).trim();
   const [sha] = raw.split(/\s+/u);
   if (!sha) {
     throw new Error("Could not resolve origin/main");
