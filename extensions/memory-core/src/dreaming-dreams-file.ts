@@ -11,6 +11,7 @@ const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+export const MEMORY_DREAMING_MARKDOWN_MAX_BYTES = 16 * 1024 * 1024;
 
 type DreamsFileLockEntry = {
   withLock: ReturnType<typeof createAsyncLock>;
@@ -52,7 +53,12 @@ function isEmptyDreamsReadError(err: unknown): boolean {
 
 export async function readDreamsFile(dreamsPath: string): Promise<string> {
   try {
-    return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
+    return (
+      await readRegularFile({
+        filePath: dreamsPath,
+        maxBytes: MEMORY_DREAMING_MARKDOWN_MAX_BYTES,
+      })
+    ).buffer.toString("utf-8");
   } catch (err) {
     if (isEmptyDreamsReadError(err)) {
       return "";

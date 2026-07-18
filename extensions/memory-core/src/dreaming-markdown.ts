@@ -11,7 +11,11 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
-import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import {
+  MEMORY_DREAMING_MARKDOWN_MAX_BYTES,
+  updateDeepDreamsFile,
+} from "./dreaming-dreams-file.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -58,6 +62,23 @@ function shouldWriteSeparate(storage: MemoryDreamingStorageConfig): boolean {
   return storage.mode === "separate" || storage.mode === "both" || storage.separateReports;
 }
 
+async function readDailyMemoryMarkdown(inlinePath: string): Promise<string> {
+  try {
+    return (
+      await readRegularFile({
+        filePath: inlinePath,
+        maxBytes: MEMORY_DREAMING_MARKDOWN_MAX_BYTES,
+      })
+    ).buffer.toString("utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return "";
+    }
+    throw err;
+  }
+}
+
 export async function writeDailyDreamingPhaseBlock(params: {
   workspaceDir: string;
   phase: Exclude<MemoryDreamingPhaseName, "deep">;
@@ -74,12 +95,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
   if (shouldWriteInline(params.storage)) {
     inlinePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
     await fs.mkdir(path.dirname(inlinePath), { recursive: true });
-    const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return "";
-      }
-      throw err;
-    });
+    const original = await readDailyMemoryMarkdown(inlinePath);
     const markers = resolvePhaseMarkers(params.phase);
     const updated = replaceManagedMarkdownBlock({
       original,
