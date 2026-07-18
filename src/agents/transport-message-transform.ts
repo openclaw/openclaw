@@ -75,23 +75,23 @@ export function transformTransportMessages(
   const syntheticToolResultText = CODEX_STYLE_ABORTED_OUTPUT_APIS.has(model.api)
     ? "aborted"
     : "No result provided";
-  // A provider id can repeat across turns, so each rewrite is queued and consumed in
-  // order. Keying by id alone would bind every result to the most recent call and leave
-  // the earlier one to be filled with a synthesized result.
-  const toolCallIdRewrites = new Map<string, string[]>();
-  const lastToolCallIdRewrite = new Map<string, string>();
+  // A provider id can repeat across turns, so each effective call id is queued and consumed in
+  // order. Keying by id alone would bind every result to the most recent call and leave the
+  // earlier one to be filled with a synthesized result.
+  const toolCallIdOccurrences = new Map<string, string[]>();
+  const lastResolvedToolCallId = new Map<string, string>();
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
       return msg;
     }
     if (msg.role === "toolResult") {
-      // Consume one rewrite per result so repeated ids pair in order, falling back to the
-      // most recent rewrite when a call carries more results than it has occurrences.
+      // Consume one occurrence per result so repeated ids pair in order, falling back to the
+      // most recently resolved id when a call carries more results than it has occurrences.
       const normalizedId =
-        toolCallIdRewrites.get(msg.toolCallId)?.shift() ??
-        lastToolCallIdRewrite.get(msg.toolCallId);
+        toolCallIdOccurrences.get(msg.toolCallId)?.shift() ??
+        lastResolvedToolCallId.get(msg.toolCallId);
       if (normalizedId !== undefined) {
-        lastToolCallIdRewrite.set(msg.toolCallId, normalizedId);
+        lastResolvedToolCallId.set(msg.toolCallId, normalizedId);
       }
       return normalizedId && normalizedId !== msg.toolCallId
         ? { ...msg, toolCallId: normalizedId }
@@ -153,6 +153,7 @@ export function transformTransportMessages(
         continue;
       }
       let normalizedToolCall = block;
+      let effectiveToolCallId = block.id;
       if (
         !isSameModel &&
         block.thoughtSignature &&
@@ -166,14 +167,19 @@ export function transformTransportMessages(
         normalizeToolCallId
       ) {
         const normalizedId = normalizeToolCallId(block.id, model, msg);
+        effectiveToolCallId = normalizedId;
         if (normalizedId !== block.id) {
-          const pending = toolCallIdRewrites.get(block.id);
-          if (pending) {
-            pending.push(normalizedId);
-          } else {
-            toolCallIdRewrites.set(block.id, [normalizedId]);
-          }
           normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
+        }
+      }
+      if (normalizeToolCallId) {
+        // Results carry only the raw provider id, so the queue must include unchanged calls too.
+        // Otherwise mixed same-model/cross-model occurrences shift every later result by one.
+        const pending = toolCallIdOccurrences.get(block.id);
+        if (pending) {
+          pending.push(effectiveToolCallId);
+        } else {
+          toolCallIdOccurrences.set(block.id, [effectiveToolCallId]);
         }
       }
       content.push(normalizedToolCall);

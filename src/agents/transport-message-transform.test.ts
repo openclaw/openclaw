@@ -659,6 +659,50 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     ]);
   });
 
+  it.each([
+    { label: "unchanged then rewritten", sameModelFirst: true },
+    { label: "rewritten then unchanged", sameModelFirst: false },
+  ])("pairs mixed-source repeated ids when $label", ({ sameModelFirst }) => {
+    const sameModelCall = {
+      ...assistantToolCall("call_1"),
+      provider: "anthropic",
+      api: "anthropic-messages" as const,
+      model: "claude-opus-4-6",
+    };
+    const rewrittenCall = assistantToolCall("call_1");
+    const messages: Context["messages"] = [
+      ...(sameModelFirst ? [sameModelCall, rewrittenCall] : [rewrittenCall, sameModelCall]),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "first output",
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: "second output",
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+      (id) => `normalized_${id}`,
+    );
+
+    const expectedIds: [string, string] = sameModelFirst
+      ? ["call_1", "normalized_call_1"]
+      : ["normalized_call_1", "call_1"];
+    expect(toolResultSummaries([result[1], result[3]] as Context["messages"])).toEqual([
+      { role: "toolResult", toolCallId: expectedIds[0], content: "first output" },
+      { role: "toolResult", toolCallId: expectedIds[1], content: "second output" },
+    ]);
+  });
+
   it("keeps pairing a displaced result with the call it follows", () => {
     let counter = 0;
     const messages: Context["messages"] = [
