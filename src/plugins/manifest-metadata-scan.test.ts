@@ -137,7 +137,12 @@ describe("listOpenClawPluginManifestMetadata", () => {
     const oversizedDir = path.join(home, ".openclaw", "extensions", "big-plugin");
     const oversizedPath = path.join(oversizedDir, "openclaw.plugin.json");
     fs.mkdirSync(oversizedDir, { recursive: true });
-    fs.writeFileSync(oversizedPath, "x".repeat(256 * 1024 + 1), "utf8");
+    fs.writeFileSync(
+      oversizedPath,
+      JSON.stringify({ id: "big-plugin", pad: "x".repeat(256 * 1024) }),
+      "utf8",
+    );
+    expect(fs.statSync(oversizedPath).size).toBeGreaterThan(256 * 1024);
 
     const records = listOpenClawPluginManifestMetadata({
       OPENCLAW_HOME: home,
