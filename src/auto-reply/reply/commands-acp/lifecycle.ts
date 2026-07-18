@@ -72,16 +72,14 @@ async function persistSpawnedSessionLabel(params: {
   }
 
   const now = Date.now();
-  // Resolve the target store from the spawned session key instead of the
-  // requester's store. Cross-agent ACP spawns (e.g. from main into cursor)
-  // have different store partitions, so using commandParams.storePath would
-  // silently lose the label (#106136).
+  // Cross-agent ACP keys belong to the target agent's store, which can differ
+  // from the requester's store during spawn.
   const { storePath } = resolveSessionStorePathForAcp({
     cfg: params.commandParams.cfg,
     sessionKey: params.sessionKey,
   });
 
-  // Only mutate the in-memory session store when both stores are the same.
+  // Only the requester store has an in-memory snapshot to keep coherent.
   if (params.commandParams.sessionStore && params.commandParams.storePath === storePath) {
     const existing = params.commandParams.sessionStore[params.sessionKey];
     if (existing) {

@@ -944,17 +944,7 @@ describe("/acp command", () => {
       storePath: "/tmp/sessions-acp.json",
     });
     hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
-    hoisted.updateSessionEntryMock
-      .mockReset()
-      .mockImplementation(
-        async (
-          _scope: { storePath: string; sessionKey: string },
-          _update: (entry: Record<string, unknown>) => Record<string, unknown>,
-        ) => {
-          // Default no-op: just return null (entry not found in test store).
-          return null;
-        },
-      );
+    hoisted.updateSessionEntryMock.mockReset().mockResolvedValue(null);
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
       .mockReturnValue(createSessionBindingCapabilities());
@@ -1317,58 +1307,36 @@ describe("/acp command", () => {
     });
   });
 
-  it("persists ACP spawn labels without a nested gateway self-call", async () => {
+  it("persists ACP spawn labels to the target store without a gateway self-call", async () => {
     const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
-
-    const result = await handleAcpCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectGatewayMethodNotCalled("sessions.patch");
-  });
-
-  it("persists ACP spawn labels to the spawned session store (cross-agent, #106136)", async () => {
-    const commandParams = createConversationParams(
-      "/acp spawn codex --bind here --label spawned-label",
-      {
-        channel: "telegram",
-        originatingTo: "telegram:-1003841603622",
-        threadId: "777",
-      },
-    );
-    // Simulate a cross-agent spawn: the requester is "main" (storePath set
-    // during session init below) and the target is "codex".
-    commandParams.storePath = "/tmp/requester-sessions.json";
-    commandParams.sessionStore = {
-      "agent:main:telegram:group:-1003841603622:topic:777": {
-        sessionId: "requester-session",
-        updatedAt: Date.now(),
-      },
-    };
+    params.storePath = "/tmp/requester-sessions.json";
     hoisted.resolveSessionStorePathForAcpMock.mockReturnValue({
       cfg: baseCfg,
       storePath: "/tmp/codex-sessions.json",
     });
 
-    const result = await handleAcpCommand(commandParams, true);
+    const result = await handleAcpCommand(params, true);
 
-    // Verify the spawn succeeded and the label was persisted to the target
-    // store, not the requester store.
     expect(result?.reply?.text).toContain("Bound this conversation to");
+    expectGatewayMethodNotCalled("sessions.patch");
     const spawnedSessionKey = (
       hoisted.ensureSessionMock.mock.calls[0]?.[0] as { sessionKey?: string } | undefined
     )?.sessionKey;
     expect(spawnedSessionKey).toMatch(/^agent:codex:acp:/);
-    expect(hoisted.updateSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/codex-sessions.json",
-        sessionKey: spawnedSessionKey,
-      }),
-      expect.any(Function),
-    );
-    expect(hoisted.updateSessionEntryMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ storePath: "/tmp/requester-sessions.json" }),
-      expect.any(Function),
-    );
+    const updateCall = hoisted.updateSessionEntryMock.mock.calls[0] as
+      | [
+          { storePath: string; sessionKey: string },
+          (entry: Record<string, unknown>) => Record<string, unknown>,
+        ]
+      | undefined;
+    expect(updateCall?.[0]).toEqual({
+      storePath: "/tmp/codex-sessions.json",
+      sessionKey: spawnedSessionKey,
+    });
+    expect(updateCall?.[1]({ sessionId: "target", updatedAt: 1 })).toEqual({
+      label: "inbox",
+      updatedAt: expect.any(Number),
+    });
   });
 
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {
