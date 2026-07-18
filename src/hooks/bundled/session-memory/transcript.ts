@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 // Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -133,12 +134,31 @@ export function getRecentSessionContentFromEvents(
   return allMessages.slice(-messageCount).join("\n");
 }
 
+// Session transcript files contain agent-user conversation content.
+// Most transcripts are under 1 MiB; cap at 50 MiB to prevent OOM on
+// extremely long sessions or corrupted files.
+const MAX_SESSION_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
+
+/** Read a session transcript file with size pre-check. */
+async function readSessionTranscriptSafely(filePath: string): Promise<string> {
+  const stat = statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`not a regular file: ${filePath}`);
+  }
+  if (stat.size > MAX_SESSION_TRANSCRIPT_BYTES) {
+    throw new Error(
+      `session transcript too large: ${filePath} is ${stat.size} bytes (max ${MAX_SESSION_TRANSCRIPT_BYTES})`,
+    );
+  }
+  return await fs.readFile(filePath, "utf-8");
+}
+
 async function getRecentSessionContent(
   sessionFilePath: string,
   messageCount = 15,
 ): Promise<string | null> {
   try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
+    const content = await readSessionTranscriptSafely(sessionFilePath);
     const lines = content.trim().split("\n");
 
     return getRecentSessionContentFromEvents(
