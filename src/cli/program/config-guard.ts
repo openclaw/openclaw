@@ -5,7 +5,12 @@ import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
-import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
+import {
+  resolveIsNixMode,
+  resolveLegacyStateDirs,
+  resolveOAuthDir,
+  resolveStateDir,
+} from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
@@ -336,13 +341,19 @@ export async function ensureConfigReady(
   }
   params.runtime.error("");
   const isPluginPackagingFailure = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot);
+  const isNixManagedConfig = resolveIsNixMode();
   const isGatewayStartup = isGatewayStartupCommand(commandPath);
   const mustBlockInvalid = !allowInvalid || (isGatewayStartup && params.allowInvalid !== true);
-  const shouldOfferRecovery = mustBlockInvalid && !params.suppressDoctorStdout;
-  if (isPluginPackagingFailure || !shouldOfferRecovery) {
+  const shouldOfferRecovery =
+    mustBlockInvalid && !params.suppressDoctorStdout && !isNixManagedConfig;
+  if (isPluginPackagingFailure || isNixManagedConfig || !shouldOfferRecovery) {
     const fixHint = isPluginPackagingFailure
       ? formatPluginPackagingRuntimeOutputRecoveryHint()
-      : commandText(formatCliCommand("openclaw doctor --fix"));
+      : isNixManagedConfig
+        ? new (await import("../../config/nix-mode-write-guard.js")).NixModeConfigMutationError({
+            configPath: snapshot.path,
+          }).message
+        : commandText(formatCliCommand("openclaw doctor --fix"));
     params.runtime.error(`${muted("Fix:")} ${fixHint}`);
   }
   params.runtime.error(

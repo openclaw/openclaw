@@ -1,5 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { isTerminalInteractive } from "./terminal-interactivity.js";
 
@@ -47,7 +47,15 @@ export async function offerInvalidConfigRecovery<T>(params: {
       const { doctorCommand } = await import("../commands/doctor.js");
       await doctorCommand(runtime, { repair: true });
     });
-  await runDoctor(params.runtime);
+  try {
+    await runDoctor(params.runtime);
+  } catch (error) {
+    if (error instanceof ExitError) {
+      throw error;
+    }
+    params.runtime.error(`Failed to run "${command}": ${formatErrorMessage(error)}`);
+    return { status: "retry-failed" };
+  }
 
   try {
     return { status: "recovered", value: await params.retry() };

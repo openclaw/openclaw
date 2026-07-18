@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { offerInvalidConfigRecovery } from "./invalid-config-recovery.js";
 
 function createRuntime(): RuntimeEnv {
@@ -98,5 +98,45 @@ describe("offerInvalidConfigRecovery", () => {
     expect(runDoctor).toHaveBeenCalledOnce();
     expect(retry).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config is still invalid"));
+  });
+
+  it("reports doctor failures without retrying the command", async () => {
+    const runtime = createRuntime();
+    const retry = vi.fn(async () => "started");
+
+    await expect(
+      offerInvalidConfigRecovery({
+        runtime,
+        retry,
+        deps: {
+          confirm: vi.fn(async () => true),
+          isInteractive: () => true,
+          runDoctor: vi.fn(async () => {
+            throw new Error("repair unavailable");
+          }),
+        },
+      }),
+    ).resolves.toEqual({ status: "retry-failed" });
+
+    expect(retry).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("repair unavailable"));
+  });
+
+  it("preserves intentional doctor exits", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      offerInvalidConfigRecovery({
+        runtime,
+        retry: vi.fn(async () => "started"),
+        deps: {
+          confirm: vi.fn(async () => true),
+          isInteractive: () => true,
+          runDoctor: vi.fn(async () => {
+            throw new ExitError(2);
+          }),
+        },
+      }),
+    ).rejects.toMatchObject({ code: 2 });
   });
 });

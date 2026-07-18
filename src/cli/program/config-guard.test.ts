@@ -103,6 +103,7 @@ describe("ensureConfigReady", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-"));
     tempRoots.push(root);
     setTestEnvValue("OPENCLAW_HOME", root);
+    deleteTestEnvValue("OPENCLAW_NIX_MODE");
     deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     return root;
@@ -128,7 +129,13 @@ describe("ensureConfigReady", () => {
   }
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR"]);
+    envSnapshot = captureEnv([
+      "HOME",
+      "OPENCLAW_HOME",
+      "OPENCLAW_NIX_MODE",
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+    ]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
     for (const root of tempRoots.splice(0)) {
@@ -569,6 +576,22 @@ describe("ensureConfigReady", () => {
 
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps invalid Nix-managed config on the manual recovery path", async () => {
+    setInvalidSnapshot();
+    setTestEnvValue("OPENCLAW_NIX_MODE", "1");
+    const runtime = makeRuntime();
+    const confirm = vi.fn(async () => true);
+
+    await ensureConfigReady(
+      { runtime: runtime as never, commandPath: ["gateway", "run"] },
+      { confirm, isInteractive: () => true },
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(plainErrorCalls(runtime).join("\n")).toContain("Config is managed by Nix");
+    expect(runtime.exit).toHaveBeenCalledWith(78);
   });
 
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
