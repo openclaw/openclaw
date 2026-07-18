@@ -46,6 +46,8 @@ const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
   () => import("../secrets/apply.js"),
 );
 
+class SecretsPlanFileNotFoundError extends Error {}
+
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
   const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
@@ -57,7 +59,9 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
     raw = readFileSync(pathname, "utf8");
   } catch (err) {
     if (hasErrnoCode(err, "ENOENT")) {
-      throw new Error(`Secrets plan file not found: ${pathname}`, { cause: err });
+      throw new SecretsPlanFileNotFoundError(`Secrets plan file not found: ${pathname}`, {
+        cause: err,
+      });
     }
     throw err;
   }
@@ -341,10 +345,10 @@ export function registerSecretsCli(program: Command): void {
             : "Secrets apply: no changes.",
         );
       } catch (err) {
-        // The missing-plan wrapper already carries a user-friendly message; keep its
-        // ENOENT cause out of the rendered CLI output while preserving it for diagnostics.
+        // The missing-plan wrapper already carries a user-facing message. Keep its
+        // ENOENT cause available to diagnostics without rendering the raw filesystem error.
         const message =
-          err instanceof Error && err.message.startsWith("Secrets plan file not found")
+          err instanceof SecretsPlanFileNotFoundError
             ? err.message
             : formatErrorMessage(err);
         defaultRuntime.error(
