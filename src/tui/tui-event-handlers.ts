@@ -657,7 +657,11 @@ export function createEventHandlers(context: EventHandlerContext) {
   const noteToolValidationDiagnostic = (evt: AgentEvent) => {
     const data = evt.data ?? {};
     const phase = asString(data.phase, "");
-    if (evt.stream === "assistant" || (evt.stream === "tool" && phase === "start")) {
+    if (
+      evt.stream === "assistant" ||
+      (evt.stream === "tool" && phase === "start") ||
+      (evt.stream === "lifecycle" && phase === "start")
+    ) {
       toolValidationDiagnostics.delete(evt.runId);
       return;
     }

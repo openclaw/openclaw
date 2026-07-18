@@ -492,7 +492,11 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     vi.useRealTimers();
   });
 
-  it("clears stale validation diagnostics when assistant output resumes", () => {
+  it.each([
+    { stream: "assistant", data: { text: "Recovered" } },
+    { stream: "tool", data: { phase: "start", name: "read" } },
+    { stream: "lifecycle", data: { phase: "start" } },
+  ] as const)("clears stale validation diagnostics on $stream progress", (progressEvent) => {
     const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-validation-loop", sessionInfo: { verboseLevel: "off" } },
     });
@@ -511,8 +515,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
     handleAgentEvent({
       runId: "run-validation-loop",
-      stream: "assistant",
-      data: { text: "Recovered" },
+      stream: progressEvent.stream,
+      data: progressEvent.data,
       sessionKey: state.currentSessionKey,
     });
     handleChatEvent({

@@ -1769,9 +1769,65 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("derives a safe validation summary from sanitized local tool result text", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "edit the file",
+      runId: "run-sanitized-validation",
+    });
+
+    registeredListener?.({
+      runId: "run-sanitized-validation",
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "edit",
+        isError: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: 'Validation failed for tool "edit":\n  - path: must be string\n\nReceived arguments:\n{"path":"secret.txt"}',
+            },
+          ],
+        },
+      },
+    });
+    registeredListener?.({
+      runId: "run-sanitized-validation",
+      stream: "lifecycle",
+      data: { phase: "end", aborted: true },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-sanitized-validation",
+        sessionKey: "agent:main:main",
+        state: "aborted",
+        errorMessage: "edit tool validation failed: invalid arguments",
+      },
+    });
+  });
+
   it.each([
     { stream: "assistant", data: { text: "Recovered" } },
     { stream: "tool", data: { phase: "start", name: "read" } },
+    { stream: "lifecycle", data: { phase: "start" } },
   ] as const)(
     "clears stale validation diagnostics on local $stream progress",
     async (progressEvent) => {

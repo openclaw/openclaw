@@ -20,7 +20,7 @@ import {
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
-import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
+import { readPreparedToolValidationSummary } from "../agents/tool-error-summary.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
@@ -1332,8 +1332,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
-    const eventToolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
-    if (evt.stream === "assistant" || (evt.stream === "tool" && evt.data?.phase === "start")) {
+    const eventToolErrorSummary = readPreparedToolValidationSummary(evt.data);
+    if (
+      evt.stream === "assistant" ||
+      (evt.stream === "tool" && evt.data?.phase === "start") ||
+      (evt.stream === "lifecycle" && lifecyclePhase === "start")
+    ) {
       run.toolErrorSummary = undefined;
     } else if (eventToolErrorSummary) {
       run.toolErrorSummary = eventToolErrorSummary;

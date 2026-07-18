@@ -8,7 +8,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import {
-  createToolValidationErrorSummary,
+  readPreparedToolValidationSummary,
   readToolValidationErrorSummary,
 } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
@@ -366,43 +366,6 @@ type TerminalLifecycleOptions = {
   suppressRestartRecoveryProjection?: boolean;
   restartRecoveryState?: { suppress: boolean };
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readToolResultText(value: unknown): string | undefined {
-  const result = asRecord(value);
-  const content = Array.isArray(result?.content) ? result.content : [];
-  for (const item of content) {
-    const text = asRecord(item)?.text;
-    if (typeof text === "string" && text.trim()) {
-      return text;
-    }
-  }
-  return undefined;
-}
-
-function readPreparedToolValidationSummary(data: unknown): string | undefined {
-  const record = asRecord(data);
-  const preparedSummary = readToolValidationErrorSummary(record?.toolErrorSummary);
-  if (preparedSummary) {
-    return preparedSummary;
-  }
-  if (record?.phase !== "result" || record.isError !== true || typeof record.name !== "string") {
-    return undefined;
-  }
-  const resultText = readToolResultText(record.result);
-  if (
-    !resultText?.startsWith(`Validation failed for tool "${record.name}":`) ||
-    !resultText.includes("\n\nReceived arguments:")
-  ) {
-    return undefined;
-  }
-  return createToolValidationErrorSummary(record.name);
-}
 
 export function createAgentEventHandler({
   broadcast,
@@ -1388,7 +1351,12 @@ export function createAgentEventHandler({
       }
       return;
     }
-    if (toolValidationSummary) {
+    if (lifecyclePhase === "start") {
+      if (chatLink) {
+        chatLink.toolErrorSummary = undefined;
+      }
+      updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    } else if (toolValidationSummary) {
       if (chatLink) {
         chatLink.toolErrorSummary = toolValidationSummary;
       }

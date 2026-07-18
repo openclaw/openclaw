@@ -64,6 +64,47 @@ export function createToolValidationErrorSummary(toolName: string): string | und
   );
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readToolResultText(value: unknown): string | undefined {
+  const result = asRecord(value);
+  const content = Array.isArray(result?.content) ? result.content : [];
+  for (const item of content) {
+    const text = asRecord(item)?.text;
+    if (typeof text === "string" && text.trim()) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Reads a boundary-prepared summary or recognizes the fixed sanitized validator envelope.
+ * The raw validator details are never returned because they can contain model input.
+ */
+export function readPreparedToolValidationSummary(data: unknown): string | undefined {
+  const record = asRecord(data);
+  const preparedSummary = readToolValidationErrorSummary(record?.toolErrorSummary);
+  if (preparedSummary) {
+    return preparedSummary;
+  }
+  if (record?.phase !== "result" || record.isError !== true || typeof record.name !== "string") {
+    return undefined;
+  }
+  const resultText = readToolResultText(record.result);
+  if (
+    !resultText?.startsWith(`Validation failed for tool "${record.name}":`) ||
+    !resultText.includes("\n\nReceived arguments:")
+  ) {
+    return undefined;
+  }
+  return createToolValidationErrorSummary(record.name);
+}
+
 /**
  * Returns only a boundary-prepared validation summary. Raw validator messages
  * stay private because paths and custom messages can contain model input.

@@ -360,6 +360,7 @@ describe("agent event handler", () => {
   it.each([
     { stream: "assistant", data: { text: "Recovered" } },
     { stream: "tool", data: { phase: "start", name: "read" } },
+    { stream: "lifecycle", data: { phase: "start" } },
   ] as const)("clears stale validation diagnostics on $stream progress", (progressEvent) => {
     const updateRunToolErrorSummary = vi.fn();
     const { chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
