@@ -173,8 +173,10 @@ describe("Zalo reply-once lifecycle", () => {
 
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      // The durable journal keeps the failed dispatch for retry (drain backoff) instead
+      // of the old commit-and-drop; the replayed POST dedupes against the pending row.
       expect(monitor.runtime.error).toHaveBeenCalledWith(
-        "[acct-zalo-lifecycle] Zalo webhook failed: Error: post-send failure",
+        expect.stringContaining("failed; keeping for retry: post-send failure"),
       );
     } finally {
       await monitor.stop();

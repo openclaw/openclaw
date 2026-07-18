@@ -1,10 +1,10 @@
 // Zalo plugin module implements monitor.webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
+import type { ZaloIngressEnqueueResult } from "./monitor-ingress.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   createFixedWindowRateLimiter,
@@ -23,7 +23,11 @@ import {
   type OpenClawConfig,
 } from "./runtime-api.js";
 
-const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
+/** Minimal durable-ingress surface the webhook admission path needs. */
+export type ZaloWebhookIngress = {
+  enqueue: (update: ZaloUpdate) => Promise<ZaloIngressEnqueueResult>;
+  drainOnce: () => Promise<void>;
+};
 
 type ZaloWebhookTarget = {
   token: string;
@@ -39,12 +43,8 @@ type ZaloWebhookTarget = {
   canHostMedia: boolean;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   fetcher?: ZaloFetch;
+  ingress: ZaloWebhookIngress;
 };
-
-export type ZaloWebhookProcessUpdate = (params: {
-  update: ZaloUpdate;
-  target: ZaloWebhookTarget;
-}) => Promise<void>;
 
 const webhookTargets = new Map<string, ZaloWebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
@@ -60,7 +60,6 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
-  recentWebhookEvents.clearMemory();
   webhookAnomalyTracker.clear();
 }
 
@@ -70,62 +69,6 @@ export function getZaloWebhookRateLimitStateSizeForTest(): number {
 
 export function getZaloWebhookStatusCounterSizeForTest(): number {
   return webhookAnomalyTracker.size();
-}
-
-function buildReplayEventCacheKey(target: ZaloWebhookTarget, update: ZaloUpdate): string | null {
-  const messageId = update.message?.message_id;
-  if (!messageId) {
-    return null;
-  }
-  const chatId = update.message?.chat?.id ?? "";
-  const senderId = update.message?.from?.id ?? "";
-  return JSON.stringify([
-    target.path,
-    target.account.accountId,
-    update.event_name,
-    chatId,
-    senderId,
-    messageId,
-  ]);
-}
-
-const recentWebhookEvents = createChannelReplayGuard<{
-  target: ZaloWebhookTarget;
-  update: ZaloUpdate;
-}>({
-  dedupe: {
-    ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
-    memoryMaxSize: 5000,
-  },
-  buildReplayKey: ({ target, update }) => buildReplayEventCacheKey(target, update),
-});
-
-export class ZaloRetryableWebhookError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "ZaloRetryableWebhookError";
-  }
-}
-
-async function processZaloReplayGuardedUpdate(params: {
-  target: ZaloWebhookTarget;
-  update: ZaloUpdate;
-  processUpdate: ZaloWebhookProcessUpdate;
-  nowMs?: number;
-}): Promise<"processed" | "duplicate"> {
-  const event = { target: params.target, update: params.update };
-  const result = await recentWebhookEvents.processGuarded(
-    event,
-    async () => {
-      params.target.statusSink?.({ lastInboundAt: Date.now() });
-      await params.processUpdate(event);
-    },
-    {
-      dedupe: { now: params.nowMs },
-      onError: (error) => (error instanceof ZaloRetryableWebhookError ? "release" : "commit"),
-    },
-  );
-  return result.kind === "processed" ? "processed" : "duplicate";
 }
 
 function recordWebhookStatus(
@@ -169,7 +112,6 @@ export function registerZaloWebhookTarget(
 export async function handleZaloWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  processUpdate: ZaloWebhookProcessUpdate,
 ): Promise<boolean> {
   return await withResolvedWebhookRequestPipeline({
     req,
@@ -254,18 +196,30 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      // Reserve the detached task before the HTTP admission is released;
-      // otherwise later queue work inherits a released admission root.
-      void runDetachedWebhookWork(() =>
-        processZaloReplayGuardedUpdate({
-          target,
-          update,
-          processUpdate,
-          nowMs,
-        }),
-      ).catch((err: unknown) => {
-        target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
-      });
+      target.statusSink?.({ lastInboundAt: nowMs });
+      let accepted: ZaloIngressEnqueueResult;
+      try {
+        // Durable-before-ack: respond 200 only after the update is journaled, so a
+        // failed append keeps Zalo's webhook redelivery contract alive.
+        accepted = await target.ingress.enqueue(update);
+      } catch (error) {
+        target.runtime.error?.(
+          `[${target.account.accountId}] Zalo webhook ingress append failed: ${String(error)}`,
+        );
+        res.statusCode = 500;
+        res.end("Ingress Unavailable");
+        recordWebhookStatus(target.runtime, path, res.statusCode);
+        return true;
+      }
+      if (accepted.kind !== "ignored") {
+        // Reserve the detached task before the HTTP admission is released;
+        // otherwise later queue work inherits a released admission root.
+        void runDetachedWebhookWork(() => target.ingress.drainOnce()).catch((err: unknown) => {
+          target.runtime.error?.(
+            `[${target.account.accountId}] Zalo ingress drain failed: ${String(err)}`,
+          );
+        });
+      }
 
       res.statusCode = 200;
       res.end("ok");

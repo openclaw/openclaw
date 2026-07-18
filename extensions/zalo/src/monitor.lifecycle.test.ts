@@ -24,13 +24,28 @@ vi.mock("./api.js", async () => {
   };
 });
 
-vi.mock("./runtime.js", () => ({
-  getZaloRuntime: () => ({
-    logging: {
-      shouldLogVerbose: () => false,
-    },
-  }),
-}));
+vi.mock("./runtime.js", async () => {
+  const { createChannelIngressQueueForTests } =
+    await import("openclaw/plugin-sdk/plugin-state-test-runtime");
+  const { mkdtempSync } = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  return {
+    getZaloRuntime: () => ({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+      state: {
+        openChannelIngressQueue: (options?: { accountId?: string; stateDir?: string }) =>
+          createChannelIngressQueueForTests({
+            channelId: "zalo",
+            stateDir: mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-lifecycle-ingress-")),
+            ...options,
+          }),
+      },
+    }),
+  };
+});
 
 const TEST_ACCOUNT = {
   accountId: "default",
@@ -116,12 +131,16 @@ describe("monitorZaloProvider lifecycle", () => {
         expect.stringContaining("zalo poll transport failed"),
       );
       expect(getUpdatesMock).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(1);
+      // The 5s backoff sleep must be pending; the ingress journal's first DB use may
+      // hold an additional unref'd timer, so only assert the backoff exists.
+      expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
 
       abort.abort();
       await run;
 
-      expect(vi.getTimerCount()).toBe(0);
+      // The journal's SQLite WAL maintenance interval (unref'd) outlives the provider,
+      // so prove the backoff timer was cleared behaviorally: advancing past the 5s
+      // backoff must not schedule another poll.
       await vi.advanceTimersByTimeAsync(5_000);
       expect(getUpdatesMock).toHaveBeenCalledTimes(1);
       expect(started.runtime.log).toHaveBeenCalledWith(

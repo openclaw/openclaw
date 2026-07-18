@@ -1,5 +1,9 @@
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 // Zalo tests cover monitor.webhook plugin behavior.
 import type { RequestListener } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -7,6 +11,8 @@ import {
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { ZaloUpdate } from "./api.js";
+import { createZaloIngressSpool, type ZaloIngressSpool } from "./monitor-ingress.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   clearZaloWebhookSecurityStateForTest,
@@ -14,8 +20,7 @@ import {
   getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget,
-  type ZaloWebhookProcessUpdate,
-  ZaloRetryableWebhookError,
+  type ZaloWebhookIngress,
 } from "./monitor.webhook.js";
 import { createTextUpdate, postWebhookReplay } from "./test-support/lifecycle-test-support.js";
 import type { ResolvedZaloAccount } from "./types.js";
@@ -36,12 +41,18 @@ const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   config: {},
 };
 
-function createWebhookRequestHandler(
-  processUpdate: ZaloWebhookProcessUpdate = async () => {},
-): RequestListener {
+function createFakeIngress(overrides?: Partial<ZaloWebhookIngress>): ZaloWebhookIngress {
+  return {
+    enqueue: vi.fn(async () => ({ kind: "accepted" }) as const),
+    drainOnce: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function createWebhookRequestHandler(): RequestListener {
   return (req, res) => {
     void (async () => {
-      const handled = await handleZaloWebhookRequestInternal(req, res, processUpdate);
+      const handled = await handleZaloWebhookRequestInternal(req, res);
       if (!handled) {
         res.statusCode = 404;
         res.end("not found");
@@ -60,6 +71,7 @@ function registerTarget(params: {
   config?: OpenClawConfig;
   core?: PluginRuntime;
   runtime?: Partial<ZaloRuntimeEnv>;
+  ingress?: ZaloWebhookIngress;
 }): () => void {
   return registerZaloWebhookTarget({
     token: "tok",
@@ -74,7 +86,37 @@ function registerTarget(params: {
     mediaMaxMb: 5,
     canHostMedia: true,
     statusSink: params.statusSink,
+    ingress: params.ingress ?? createFakeIngress(),
   });
+}
+
+const ingressStateDirs: string[] = [];
+const ingressDisposers: Array<() => void> = [];
+
+async function createIngressStateDir(): Promise<string> {
+  const created = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalo-webhook-ingress-"));
+  const resolved = await realpath(created);
+  ingressStateDirs.push(resolved);
+  return resolved;
+}
+
+async function createRealIngress(params: {
+  accountId: string;
+  dispatch: (update: ZaloUpdate) => Promise<void>;
+}): Promise<ZaloIngressSpool> {
+  const stateDir = await createIngressStateDir();
+  const spool = createZaloIngressSpool({
+    accountId: params.accountId,
+    abortSignal: new AbortController().signal,
+    queue: createChannelIngressQueueForTests({
+      channelId: "zalo",
+      accountId: params.accountId,
+      stateDir,
+    }),
+    dispatch: params.dispatch,
+  });
+  ingressDisposers.push(spool.dispose);
+  return spool;
 }
 
 async function postUntilRateLimited(params: {
@@ -143,9 +185,15 @@ async function expectTwoWebhookPostsOk(params: {
 }
 
 describe("handleZaloWebhookRequest", () => {
-  afterEach(() => {
+  afterEach(async () => {
     clearZaloWebhookSecurityStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    for (const dispose of ingressDisposers.splice(0).toReversed()) {
+      dispose();
+    }
+    for (const stateDir of ingressStateDirs.splice(0).toReversed()) {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("returns 400 for non-object payloads", async () => {
@@ -218,10 +266,43 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("deduplicates webhook replay for the same event origin", async () => {
+  it("journals the update before ack and drains it detached", async () => {
+    const dispatch = vi.fn(async (_update: ZaloUpdate) => undefined);
+    const ingress = await createRealIngress({ accountId: "default", dispatch });
+    const unregister = registerTarget({ path: "/hook-durable", ingress });
+    const payload = createTextUpdate({
+      messageId: "msg-durable-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await postWebhookJson({
+          baseUrl,
+          path: "/hook-durable",
+          secret: "secret",
+          payload,
+        });
+
+        expect(response.status).toBe(200);
+        await ingress.waitForIdle();
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(dispatch.mock.calls[0]?.[0].message?.message_id).toBe("msg-durable-1");
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("deduplicates webhook replay through the durable journal", async () => {
     runDetachedWebhookWork.mockClear();
+    const dispatch = vi.fn(async (_update: ZaloUpdate) => undefined);
+    const ingress = await createRealIngress({ accountId: "default", dispatch });
     const sink = vi.fn();
-    const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
+    const unregister = registerTarget({ path: "/hook-replay", statusSink: sink, ingress });
     const payload = createTextUpdate({
       messageId: "msg-replay-1",
       userId: "123",
@@ -241,7 +322,10 @@ describe("handleZaloWebhookRequest", () => {
 
         expect(first.status).toBe(200);
         expect(replay.status).toBe(200);
-        expect(sink).toHaveBeenCalledTimes(1);
+        await ingress.waitForIdle();
+        expect(dispatch).toHaveBeenCalledOnce();
+        // Admission is acknowledged per delivery; the journal dedupes dispatch.
+        expect(sink).toHaveBeenCalledTimes(2);
         expect(runDetachedWebhookWork).toHaveBeenCalledTimes(2);
       });
     } finally {
@@ -249,48 +333,40 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("allows a retry after processUpdate throws a retryable replay error", async () => {
+  it("responds 500 when the ingress append fails so Zalo redelivers", async () => {
     const error = vi.fn();
+    const ingress = createFakeIngress({
+      enqueue: vi.fn(async () => {
+        throw new Error("sqlite wedged");
+      }),
+    });
     const unregister = registerTarget({
-      path: "/hook-retry-after-failure",
+      path: "/hook-append-failure",
       runtime: { error },
+      ingress,
     });
     const payload = createTextUpdate({
-      messageId: "msg-retry-after-failure-1",
+      messageId: "msg-append-failure-1",
       userId: "123",
       userName: "",
       chatId: "123",
       text: "hello",
     });
-    let attempts = 0;
-    const processUpdate = vi.fn<ZaloWebhookProcessUpdate>(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new ZaloRetryableWebhookError("boom");
-      }
-    });
 
     try {
-      await withServer(createWebhookRequestHandler(processUpdate), async (baseUrl) => {
-        const first = await postWebhookJson({
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await postWebhookJson({
           baseUrl,
-          path: "/hook-retry-after-failure",
+          path: "/hook-append-failure",
           secret: "secret",
           payload,
         });
 
-        expect(first.status).toBe(200);
-        await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
-
-        const second = await postWebhookJson({
-          baseUrl,
-          path: "/hook-retry-after-failure",
-          secret: "secret",
-          payload,
-        });
-
-        expect(second.status).toBe(200);
-        await vi.waitFor(() => expect(processUpdate).toHaveBeenCalledTimes(2));
+        expect(response.status).toBe(500);
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining("Zalo webhook ingress append failed"),
+        );
+        expect(ingress.drainOnce).not.toHaveBeenCalled();
       });
     } finally {
       unregister();
@@ -300,10 +376,13 @@ describe("handleZaloWebhookRequest", () => {
   it("keeps replay dedupe isolated per authenticated target", async () => {
     const sinkA = vi.fn();
     const sinkB = vi.fn();
+    const ingressA = createFakeIngress();
+    const ingressB = createFakeIngress();
     const unregisterA = registerTarget({
       path: "/hook-replay-scope",
       secret: "secret-a",
       statusSink: sinkA,
+      ingress: ingressA,
     });
     const unregisterB = registerTarget({
       path: "/hook-replay-scope",
@@ -313,6 +392,7 @@ describe("handleZaloWebhookRequest", () => {
         ...DEFAULT_ACCOUNT,
         accountId: "work",
       },
+      ingress: ingressB,
     });
     const payload = createTextUpdate({
       messageId: "msg-replay-scope-1",
@@ -331,77 +411,14 @@ describe("handleZaloWebhookRequest", () => {
         });
       });
 
+      // Each account owns its journal, so the same update is admitted once per target.
+      expect(ingressA.enqueue).toHaveBeenCalledTimes(1);
+      expect(ingressB.enqueue).toHaveBeenCalledTimes(1);
       expect(sinkA).toHaveBeenCalledTimes(1);
       expect(sinkB).toHaveBeenCalledTimes(1);
     } finally {
       unregisterA();
       unregisterB();
-    }
-  });
-
-  it("does not collide replay dedupe across different chats", async () => {
-    const sink = vi.fn();
-    const unregister = registerTarget({ path: "/hook-replay-chat-scope", statusSink: sink });
-    const firstPayload = createTextUpdate({
-      messageId: "msg-replay-chat-1",
-      userId: "123",
-      userName: "",
-      chatId: "chat-a",
-      text: "hello from a",
-    });
-    const secondPayload = createTextUpdate({
-      messageId: "msg-replay-chat-1",
-      userId: "123",
-      userName: "",
-      chatId: "chat-b",
-      text: "hello from b",
-    });
-
-    try {
-      await withServer(webhookRequestHandler, async (baseUrl) => {
-        await expectTwoWebhookPostsOk({
-          baseUrl,
-          first: { path: "/hook-replay-chat-scope", secret: "secret", payload: firstPayload },
-          second: { path: "/hook-replay-chat-scope", secret: "secret", payload: secondPayload },
-        });
-      });
-
-      expect(sink).toHaveBeenCalledTimes(2);
-    } finally {
-      unregister();
-    }
-  });
-
-  it("does not collide replay dedupe across different senders in the same chat", async () => {
-    const sink = vi.fn();
-    const unregister = registerTarget({ path: "/hook-replay-sender-scope", statusSink: sink });
-    const firstPayload = createTextUpdate({
-      messageId: "msg-replay-sender-1",
-      userId: "user-a",
-      userName: "",
-      chatId: "chat-shared",
-      text: "hello from user a",
-    });
-    const secondPayload = createTextUpdate({
-      messageId: "msg-replay-sender-1",
-      userId: "user-b",
-      userName: "",
-      chatId: "chat-shared",
-      text: "hello from user b",
-    });
-
-    try {
-      await withServer(webhookRequestHandler, async (baseUrl) => {
-        await expectTwoWebhookPostsOk({
-          baseUrl,
-          first: { path: "/hook-replay-sender-scope", secret: "secret", payload: firstPayload },
-          second: { path: "/hook-replay-sender-scope", secret: "secret", payload: secondPayload },
-        });
-      });
-
-      expect(sink).toHaveBeenCalledTimes(2);
-    } finally {
-      unregister();
     }
   });
 
@@ -434,92 +451,6 @@ describe("handleZaloWebhookRequest", () => {
       expect(sink).toHaveBeenCalledTimes(1);
     } finally {
       unregister();
-    }
-  });
-
-  it("keeps replay dedupe isolated when path/account values collide under colon-joined keys", async () => {
-    const sinkA = vi.fn();
-    const sinkB = vi.fn();
-    // Old key format `${path}:${accountId}:${event_name}:${messageId}` would collide for these two targets.
-    const unregisterA = registerTarget({
-      path: "/hook-replay-collision:a",
-      secret: "secret-a",
-      statusSink: sinkA,
-      account: {
-        ...DEFAULT_ACCOUNT,
-        accountId: "team",
-      },
-    });
-    const unregisterB = registerTarget({
-      path: "/hook-replay-collision",
-      secret: "secret-b",
-      statusSink: sinkB,
-      account: {
-        ...DEFAULT_ACCOUNT,
-        accountId: "a:team",
-      },
-    });
-    const payload = createTextUpdate({
-      messageId: "msg-replay-collision-1",
-      userId: "123",
-      userName: "",
-      chatId: "123",
-      text: "hello",
-    });
-
-    try {
-      await withServer(webhookRequestHandler, async (baseUrl) => {
-        await expectTwoWebhookPostsOk({
-          baseUrl,
-          first: { path: "/hook-replay-collision:a", secret: "secret-a", payload },
-          second: { path: "/hook-replay-collision", secret: "secret-b", payload },
-        });
-      });
-
-      expect(sinkA).toHaveBeenCalledTimes(1);
-      expect(sinkB).toHaveBeenCalledTimes(1);
-    } finally {
-      unregisterA();
-      unregisterB();
-    }
-  });
-
-  it("keeps replay dedupe isolated across different webhook paths", async () => {
-    const sinkA = vi.fn();
-    const sinkB = vi.fn();
-    const sharedSecret = "secret";
-    const unregisterA = registerTarget({
-      path: "/hook-replay-scope-a",
-      secret: sharedSecret,
-      statusSink: sinkA,
-    });
-    const unregisterB = registerTarget({
-      path: "/hook-replay-scope-b",
-      secret: sharedSecret,
-      statusSink: sinkB,
-    });
-    const payload = createTextUpdate({
-      messageId: "msg-replay-cross-path-1",
-      userId: "123",
-      userName: "",
-      chatId: "123",
-      text: "hello",
-    });
-
-    try {
-      await withServer(webhookRequestHandler, async (baseUrl) => {
-        await expectTwoWebhookPostsOk({
-          baseUrl,
-          first: { path: "/hook-replay-scope-a", secret: sharedSecret, payload },
-          second: { path: "/hook-replay-scope-b", secret: sharedSecret, payload },
-        });
-      });
-
-      expect(sinkA).toHaveBeenCalledTimes(1);
-      expect(sinkB).toHaveBeenCalledTimes(1);
-    } finally {
-      unregisterA();
-      unregisterB();
     }
   });
 

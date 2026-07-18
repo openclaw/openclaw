@@ -7,6 +7,7 @@ import {
 import { expect, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
+import { openLifecycleIngressQueueForTest } from "./monitor-mocks-test-support.js";
 
 function resolveLifecycleAllowFrom(params: {
   dmPolicy: "open" | "pairing";
@@ -199,6 +200,10 @@ export function createImageLifecycleCore() {
       shouldLogVerbose: vi.fn(
         () => false,
       ) as unknown as PluginRuntime["logging"]["shouldLogVerbose"],
+    },
+    state: {
+      openChannelIngressQueue:
+        openLifecycleIngressQueueForTest as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
     },
     channel: {
       pairing: {

@@ -40,6 +40,11 @@ import {
   prepareZaloDurableReplyPayload,
   resolveZaloDurableReplyOptions,
 } from "./monitor-durable.js";
+import {
+  createZaloIngressSpool,
+  type ZaloIngressSpool,
+  type ZaloIngressTurnLifecycle,
+} from "./monitor-ingress.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -93,9 +98,11 @@ type ZaloProcessingContext = {
 type ZaloPollingLoopParams = ZaloProcessingContext & {
   abortSignal: AbortSignal;
   isStopped: () => boolean;
+  ingress: ZaloIngressSpool;
 };
 type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
+  turnAdoptionLifecycle?: ZaloIngressTurnLifecycle;
 };
 const hostedMediaRouteRefs = new Map<string, { count: number; unregisters: Array<() => void> }>();
 
@@ -164,9 +171,11 @@ type ZaloMessagePipelineParams = ZaloProcessingContext & {
   mediaPath?: string;
   mediaType?: string;
   authorization?: ZaloMessageAuthorizationResult;
+  turnAdoptionLifecycle?: ZaloIngressTurnLifecycle;
 };
 type ZaloImageMessageParams = ZaloProcessingContext & {
   message: ZaloMessage;
+  turnAdoptionLifecycle?: ZaloIngressTurnLifecycle;
 };
 type ZaloMessageAuthorizationResult = {
   chatId: string;
@@ -210,54 +219,12 @@ async function handleZaloWebhookRequest(
 ): Promise<boolean> {
   const { handleZaloWebhookRequest: handleZaloWebhookRequestInternal } =
     await loadZaloWebhookModule();
-  return await handleZaloWebhookRequestInternal(req, res, async ({ update, target }) => {
-    await processUpdate({
-      update,
-      token: target.token,
-      account: target.account,
-      config: target.config,
-      runtime: target.runtime,
-      core: target.core as ZaloCoreRuntime,
-      mediaMaxMb: target.mediaMaxMb,
-      canHostMedia: target.canHostMedia,
-      webhookUrl: target.webhookUrl,
-      webhookPath: target.webhookPath,
-      statusSink: target.statusSink,
-      fetcher: target.fetcher,
-    });
-  });
+  return await handleZaloWebhookRequestInternal(req, res);
 }
 
 function startPollingLoop(params: ZaloPollingLoopParams) {
-  const {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    abortSignal,
-    isStopped,
-    statusSink,
-    fetcher,
-  } = params;
+  const { token, account, runtime, abortSignal, isStopped, statusSink, fetcher, ingress } = params;
   const pollTimeout = 30;
-  const processingContext = {
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    mediaMaxMb,
-    canHostMedia,
-    webhookUrl,
-    webhookPath,
-    statusSink,
-    fetcher,
-  };
 
   runtime.log?.(`[${account.accountId}] Zalo polling loop started timeout=${String(pollTimeout)}s`);
 
@@ -273,11 +240,14 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
-        await processUpdate({
-          update: response.result,
-          ...processingContext,
-        });
+        // The Bot API consumes each polled update on response (there is no offset or
+        // confirm parameter), so journal durably before dispatch: an unjournaled
+        // update is permanently lost if the process dies before dispatch completes.
+        await ingress.enqueue(response.result);
       }
+      // Pump every cycle so released retries drain even when this poll returned nothing.
+      await ingress.drainOnce();
+      await ingress.waitForIdle();
     } catch (err) {
       if (err instanceof ZaloApiError && err.isPollingTimeout) {
         // no updates
@@ -299,7 +269,18 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 }
 
 async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> {
-  const { update, token, account, config, runtime, core, mediaMaxMb, statusSink, fetcher } = params;
+  const {
+    update,
+    token,
+    account,
+    config,
+    runtime,
+    core,
+    mediaMaxMb,
+    statusSink,
+    fetcher,
+    turnAdoptionLifecycle,
+  } = params;
   const { event_name, message } = update;
   const sharedContext = {
     token,
@@ -313,6 +294,7 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
     webhookPath: params.webhookPath,
     statusSink,
     fetcher,
+    turnAdoptionLifecycle,
   };
   if (!message) {
     return undefined;
@@ -346,7 +328,10 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
 }
 
 async function handleTextMessage(
-  params: ZaloProcessingContext & { message: ZaloMessage },
+  params: ZaloProcessingContext & {
+    message: ZaloMessage;
+    turnAdoptionLifecycle?: ZaloIngressTurnLifecycle;
+  },
 ): Promise<void> {
   const { message } = params;
   const { text } = message;
@@ -680,6 +665,9 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     accountId: account.accountId,
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
     delivery: {
       preparePayload: (payload) =>
         prepareZaloDurableReplyPayload({
@@ -842,6 +830,29 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   const stopHandlers: Array<() => void> = [];
   let cleanupWebhook: (() => Promise<void>) | undefined;
 
+  const ingress = createZaloIngressSpool({
+    accountId: account.accountId,
+    abortSignal,
+    onLog: (message) => runtime.error?.(`[${account.accountId}] ${message}`),
+    dispatch: async (update, turnAdoptionLifecycle) => {
+      await processUpdate({
+        update,
+        token,
+        account,
+        config,
+        runtime,
+        core,
+        mediaMaxMb: effectiveMediaMaxMb,
+        canHostMedia,
+        webhookUrl: effectiveWebhookUrl,
+        webhookPath: effectiveWebhookPath,
+        statusSink,
+        fetcher,
+        turnAdoptionLifecycle,
+      });
+    },
+  });
+
   const stop = () => {
     if (stopped) {
       return;
@@ -864,6 +875,9 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   );
 
   try {
+    // Replay updates journaled before a previous crash or shutdown before new inbound work.
+    await ingress.drainOnce();
+
     if (hostedMediaRoutePath) {
       const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
         path: hostedMediaRoutePath,
@@ -930,6 +944,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
           mediaMaxMb: effectiveMediaMaxMb,
           canHostMedia,
           fetcher,
+          ingress,
         },
         {
           route: {
@@ -1000,6 +1015,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       mediaMaxMb: effectiveMediaMaxMb,
       statusSink,
       fetcher,
+      ingress,
     });
 
     await waitForAbortSignal(abortSignal);
@@ -1012,6 +1028,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     abortSignal.removeEventListener("abort", stopOnAbort);
     await cleanupWebhook?.();
     stop();
+    // Dispose leaves undispatched claims for the next start to recover and replay.
+    ingress.dispose();
     runtime.log?.(`[${account.accountId}] Zalo provider stopped mode=${mode}`);
   }
 }

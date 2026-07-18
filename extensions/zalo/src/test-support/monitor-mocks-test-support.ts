@@ -1,13 +1,17 @@
 // Zalo plugin module implements monitor mocks test support behavior.
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi, type Mock } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type MonitorModule = typeof import("../monitor.js");
@@ -110,6 +114,18 @@ export async function resetLifecycleTestState() {
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 
+/** Fresh SQLite state per queue open keeps journaled updates isolated per test run. */
+export function openLifecycleIngressQueueForTest(options?: {
+  accountId?: string;
+  stateDir?: string;
+}) {
+  return createChannelIngressQueueForTests({
+    channelId: "zalo",
+    stateDir: mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-test-ingress-")),
+    ...options,
+  });
+}
+
 export function setLifecycleRuntimeCore(
   channel: NonNullable<NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["channel"]>,
   state?: NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["state"],
@@ -117,7 +133,11 @@ export function setLifecycleRuntimeCore(
   getZaloRuntimeMock.mockReturnValue(
     createPluginRuntimeMock({
       channel,
-      ...(state ? { state } : {}),
+      state: {
+        openChannelIngressQueue:
+          openLifecycleIngressQueueForTest as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
+        ...state,
+      },
     }),
   );
 }
