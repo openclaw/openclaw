@@ -756,7 +756,9 @@ async function prepareCronRunContext(params: {
   }
 
   const resolvedModelSelection = await resolveCronModelSelection({
-    cfg: input.cfg,
+    // Authorization needs the unflattened active config so inherited policy
+    // aliases cannot be rebound by the selected agent's metadata aliases.
+    cfg: runtimeCfg,
     cfgWithAgentDefaults,
     agentConfigOverride,
     sessionEntry: cronSession.sessionEntry,

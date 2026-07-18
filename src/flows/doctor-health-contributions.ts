@@ -815,7 +815,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   const warnings: string[] = [];
   if (!status.allowed) {
     warnings.push(
-      `- hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+      `- hooks.gmail.model "${status.key}" not allowed by agents.defaults.modelPolicy.allow (will use primary instead)`,
     );
   }
   if (!status.inCatalog) {

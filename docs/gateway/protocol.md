@@ -864,11 +864,11 @@ context.
 `models.list` accepts an optional `view` parameter
 (`src/agents/model-catalog-visibility.ts`):
 
-- Omitted or `"default"`: if `agents.defaults.models` is configured, the
+- Omitted or `"default"`: if `agents.defaults.modelPolicy.allow` is configured, the
   response is the allowed catalog, including dynamically discovered models
   for `provider/*` entries. Otherwise the response is the full gateway
   catalog.
-- `"configured"`: picker-sized behavior. If `agents.defaults.models` is
+- `"configured"`: picker-sized behavior. If `agents.defaults.modelPolicy.allow` is
   configured, it still wins, including provider-scoped discovery for
   `provider/*` entries. Without an allowlist, the response uses explicit
   `models.providers.<provider>.models` entries, falling back to the full
@@ -877,7 +877,7 @@ context.
   independent of picker allowlists. Rows include public model capabilities and
   route-aware availability, but omit provider endpoints, auth material, and
   runtime request configuration.
-- `"all"`: full gateway catalog, bypassing `agents.defaults.models`. Use for
+- `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
 ## Exec approvals
