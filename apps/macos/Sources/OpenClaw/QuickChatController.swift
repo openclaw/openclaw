@@ -141,7 +141,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         self.allowsHotkeyRegistrationInTests = allowsHotkeyRegistrationInTests
         super.init()
         self.model.onSendDispatched = { [weak self] route in
-            self?.replyBinding.prepare(route: route)
+            guard let self else { return }
+            // A dispatched send supersedes any pending recents fetch: its menu popping
+            // over the fresh reply would rebind away from the response just sent.
+            self.recentSessionsRequestID = UUID()
+            self.replyBinding.prepare(route: route)
         }
     }
 
@@ -448,6 +452,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         }
         let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
+        // Competing interaction: invalidate any in-flight recents fetch before blocking.
+        self.recentSessionsRequestID = UUID()
         menu.popUp(positioning: nil, at: contentPoint, in: contentView)
     }
 
@@ -534,6 +540,8 @@ final class QuickChatController: NSObject, NSWindowDelegate {
                 })
         }
         guard let windowPicker = self.windowPicker else { return }
+        // Competing interaction: a recents menu must not pop over the picker overlays.
+        self.recentSessionsRequestID = UUID()
         Task { await windowPicker.begin() }
     }
 
