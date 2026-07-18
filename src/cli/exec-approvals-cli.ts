@@ -1,5 +1,5 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
-import fs from "node:fs/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -799,7 +799,14 @@ export function registerExecApprovalsCli(program: Command) {
         }
         const { source, nodeId, targetLabel, baseHash, kind } =
           await loadWritableSnapshotTarget(opts);
-        const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
+        const raw = opts.stdin
+          ? await readStdin()
+          : (
+              await readRegularFile({
+                filePath: String(opts.file),
+                maxBytes: EXEC_APPROVALS_STDIN_MAX_BYTES,
+              })
+            ).buffer.toString("utf8");
         let input: unknown;
         try {
           input = JSON5.parse(raw);
