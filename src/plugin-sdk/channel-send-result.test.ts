@@ -113,7 +113,7 @@ describe("createAttachedChannelResultAdapter", () => {
 });
 
 describe("createRawChannelSendResultAdapter", () => {
-  it("normalizes raw send results through adapter methods", async () => {
+  it("normalizes successes and rejects provider failures", async () => {
     const adapter = createRawChannelSendResultAdapter({
       channel: "zalo",
       sendText: async () => ({ ok: true, messageId: "m1" }),
@@ -128,6 +128,17 @@ describe("createRawChannelSendResultAdapter", () => {
     });
     await expect(adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" })).rejects.toThrow(
       "boom",
+    );
+  });
+
+  it("uses a channel-specific error when a failed result has no message", async () => {
+    const adapter = createRawChannelSendResultAdapter({
+      channel: "legacy-test",
+      sendText: async () => ({ ok: false }),
+    });
+
+    await expect(adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" })).rejects.toThrow(
+      "Channel send failed for legacy-test",
     );
   });
 });
