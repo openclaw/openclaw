@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { getExistingSubscription } from "./web-push.runtime.ts";
 
 const originalServiceWorkerDescriptor = Object.getOwnPropertyDescriptor(
@@ -46,9 +45,7 @@ describe("web push service worker readiness", () => {
     installServiceWorkerReady(new Promise<ServiceWorkerRegistration>(() => {}));
 
     const subscription = getExistingSubscription();
-    const rejection = expect(subscription).rejects.toThrow(
-      "Service worker not ready (timed out)",
-    );
+    const rejection = expect(subscription).rejects.toThrow("Service worker not ready (timed out)");
     await vi.advanceTimersByTimeAsync(10_000);
 
     await rejection;
