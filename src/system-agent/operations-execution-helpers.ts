@@ -8,6 +8,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
+  SYSTEM_AGENT_CONFIG_WRITE_DENYLIST,
+  classifyInferenceRouteConfigPath,
+  type InferenceRoutePathVerdict,
+} from "./config-write-policy.js";
+import {
   projectDefaultInferenceRoute,
   projectInferenceRoute,
   sameDefaultInferenceRoute,
@@ -314,70 +319,6 @@ export async function runConfigSetOperation(params: {
   });
 }
 
-/**
- * Config roots the system agent must never write directly, with the operator
- * escalation for each. These stay human-only regardless of approval:
- * credential material, alternate-config inclusion, and provider/catalog
- * definitions that feed inference routing (which has the verified
- * `set_default_model` path instead). Everything else in the schema is
- * agent-writable behind the exact-operation human approval gate — the
- * config-write-parity contract test enforces that classification.
- */
-export const SYSTEM_AGENT_CONFIG_WRITE_DENYLIST: Readonly<Record<string, string>> = {
-  $include: "alternate-config inclusion; edit openclaw.json in a trusted shell",
-  auth: "provider auth; exit OpenClaw and run `openclaw onboard`",
-  env: "environment/credential injection; edit openclaw.json in a trusted shell",
-  models:
-    "provider/catalog definitions feed routing; use `set_default_model` or `openclaw onboard`",
-  secrets: "secret providers; edit openclaw.json in a trusted shell",
-};
-
-export type InferenceRoutePathVerdict = "allowed" | "blocked" | "agent-route" | "plugin-entry";
-
-export function classifyInferenceRouteConfigPath(
-  path: readonly string[],
-): InferenceRoutePathVerdict {
-  const segments = path.map((segment) => segment.trim().toLowerCase()).filter(Boolean);
-  const [root, scope, ownerOrField, field] = segments;
-  if (root && root in SYSTEM_AGENT_CONFIG_WRITE_DENYLIST) {
-    return "blocked";
-  }
-  // Plugin enable/disable/config of installed plugins is an operator toggle;
-  // install sources and load policy keep their trust boundary in
-  // plugin_install (`plugins.entries.*` only). The caller still verifies the
-  // entry does not back the active inference route, mirroring plugin_uninstall.
-  if (root === "plugins") {
-    return scope === "entries" && ownerOrField ? "plugin-entry" : "blocked";
-  }
-  if (root !== "agents") {
-    return "allowed";
-  }
-  if (!scope || (scope === "defaults" && !ownerOrField) || (scope === "list" && !ownerOrField)) {
-    return "blocked";
-  }
-  if (scope === "defaults") {
-    return ["agentruntime", "clibackends", "model", "models", "params"].includes(ownerOrField ?? "")
-      ? "blocked"
-      : "allowed";
-  }
-  if (scope !== "list") {
-    return "allowed";
-  }
-  if (/^\d+$/.test(ownerOrField ?? "") && !field) {
-    return "blocked";
-  }
-  const routeField = /^\d+$/.test(ownerOrField ?? "") ? field : ownerOrField;
-  // Identity/topology fields stay blocked for every agent; routing fields are
-  // blocked only when the entry backs the default (system) inference route —
-  // the caller resolves that from the config, since a path cannot tell.
-  if (["agentdir", "default", "id"].includes(routeField ?? "")) {
-    return "blocked";
-  }
-  return ["agentruntime", "clibackends", "model", "models", "params"].includes(routeField ?? "")
-    ? "agent-route"
-    : "allowed";
-}
-
 async function isDefaultAgentListPath(segments: readonly string[]): Promise<boolean> {
   const listIndexSegment = segments
     .map((segment) => segment.trim().toLowerCase())
@@ -407,7 +348,7 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
 ): Promise<void> {
   const { parseConfigSetPath } = await import("../cli/config-cli.js");
   const segments = parseConfigSetPath(operation.path);
-  const verdict = classifyInferenceRouteConfigPath(segments);
+  const verdict: InferenceRoutePathVerdict = classifyInferenceRouteConfigPath(segments);
   if (verdict === "allowed") {
     return;
   }
@@ -428,8 +369,12 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
       `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Exit OpenClaw and edit it from a terminal.`,
     );
   }
+  const deniedRoot = segments[0]?.trim().toLowerCase() ?? "";
+  const denialReason = SYSTEM_AGENT_CONFIG_WRITE_DENYLIST[deniedRoot];
   throw new Error(
-    "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
+    denialReason
+      ? `Direct config writes cannot change \`${deniedRoot}\` (${denialReason}).`
+      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
   );
 }
 

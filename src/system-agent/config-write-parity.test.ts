@@ -7,7 +7,7 @@ import { OpenClawSchemaShape } from "../config/zod-schema.root-shape.js";
 import {
   SYSTEM_AGENT_CONFIG_WRITE_DENYLIST,
   classifyInferenceRouteConfigPath,
-} from "./operations-execution-helpers.js";
+} from "./config-write-policy.js";
 
 // Roots with a partial policy: some subpaths are agent-writable, the rest are
 // blocked. Their fine-grained rules are asserted individually below.
