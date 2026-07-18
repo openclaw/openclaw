@@ -100,7 +100,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
     func upsert(_ record: PortGuardian.Record) throws -> PortGuardian.Record {
         try Self.validate(record)
         return try self.mapDatabaseError {
-            try self.database.withImmediateTransaction {
+            try self.withValidatedMutationTransaction {
                 try self.upsertUnlocked(record)
                 guard try self.readRecord(pid: record.pid) == record else {
                     throw PortGuardianStoreError("SQLite did not preserve the PortGuardian record receipt")
@@ -119,7 +119,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
     func deleteIfMatches(_ records: [PortGuardian.Record]) throws -> [PortGuardian.Record] {
         try records.forEach(Self.validate)
         return try self.mapDatabaseError {
-            try self.database.withImmediateTransaction {
+            try self.withValidatedMutationTransaction {
                 var deleted: [PortGuardian.Record] = []
                 for record in records where try self.deleteIfMatchesUnlocked(record) {
                     deleted.append(record)
@@ -226,7 +226,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
 
     private func applyLegacyMigration(_ plans: [LegacyMigrationPlan]) throws {
         try self.mapDatabaseError {
-            try self.database.withImmediateTransaction {
+            try self.withValidatedMutationTransaction {
                 for plan in plans {
                     let authoritative = try self.readRecord(pid: plan.legacy.pid)
                     guard authoritative == plan.expected else {
@@ -254,6 +254,17 @@ final class PortGuardianRecordStore: @unchecked Sendable {
                     }
                 }
             }
+        }
+    }
+
+    /// A store can outlive another runtime's schema upgrade. Revalidate under the
+    /// write lock so an older native client never mutates a newer database contract.
+    private func withValidatedMutationTransaction<T>(_ body: () throws -> T) throws -> T {
+        try self.database.withImmediateTransaction {
+            try self.database.ensureCanonicalTable(
+                .macosPortGuardianRecords,
+                allowVersionZeroCreation: false)
+            return try body()
         }
     }
 

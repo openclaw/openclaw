@@ -562,6 +562,34 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
+    func `retained store rejects mutations after schema advances`() throws {
+        let fixture = try Self.fixture()
+        defer { fixture.cleanup() }
+        let store = try PortGuardianRecordStore(
+            databaseURL: fixture.databaseURL,
+            legacyLockURL: fixture.lockURL)
+        let existing = Self.record(pid: 4242, port: 18789, timestamp: 42)
+        try store.upsert(existing)
+        try JSONEncoder().encode([existing]).write(to: fixture.legacyURL, options: [.atomic])
+
+        try Self.execute(fixture.databaseURL, "PRAGMA user_version = 5")
+
+        #expect(throws: PortGuardianStoreError.self) {
+            try store.upsert(Self.record(pid: 4243, port: 18790, timestamp: 43))
+        }
+        #expect(throws: PortGuardianStoreError.self) {
+            try store.deleteIfMatches(existing)
+        }
+        #expect(throws: PortGuardianStoreError.self) {
+            try store.migrateLegacyRecords(recordURL: fixture.legacyURL)
+        }
+        #expect(FileManager.default.fileExists(atPath: fixture.legacyURL.path))
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT COUNT(*) FROM macos_port_guardian_records") == 1)
+    }
+
+    @Test
     func `legacy compatibility lock rejects symbolic links`() throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
