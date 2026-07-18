@@ -242,9 +242,7 @@ internal class ChatComposerStateStore(
 
   fun cancelMediaImport(importId: Long) = synchronized(lock) { attachmentStore.cancelImport(importId) }
 
-  fun clearAttachmentOmission(owner: ChatComposerOwner) = synchronized(lock) {
-    attachmentNoticesState.value = attachmentNoticesState.value - owner
-  }
+  fun clearAttachmentOmission(owner: ChatComposerOwner) = synchronized(lock) { attachmentNoticesState.value = attachmentNoticesState.value - owner }
 
   fun reportImageOmission(
     owner: ChatComposerOwner,
