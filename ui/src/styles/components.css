@@ -1181,7 +1181,6 @@
   margin: 0;
   width: 16px;
   height: 16px;
-  accent-color: var(--accent);
 }
 
 .form-grid {
@@ -2370,7 +2369,6 @@ td.data-table-checkbox-col {
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--accent);
   vertical-align: middle;
 }
 
@@ -2492,7 +2490,6 @@ td.data-table-key-col {
 }
 
 .field-inline.checkbox input[type="checkbox"] {
-  accent-color: var(--accent);
 }
 
 /* ===========================================
@@ -4818,7 +4815,6 @@ td.data-table-key-col {
 
 .device-pair-setup__access input {
   margin-top: 2px;
-  accent-color: var(--accent);
 }
 
 .device-pair-setup__access span {
