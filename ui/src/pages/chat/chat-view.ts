@@ -112,6 +112,8 @@ export type ChatProps = {
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
+  disabledActionLabel?: string | null;
+  onDisabledAction?: (() => void) | null;
   error: string | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
@@ -197,6 +199,8 @@ export type ChatProps = {
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
+  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+  onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;
   backgroundTasks?: BackgroundTasksProps;
   taskSuggestions?: TaskSuggestion[];
@@ -216,6 +220,28 @@ export type ChatProps = {
 export function resetChatViewState(paneId?: string) {
   resetChatComposerState(paneId);
   resetChatThreadPresentationState(paneId);
+}
+
+export function renderChatResizableDivider(props: {
+  className?: string;
+  label: string;
+  maxRatio?: number;
+  minRatio?: number;
+  onElement?: (element: Element | undefined) => void;
+  onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
+  orientation: "horizontal" | "vertical";
+  splitRatio: number;
+}) {
+  return html`<resizable-divider
+    ${ref(props.onElement ?? (() => {}))}
+    class=${props.className ?? nothing}
+    .splitRatio=${props.splitRatio}
+    .minRatio=${props.minRatio ?? 0.4}
+    .maxRatio=${props.maxRatio ?? 0.7}
+    .label=${props.label}
+    .orientation=${props.orientation}
+    @resize=${props.onResize}
+  ></resizable-divider>`;
 }
 
 export function renderChat(props: ChatProps) {
@@ -310,6 +336,8 @@ export function renderChat(props: ChatProps) {
       getDraft: props.getDraft,
       onSend: props.onSend,
       onSetReply: props.onSetReply,
+      onRewindMessage: props.onRewindMessage,
+      onForkMessage: props.onForkMessage,
       // Archived/non-composable sessions must not offer selection actions:
       // withholding the callback keeps the popup from rendering at all.
       onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
@@ -330,6 +358,8 @@ export function renderChat(props: ChatProps) {
     connected: props.connected,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
+    disabledActionLabel: props.disabledActionLabel,
+    onDisabledAction: props.onDisabledAction,
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
@@ -443,7 +473,6 @@ export function renderChat(props: ChatProps) {
         }
       }}
     >
-      ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error
         ? html`
             <div class="callout danger callout--dismissible" role="alert">
@@ -563,14 +592,12 @@ export function renderChat(props: ChatProps) {
             </div>
 
             ${sidebarOpen
-              ? html`
-                  <resizable-divider
-                    .splitRatio=${splitRatio}
-                    .label=${t("nav.resize")}
-                    .orientation=${sidebarStacked ? "horizontal" : "vertical"}
-                    @resize=${(event: CustomEvent) =>
-                      props.onSplitRatioChange?.(event.detail.splitRatio)}
-                  ></resizable-divider>
+              ? html`${renderChatResizableDivider({
+                    label: t("nav.resize"),
+                    orientation: sidebarStacked ? "horizontal" : "vertical",
+                    splitRatio,
+                    onResize: (event) => props.onSplitRatioChange?.(event.detail.splitRatio),
+                  })}
                   <openclaw-chat-detail-panel
                     class="chat-sidebar"
                     .content=${props.sidebarContent ?? null}
@@ -581,8 +608,7 @@ export function renderChat(props: ChatProps) {
                     .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
                     .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
-                  ></openclaw-chat-detail-panel>
-                `
+                  ></openclaw-chat-detail-panel> `
               : nothing}
           </div>
         </div>

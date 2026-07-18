@@ -74,6 +74,7 @@ import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
   errorBackoffMs,
+  hasActiveCronRun,
   hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
@@ -1824,7 +1825,7 @@ function isRunnableJob(params: {
   if (params.skipJobIds?.has(job.id)) {
     return false;
   }
-  if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
+  if (hasActiveCronRun(job)) {
     return false;
   }
   const lastRunStatus = resolveJobLastRunStatus(job);

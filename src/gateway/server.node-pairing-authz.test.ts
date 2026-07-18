@@ -210,7 +210,7 @@ async function expectRpcNodePairingApprovalRejected(params: {
     await connectOk(ws, {
       token: "secret",
       scopes: params.operatorScopes,
-      deviceIdentityPath: `${await makeNodePairingStateDir()}/${params.operatorName}.json`,
+      deviceIdentityPath: `${await makeNodePairingStateDir()}/${params.operatorName}.sqlite`,
     });
     await seedNodeDevice(params.nodeId);
     const request = await requestNodePairing({
@@ -734,7 +734,7 @@ describe("gateway node pairing authorization", () => {
         await connectOk(ws, {
           token: "secret",
           scopes: ["operator.read"],
-          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only.json`,
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only.sqlite`,
         });
 
         type NodeDiagnostics = {

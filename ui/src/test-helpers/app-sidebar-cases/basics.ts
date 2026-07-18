@@ -12,7 +12,7 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar update card wiring", () => {
-  it("shows OpenClaw in the default pinned routes", async () => {
+  it("shows OpenClaw in the default sidebar entries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
@@ -73,6 +73,21 @@ describe("AppSidebar brand actions", () => {
 
     button?.click();
     expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+  });
+
+  it("opens the archived Sessions view from the sessions-zone footer", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:work"]),
+    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-view-archived")?.click();
+
+    expect(onNavigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
   });
 });
 
@@ -246,7 +261,7 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults,
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5 }],
+        sessions: [{ key: "agent:main:main", kind: "direct", label: "Main task", updatedAt: 5 }],
       },
       agentId: "main",
     });
@@ -254,6 +269,9 @@ describe("AppSidebar agent chip", () => {
 
     // No per-agent sections: the card switcher owns agent switching now, and
     // the main session lives behind the identity card instead of the list.
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
+      "Main task",
+    );
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
     expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull();

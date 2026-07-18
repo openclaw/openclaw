@@ -88,6 +88,8 @@ type ChatComposerProps = {
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
+  disabledActionLabel?: string | null;
+  onDisabledAction?: (() => void) | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
@@ -1833,7 +1835,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                       : t("chat.composer.turnCameraOn")}
                     aria-pressed=${props.voiceVideoEnabled ? "true" : "false"}
                   >
-                    ${icons.camera}
+                    ${props.voiceVideoEnabled ? icons.cameraOff : icons.camera}
                     <span class="agent-chat__control-label"
                       >${props.voiceVideoEnabled
                         ? t("chat.composer.turnCameraOff")
@@ -2407,6 +2409,20 @@ export function renderChatComposer(props: ChatComposerProps) {
                     }
                   })}
                 ></video>
+              </div>
+            `
+          : nothing}
+        ${props.disabledReason
+          ? html`
+              <div class="agent-chat__disabled-reason">
+                <span>${props.disabledReason}</span>
+                ${props.disabledActionLabel && props.onDisabledAction
+                  ? html`
+                      <button type="button" class="btn btn--xs" @click=${props.onDisabledAction}>
+                        ${props.disabledActionLabel}
+                      </button>
+                    `
+                  : nothing}
               </div>
             `
           : nothing}

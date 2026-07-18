@@ -1828,6 +1828,14 @@ async function drainStoredChatOutbox(
               sendResetSlashCommand(host, message, resetOpts),
           },
         );
+        if (dispatchResult === "deferred") {
+          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+            ...entry,
+            sendError: undefined,
+            sendState: "waiting-idle",
+          }));
+          return "blocked";
+        }
         if (dispatchResult === "failed") {
           const commandStillCurrent = commandScopeIsCurrent();
           const error =
@@ -2322,7 +2330,10 @@ export async function handleSendChat(
         if (dispatchResult === "failed") {
           opts?.onLocalCommandSendRejected?.();
         }
-        if (dispatchResult === "failed" && messageOverride == null) {
+        if (
+          (dispatchResult === "failed" || dispatchResult === "cancelled") &&
+          messageOverride == null
+        ) {
           const restorePlan = pendingComposerRestorePlan(host, {
             previousAttachments: attachmentsToSend,
             previousDraft,

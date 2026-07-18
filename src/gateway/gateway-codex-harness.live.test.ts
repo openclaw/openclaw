@@ -802,7 +802,11 @@ function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
   if (!combined) {
     return "<none>";
   }
-  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+  const half = Math.floor(maxChars / 2);
+  return `${combined.slice(0, half)}\n...\n${combined.slice(-half)}`;
 }
 
 async function readCodexHarnessCompactionCount(params: {
@@ -852,30 +856,69 @@ async function verifyCodexCompactionStress(params: {
   let completedCompactions = 0;
   let reportedCompactions = 0;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
-    const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-${randomBytes(3)
-      .toString("hex")
-      .toUpperCase()}`;
+    const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
+    const largeOutputCommand = `node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`;
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
-      eventPrefixes: ["codex_app_server.", "compaction"],
+      eventPrefixes: ["codex_app_server.", "compaction", "tool"],
       sessionKey: params.sessionKey,
       message: [
         "Large-output compaction probe.",
         "Use the native exec_command tool exactly once.",
-        `Run this exact command: node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`,
+        `Run this exact command: ${largeOutputCommand}`,
         "Set max_output_tokens to 10000.",
         `After the tool completes, reply exactly ${acknowledgement} and nothing else.`,
       ].join("\n"),
     });
     expect(text).toContain(acknowledgement);
     recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
-    completedCompactions += events.filter(
+    const turnCompletedCompactions = events.filter(
       (event) =>
         event.stream === "compaction" &&
         event.data?.phase === "end" &&
         event.data?.completed === true,
     ).length;
+    completedCompactions += turnCompletedCompactions;
     reportedCompactions += compactionCount;
+    const commandStartIndex = events.findIndex((event) => {
+      if (
+        event.stream !== "tool" ||
+        event.data?.phase !== "start" ||
+        event.data?.name !== "bash" ||
+        !event.data?.args ||
+        typeof event.data.args !== "object"
+      ) {
+        return false;
+      }
+      const command = (event.data.args as { command?: unknown }).command;
+      // Codex may preserve the command text or wrap it in a login shell.
+      return (
+        typeof command === "string" &&
+        command.includes("node -e") &&
+        command.includes(`i<${outputLines}`) &&
+        command.includes("2654435761") &&
+        command.includes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+      );
+    });
+    const commandItemId = events[commandStartIndex]?.data?.itemId;
+    const commandResultIndex = events.findIndex((event, index) => {
+      const result = event.data?.result;
+      return (
+        index > commandStartIndex &&
+        event.stream === "tool" &&
+        event.data?.phase === "result" &&
+        event.data?.itemId === commandItemId &&
+        event.data?.status === "completed" &&
+        event.data?.isError === false &&
+        result !== null &&
+        typeof result === "object" &&
+        (result as { exitCode?: unknown }).exitCode === 0
+      );
+    });
+    expect(
+      commandResultIndex,
+      `large-output turn did not successfully complete the exact native command; events=${JSON.stringify(events)}`,
+    ).toBeGreaterThan(commandStartIndex);
 
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
@@ -885,9 +928,18 @@ async function verifyCodexCompactionStress(params: {
     const originalLengths = Array.from(serialized.matchAll(/original (\d+) chars/gu), (match) =>
       Number(match[1]),
     );
+    const hasTruncatedToolResult = originalLengths.some((length) => length > 10_000);
+    const postCommandCompaction = events.some(
+      (event, index) =>
+        index > commandResultIndex &&
+        event.stream === "compaction" &&
+        event.data?.phase === "end" &&
+        event.data?.completed === true,
+    );
+    // Native compaction can replace the command row after the successful large-output result.
     expect(
-      originalLengths.some((length) => length > 10_000),
-      `expected a truncated large native tool result; lengths=${JSON.stringify(originalLengths)}`,
+      hasTruncatedToolResult || postCommandCompaction,
+      `expected a truncated large native tool result or its later native compaction; lengths=${JSON.stringify(originalLengths)}`,
     ).toBe(true);
   }
 
@@ -940,12 +992,9 @@ async function waitForAssistantText(params: {
       limit: 24,
     });
     const assistantTexts = extractAssistantTexts(history.messages ?? []);
-    const normalizedContains = params.contains.toUpperCase();
+    const normalizedContains = normalizeAssistantTokenText(params.contains);
     const matched = assistantTexts.find((text) =>
-      text
-        .toUpperCase()
-        .replace(/[^A-F0-9]/g, "")
-        .includes(normalizedContains),
+      normalizeAssistantTokenText(text).includes(normalizedContains),
     );
     if (matched) {
       return matched;
@@ -962,6 +1011,10 @@ async function waitForAssistantText(params: {
       extractAssistantTexts(finalHistory.messages ?? []),
     )}`,
   );
+}
+
+function normalizeAssistantTokenText(text: string): string {
+  return text.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 async function verifyCodexImageProbe(params: {
@@ -1033,7 +1086,7 @@ async function verifyCodexChatImageProbe(params: {
         {
           mimeType: "image/png",
           fileName: "codex-chat-image-probe.png",
-          content: renderBitmapTextPngBase64(token),
+          content: renderBitmapTextPngBase64(token, { scale: 12, padding: 24 }),
         },
       ],
       originatingChannel: "codex-harness-live",
@@ -1051,14 +1104,15 @@ async function verifyCodexChatImageProbe(params: {
     sessionKey: params.sessionKey,
     contains: token,
   });
-  const normalized = text.toUpperCase().replace(/[^A-F0-9]/g, "");
+  const normalized = normalizeAssistantTokenText(text);
   expect(normalized, `Expected Codex to read bitmap token ${token}; received:\n${text}`).toContain(
     token,
   );
 }
 
 function randomBitmapTextToken(length = 6): string {
-  const alphabet = "24567ACEF";
+  // Keep glyphs visually distinct so this checks image transport, not tiny-font OCR quality.
+  const alphabet = "247";
   return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
@@ -1747,7 +1801,13 @@ describeLive("gateway live (Codex harness)", () => {
 
             if (CODEX_HARNESS_CHAT_IMAGE_PROBE) {
               logCodexLiveStep("chat-image-probe:start", { sessionKey });
-              await verifyCodexChatImageProbe({ client: activeClient, sessionKey });
+              const unsubscribeChatImageDebugEvents =
+                await subscribeCodexLiveDebugEvents(sessionKey);
+              try {
+                await verifyCodexChatImageProbe({ client: activeClient, sessionKey });
+              } finally {
+                unsubscribeChatImageDebugEvents();
+              }
               logCodexLiveStep("chat-image-probe:done");
             }
 

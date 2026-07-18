@@ -5239,6 +5239,32 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("serves deterministic Matrix voice preflight transcription for the request prompt", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body:
+        '--qa\r\ncontent-disposition: form-data; name="file"; filename="audio.wav"\r\n\r\n' +
+        'fixture audio\r\n--qa\r\ncontent-disposition: form-data; name="prompt"\r\n\r\n' +
+        "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER\r\n--qa--\r\n",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      text: "C3PLQA reply with only these words Matrix QA voice pre-flight OK.",
+    });
+  });
+
   it("dispatches an Anthropic /v1/messages read tool call for source discovery prompts", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
