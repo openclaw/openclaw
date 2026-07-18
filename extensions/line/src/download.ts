@@ -1,6 +1,7 @@
 // Line plugin module implements download behavior.
 import { setTimeout as delay } from "node:timers/promises";
-import { MediaFetchError, saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaStream } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 
@@ -18,12 +19,60 @@ const CONTENT_READY_MAX_DELAY_MS = 4000;
 const CONTENT_READY_TIMEOUT_MS = 15_000;
 const LINE_CONTENT_BASE_URL = "https://api-data.line.me/v2/bot/message";
 
+class RetryableLineMediaFetchError extends MediaFetchError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("fetch_failed", message, options);
+    this.name = "RetryableLineMediaFetchError";
+  }
+}
+
 function contentBackoffDelayMs(attempt: number): number {
   return Math.min(CONTENT_READY_BASE_DELAY_MS * 2 ** attempt, CONTENT_READY_MAX_DELAY_MS);
 }
 
 function lineContentUrl(messageId: string): string {
   return `${LINE_CONTENT_BASE_URL}/${encodeURIComponent(messageId)}/content`;
+}
+
+async function* lineResponseBodyChunks(
+  response: Response,
+  messageId: string,
+): AsyncIterable<Uint8Array> {
+  const body = response.body;
+  if (!body) {
+    throw new RetryableLineMediaFetchError(
+      `LINE media response for message ${messageId} had no body`,
+    );
+  }
+  const reader = body.getReader();
+  let completed = false;
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        throw new RetryableLineMediaFetchError(
+          `LINE media response stream failed for message ${messageId}`,
+          { cause: err },
+        );
+      }
+      if (chunk.done) {
+        completed = true;
+        return;
+      }
+      if (chunk.value.byteLength > 0) {
+        yield chunk.value;
+      }
+    }
+  } finally {
+    if (!completed) {
+      await reader.cancel().catch(() => undefined);
+    }
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
 }
 
 async function fetchLineContentWhenReady(
@@ -42,8 +91,7 @@ async function fetchLineContentWhenReady(
       });
       if (response.status === 200) {
         if (!response.body) {
-          throw new MediaFetchError(
-            "fetch_failed",
+          throw new RetryableLineMediaFetchError(
             `LINE media response for message ${messageId} had no body`,
           );
         }
@@ -64,8 +112,7 @@ async function fetchLineContentWhenReady(
     }
   } catch (err) {
     if (controller.signal.aborted) {
-      throw new MediaFetchError(
-        "fetch_failed",
+      throw new RetryableLineMediaFetchError(
         `LINE media for message ${messageId} did not become ready within ${CONTENT_READY_TIMEOUT_MS / 1000} seconds`,
         { cause: err },
       );
@@ -73,11 +120,9 @@ async function fetchLineContentWhenReady(
     if (err instanceof MediaFetchError) {
       throw err;
     }
-    throw new MediaFetchError(
-      "fetch_failed",
-      `LINE media download failed for message ${messageId}`,
-      { cause: err },
-    );
+    throw new RetryableLineMediaFetchError(`LINE media download failed for message ${messageId}`, {
+      cause: err,
+    });
   } finally {
     clearTimeout(deadline);
   }
@@ -92,13 +137,13 @@ async function fetchLineContentWhenReady(
 // Retryable = a transient LINE content failure that a later attempt can resolve
 // (still-preparing 202, readiness-deadline abort, 408/429/5xx, network). The drain
 // retries the event when the download rejects before adoption; permanent failures
-// (missing/expired content, size limit) fall through to degrade.
+// (missing/expired content, size limit, local persistence) fall through to degrade.
 export function isRetryableLineInboundMediaError(err: unknown): boolean {
+  if (err instanceof RetryableLineMediaFetchError) {
+    return true;
+  }
   if (!(err instanceof MediaFetchError)) {
     return false;
-  }
-  if (err.code === "fetch_failed") {
-    return true;
   }
   if (err.code === "http_error") {
     return (
@@ -118,12 +163,19 @@ export async function downloadLineMedia(
   options?: { originalFilename?: string },
 ): Promise<DownloadResult> {
   const response = await fetchLineContentWhenReady(messageId, channelAccessToken);
-  const saved = await saveResponseMedia(response, {
-    sourceUrl: lineContentUrl(messageId),
-    subdir: "inbound",
-    maxBytes,
-    originalFilename: options?.originalFilename,
-  });
+  let saved: Awaited<ReturnType<typeof saveMediaStream>>;
+  try {
+    saved = await saveMediaStream(
+      lineResponseBodyChunks(response, messageId),
+      response.headers.get("content-type") ?? undefined,
+      "inbound",
+      maxBytes,
+      options?.originalFilename,
+    );
+  } catch (err) {
+    await response.body?.cancel().catch(() => undefined);
+    throw err;
+  }
   logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
 
   return {
