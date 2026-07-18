@@ -756,6 +756,7 @@ describe("opencode provider plugin", () => {
     });
     const gpt56LevelIds = gpt56Profile?.levels.map((level) => level.id) ?? [];
     expect(gpt56Profile?.defaultLevel).toBe("medium");
+    expect(gpt56LevelIds).not.toContain("minimal");
     expect(gpt56LevelIds).toContain("xhigh");
     expect(gpt56LevelIds).toContain("max");
   });

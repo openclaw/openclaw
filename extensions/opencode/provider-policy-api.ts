@@ -8,7 +8,6 @@ import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/provider-model
 const GPT_56_THINKING_PROFILE = {
   levels: [
     { id: "off" },
-    { id: "minimal" },
     { id: "low" },
     { id: "medium" },
     { id: "high" },

@@ -52,7 +52,6 @@ describe("opencode provider policy public artifact", () => {
     ).toEqual({
       levels: [
         { id: "off" },
-        { id: "minimal" },
         { id: "low" },
         { id: "medium" },
         { id: "high" },
