@@ -777,7 +777,9 @@ describe("memory embedding policy", () => {
           return "ok";
         },
         isRetryable: isRetryableMemoryEmbeddingError,
-        waitForRetry: async (d) => { waits.push(d); },
+        waitForRetry: async (d) => {
+          waits.push(d);
+        },
         maxAttempts: 3,
         baseDelayMs: 500,
         rateLimitBaseDelayMs: 10_000,
