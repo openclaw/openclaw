@@ -283,6 +283,8 @@ export const en: TranslationMap = {
       adminRequired: "Administrator access is required to create setup codes.",
       title: "OpenClaw mobile",
       subtitle: "Scan this QR code in the mobile app to connect a new phone.",
+      noApp: "Don't have the app yet?",
+      getApps: "Get the apps",
       generating: "Creating a secure setup code…",
       accessTitle: "Mobile access",
       fullAccess: "Full access (recommended)",

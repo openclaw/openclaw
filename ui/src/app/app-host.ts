@@ -1509,6 +1509,10 @@ class OpenClawShell extends OpenClawLightDomElement {
             context.overlays.closeDevicePairSetup();
             this.navigate("nodes");
           },
+          onGetApps: () => {
+            context.overlays.closeDevicePairSetup();
+            this.navigate("apps");
+          },
         })}
         ${onboarding && activeRoute !== "custodian"
           ? html`<openclaw-onboarding-memory-import
