@@ -1037,6 +1037,11 @@ export function getActiveSecretsRuntimeSnapshotRevision(): number {
   return activeSnapshotRevision;
 }
 
+/** Whether the active snapshot is the activation or a scoped descendant of one revision. */
+export function hasActiveSecretsRuntimeSnapshotLineage(revision: number): boolean {
+  return activeSnapshot !== null && activeSnapshotLineageStartRevision === revision;
+}
+
 /** Advance canonical source ownership without replacing resolved runtime or auth bytes. */
 export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
   expectedSecretsRevision: number;

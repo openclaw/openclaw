@@ -23,6 +23,7 @@ import { describeSecretResolutionError } from "./resolve-errors.js";
 import { resolveSecretRefValues } from "./resolve.js";
 import {
   associateSecretResolutionErrorOwners,
+  isRetryableSecretDegradationReason,
   type DegradedSecretOwner,
   type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
@@ -455,9 +456,25 @@ async function resolveSecretInputWithEnvFallback(params: {
       resolvedFromRef = normalizeSecretInput(resolvedValue);
     } catch (error) {
       const reason = describeSecretResolutionError(error);
-      if (!reason) {
+      if (!reason || !isRetryableSecretDegradationReason(reason)) {
         // Invalid provider config or resolved values are structural failures. They must fail
         // activation before publishing an owner degradation that could imply retryability.
+        if (reason) {
+          associateWebProviderResolutionError({
+            kind: params.kind,
+            config: params.sourceConfig,
+            error,
+            unavailableProviders: [
+              {
+                providerId: params.providerId,
+                path: params.path,
+                ref,
+                refKey: secretRefKey(ref),
+                reason,
+              },
+            ],
+          });
+        }
         throw error;
       }
       unresolvedRefReason = reason;

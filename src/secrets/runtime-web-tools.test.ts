@@ -1824,9 +1824,9 @@ describe("runtime web tools resolution", () => {
     ]);
   });
 
-  it("preserves a denied-provider reason without exposing its ref", async () => {
+  it("rejects denied providers instead of restoring stale web credentials", async () => {
     const refId = "FIRECRAWL_API_KEY";
-    const { degradedOwners } = await runRuntimeWebTools({
+    const error = await runRuntimeWebTools({
       config: asConfig({
         secrets: {
           providers: {
@@ -1848,17 +1848,18 @@ describe("runtime web tools resolution", () => {
       }),
       env: { [refId]: "fixture-api-key" },
       allowUnavailableSecretOwners: true,
-    });
+    }).catch((caught: unknown) => caught);
 
-    expect(degradedOwners).toMatchObject([
-      {
+    expect(error).toBeInstanceOf(Error);
+    expect(listSecretResolutionErrorOwners(error)).toEqual([
+      expect.objectContaining({
         ownerKind: "capability",
         ownerId: "web-fetch:firecrawl",
         reason: "secret provider policy denied resolution",
-      },
+        failureMatched: true,
+      }),
     ]);
-    expect(degradedOwners[0]?.reason).not.toContain(refId);
-    expect(degradedOwners[0]?.reason).not.toContain("fixture-api-key");
+    expect(String(error)).not.toContain("fixture-api-key");
   });
 
   it("resolves web fetch fallback SecretRefs with provider env var allowlist", async () => {

@@ -18,6 +18,7 @@ import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degrade
 import { activateProviderAuthRuntimeSnapshot } from "../secrets/runtime-provider-auth-activation.js";
 import {
   activateSecretsRuntimeSnapshotState,
+  activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
@@ -843,6 +844,120 @@ describe("gateway startup config secret preflight", () => {
     );
   });
 
+  it("publishes deferred degradation after a provider-auth descendant activation", async () => {
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const degraded = {
+      ...preparedSnapshot(initial.sourceConfig),
+      degradedOwners: [
+        {
+          ownerKind: "capability" as const,
+          ownerId: "tts",
+          state: "unavailable" as const,
+          degradationState: "cold" as const,
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason: "secret reference was not found" as const,
+        },
+      ],
+    };
+    const emitStateEvent = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        degraded,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, deferStatePublication: true },
+      ),
+    ).resolves.toBe(degraded);
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const descendant = structuredClone(degraded);
+
+    await expect(
+      activateProviderAuthRuntimeSnapshot({
+        snapshot: descendant,
+        expectedRevision: outerRevision,
+        activateSnapshotIfCurrent: () =>
+          activateSecretsRuntimeSnapshotStateIfCurrent({
+            snapshot: descendant,
+            expectedRevision: outerRevision,
+            refreshContext: null,
+            refreshHandler: null,
+            preserveActivationLineage: true,
+          }),
+      }),
+    ).resolves.toBe(true);
+    expect(emitStateEvent).not.toHaveBeenCalled();
+
+    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, degraded);
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
+  });
+
+  it("publishes deferred recovery after a provider-auth descendant activation", async () => {
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const degraded = {
+      ...preparedSnapshot(initial.sourceConfig),
+      degradedOwners: [
+        {
+          ownerKind: "capability" as const,
+          ownerId: "tts",
+          state: "unavailable" as const,
+          degradationState: "cold" as const,
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason: "secret reference was not found" as const,
+        },
+      ],
+    };
+    const recovered = preparedSnapshot(initial.sourceConfig);
+    const emitStateEvent = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    await activateRuntimeSecrets.activatePreparedSnapshot?.(degraded, {
+      reason: "reload",
+      activate: true,
+    });
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        recovered,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, deferStatePublication: true },
+      ),
+    ).resolves.toBe(recovered);
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const descendant = structuredClone(recovered);
+
+    await expect(
+      activateProviderAuthRuntimeSnapshot({
+        snapshot: descendant,
+        expectedRevision: outerRevision,
+        activateSnapshotIfCurrent: () =>
+          activateSecretsRuntimeSnapshotStateIfCurrent({
+            snapshot: descendant,
+            expectedRevision: outerRevision,
+            refreshContext: null,
+            refreshHandler: null,
+            preserveActivationLineage: true,
+          }),
+      }),
+    ).resolves.toBe(true);
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
+
+    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, recovered);
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+      "SECRETS_RELOADER_DEGRADED",
+      "SECRETS_RELOADER_RECOVERED",
+    ]);
+  });
+
   it("rejects a managed reload prepared before an OAuth credential mutation", async () => {
     const agentDir = "/tmp/openclaw-managed-auth-store-cas";
     const initial = preparedSnapshot(gatewayTokenConfig({}));
@@ -1242,7 +1357,7 @@ describe("gateway startup config secret preflight", () => {
   );
 
   it.each(["reload", "restart-check"] as const)(
-    "publishes the owner when a resolved secret value is invalid during %s",
+    "rejects invalid resolved values without publishing degradation during %s",
     async (reason) => {
       activateSecretsRuntimeSnapshotForTest(preparedSnapshot(gatewayTokenConfig({})));
       const invalidSecretError = new Error(
@@ -1280,24 +1395,8 @@ describe("gateway startup config secret preflight", () => {
         }),
       ).rejects.toThrow(invalidSecretError.message);
 
-      expect(logSecrets.warn).toHaveBeenCalledWith(
-        "[SECRETS_DEGRADED] stale capability:tts: resolved secret value was invalid. " +
-          "Retry: openclaw secrets reload.",
-        {
-          event: "secrets.degraded",
-          ownerKind: "capability",
-          ownerId: "tts",
-          reason: "resolved secret value was invalid",
-          state: "stale",
-          retryHint: "openclaw secrets reload",
-        },
-      );
-      expect(JSON.stringify(logSecrets.warn.mock.calls)).not.toContain("/private/value");
-      expect(emitStateEvent).toHaveBeenCalledWith(
-        "SECRETS_RELOADER_DEGRADED",
-        "Secret resolution failed; runtime remains on the last-known-good snapshot.",
-        expect.anything(),
-      );
+      expect(logSecrets.warn).not.toHaveBeenCalled();
+      expect(emitStateEvent).not.toHaveBeenCalled();
     },
   );
 

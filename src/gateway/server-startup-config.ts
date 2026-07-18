@@ -11,6 +11,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import {
   classifySecretResolutionErrorDegradations,
+  isRetryableSecretDegradationReason,
   listSecretResolutionErrorOwners,
   redactSecretDegradationReason,
   SECRET_DEGRADATION_RETRY_HINT,
@@ -23,6 +24,7 @@ import {
   graftActiveSecretsRuntimeAuthState,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
+  hasActiveSecretsRuntimeSnapshotLineage,
   hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
 } from "../secrets/runtime-state.js";
@@ -370,11 +372,14 @@ export function createRuntimeSecretsActivator(params: {
       (activationParams.activate || activationParams.publishFailureAsDegraded === true) &&
       (activationParams.canPublishFailureAsDegraded?.() ?? true);
     const degradations = classifySecretResolutionErrorDegradations(err);
+    const retryableDegradations = degradations.filter((degradation) =>
+      isRetryableSecretDegradationReason(degradation.reason),
+    );
     if (
-      degradations.length > 0 &&
+      retryableDegradations.length > 0 &&
       (activationParams.reason === "startup" || mayPublishReloadDegradation)
     ) {
-      for (const degradation of degradations) {
+      for (const degradation of retryableDegradations) {
         logSecretDegradation(params.logSecrets, degradation);
       }
       if (activationParams.reason !== "startup") {
@@ -605,7 +610,7 @@ export function createRuntimeSecretsActivator(params: {
       }
       return;
     }
-    if (transition.activationRevision !== getActiveSecretsRuntimeSnapshotRevision()) {
+    if (!hasActiveSecretsRuntimeSnapshotLineage(transition.activationRevision)) {
       return;
     }
     if (transition.kind === "degraded") {
