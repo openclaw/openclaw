@@ -165,7 +165,7 @@ function runtimeOutput(): string {
 function approvalDisplayId(id: string): string {
   // Mirrors the CLI: terminal-safe ids render raw; only unsafe ids get the
   // copyable id64 token.
-  return /^[A-Za-z0-9._:-]{1,128}$/.test(id)
+  return /^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127}$/.test(id)
     ? id
     : `id64_${Buffer.from(id).toString("base64url")}`;
 }

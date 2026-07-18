@@ -413,7 +413,9 @@ function escapeApprovalTextForTerminal(value: string): string {
 // stored verbatim, so hostile ids (ANSI escapes, controls) are possible. Show
 // the raw id when it is terminal-safe; wrap only unsafe ids in a copyable
 // token that `resolve` decodes.
-const APPROVAL_ID_TERMINAL_SAFE_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+// Leading hyphen excluded: a raw `-x`/`--flag` id could not be pasted into
+// `approvals resolve <id>` without Commander eating it as an option.
+const APPROVAL_ID_TERMINAL_SAFE_RE = /^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127}$/;
 
 function formatApprovalIdForTerminal(value: string): string {
   if (APPROVAL_ID_TERMINAL_SAFE_RE.test(value)) {
