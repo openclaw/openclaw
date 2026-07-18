@@ -469,10 +469,12 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above. Plugins can also
-subscribe to them directly without OTLP export. Event kinds are additive;
-TypeScript consumers should keep a default branch instead of assuming the
-`DiagnosticEventPayload` union is permanently exhaustive.
+The events below back the metrics and spans above or are available for direct
+plugin subscription. `run.progress` and `run.execution_phase` are direct-only
+lifecycle signals; the diagnostics-otel plugin does not export them as
+standalone OTLP signals. Event kinds and `run.execution_phase.phase` values are
+additive. TypeScript consumers should keep default branches instead of assuming
+either union is permanently exhaustive.
 
 **Model usage**
 

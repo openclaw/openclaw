@@ -373,7 +373,7 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
  * EmbeddedAgentExecutionPhase contract (type-only import keeps this module
  * runtime-independent of the agents layer).
  */
-export type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
+type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
   type: "run.execution_phase";
   sessionKey?: string;
   sessionId: string;

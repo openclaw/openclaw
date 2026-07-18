@@ -95,9 +95,11 @@ describe("withExecutionPhaseDiagnostics", () => {
 
     emitDiagnosticEvent({
       type: "model.call.started",
+      runId: "run-3",
+      callId: "run-3:model:1",
       provider: "anthropic",
       model: "claude",
-    } as never);
+    });
     params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
     // Nothing is delivered synchronously: both event kinds ride the async lane.
     expect(events).toEqual([]);
