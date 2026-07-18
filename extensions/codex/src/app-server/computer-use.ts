@@ -1145,6 +1145,40 @@ export async function killStaleComputerUseMcpChildren(
     try {
       process.kill(processInfo.pid, "SIGTERM");
       killedPids.push(processInfo.pid);
+      // Schedule a SIGKILL escalation after a grace period, in case the
+      // process traps or ignores SIGTERM. Revalidate process identity
+      // before escalating — the PID could have been reused.
+      const ancestorPid = options.ancestorPid;
+      const sigkillTimer = setTimeout(() => {
+        void (async () => {
+          try {
+            // Quick existence check before running ps.
+            process.kill(processInfo.pid, 0);
+          } catch {
+            return; // already exited
+          }
+          try {
+            const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+              logOutput: false,
+              maxBuffer: 5 * 1024 * 1024,
+            });
+            const currentInfos = parsePsOutput(result.stdout);
+            const current = currentInfos.find((info) => info.pid === processInfo.pid);
+            if (
+              !current ||
+              !isStaleComputerUseMcpChild(current.command) ||
+              !isDescendantOfPid(current.pid, ancestorPid, currentInfos)
+            ) {
+              // Process identity changed — abort SIGKILL.
+              return;
+            }
+            process.kill(processInfo.pid, "SIGKILL");
+          } catch {
+            // ps failure or ESRCH — process is gone, no-op.
+          }
+        })();
+      }, 2_000);
+      sigkillTimer.unref();
     } catch (error) {
       warnings.push(
         `Could not terminate stale Computer Use MCP child pid ${processInfo.pid}: ${describeControlFailure(error)}`,
