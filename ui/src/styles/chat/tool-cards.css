@@ -764,7 +764,11 @@
   min-height: 420px;
   border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   border-radius: var(--radius-md);
-  background: #fff;
+  /* Widget documents keep a transparent body; the host provides the themed
+     backdrop so transparent regions match the active theme instead of
+     flashing white in dark mode. Documents from the pre-token wrapper assumed
+     white; accepted tradeoff — they are transient (32-doc LRU) and age out. */
+  background: var(--card);
 }
 
 .chat-tool-card__raw-toggle {

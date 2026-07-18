@@ -2085,6 +2085,8 @@ export const en: TranslationMap = {
     heroTagline:
       "Companion apps for your phone, watch, desktop, and browser — plus plugins to extend what your agent can do.",
     sectionMobile: "On your phone",
+    havePhone: "Already have the app?",
+    pairDevice: "Pair your device",
     sectionWatch: "On your wrist",
     sectionDesktop: "On your desktop",
     sectionBrowser: "In your browser",
@@ -3513,6 +3515,13 @@ export const en: TranslationMap = {
       copyPath: "Copy path",
       copyBranch: "Copy branch name",
       copied: "Copied",
+      branches: "Session branches",
+      branchSwitchUnavailable: "Branch switch is unavailable while the agent is working.",
+      branchSwitchRequiresAdmin: "Branch switching requires operator admin access.",
+      untitledBranch: "Untitled branch",
+      oneMessage: "{count} message",
+      messages: "{count} messages",
+      activeBranch: "Active branch",
     },
     board: {
       faceLabel: "Session face",

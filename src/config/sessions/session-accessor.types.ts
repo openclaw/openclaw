@@ -673,6 +673,45 @@ export type SessionMessageCutMutationParams = {
   targetKey?: string;
 };
 
+export type SessionBranchSummary = {
+  leafEntryId: string;
+  headline: string;
+  messageCount: number;
+  updatedAt?: string;
+  active: boolean;
+};
+
+export type SessionBranchListResult =
+  | { status: "ok"; branches: SessionBranchSummary[] }
+  | { status: "missing-session" }
+  | { status: "unsupported-storage" }
+  | { status: "failed" };
+
+export type SessionBranchListParams = Pick<
+  SessionMessageCutMutationParams,
+  "agentId" | "env" | "sessionKey" | "sessionStoreKey" | "storePath"
+>;
+
+export type SessionBranchSwitchMutationResult =
+  | {
+      status: "created";
+      key: string;
+      entry: SessionEntry;
+    }
+  | { status: "missing-session" }
+  | { status: "missing-entry" }
+  | { status: "not-branch-tip" }
+  | { status: "already-active" }
+  | { status: "unsupported-storage" }
+  | { status: "failed" };
+
+export type SessionBranchSwitchMutationParams = Omit<
+  SessionMessageCutMutationParams,
+  "entryId" | "targetKey"
+> & {
+  leafEntryId: string;
+};
+
 export type SessionCompactionCheckpointEntryBuildContext = {
   /** Checkpoint row selected from the current persisted session entry. */
   checkpoint: SessionCompactionCheckpoint;
