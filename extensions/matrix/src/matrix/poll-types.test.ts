@@ -91,8 +91,8 @@ describe("buildPollStartContent", () => {
     const options = Array.from({ length: 21 }, (_, i) => `Option ${i + 1}`);
     const content = buildPollStartContent({ question: "Q", options });
     expect(content["m.poll.start"]?.answers).toHaveLength(20);
-    expect(content["m.poll.start"]?.answers?.[0]?.text).toBe("Option 1");
-    expect(content["m.poll.start"]?.answers?.[19]?.text).toBe("Option 20");
+    expect(content["m.poll.start"]?.answers?.[0]?.["m.text"]).toBe("Option 1");
+    expect(content["m.poll.start"]?.answers?.[19]?.["m.text"]).toBe("Option 20");
   });
 });
 
