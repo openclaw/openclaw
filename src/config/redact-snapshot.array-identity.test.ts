@@ -266,36 +266,6 @@ describe("restoreRedactedValues — identity-keyed object arrays", () => {
   });
 });
 
-// Identity semantics: the restoration identity is the visible unique id exactly
-// as the client sends it back. Config entries are addressed by id rather than by
-// position — the schema gives every entry an `id`, lookups and per-agent state
-// resolve by that id, and config writes locate a row by finding its id — so an
-// item's array position is not its identity. (Uniqueness is conventional, not
-// schema-enforced; this module falls back to positional restore when an original
-// array violates it.) The complementary half of the contract — an id that was
-// not in the original inherits nothing — is covered by the fail-closed block
-// below.
-describe("restoreRedactedValues — identity semantics", () => {
-  const hints = { "rows[].mark": { sensitive: true } } as unknown as ConfigUiHints;
-  const original = {
-    rows: [
-      { id: "alpha", mark: "mark-alpha" },
-      { id: "bravo", mark: "mark-bravo" },
-    ],
-  };
-
-  it("restores values for the authoritative id when an original id is reused", () => {
-    const redacted = redactConfigObject(original, hints) as typeof original;
-    const sentinel = redacted.rows[0]?.mark;
-    // Final array holds a single item carrying the original id `alpha`.
-    const res = restoreRedactedValues({ rows: [{ id: "alpha", mark: sentinel }] }, original, hints);
-    expect(res.ok).toBe(true);
-    expect((res.result as typeof original).rows).toEqual([{ id: "alpha", mark: "mark-alpha" }]);
-    // The value belonging to a different id is not transferred.
-    expect(JSON.stringify(res.result)).not.toContain("mark-bravo");
-  });
-});
-
 describe("restoreRedactedValues — identity-keyed fail-closed edges", () => {
   const original = agentsConfig([
     { id: "alpha", mark: "mark-alpha" },
@@ -447,8 +417,13 @@ describe("restoreRedactedValues — non-regression", () => {
       },
     };
     const redacted = redactConfigObject(original, hints) as typeof original;
-    // The client never receives the real values.
-    expect(JSON.stringify(redacted)).not.toContain(secretFor("alpha"));
+    // Every entry must actually be redacted: the client never receives real
+    // values, and the delete case below only proves identity restoration if the
+    // retained entry was redacted too.
+    expect(redacted.agents.list.map((a) => a.memorySearch.remote.apiKey)).toEqual([
+      REDACTED_SENTINEL,
+      REDACTED_SENTINEL,
+    ]);
     // Unchanged round-trip is accepted and lossless.
     const unchanged = restoreRedactedValues(redacted, original, hints);
     expect(unchanged.ok).toBe(true);
@@ -484,6 +459,60 @@ describe("restoreRedactedValues — non-regression", () => {
     const redacted = redactConfigObject(original, hints) as typeof original;
     expect(redacted.rows.map((r) => r.id)).toEqual([REDACTED_SENTINEL, REDACTED_SENTINEL]);
     // Unchanged round-trip still succeeds losslessly via positional restore.
+    const res = restoreRedactedValues(redacted, original, hints);
+    expect(res.ok).toBe(true);
+    expect(res.result).toEqual(original);
+  });
+
+  it("keeps each hook mapping's own value on the real production schema hints", () => {
+    // Second real trigger path for the resolver (hooks.mappings[] carries an id
+    // and a redaction-backed descendant), locking that it gains no new semantics.
+    const hints = buildConfigSchema().uiHints;
+    const valueFor = (id: string) => `value-for-${id}`;
+    const original = {
+      hooks: { mappings: ["first", "second"].map((id) => ({ id, sessionKey: valueFor(id) })) },
+    };
+    const redacted = redactConfigObject(original, hints) as typeof original;
+    // Every entry must actually be redacted, otherwise the delete case below
+    // could pass without exercising identity-based restoration at all.
+    expect(redacted.hooks.mappings.map((m) => m.sessionKey)).toEqual([
+      REDACTED_SENTINEL,
+      REDACTED_SENTINEL,
+    ]);
+    const unchanged = restoreRedactedValues(redacted, original, hints);
+    expect(unchanged.ok).toBe(true);
+    expect(unchanged.result).toEqual(original);
+    // Removing the first entry leaves the retained entry with its own value.
+    const afterDelete = restoreRedactedValues(
+      { hooks: { mappings: [redacted.hooks.mappings[1]] } },
+      original,
+      hints,
+    );
+    expect(afterDelete.ok).toBe(true);
+    const mappings = (afterDelete.result as typeof original).hooks.mappings;
+    expect(mappings.map((m) => [m.id, m.sessionKey])).toEqual([["second", valueFor("second")]]);
+    expect(JSON.stringify(mappings)).not.toContain(valueFor("first"));
+  });
+
+  it("keeps hook mappings positional when only some entries carry an id", () => {
+    // hooks.mappings[].id is optional, so a real config can mix entries with and
+    // without ids. That array is not identity-keyed and must keep the existing
+    // positional behavior rather than matching partially.
+    const hints = buildConfigSchema().uiHints;
+    const valueFor = (id: string) => `value-for-${id}`;
+    const original = {
+      hooks: {
+        mappings: [
+          { id: "first", sessionKey: valueFor("first") },
+          { sessionKey: valueFor("second") },
+        ],
+      },
+    };
+    const redacted = redactConfigObject(original, hints) as typeof original;
+    expect(redacted.hooks.mappings.map((m) => m.sessionKey)).toEqual([
+      REDACTED_SENTINEL,
+      REDACTED_SENTINEL,
+    ]);
     const res = restoreRedactedValues(redacted, original, hints);
     expect(res.ok).toBe(true);
     expect(res.result).toEqual(original);
