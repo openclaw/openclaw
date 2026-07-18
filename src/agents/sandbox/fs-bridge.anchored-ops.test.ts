@@ -262,7 +262,7 @@ describe("sandbox fs bridge anchored ops", () => {
       const statScript = getDockerScript(statCall[0]);
       expect(statScript).toContain(SANDBOX_STAT_MISSING_SENTINEL);
       expect(statScript).toContain('stat_output=$(stat -c "%f|%s|%Y" -- "$2" 2>&1)');
-      expect(statScript.match(new RegExp(SANDBOX_STAT_MISSING_SENTINEL, "g"))).toHaveLength(2);
+      expect(statScript.match(new RegExp(SANDBOX_STAT_MISSING_SENTINEL, "g"))).toHaveLength(3);
     });
   });
 
