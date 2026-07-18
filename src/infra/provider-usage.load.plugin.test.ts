@@ -1,8 +1,8 @@
 // Tests provider usage loading from plugin-provided sources.
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
@@ -54,6 +54,15 @@ let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProv
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
+async function withTempHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {
+  const homeDir = mkdtempSync(join(tmpdir(), "openclaw-provider-usage-home-"));
+  try {
+    return await fn(homeDir);
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+}
+
 function requireFirstPluginUsageCall(): {
   provider?: unknown;
   context?: {
@@ -100,17 +109,15 @@ function requireUndiciFetchInit(): Record<string, unknown> {
 }
 
 describe("provider-usage.load plugin boundary", () => {
-  beforeAll(async () => {
-    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     envAgentSpy.mockClear();
     loadUndiciRuntimeDeps.mockClear();
     undiciFetch.mockReset();
     EnvHttpProxyAgent.lastCreated = undefined;
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
+    vi.resetModules();
+    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
   });
 
   it("prefers plugin-owned usage snapshots", async () => {
@@ -201,26 +208,30 @@ describe("provider-usage.load plugin boundary", () => {
       throw new Error("usage plugin mock should receive the fetch function without calling it");
     });
 
-    await expect(
-      loadProviderUsageSummary({
-        now: usageNow,
-        agentDir: mkdtempSync(join(tmpdir(), "openclaw-kimi-usage-")),
-        env: { KIMI_API_KEY: "kimi-token" },
-        fetch: mockFetch as unknown as typeof fetch,
-        skipPluginAuthWithoutCredentialSource: true,
-      }),
-    ).resolves.toEqual({
-      updatedAt: usageNow,
-      providers: [
-        {
-          provider: "kimi",
-          displayName: "Kimi",
-          windows: [
-            { label: "5h", usedPercent: 12 },
-            { label: "7d", usedPercent: 34 },
-          ],
-        },
-      ],
+    await withTempHome(async (homeDir) => {
+      await expect(
+        loadProviderUsageSummary({
+          now: usageNow,
+          env: {
+            HOME: homeDir,
+            KIMI_API_KEY: "kimi-token",
+          },
+          fetch: mockFetch as unknown as typeof fetch,
+          skipPluginAuthWithoutCredentialSource: true,
+        }),
+      ).resolves.toEqual({
+        updatedAt: usageNow,
+        providers: [
+          {
+            provider: "kimi",
+            displayName: "Kimi",
+            windows: [
+              { label: "5h", usedPercent: 12 },
+              { label: "7d", usedPercent: 34 },
+            ],
+          },
+        ],
+      });
     });
 
     expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledOnce();

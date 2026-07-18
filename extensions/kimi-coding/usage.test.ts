@@ -1,12 +1,13 @@
 // Covers Kimi Coding plan usage parsing.
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import {
-  fetchKimiUsage,
-  isManagedKimiUsageBaseUrl,
-  normalizeKimiUsageBaseUrl,
-  parseKimiUsageWindows,
-} from "./usage.js";
+import { fetchKimiUsage, isManagedKimiUsageBaseUrl, normalizeKimiUsageBaseUrl } from "./usage.js";
+
+async function expectParsedWindows(body: unknown) {
+  const mockFetch = createProviderUsageFetch(async () => makeResponse(200, body));
+  const result = await fetchKimiUsage("kimi-key", 5000, mockFetch);
+  return result.windows;
+}
 
 describe("fetchKimiUsage", () => {
   it("returns token-expired errors for auth failures", async () => {
@@ -57,25 +58,25 @@ describe("fetchKimiUsage", () => {
   });
 });
 
-describe("parseKimiUsageWindows", () => {
-  it("parses seven-day usage and five-hour named limit", () => {
-    expect(
-      parseKimiUsageWindows({
+describe("fetchKimiUsage window parsing", () => {
+  it("parses seven-day usage and five-hour named limit", async () => {
+    await expect(
+      expectParsedWindows({
         usage: { limit: 1000, used: 250 },
         limits: [
           { name: "daily", detail: { limit: 100, used: 20 } },
           { name: "Kimi Code 5-hour quota", detail: { limit: 200, remaining: 150 } },
         ],
       }),
-    ).toEqual([
+    ).resolves.toEqual([
       { label: "5h", usedPercent: 25 },
       { label: "7d", usedPercent: 25 },
     ]);
   });
 
-  it("recognizes duration-based five-hour windows", () => {
-    expect(
-      parseKimiUsageWindows({
+  it("recognizes duration-based five-hour windows", async () => {
+    await expect(
+      expectParsedWindows({
         usage: { limit: "100", remaining: "90" },
         limits: [
           {
@@ -84,28 +85,28 @@ describe("parseKimiUsageWindows", () => {
           },
         ],
       }),
-    ).toEqual([
+    ).resolves.toEqual([
       { label: "5h", usedPercent: 25 },
       { label: "7d", usedPercent: 10 },
     ]);
 
-    expect(
-      parseKimiUsageWindows({
+    await expect(
+      expectParsedWindows({
         limits: [{ duration: 5, timeUnit: "HOUR", limit: 10, used: 4 }],
       }),
-    ).toEqual([{ label: "5h", usedPercent: 40 }]);
+    ).resolves.toEqual([{ label: "5h", usedPercent: 40 }]);
   });
 
-  it("clamps malformed or out-of-range usage rows", () => {
-    expect(
-      parseKimiUsageWindows({
+  it("clamps malformed or out-of-range usage rows", async () => {
+    await expect(
+      expectParsedWindows({
         usage: { limit: 100, used: 150 },
         limits: [
           { name: "5h", detail: { limit: 0, used: 1 } },
           { name: "5h", detail: { limit: 100, remaining: 110 } },
         ],
       }),
-    ).toEqual([
+    ).resolves.toEqual([
       { label: "5h", usedPercent: 0 },
       { label: "7d", usedPercent: 100 },
     ]);

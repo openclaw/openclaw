@@ -106,7 +106,7 @@ function isFiveHourLimit(item: KimiUsageLimit): boolean {
   );
 }
 
-export function parseKimiUsageWindows(payload: unknown): UsageWindow[] {
+function parseKimiUsageWindows(payload: unknown): UsageWindow[] {
   const data = asRecord(payload) as KimiUsageResponse | undefined;
   if (!data) {
     return [];
