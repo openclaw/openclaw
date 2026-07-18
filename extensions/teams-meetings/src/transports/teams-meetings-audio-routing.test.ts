@@ -62,7 +62,9 @@ describe("Microsoft Teams meeting audio routing", () => {
     };
     const pending: PageMedia = {
       muted: false,
+      readyState: 0,
       sinkId: "built-in-output",
+      src: "blob:https://teams.live.com/pending-remote-audio",
       async setSinkId() {
         throw new DOMException("The element has no supported source.", "AbortError");
       },
@@ -734,7 +736,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     });
   });
 
-  it("fails routing for a loaded non-MediaStream element that rejects its sink", async () => {
+  it("keeps a loaded non-MediaStream AbortError retryable", async () => {
     const routed: PageMedia = {
       sinkId: "",
       async setSinkId(value) {
@@ -763,6 +765,8 @@ describe("Microsoft Teams meeting audio routing", () => {
     });
 
     expect(result).toMatchObject({
+      audioOutputRouteError: "Cannot route loaded media.",
+      audioOutputRouteRetryable: true,
       audioOutputRouted: false,
       manualActionReason: "teams-audio-choice-required",
     });

@@ -97,7 +97,7 @@ export function teamsMeetingStatusCallSource(): string {
               } catch (error) {
                 directRouteError = {
                   message: error?.message || String(error),
-                  retryable: false,
+                  retryable: error?.name === "AbortError",
                 };
               }
             }
@@ -120,11 +120,9 @@ export function teamsMeetingStatusCallSource(): string {
               continue;
             }
             if (!stream) {
-              const hasPlaybackSource = Boolean(
-                element.currentSrc || element.src || Number(element.readyState) > 0
-              );
+              const hasLoadedPlaybackSource = Number(element.readyState) > 0;
               routed.push(false);
-              if (hasPlaybackSource && directRouteError) routeErrors.push(directRouteError);
+              if (hasLoadedPlaybackSource && directRouteError) routeErrors.push(directRouteError);
               if (canMutateSession && originalMuteBySource.get(element) === false) {
                 // Teams may attach the remote MediaStream after creating its media element.
                 // Retain ownership so the muted element remains eligible on the next poll.
