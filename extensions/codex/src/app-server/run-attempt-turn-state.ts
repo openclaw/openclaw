@@ -76,6 +76,21 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       | undefined,
     terminalDynamicToolReleaseCheckScheduled: false,
     currentTurnHadNonTerminalDynamicToolResult: false,
+    // Set when a terminal dynamic tool result released the turn: the attempt
+    // now awaits Codex's own turn/completed instead of interrupting, so the
+    // thread rollout keeps no false user-interrupt marker. interruptRequested
+    // flips (before the RPC) only for the bounded deadline/new-inbound
+    // fallback, and marks that interrupt as OpenClaw-initiated — not a user
+    // abort — for terminal classification.
+    terminalReleaseAwaitingTurnCompletion: undefined as
+      | {
+          threadId: string;
+          turnId: string;
+          toolCallId: string;
+          tool: string;
+          interruptRequested: boolean;
+        }
+      | undefined,
   };
   const completion = new Promise<void>((resolve) => {
     state.resolveCompletion = resolve;
