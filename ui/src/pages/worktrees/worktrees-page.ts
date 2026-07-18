@@ -13,6 +13,7 @@ import {
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
+import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
@@ -703,10 +704,18 @@ class WorktreesPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("worktrees")}</div>
+          <div class="page-title">${titleForRoute("sessions")}</div>
         </div>
+        ${renderSessionsHubTabs({
+          active: "worktrees",
+          onSelect: (tab) => {
+            if (tab !== "worktrees") {
+              this.context?.navigate(tab);
+            }
+          },
+        })}
       </section>
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(body, { id: "sessions-hub-panel" })}
     `;
   }
 }
