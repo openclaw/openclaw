@@ -349,6 +349,7 @@ export function runLeaveScript(params: {
   leave?: PageControl;
   meetingSessionId?: string;
   postCall?: PageControl;
+  priorAudioOutputs?: unknown[];
   priorMeeting?: Record<string, unknown>;
 }) {
   const currentUrl = params.currentUrl ?? URL;
@@ -375,6 +376,9 @@ export function runLeaveScript(params: {
       ...params.priorMeeting,
     },
   };
+  if (params.priorAudioOutputs) {
+    window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
+  }
   const run = runInNewContext(
     `(${teamsMeetingLeaveScript({ meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
     {

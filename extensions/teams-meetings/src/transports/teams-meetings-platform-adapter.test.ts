@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   TEAMS_MEETINGS_PLATFORM_ADAPTER,
   isTeamsMeetingsRealtimeRouteReady,
@@ -336,9 +336,18 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("does not trust a stale identity marker to leave a different SPA call", () => {
     const staleLeave = control({ label: "Leave old call" });
     const currentLeave = control({ label: "Leave current call" });
-    const { result } = runLeaveScript({
+    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
+    const { result, window } = runLeaveScript({
       currentUrl: "https://teams.microsoft.com/v2/",
       leave: currentLeave,
+      priorAudioOutputs: [
+        {
+          bridge,
+          sessionId: "session-1",
+          source: { muted: true },
+          sourceMuted: false,
+        },
+      ],
       priorMeeting: {
         identity: "teams-work:19:meeting_test@thread.v2",
         inCallControl: staleLeave,
@@ -348,6 +357,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
     expect(result).toEqual({ departed: false, urlMatched: false });
     expect(currentLeave.clicks).toBe(0);
+    expect(bridge.pause).not.toHaveBeenCalled();
+    expect(window["__openclawTeamsAudioOutputs"]).toHaveLength(1);
   });
 
   it("does not leave a call owned by a newer OpenClaw session", () => {
@@ -367,6 +378,35 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
     expect(result).toEqual({ departed: false, sessionMatched: false, urlMatched: true });
     expect(leave.clicks).toBe(0);
+  });
+
+  it("retires only the departing session's audio bridges", () => {
+    const source = { muted: true };
+    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
+    const foreignBridge = { sessionId: "session-2" };
+    const { result, window } = runLeaveScript({
+      postCall: control({ label: "Rejoin" }),
+      priorAudioOutputs: [
+        {
+          bridge,
+          sessionId: "session-1",
+          source,
+          sourceMuted: false,
+        },
+        foreignBridge,
+      ],
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(result).toEqual({ departed: true, urlMatched: true });
+    expect(source.muted).toBe(false);
+    expect(bridge.pause).toHaveBeenCalledOnce();
+    expect(bridge.remove).toHaveBeenCalledOnce();
+    expect(bridge.srcObject).toBeNull();
+    expect(window["__openclawTeamsAudioOutputs"]).toEqual([foreignBridge]);
   });
 
   it.each([

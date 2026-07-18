@@ -201,6 +201,31 @@ export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meet
   if (!expectedSessionId || state?.sessionId !== expectedSessionId) {
     return JSON.stringify({ departed: false, sessionMatched: false, urlMatched: true });
   }
+  const retireOwnedAudioBridges = () => {
+    const entries = Array.isArray(window.__openclawTeamsAudioOutputs)
+      ? window.__openclawTeamsAudioOutputs
+      : [];
+    const retained = [];
+    for (const entry of entries) {
+      if (entry?.sessionId !== expectedSessionId) {
+        retained.push(entry);
+        continue;
+      }
+      const sources = Array.isArray(entry?.sources)
+        ? entry.sources
+        : entry?.source
+          ? [{ element: entry.source, muted: Boolean(entry.sourceMuted) }]
+          : [];
+      for (const source of sources) {
+        if (source?.element) source.element.muted = Boolean(source.muted);
+      }
+      entry?.bridge?.pause?.();
+      if (entry?.bridge) entry.bridge.srcObject = null;
+      entry?.bridge?.remove?.();
+    }
+    if (retained.length > 0) window.__openclawTeamsAudioOutputs = retained;
+    else delete window.__openclawTeamsAudioOutputs;
+  };
   const first = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);
@@ -247,6 +272,7 @@ export function teamsMeetingLeaveScript(params: { meetingSessionId: string; meet
     return JSON.stringify({ departed: false, urlMatched: false });
   }
   if (postCall) {
+    retireOwnedAudioBridges();
     delete window.__openclawTeamsMeeting;
     return JSON.stringify({ departed: true, urlMatched: true });
   }
