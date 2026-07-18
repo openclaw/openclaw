@@ -176,6 +176,15 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
       allowedOrigins: [origin],
     });
   });
+
+  it("matches a configured trailing-dot baseUrl to its dotless request origin", () => {
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin("http://example.com.:11434/v1");
+
+    expect(resolveSsrFPolicyForUrl(new URL("http://example.com:11434/v1/chat"), policy)).toEqual({
+      allowedOrigins: ["http://example.com.:11434"],
+      allowedHostnames: ["example.com"],
+    });
+  });
 });
 
 describe("resolveSsrFPolicyForUrl", () => {
