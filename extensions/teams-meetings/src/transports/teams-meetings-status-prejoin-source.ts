@@ -9,6 +9,7 @@ type TeamsMeetingStatusPreludeParams = {
   readOnly?: boolean;
   selectors: string;
   toggleStateFunction: string;
+  waitForInCallMs: number;
 };
 
 const TEAMS_MEETING_TRANSCRIPT_MAX_LINES = 500;
@@ -28,6 +29,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
   const captureCaptions = ${JSON.stringify(params.captureCaptions)};
   const readOnly = ${JSON.stringify(Boolean(params.readOnly))};
   const sessionId = ${JSON.stringify(params.meetingSessionId)};
+  const identityRetentionMs = ${JSON.stringify(Math.max(30_000, params.waitForInCallMs))};
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const label = (node) => [
     node?.getAttribute?.("aria-label"),
@@ -266,7 +268,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
     priorMeeting?.identity === expectedIdentity &&
     !priorMeeting?.inCallControl &&
     markerAgeMs >= 0 &&
-    markerAgeMs < 30_000 &&
+    markerAgeMs < identityRetentionMs &&
     leave &&
     leave.isConnected !== false
   );
@@ -332,7 +334,7 @@ export function teamsMeetingStatusPreludeSource(params: TeamsMeetingStatusPrelud
     !currentIdentity &&
     priorMeeting &&
     !identityAwaitingRerender &&
-    (priorMeeting.inCallControl || markerAgeMs >= 30_000)
+    (priorMeeting.inCallControl || markerAgeMs >= identityRetentionMs)
   ) {
     delete window.__openclawTeamsMeeting;
   }

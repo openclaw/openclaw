@@ -86,6 +86,7 @@ export function teamsMeetingStatusScript(params: {
   meetingSessionId?: string;
   meetingUrl: string;
   readOnly?: boolean;
+  waitForInCallMs: number;
 }) {
   const selectors = JSON.stringify(TEAMS_MEETING_SELECTORS);
   const expectedIdentity = normalizeTeamsMeetingUrlForReuse(params.meetingUrl);

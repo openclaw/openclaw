@@ -137,6 +137,7 @@ export async function runStatusScript(params: {
   priorCaptions?: unknown;
   priorMeeting?: Record<string, unknown>;
   readOnly?: boolean;
+  waitForInCallMs?: number;
   globalSelectedOption?: PageControl;
   media?: PageMedia[];
   devices?: Array<{ deviceId: string; kind: string; label: string }>;
@@ -261,7 +262,9 @@ export async function runStatusScript(params: {
     },
   };
   const window: Record<string, unknown> = {};
-  let captionObserverCallback: (() => void) | undefined;
+  let captionObserverCallback:
+    | ((records?: Array<{ removedNodes: PageControl[] }>) => void)
+    | undefined;
   let captionObserverDisconnects = 0;
   if (params.priorMeeting) {
     window[MEETING_STATE_KEY] = params.priorMeeting;
@@ -280,12 +283,13 @@ export async function runStatusScript(params: {
     meetingSessionId: "session-1",
     meetingUrl: params.meetingUrl ?? URL,
     readOnly: params.readOnly,
+    waitForInCallMs: params.waitForInCallMs ?? 60_000,
   });
   const run = runInNewContext(`(${script})`, {
     Event: globalThis.Event,
     HTMLInputElement: function HTMLInputElement() {},
     MutationObserver: class MutationObserver {
-      constructor(callback: () => void) {
+      constructor(callback: (records?: Array<{ removedNodes: PageControl[] }>) => void) {
         captionObserverCallback = callback;
       }
       disconnect() {
@@ -313,9 +317,9 @@ export async function runStatusScript(params: {
   return {
     captionButton,
     captionObserverDisconnects: () => captionObserverDisconnects,
-    triggerCaptionMutation(nextUrl?: string) {
+    triggerCaptionMutation(nextUrl?: string, removedNode?: PageControl) {
       if (nextUrl) location.href = nextUrl;
-      captionObserverCallback?.();
+      captionObserverCallback?.(removedNode ? [{ removedNodes: [removedNode] }] : []);
     },
     result: JSON.parse(await run()) as Record<string, unknown>,
     window,

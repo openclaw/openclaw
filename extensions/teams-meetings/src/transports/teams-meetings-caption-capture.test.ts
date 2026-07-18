@@ -28,6 +28,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       guestName: "OpenClaw Guest",
       meetingSessionId: "session-1",
       meetingUrl: URL,
+      waitForInCallMs: 60_000,
     });
     expect(script).toContain('data-tid=\\"prejoin-display-name-input\\"');
     expect(script).toContain('data-tid=\\"call-hangup\\"');
@@ -332,6 +333,33 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(second.result.recentTranscript).toMatchObject([
       { text: "First recycled-row utterance" },
       { text: "Completely different second utterance" },
+    ]);
+  });
+
+  it("commits a removed row before Teams rapidly reuses its DOM node", async () => {
+    const row = captionRow("OpenClaw QA", "Rapid first utterance");
+    const first = await runStatusScript({
+      allowMicrophone: false,
+      captionRows: [row],
+      captureCaptions: true,
+      leave: control({ label: "Leave" }),
+    });
+    const caption = row.querySelector('[data-tid="closed-caption-text"]');
+    if (!caption) throw new Error("expected caption text control");
+    caption.textContent = "Rapid second utterance";
+    first.triggerCaptionMutation(undefined, row);
+    const second = await runStatusScript({
+      allowMicrophone: false,
+      captionRows: [row],
+      captureCaptions: true,
+      leave: control({ label: "Leave" }),
+      priorCaptions: first.window.__openclawTeamsCaptions,
+    });
+
+    expect(second.result.transcriptLines).toBe(2);
+    expect(second.result.recentTranscript).toMatchObject([
+      { text: "Rapid first utterance" },
+      { text: "Rapid second utterance" },
     ]);
   });
 

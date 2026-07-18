@@ -245,6 +245,7 @@ export async function openMeetingWithBrowser<
             autoJoin: params.config.autoJoin,
             captureCaptions: params.adapter.browser.captions.enabled(params.session.mode),
             guestName: params.config.guestName,
+            waitForInCallMs: params.config.waitForInCallMs,
           }),
         },
         timeoutMs: Math.min(timeoutMs, 10_000),

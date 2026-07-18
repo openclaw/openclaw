@@ -268,6 +268,7 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
         meetingSessionId: params.meetingSessionId || undefined,
         meetingUrl: params.url,
         readOnly: params.readOnly,
+        waitForInCallMs: params.waitForInCallMs,
       }),
     parseStatus: parseBrowserStatus,
     classifyManualAction,

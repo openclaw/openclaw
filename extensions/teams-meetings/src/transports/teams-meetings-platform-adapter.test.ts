@@ -251,6 +251,27 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
   });
 
+  it("retains prejoin identity for the configured in-call wait", async () => {
+    const leave = control({ label: "Leave" });
+    const admitted = await runStatusScript({
+      allowMicrophone: false,
+      currentUrl: "https://teams.microsoft.com/v2/",
+      leave,
+      priorMeeting: {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        sessionId: "session-1",
+        verifiedAt: Date.now() - 45_000,
+      },
+      waitForInCallMs: 60_000,
+    });
+
+    expect(admitted.result.inCall).toBe(true);
+    expect(admitted.window[MEETING_STATE_KEY]).toMatchObject({
+      identity: "teams-work:19:meeting_test@thread.v2",
+      inCallControl: leave,
+    });
+  });
+
   it("re-adopts a replaced hang-up control only within the bounded rerender window", async () => {
     const previousLeave = control({ label: "Leave" });
     previousLeave.isConnected = false;

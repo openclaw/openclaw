@@ -387,18 +387,30 @@ export function teamsMeetingStatusCallSource(): string {
       observedMeeting.inCallUrl === location.href
     );
   };
-  const scrapeCaptions = () => {
+  const scrapeCaptions = (mutations = []) => {
     if (!captionCaptureMatchesCurrentMeeting()) return;
     const content = firstRaw(selectors.captionContent);
     const rows = content
       ? selectors.captionRows.flatMap((selector) => [...content.querySelectorAll(selector)])
       : [];
     captionState.settled = Array.isArray(captionState.settled) ? captionState.settled : [];
+    const removedNodes = mutations.flatMap((mutation) => [...(mutation.removedNodes || [])]);
+    const rowWasRemoved = (entry) => removedNodes.some((node) =>
+      node === entry.node || node?.contains?.(entry.node)
+    );
+    const removedVisible = captionState.visible.filter(rowWasRemoved);
+    if (removedVisible.length > 0) {
+      if (captionState.settleTimer !== undefined) clearTimeout(captionState.settleTimer);
+      captionState.settleTimer = undefined;
+      captionState.visible = captionState.visible.filter((entry) => !rowWasRemoved(entry));
+      commitCaptionLines(captionState, removedVisible);
+      retainSettledCaptionLines(captionState, removedVisible);
+    }
     const retainedLineIds = new Set(captionState.lines.map((entry) => entry.utteranceId));
     captionState.settled = captionState.settled.filter((entry) =>
       entry.rowIdentity
         ? retainedLineIds.has(entry.utteranceId)
-        : rows.some((row) => sameCaptionRow(entry, {
+        : !rowWasRemoved(entry) && rows.some((row) => sameCaptionRow(entry, {
             node: row,
             rowIdentity: captionRowIdentity(row),
           }))

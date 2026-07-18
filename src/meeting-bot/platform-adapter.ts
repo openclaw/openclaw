@@ -41,6 +41,7 @@ export type MeetingBrowserStatusScriptParams<Mode extends string> =
     captureCaptions: boolean;
     guestName: string;
     readOnly?: boolean;
+    waitForInCallMs: number;
   };
 
 export type MeetingBrowserLeaveStep = {
