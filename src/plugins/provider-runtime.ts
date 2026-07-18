@@ -111,10 +111,13 @@ type ProviderModelCatalogAugmentOutcome =
       value: Awaited<ReturnType<ProviderModelCatalogAugmentHook>>;
     }
   | { status: "rejected"; error: unknown }
+  | { status: "aborted" }
   | { status: "timed-out" };
 type ProviderModelCatalogAugmentInvocation = {
   controller: AbortController;
   outcome: Promise<ProviderModelCatalogAugmentOutcome>;
+  settlement: Promise<ProviderModelCatalogAugmentOutcome>;
+  timeoutWarningLogged: boolean;
 };
 type ProviderModelCatalogAugmentInFlight = {
   hook: ProviderModelCatalogAugmentHook;
@@ -1222,54 +1225,51 @@ function resolveProviderModelCatalogAugmentInvocation(params: {
   const signal = params.context.signal
     ? AbortSignal.any([params.context.signal, controller.signal])
     : controller.signal;
+  const settlement = Promise.resolve()
+    .then(() =>
+      params.hook({
+        ...params.context,
+        signal,
+        timeoutMs: PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS,
+      }),
+    )
+    .then(
+      (value): ProviderModelCatalogAugmentOutcome => ({ status: "fulfilled", value }),
+      (error: unknown): ProviderModelCatalogAugmentOutcome => ({ status: "rejected", error }),
+    );
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let handleAbort: (() => void) | undefined;
+  const interrupted = new Promise<ProviderModelCatalogAugmentOutcome>((resolve) => {
+    handleAbort = () => resolve({ status: timedOut ? "timed-out" : "aborted" });
+    controller.signal.addEventListener("abort", handleAbort, { once: true });
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS);
+  });
   const invocation = {
     controller,
-    outcome: Promise.resolve()
-      .then(() =>
-        params.hook({
-          ...params.context,
-          signal,
-          timeoutMs: PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS,
-        }),
-      )
-      .then(
-        (value): ProviderModelCatalogAugmentOutcome =>
-          controller.signal.aborted ? { status: "timed-out" } : { status: "fulfilled", value },
-        (error: unknown): ProviderModelCatalogAugmentOutcome =>
-          controller.signal.aborted ? { status: "timed-out" } : { status: "rejected", error },
-      ),
+    outcome: Promise.race([settlement, interrupted]).finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      if (handleAbort) {
+        controller.signal.removeEventListener("abort", handleAbort);
+        handleAbort = undefined;
+      }
+    }),
+    settlement,
+    timeoutWarningLogged: false,
   } satisfies ProviderModelCatalogAugmentInvocation;
   params.inFlight.set(key, { hook: params.hook, invocation });
-  void invocation.outcome.then(() => {
+  void invocation.settlement.then(() => {
     if (params.inFlight.get(key)?.invocation === invocation) {
       params.inFlight.delete(key);
     }
   });
   return invocation;
-}
-
-function waitForProviderModelCatalogAugment(
-  invocation: ProviderModelCatalogAugmentInvocation,
-): Promise<ProviderModelCatalogAugmentOutcome> {
-  if (invocation.controller.signal.aborted) {
-    return Promise.resolve({ status: "timed-out" });
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  return Promise.race([
-    invocation.outcome,
-    new Promise<{ status: "timed-out" }>((resolve) => {
-      timer = setTimeout(() => {
-        invocation.controller.abort();
-        resolve({ status: "timed-out" });
-      }, PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS);
-    }),
-  ]).finally(clearTimer);
 }
 
 export async function augmentModelCatalogWithProviderPluginsResult(
@@ -1290,23 +1290,31 @@ export async function augmentModelCatalogWithProviderPluginsResult(
       hook,
       context: params.context,
     });
-    return [{ plugin, result: waitForProviderModelCatalogAugment(invocation) }];
+    return [{ plugin, invocation, result: invocation.outcome }];
   });
   const outcomes = await Promise.all(pending.map(({ result }) => result));
   for (const [index, outcome] of outcomes.entries()) {
-    const plugin = pending[index]?.plugin;
-    if (!plugin) {
+    const pendingItem = pending[index];
+    if (!pendingItem) {
       continue;
     }
+    const { invocation, plugin } = pendingItem;
     if (outcome.status === "rejected") {
       throw outcome.error;
     }
+    if (outcome.status === "aborted") {
+      authoritative = false;
+      continue;
+    }
     if (outcome.status === "timed-out") {
       authoritative = false;
-      const pluginId = plugin.pluginId ?? plugin.id;
-      log.warn(
-        `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
-      );
+      if (!invocation.timeoutWarningLogged) {
+        invocation.timeoutWarningLogged = true;
+        const pluginId = plugin.pluginId ?? plugin.id;
+        log.warn(
+          `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
+        );
+      }
       continue;
     }
     const next = outcome.value;

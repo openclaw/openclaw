@@ -1197,13 +1197,139 @@ describe("provider-runtime", () => {
       await expect(firstLoad).resolves.toEqual({ entries: [], authoritative: false });
 
       const retryLoad = loadCatalog();
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(0);
       await expect(retryLoad).resolves.toEqual({ entries: [], authoritative: false });
 
       expect(augmentHungCatalog).toHaveBeenCalledTimes(1);
       expect(signals).toHaveLength(1);
       expect(signals[0]?.aborted).toBe(true);
       expect(timeoutBudgets).toEqual([15_000]);
+      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares the original catalog hook deadline with overlapping callers", async () => {
+    vi.useFakeTimers();
+    try {
+      const augmentHungCatalog = vi.fn<NonNullable<ProviderPlugin["augmentModelCatalog"]>>(
+        () => new Promise<never>(() => {}),
+      );
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["hung-plugin"]);
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "hung",
+          pluginId: "hung-plugin",
+          label: "Hung Provider",
+          auth: [],
+          augmentModelCatalog: augmentHungCatalog,
+        },
+      ]);
+      const loadCatalog = () =>
+        augmentModelCatalogWithProviderPluginsResult({
+          env: process.env,
+          context: { env: process.env, entries: [] },
+        });
+
+      let firstResult:
+        | Awaited<ReturnType<typeof augmentModelCatalogWithProviderPluginsResult>>
+        | undefined;
+      let overlappingResult:
+        | Awaited<ReturnType<typeof augmentModelCatalogWithProviderPluginsResult>>
+        | undefined;
+      const firstLoad = loadCatalog();
+      void firstLoad.then((result) => {
+        firstResult = result;
+      });
+      await vi.advanceTimersByTimeAsync(14_000);
+      const overlappingLoad = loadCatalog();
+      void overlappingLoad.then((result) => {
+        overlappingResult = result;
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(overlappingResult).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(firstResult).toEqual({ entries: [], authoritative: false });
+      expect(overlappingResult).toEqual({ entries: [], authoritative: false });
+      expect(augmentHungCatalog).toHaveBeenCalledTimes(1);
+      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases existing catalog waiters when their runtime scope is retired", async () => {
+    vi.useFakeTimers();
+    try {
+      const config = {} as OpenClawConfig;
+      const healthyEntry = { provider: "healthy", id: "healthy-model", name: "Healthy Model" };
+      let hungSignal: AbortSignal | undefined;
+      setActivePluginRegistry(
+        createEmptyPluginRegistry(),
+        "generation-one",
+        "default",
+        "/tmp/work",
+      );
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["catalog-plugin"]);
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "catalog-provider",
+          pluginId: "catalog-plugin",
+          label: "Catalog Provider",
+          auth: [],
+          augmentModelCatalog: (context) => {
+            hungSignal = context.signal;
+            return new Promise<never>(() => {});
+          },
+        },
+      ]);
+
+      let firstResult:
+        | Awaited<ReturnType<typeof augmentModelCatalogWithProviderPluginsResult>>
+        | undefined;
+      const firstLoad = augmentModelCatalogWithProviderPluginsResult({
+        config,
+        env: process.env,
+        context: { config, env: process.env, entries: [] },
+      });
+      void firstLoad.then((result) => {
+        firstResult = result;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      setActivePluginRegistry(
+        createEmptyPluginRegistry(),
+        "generation-two",
+        "default",
+        "/tmp/work",
+      );
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: "catalog-provider",
+          pluginId: "catalog-plugin",
+          label: "Catalog Provider",
+          auth: [],
+          augmentModelCatalog: () => [healthyEntry],
+        },
+      ]);
+      await expect(
+        augmentModelCatalogWithProviderPluginsResult({
+          config,
+          env: process.env,
+          context: { config, env: process.env, entries: [] },
+        }),
+      ).resolves.toEqual({ entries: [healthyEntry], authoritative: true });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(firstResult).toEqual({ entries: [], authoritative: false });
+      expect(hungSignal?.aborted).toBe(true);
+      expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
