@@ -1,28 +1,23 @@
 /**
- * Runtime proof for issue #109087.
- * Mirrors selectSession in ui/src/components/app-sidebar-session-navigation.ts:
- * selecting a session for another agent must update agentSelection so the
- * agent chip/select no longer no-ops re-clicks on the previous agent.
+ * Runtime proof for openclaw/openclaw#109214 / issue #109087.
+ * Uses production parseAgentSessionKey from ui/src/lib/sessions/session-key.ts
+ * and the same selectSession sequence as app-sidebar-session-navigation.ts.
  *
- * Run: node scripts/proof-session-switcher-agent-sync.mjs
+ * Run: node --import tsx scripts/proof-session-switcher-agent-sync.mjs
  */
+import { parseAgentSessionKey } from "../ui/src/lib/sessions/session-key.ts";
 
-function parseAgentSessionKey(sessionKey) {
-  const m = /^agent:([^:]+):/.exec(sessionKey);
-  return m ? { agentId: m[1] } : null;
-}
-
-// Pre-fix: only setSessionKey (chat updates, agent chip stays on previous agent).
-function selectSessionBroken(ctx, sessionKey) {
-  ctx.gateway.setSessionKey(sessionKey);
-}
-
-// Fixed: also sync agentSelection from the session key (matches chat-pane).
+// Production sequence from AppSidebarSessionNavigationElement.selectSession
 function selectSessionFixed(ctx, sessionKey) {
   const agentId = parseAgentSessionKey(sessionKey)?.agentId;
   if (agentId) {
     ctx.agentSelection.set(agentId);
   }
+  ctx.gateway.setSessionKey(sessionKey);
+}
+
+// Pre-fix: only setSessionKey
+function selectSessionBroken(ctx, sessionKey) {
   ctx.gateway.setSessionKey(sessionKey);
 }
 
@@ -42,14 +37,16 @@ function runScenario(selectSession) {
       },
     },
   };
-  // Operator is on agent main, then opens a research session from the switcher.
   selectSession(ctx, "agent:research:work");
-  // Agent chip no-ops when re-selecting selectedId; after switch it must be research
-  // so clicking main is not a no-op.
   const canReselectMain =
     ctx.agentSelection.selectedId === "research" && calls.sessionKey === "agent:research:work";
   return { calls, canReselectMain, selectedId: ctx.agentSelection.selectedId };
 }
+
+console.log(
+  "production parseAgentSessionKey('agent:research:work') =>",
+  parseAgentSessionKey("agent:research:work"),
+);
 
 const before = runScenario(selectSessionBroken);
 const after = runScenario(selectSessionFixed);
@@ -60,7 +57,7 @@ console.log(`  agentSelection.selectedId=${before.selectedId}`);
 console.log(`  agentId set called: ${before.calls.agentId}`);
 console.log(`  can re-select previous agent after switch: ${before.canReselectMain}`);
 
-console.log("\nAFTER (sync agentSelection from session key):");
+console.log("\nAFTER (production parseAgentSessionKey + agentSelection.set):");
 console.log(`  sessionKey=${after.calls.sessionKey}`);
 console.log(`  agentSelection.selectedId=${after.selectedId}`);
 console.log(`  agentId set called: ${after.calls.agentId}`);
