@@ -3638,6 +3638,7 @@ export const en: TranslationMap = {
       dockHidden: "Hide chat",
       resizeDock: "Resize chat dock",
       reopenChat: "Show chat",
+      defaultTab: "Main",
       mockPlaceholder: "Board view seam · {tabs} tabs · {widgets} widgets",
       mockOverview: "Overview",
       mockResearch: "Research",

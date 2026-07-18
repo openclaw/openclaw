@@ -227,7 +227,14 @@ class MockBoardProvider implements BoardProvider {
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
       ? snapshot.tabs
-      : [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }];
+      : [
+          {
+            tabId: "main",
+            title: t("chat.board.defaultTab"),
+            position: 0,
+            chatDock: "right" as const,
+          },
+        ];
     const existing = snapshot.widgets.find((widget) => widget.name === name);
     const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
     widgets.push({
