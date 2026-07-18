@@ -146,29 +146,31 @@ type BasetenLiveModelRow = {
   supported_features?: unknown;
 };
 
-function readPositiveInteger(value: unknown): number | undefined {
+const DECIMAL_NUMBER_STRING_RE = /^[+-]?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function readFiniteDecimalNumber(value: unknown): number | undefined {
   const number =
     typeof value === "number"
       ? value
-      : typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)
+      : typeof value === "string" && DECIMAL_NUMBER_STRING_RE.test(value.trim())
         ? Number(value)
         : undefined;
-  if (number === undefined) {
-    return undefined;
-  }
-  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
+  return number !== undefined && Number.isFinite(number) ? number : undefined;
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  const number = readFiniteDecimalNumber(value);
+  return number !== undefined && Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
 function readPerTokenPrice(value: unknown): number | undefined {
-  if (
-    typeof value !== "number" &&
-    (typeof value !== "string" || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value))
-  ) {
+  const number = readFiniteDecimalNumber(value);
+  if (number === undefined || number < 0) {
     return undefined;
   }
-  const number = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(number) && number >= 0
-    ? Number((number * 1_000_000).toFixed(9))
+  const costPerMillionTokens = number * 1_000_000;
+  return Number.isFinite(costPerMillionTokens)
+    ? Number(costPerMillionTokens.toFixed(9))
     : undefined;
 }
 

@@ -121,26 +121,43 @@ describe("Baseten model catalog", () => {
     });
   });
 
-  it("rejects malformed live numeric strings before applying model metadata", () => {
-    const model = projectBasetenLiveModels([
+  it("rejects malformed live numeric strings without dropping compatible forms", () => {
+    const models = projectBasetenLiveModels([
       {
         id: "thinkingmachines/inkling",
         object: "model",
         context_length: "0x100000",
-        max_completion_tokens: "3.2e4",
+        max_completion_tokens: "0x8000",
         pricing: {
-          prompt: "0x1",
-          completion: "4.2e-6",
-          input_cache_read: " 0.00000018 ",
+          prompt: "1e308",
+          completion: "NaN",
+          input_cache_read: "0x1",
         },
       },
-    ])[0];
+      {
+        id: "future/model",
+        object: "model",
+        context_length: "3.2e4",
+        max_completion_tokens: " 4e3 ",
+        pricing: {
+          prompt: " 0.0000002 ",
+          completion: "4.2e-6",
+          input_cache_read: ".00000004",
+        },
+      },
+    ]);
 
-    expect(model).toMatchObject({
+    expect(models[0]).toMatchObject({
       id: "thinkingmachines/inkling",
       contextWindow: 1_048_000,
       maxTokens: 32_000,
       cost: { input: 1, output: 4.05, cacheRead: 0.17, cacheWrite: 0 },
+    });
+    expect(models[1]).toMatchObject({
+      id: "future/model",
+      contextWindow: 32_000,
+      maxTokens: 4_000,
+      cost: { input: 0.2, output: 4.2, cacheRead: 0.04, cacheWrite: 0 },
     });
   });
 
