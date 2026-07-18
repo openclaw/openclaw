@@ -209,9 +209,8 @@ export function createGatewayHooksRequestHandler(params: {
       mainKey: dispatchCfg.session?.mainKey,
       cfg: dispatchCfg,
     });
-    // Acceptance fixes the target identity; queued execution still reads fresh
-    // settings. Otherwise reload can move one FIFO entry to another session.
-    job.agentId = agentId;
+    // Queue identity is fixed when accepted; the isolated runner still receives
+    // the original session expression and fresh config, preserving hook routing.
     void runWithGatewayIndependentRootWorkContinuation(() =>
       enqueueHookAgentDispatch(queueKey, async () => {
         try {
@@ -220,7 +219,7 @@ export function createGatewayHooksRequestHandler(params: {
           const cfg = getRuntimeConfig();
           hookEventSessionKey = resolveHookEventSessionKey({
             cfg,
-            agentId,
+            agentId: value.agentId,
           });
           const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
           const result = await runCronIsolatedAgentTurn({
@@ -228,7 +227,8 @@ export function createGatewayHooksRequestHandler(params: {
             deps,
             job,
             message: value.message,
-            sessionKey: queueKey,
+            sessionKey,
+            agentId,
             lane: "cron",
           });
           const summary = resolveHookRunSummary(result);
