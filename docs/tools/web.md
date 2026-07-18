@@ -132,7 +132,7 @@ type WebSearchOutput =
   | {
       kind: "error";
       provider: string;
-      error: string;
+      error: "provider_error";
       message: string;
       docs?: string;
     }
@@ -192,8 +192,9 @@ true: provider prose (`title`, `snippet`, `siteName`, `content`, citation
 titles, error `message`) is stripped of any pre-existing envelope lines and
 re-wrapped exactly once at the core boundary, so no provider metadata can spoof
 the marker. `query` is always the requested query, citation and result URLs
-must parse as http(s), `published` must be ISO-date shaped, and a payload
-carrying an `error` key is always reported as `kind: "error"`. Raw passthrough
+must parse as http(s), `published` must be ISO-date shaped, URLs are emitted canonicalized, and a
+payload carrying an `error` key is always reported as `kind: "error"` with the
+raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
 ## Auto-detection

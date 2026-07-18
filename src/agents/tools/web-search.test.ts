@@ -37,7 +37,7 @@ describe("web_search tool schema", () => {
 
     expect(tool?.outputSchema).toBe(WebSearchOutputSchema);
     expect(compactToolOutputHint(tool?.outputSchema)).toBe(
-      '{ error: string; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; tookMs?: number } | { content: string; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number } | { data: unknown; kind: "raw"; provider: string }',
+      '{ error: "provider_error"; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; tookMs?: number } | { content: string; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number } | { data: unknown; kind: "raw"; provider: string }',
     );
   });
 });
@@ -562,7 +562,7 @@ const normalizedProviderFixtures: Array<{
     expected: {
       kind: "error",
       provider: "brave",
-      error: "missing_brave_api_key",
+      error: "provider_error",
       message: "missing_brave_api_key",
       docs: "https://docs.openclaw.ai/tools/web",
     },
@@ -738,7 +738,8 @@ describe("web_search normalized output contract", () => {
 
     expect(normalized.kind).toBe("error");
     if (normalized.kind === "error") {
-      expect(normalized.error).toBe("rate_limited");
+      expect(normalized.error).toBe("provider_error");
+      expect(normalized.message).toContain("rate_limited");
     }
   });
 

@@ -47,7 +47,7 @@ export const WebSearchOutputSchema = Type.Union([
     {
       kind: Type.Literal("error"),
       provider: Type.String(),
-      error: Type.String(),
+      error: Type.Literal("provider_error"),
       message: Type.String(),
       docs: Type.Optional(Type.String()),
     },
@@ -111,16 +111,16 @@ function readFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function isHttpUrl(value: string): boolean {
+// URLs are emitted canonicalized (percent-encoded), so whitespace or readable
+// prose smuggled into a URL slot cannot ride outside the envelope as-is.
+function toHttpUrl(value: string): string | undefined {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
-
-const ERROR_CODE_RE = /^[A-Za-z0-9_.-]{1,64}$/u;
 // Purely structural date charset; free-form dates could smuggle instructions.
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
@@ -141,14 +141,16 @@ function normalizeCitations(value: unknown): Array<{ url: string; title?: string
   // would bypass the untrusted-content envelope.
   return value.flatMap((entry) => {
     if (typeof entry === "string") {
-      return isHttpUrl(entry) ? [{ url: entry }] : [];
+      const url = toHttpUrl(entry);
+      return url ? [{ url }] : [];
     }
-    if (!isRecord(entry) || typeof entry.url !== "string" || !isHttpUrl(entry.url)) {
+    const url = isRecord(entry) && typeof entry.url === "string" ? toHttpUrl(entry.url) : undefined;
+    if (!isRecord(entry) || !url) {
       return [];
     }
     return [
       {
-        url: entry.url,
+        url,
         ...(typeof entry.title === "string" ? { title: wrapProse(entry.title) } : {}),
       },
     ];
@@ -172,18 +174,19 @@ export function normalizeWebSearchOutput(params: {
   // success payloads, so treating it as failure first prevents an error plus
   // empty results from masquerading as a successful search.
   if (Object.hasOwn(result, "error")) {
-    // Error branches carry no externalContent marker, so nothing free-form may
-    // pass unwrapped: codes are charset-gated, docs must parse as http(s), and
-    // the human-readable message gets the untrusted envelope.
+    // Error branches carry no externalContent marker, so nothing provider-
+    // controlled may pass unwrapped: the structured code is a core literal,
+    // the raw provider code and message travel inside the envelope, and docs
+    // must canonicalize as http(s).
     const rawError = typeof result.error === "string" ? result.error : "provider_error";
-    const error = ERROR_CODE_RE.test(rawError) ? rawError : "provider_error";
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
+    const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
     return {
       kind: "error",
       provider,
-      error,
-      message: wrapProse(rawMessage),
-      ...(typeof result.docs === "string" && isHttpUrl(result.docs) ? { docs: result.docs } : {}),
+      error: "provider_error",
+      message: wrapProse(rawMessage === rawError ? rawError : `${rawError}: ${rawMessage}`),
+      ...(docs ? { docs } : {}),
     };
   }
 
@@ -197,7 +200,7 @@ export function normalizeWebSearchOutput(params: {
       isRecord(entry) &&
       typeof entry.title === "string" &&
       typeof entry.url === "string" &&
-      isHttpUrl(entry.url),
+      toHttpUrl(entry.url) !== undefined,
   );
   if (rows && conformingRows) {
     const results = rows.map((row) => {
@@ -215,7 +218,7 @@ export function normalizeWebSearchOutput(params: {
           : undefined;
       return {
         title: wrapProse(row.title as string),
-        url: row.url as string,
+        url: toHttpUrl(row.url as string) as string,
         ...(snippet !== undefined ? { snippet: wrapProse(snippet) } : {}),
         ...(published !== undefined ? { published } : {}),
         ...(typeof row.siteName === "string" ? { siteName: wrapProse(row.siteName) } : {}),
