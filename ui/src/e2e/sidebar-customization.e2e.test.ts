@@ -569,10 +569,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
     try {
       await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent("agent:main:work")}`);
-      const brand = page.locator("openclaw-app-sidebar").getByRole("link", { name: "New thread" });
-      await expect.poll(() => brand.getAttribute("href")).toBe("/new");
-
-      await brand.click();
+      await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
 
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");

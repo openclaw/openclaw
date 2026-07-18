@@ -519,7 +519,7 @@ suite("Claude native session catalog", () => {
     expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
     expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
     await expect
-      .poll(() => page.getByText("This session is on a paired node and is view-only.").count())
+      .poll(() => page.getByText("This thread is on a paired node and is view-only.").count())
       .toBe(1);
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const expectCenteredLayout = async (screenshotName: string) => {

@@ -442,7 +442,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await expect.poll(() => createDialog.isVisible()).toBe(true);
       await createForm.getByLabel("Title").fill(createdCard.title);
       await createForm.getByLabel("Notes").fill(createdCard.notes ?? "");
-      await chooseWorkboardSelectOption(createForm, "Session", linkedSessionName);
+      await chooseWorkboardSelectOption(createForm, "Thread", linkedSessionName);
       await createForm.getByLabel("Labels").fill("ui, proof");
       await captureScreenshot(writable.page, artifacts, "02-create-dialog");
       const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;

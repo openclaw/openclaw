@@ -1867,10 +1867,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       // The background hydrate must not take the shared sessions loading
       // flag, which would disable New thread for the whole request.
-      expect(await page.getByRole("button", { name: "New thread" }).first().isEnabled()).toBe(true);
+      const newThread = page.getByRole("button", { name: "New thread" }).first();
+      expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
-      await expect.poll(() => newSession.isEnabled()).toBe(true);
+      await expect.poll(() => newThread.isEnabled()).toBe(true);
     } finally {
       await closeBrowserContext(context);
     }
@@ -3482,15 +3483,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      await page.getByRole("button", { name: "Sort threads" }).click();
+      const sortThreads = page.getByRole("button", { name: "Sort threads" });
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
-      await page.getByRole("button", { name: "Sort threads" }).click();
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
-      await page.getByRole("button", { name: "Sort threads" }).click();
+      await sortThreads.locator("..").hover();
+      await sortThreads.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {
