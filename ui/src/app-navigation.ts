@@ -10,7 +10,7 @@ type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
 
-// The sidebar shows a small user-customizable pinned set; every other nav route
+// The sidebar shows a small user-customizable ordered zone; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
@@ -49,39 +49,70 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
+export type SidebarZoneEntry =
+  | { type: "route"; route: SidebarNavRoute }
+  | { type: "session"; key: string };
+
 // Keep the highest-value operational destinations visible on first use. Users
-// can still replace this set through the customize menu.
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "custodian",
-  "usage",
-  "cron",
-  "plugins",
-] as const satisfies readonly SidebarNavRoute[];
+// can still replace this route set through the customize menu.
+export const DEFAULT_SIDEBAR_ENTRIES = ["custodian", "usage", "cron", "plugins"].map((route) =>
+  serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
+);
 
 /**
- * Normalize a persisted pinned-route list. Returns null when the value is not a
- * list (caller falls back to defaults); unknown or duplicate entries are dropped
- * so prefs survive route renames/removals without a migration.
+ * Parse the compact persisted representation used by browser and synced prefs.
  */
-export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
+export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  if (value.startsWith("route:")) {
+    const route = value.slice("route:".length);
+    return SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)
+      ? { type: "route", route: route as SidebarNavRoute }
+      : null;
+  }
+  if (value.startsWith("session:")) {
+    const key = value.slice("session:".length).trim();
+    return key ? { type: "session", key } : null;
+  }
+  return null;
+}
+
+export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
+  return entry.type === "route" ? `route:${entry.route}` : `session:${entry.key}`;
+}
+
+/**
+ * Normalize a persisted sidebar-zone list. Returns null when the value is not a
+ * list; malformed and duplicate entries are dropped.
+ */
+export function normalizeSidebarEntries(value: unknown): string[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const pinned: SidebarNavRoute[] = [];
-  for (const entry of value) {
-    if (
-      typeof entry === "string" &&
-      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
-      !pinned.includes(entry as SidebarNavRoute)
-    ) {
-      pinned.push(entry as SidebarNavRoute);
+  const normalized: string[] = [];
+  for (const valueEntry of value) {
+    const parsed = parseSidebarEntry(valueEntry);
+    if (!parsed) {
+      continue;
+    }
+    const entry = serializeSidebarEntry(parsed);
+    if (!normalized.includes(entry)) {
+      normalized.push(entry);
     }
   }
-  return pinned;
+  return normalized;
 }
 
-export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+export function sidebarMoreRoutes(entries: readonly string[]): SidebarNavRoute[] {
+  const visibleRoutes = new Set(
+    entries.flatMap((entry) => {
+      const parsed = parseSidebarEntry(entry);
+      return parsed?.type === "route" ? [parsed.route] : [];
+    }),
+  );
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !visibleRoutes.has(routeId));
 }
 
 type SettingsNavigationGroup = {

@@ -125,12 +125,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
               if (event.dataTransfer) {
                 writeSessionDragData(event.dataTransfer, session.key);
                 this.draggingSessionKey = session.key;
+                this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
               }
             }}
         @dragend=${session.isChild
           ? nothing
           : () => {
-              this.draggingSessionKey = null;
+              this.finishSidebarEntryDrag();
               this.sessionDropTarget = null;
             }}
         @contextmenu=${session.isChild
@@ -302,6 +303,10 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           </div>`
         : nothing}
     </div>`;
+  }
+
+  protected renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
+    return this.renderSessionTree(session);
   }
 
   private renderSessionSection(
@@ -578,7 +583,14 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
     return html`
-      <section class="sidebar-sessions">
+      <section
+        class="sidebar-sessions ${this.sessionListRemovalDrop
+          ? "sidebar-sessions--removal-drop"
+          : ""}"
+        @dragover=${(event: DragEvent) => this.handleSessionListDragOver(event)}
+        @dragleave=${(event: DragEvent) => this.handleSessionListDragLeave(event)}
+        @drop=${(event: DragEvent) => this.handleSessionListDrop(event)}
+      >
         ${this.sessionMutationError
           ? html`
               <div

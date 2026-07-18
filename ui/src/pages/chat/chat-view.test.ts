@@ -448,7 +448,7 @@ function createChatHeaderState(
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,
-      sidebarPinnedRoutes: [],
+      sidebarEntries: [],
       chatShowThinking: false,
       chatShowToolCalls: true,
     },

@@ -1,6 +1,10 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import {
+  serializeSidebarEntry,
+  type NavigationRouteId,
+  type SidebarZoneEntry,
+} from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
@@ -19,6 +23,7 @@ import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -282,7 +287,43 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
+  private renderSidebarZoneEntry(
+    entry: SidebarZoneEntry,
+    sessionRows: ReadonlyMap<string, SidebarRecentSession>,
+  ) {
+    if (entry.type === "route" && !this.isRouteEnabled(entry.route)) {
+      return nothing;
+    }
+    const serialized = serializeSidebarEntry(entry);
+    const dropPosition =
+      this.sidebarZoneDropTarget?.entry === serialized ? this.sidebarZoneDropTarget.position : null;
+    const content =
+      entry.type === "route"
+        ? this.renderRoute(entry.route)
+        : sessionRows.has(entry.key)
+          ? this.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
+          : nothing;
+    return html`
+      <div
+        class="sidebar-zone-entry ${dropPosition
+          ? `sidebar-zone-entry--drop-${dropPosition}`
+          : ""} ${this.draggingSidebarEntry === serialized ? "sidebar-zone-entry--dragging" : ""}"
+        data-sidebar-entry=${serialized}
+        draggable=${entry.type === "route" ? "true" : "false"}
+        @dragstart=${entry.type === "route"
+          ? (event: DragEvent) => this.startSidebarRouteDrag(event, entry.route)
+          : nothing}
+        @dragend=${entry.type === "route" ? () => this.finishSidebarEntryDrag() : nothing}
+        @dragover=${(event: DragEvent) => this.handleSidebarZoneDragOver(event, serialized)}
+        @drop=${(event: DragEvent) => this.handleSidebarZoneDrop(event, serialized)}
+      >
+        ${content}
+      </div>
+    `;
+  }
+
   override render() {
+    const sidebarZone = this.reconciledSidebarZone();
     return html`
       <aside class="sidebar">
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
@@ -294,9 +335,16 @@ class AppSidebar extends AppSidebarSessionListElement {
           >
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               ${this.renderPagesHead()}
-              <div class="nav-section__items">
+              <div
+                class="nav-section__items"
+                @dragover=${(event: DragEvent) => this.handleSidebarZoneDragOver(event)}
+                @dragleave=${(event: DragEvent) => this.handleSidebarZoneDragLeave(event)}
+                @drop=${(event: DragEvent) => this.handleSidebarZoneDrop(event)}
+              >
                 ${this.renderHomeRow()}
-                ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
+                ${sidebarZone.entries.map((entry) =>
+                  this.renderSidebarZoneEntry(entry, sidebarZone.sessionRows),
+                )}
               </div>
             </nav>
             ${this.renderSessions()}

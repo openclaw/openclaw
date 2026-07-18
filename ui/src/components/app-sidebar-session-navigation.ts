@@ -1,5 +1,6 @@
 import { state } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -31,6 +32,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
+import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import {
   adoptedCatalogSessionKeys,
@@ -242,7 +244,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     const sections = groupSidebarSessionRows(rows, {
       grouping: this.sessionsGrouping,
       knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
-    });
+    }).filter((section) => section.id !== "pinned");
     const expandedRows = sections.flatMap((section) =>
       this.isSessionSectionCollapsed(section.id) ? [] : section.rows,
     );
@@ -263,10 +265,30 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return { sections: limitedSections, expandedRows, visibleRows };
   }
 
+  protected reconciledSidebarZone() {
+    const navigationState = this.getSessionNavigationState();
+    const pinnedRows = this.selectedAgentSessionRows(navigationState).filter((row) => row.pinned);
+    const reconciled = reconcileSidebarZone(this.sidebarEntries, pinnedRows, SIDEBAR_NAV_ROUTES);
+    return {
+      ...reconciled,
+      sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
+    };
+  }
+
   /** Rows in on-screen order; shift ranges and batch actions share this ordering. */
   protected visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const navigationState = this.getSessionNavigationState();
-    return this.zonedVisibleSections(this.selectedAgentSessionRows(navigationState)).visibleRows;
+    const rows = this.selectedAgentSessionRows(navigationState);
+    const { visibleRows } = this.zonedVisibleSections(rows);
+    const pinnedByKey = new Map(rows.filter((row) => row.pinned).map((row) => [row.key, row]));
+    const pinnedRows = this.reconciledSidebarZone().entries.flatMap((entry) =>
+      entry.type === "session"
+        ? pinnedByKey.get(entry.key)
+          ? [pinnedByKey.get(entry.key)!]
+          : []
+        : [],
+    );
+    return [...pinnedRows, ...visibleRows];
   }
 
   protected selectedVisibleSessions(): SidebarRecentSession[] {

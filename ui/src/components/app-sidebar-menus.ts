@@ -3,8 +3,9 @@ import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import {
   cancelRoutePreload,
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
+  DEFAULT_SIDEBAR_ENTRIES,
   scheduleRoutePreload,
+  serializeSidebarEntry,
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -314,7 +315,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     const trigger = this.customizeMenuTrigger;
     return renderSidebarCustomizeMenu({
       position,
-      pinnedRoutes: this.sidebarPinnedRoutes,
+      sidebarEntries: this.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
@@ -324,14 +325,18 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.closeCustomizeMenu({ restoreFocus });
       },
       onToggleRoute: (routeId) => {
-        const pinned = this.sidebarPinnedRoutes;
-        const next = pinned.includes(routeId)
-          ? pinned.filter((route) => route !== routeId)
-          : [...pinned, routeId];
-        this.onUpdatePinnedRoutes?.(next);
+        const entry = serializeSidebarEntry({ type: "route", route: routeId });
+        const canonical = this.reconciledSidebarZone().sidebarEntries;
+        const next = canonical.includes(entry)
+          ? canonical.filter((candidate) => candidate !== entry)
+          : [...canonical, entry];
+        this.onUpdateSidebarEntries?.(next);
       },
       onReset: () => {
-        this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
+        const sessions = this.reconciledSidebarZone().entries.flatMap((entry) =>
+          entry.type === "session" ? [serializeSidebarEntry(entry)] : [],
+        );
+        this.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
         this.closeCustomizeMenu({ restoreFocus: true });
       },
     });
@@ -568,7 +573,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       open: this.moreMenuPosition !== null,
       active: sidebarMoreMenuHoldsActiveRoute({
         activeRouteId: this.activeRouteId,
-        pinnedRoutes: this.sidebarPinnedRoutes,
+        sidebarEntries: this.sidebarEntries,
         isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       }),
       onToggle: (trigger) => this.toggleMoreMenu(trigger),
@@ -583,7 +588,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       basePath: this.basePath,
       activeRouteId: this.activeRouteId,
       activePluginTabId: this.activePluginTabId,
-      pinnedRoutes: this.sidebarPinnedRoutes,
+      sidebarEntries: this.sidebarEntries,
       pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
