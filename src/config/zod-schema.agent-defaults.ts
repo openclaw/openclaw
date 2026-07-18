@@ -158,6 +158,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     compaction: z
       .object({
+        enabled: z.boolean().optional(),
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         provider: z.string().optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
