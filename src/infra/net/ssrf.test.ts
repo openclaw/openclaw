@@ -181,7 +181,7 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
     const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin("http://example.com.:11434/v1");
 
     expect(resolveSsrFPolicyForUrl(new URL("http://example.com:11434/v1/chat"), policy)).toEqual({
-      allowedOrigins: ["http://example.com.:11434"],
+      allowedOrigins: ["http://example.com:11434"],
       allowedHostnames: ["example.com"],
     });
   });
