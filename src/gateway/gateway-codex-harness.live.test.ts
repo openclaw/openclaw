@@ -1038,7 +1038,7 @@ async function verifyCodexChatImageProbe(params: {
         {
           mimeType: "image/png",
           fileName: "codex-chat-image-probe.png",
-          content: renderBitmapTextPngBase64(token),
+          content: renderBitmapTextPngBase64(token, { scale: 12, padding: 24 }),
         },
       ],
       originatingChannel: "codex-harness-live",
