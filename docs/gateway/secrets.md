@@ -615,7 +615,7 @@ Behavior:
 - Recovered: emitted once after the next successful activation.
 - Repeated failures while already degraded log warnings but do not re-emit the event.
 - Startup fail-fast never emits a degraded event, because runtime never became active.
-- Startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. The warning includes the owner kind and id, a redacted reason, `cold` or `stale` state, and the `openclaw secrets reload` retry hint. It never includes resolved values or SecretRef ids.
+- Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
 - `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
 
 ## Command-path resolution

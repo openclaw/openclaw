@@ -4600,6 +4600,44 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
   });
 
+  it("derives ask_user QA summaries from the returned answers", async () => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Nothing to say: entire reply exactly NO_REPLY",
+            },
+          ],
+        },
+        makeUserInput(
+          "QA routing marker: tool search qa check target=ask_user. Ask structured questions, then summarize their actual answers.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_ask_user_1",
+          output: JSON.stringify({
+            content: [
+              {
+                type: "text",
+                text: 'Deploy: Canary\nChecks: Lint, Unit (Recommended)\nNote: weekend-only\n\n{"status":"answered"}',
+              },
+            ],
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(
+      "ASK-USER-ROUNDTRIP-OK | deploy=Canary | checks=Lint,Unit | note=weekend-only",
+    );
+  });
+
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 

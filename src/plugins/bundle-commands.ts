@@ -10,8 +10,10 @@ import {
   stripFrontmatterBlock,
 } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { parseFrontmatterBool } from "../shared/frontmatter.js";
 import {
@@ -35,6 +37,7 @@ type ClaudeBundleCommandSpec = {
 };
 
 const BUNDLE_COMMAND_MAX_BYTES = 1 * 1024 * 1024;
+const log = createSubsystemLogger("plugins/bundle-commands");
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
   const result = readRootJsonObjectSync({
@@ -107,9 +110,10 @@ function loadBundleCommandsFromRoot(params: {
     let raw: string;
     try {
       raw = readRegularFileSync({ filePath, maxBytes: BUNDLE_COMMAND_MAX_BYTES }).buffer.toString(
-        "utf8",
+        "utf-8",
       );
-    } catch {
+    } catch (error) {
+      log.warn(`skipping unreadable bundle command file ${filePath}: ${formatErrorMessage(error)}`);
       continue;
     }
     const frontmatter = parseFrontmatterBlock(raw);

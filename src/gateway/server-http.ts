@@ -9,6 +9,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -765,7 +766,11 @@ export function createGatewayHttpServer(opts: {
           },
         });
       }
-      if (nodeCapability && isCanvasDocumentHttpPath(scopedRequestPath)) {
+      if (
+        nodeCapability &&
+        isCoreCanvasHostEnabled(configSnapshot) &&
+        isCanvasDocumentHttpPath(scopedRequestPath)
+      ) {
         requestStages.push({
           name: "canvas-documents",
           run: async () =>
