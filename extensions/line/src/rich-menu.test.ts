@@ -68,11 +68,18 @@ describe("messageAction", () => {
     expect(action.text).toHaveLength(300);
   });
 
-  it("truncates message text without leaving a dangling surrogate", () => {
-    const action = messageAction("Go", `${"x".repeat(299)}\u{1f600}`) as { text: string };
+  it("preserves 300 emoji graphemes in message text", () => {
+    const text = "\u{1f600}".repeat(300);
+    const action = messageAction("Go", text) as { text: string };
 
-    expect(action.text).toBe("x".repeat(299));
-    expect(action.text).not.toMatch(/[\uD800-\uDBFF]$/u);
+    expect(action.text).toBe(text);
+  });
+
+  it("truncates message text to 300 graphemes", () => {
+    const grapheme = "e\u0301";
+    const action = messageAction("Go", grapheme.repeat(301)) as { text: string };
+
+    expect(action.text).toBe(grapheme.repeat(300));
   });
 });
 
