@@ -1614,6 +1614,7 @@ export const en: TranslationMap = {
   tabs: {
     agents: "Agents",
     activity: "Activity",
+    apps: "Apps",
     approvals: "Approvals",
     workboard: "Workboard",
     worktrees: "Worktrees",
@@ -1651,6 +1652,7 @@ export const en: TranslationMap = {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Browser-local tool activity summaries.",
+    apps: "Companion apps for phone, watch, desktop, and browser.",
     approvals: "Recent exec, plugin, and system-agent approvals.",
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
@@ -2034,6 +2036,65 @@ export const en: TranslationMap = {
     gatewayVersion: "Connected Gateway version",
     gatewayVersionHint:
       "Reported by the active Gateway connection; separate from this Control UI build.",
+  },
+  appsPage: {
+    heroTitle: "Take OpenClaw everywhere",
+    heroTagline:
+      "Companion apps for your phone, watch, desktop, and browser — plus plugins to extend what your agent can do.",
+    sectionMobile: "On your phone",
+    sectionWatch: "On your wrist",
+    sectionDesktop: "On your desktop",
+    sectionBrowser: "In your browser",
+    sectionCommunity: "Community",
+    badgeBundledIos: "Included with the iOS app",
+    badgeBundledAndroid: "Included with the Android app",
+    ctaAppStore: "App Store",
+    ctaPlayStore: "Google Play",
+    ctaDownload: "Download",
+    ctaDocs: "Docs",
+    ctaSetupGuide: "Setup guide",
+    ctaOpenPlugins: "Open Plugins",
+    ctaBrowseClawHub: "Browse ClawHub",
+    linkDiscord: "Discord community",
+    linkDocs: "Docs",
+    cards: {
+      ios: {
+        title: "iPhone",
+        desc: "Chat, talk, approve actions, and share into OpenClaw from iOS.",
+      },
+      android: {
+        title: "Android",
+        desc: "Your Android phone as a full OpenClaw node — chat, camera, and Canvas.",
+      },
+      appleWatch: {
+        title: "Apple Watch",
+        desc: "Glanceable chats and quick replies from your wrist.",
+      },
+      wearOs: {
+        title: "Wear OS",
+        desc: "The Android companion extends OpenClaw to your watch.",
+      },
+      macos: {
+        title: "macOS",
+        desc: "Menu bar companion for your Gateway — notifications, approvals, quick chat.",
+      },
+      windows: {
+        title: "Windows",
+        desc: "The Windows companion connects your PC as an OpenClaw node.",
+      },
+      linux: {
+        title: "Linux",
+        desc: "Native desktop app — .deb and AppImage builds.",
+      },
+      chrome: {
+        title: "Chrome extension",
+        desc: "Let OpenClaw drive your existing Chrome — tabs, pages, and forms.",
+      },
+      plugins: {
+        title: "Plugins & ClawHub",
+        desc: "Extend OpenClaw with channels, tools, and skills from the community.",
+      },
+    },
   },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
@@ -2822,6 +2883,7 @@ export const en: TranslationMap = {
       skills: "Skills",
     },
     items: {
+      apps: "Apps",
       sessions: "Sessions",
       scheduled: "Scheduled",
       skills: "Skills",
