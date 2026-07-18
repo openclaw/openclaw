@@ -413,14 +413,51 @@ test("sessions.create provisions a worktree from an admin-selected cwd", async (
   }
 });
 
-test("sessions.create rejects cwd without a managed worktree", async () => {
+test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
   const created = await directSessionReq("sessions.create", { cwd: "/tmp/repo" });
+
+  expect(created.ok).toBe(true);
+  expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
+    "/tmp/repo",
+  );
+});
+
+test("sessions.create keeps its cwd contract absolute-only", async () => {
+  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
 
   expect(created.ok).toBe(false);
   expect(created.error).toMatchObject({
     code: "INVALID_REQUEST",
-    message: "sessions.create cwd requires worktree=true or execNode",
+    message: "sessions.create cwd must be absolute",
   });
+});
+
+test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const created = await directSessionReq("sessions.create", { cwd: "/tmp/outside" });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "sessions.create cwd is outside the sandboxed agent workspace",
+    });
+  } finally {
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create allows cwd within a sandboxed agent workspace", async () => {
+  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  try {
+    const cwd = "/tmp/safe-workspace/packages/app";
+    const created = await directSessionReq("sessions.create", { cwd });
+
+    expect(created.ok).toBe(true);
+    expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
+  } finally {
+    testState.agentConfig = undefined;
+  }
 });
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {

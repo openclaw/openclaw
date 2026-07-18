@@ -306,6 +306,9 @@ describe("sessions_spawn tool", () => {
       const result = await tool.execute("visible", {
         task: "inspect issue",
         label: "Issue review",
+        model: "anthropic/claude-sonnet-4-6",
+        cwd: dir,
+        context: "fork",
         visible: true,
         worktree: true,
         worktreeName: "issue-review",
@@ -322,9 +325,11 @@ describe("sessions_spawn tool", () => {
       expect(callGateway).toHaveBeenCalledWith("sessions.create", {
         agentId: "main",
         label: "Issue review",
-        model: "openai/gpt-5.4",
+        model: "anthropic/claude-sonnet-4-6",
         task: "inspect issue",
         parentSessionKey: "agent:main:main",
+        fork: true,
+        cwd: dir,
         worktree: true,
         worktreeName: "issue-review",
         worktreeBaseRef: "main",
@@ -394,6 +399,138 @@ describe("sessions_spawn tool", () => {
         parentSessionKey: "agent:main:main",
       }),
     );
+    expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
+  });
+
+  it("rejects cross-agent visible transcript forks", async () => {
+    const callGateway = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["reviewer"] } },
+          list: [{ id: "main" }, { id: "reviewer" }],
+        },
+      },
+      callGateway,
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-cross-agent-fork", {
+      task: "review patch",
+      agentId: "reviewer",
+      context: "fork",
+      visible: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error:
+        'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects cwd escape for sandboxed visible sessions", async () => {
+    await withTempDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          agents: {
+            defaults: { sandbox: { mode: "all" } },
+            list: [{ id: "main", workspace: path.join(dir, "workspace") }],
+          },
+        },
+        callGateway,
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible-sandbox-cwd", {
+        task: "inspect",
+        cwd: path.join(dir, "outside"),
+        visible: true,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "forbidden",
+        error:
+          "cwd override is not supported outside the target agent workspace for sandboxed visible session runs",
+      });
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows cwd within a sandboxed visible session workspace", async () => {
+    await withTempDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
+      const workspace = path.join(dir, "workspace");
+      const cwd = path.join(workspace, "packages", "app");
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          agents: {
+            defaults: { sandbox: { mode: "all" } },
+            list: [{ id: "main", workspace }],
+          },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible-sandbox-cwd", {
+        task: "inspect",
+        cwd,
+        visible: true,
+      });
+
+      expect(result.details).toMatchObject({ status: "accepted" });
+      expect(callGateway).toHaveBeenCalledWith("sessions.create", expect.objectContaining({ cwd }));
+    });
+  });
+
+  it.each([
+    [
+      "thinking",
+      { thinking: "high" },
+      "thinking unavailable with visible=true: thinking overrides are not wired to the sessions.create path",
+    ],
+    [
+      "thread",
+      { thread: true },
+      "thread unavailable with visible=true: visible sessions route to the dashboard, not a channel thread",
+    ],
+    [
+      "mode",
+      { mode: "session" },
+      "mode unavailable with visible=true: visible sessions are persistent dashboard sessions",
+    ],
+    [
+      "lightContext",
+      { lightContext: true },
+      "lightContext unavailable with visible=true: bootstrap staging is not wired to the sessions.create path",
+    ],
+    [
+      "attachments",
+      { attachments: [{ name: "note.txt", content: "hello" }] },
+      "attachments unavailable with visible=true: attachment staging is not wired to the sessions.create path",
+    ],
+    [
+      "attachAs",
+      { attachAs: { mountPath: "inputs" } },
+      "attachAs unavailable with visible=true: attachment staging is not wired to the sessions.create path",
+    ],
+  ] as const)("rejects visible %s overrides with a reason", async (_name, override, message) => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("visible-unsupported", { task: "inspect", visible: true, ...override }),
+    ).rejects.toThrow(message);
   });
 
   it("denies visible sessions when tool restrictions cannot carry forward", async () => {
