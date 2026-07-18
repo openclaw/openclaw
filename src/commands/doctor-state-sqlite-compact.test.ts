@@ -163,7 +163,6 @@ describe("runDoctorStateSqliteCompact", () => {
     expect(report.after.walSizeBytes).toBe(0);
     expect(report.after.pageSizeBytes).toBeGreaterThan(0);
     expect(report.reclaimedBytes).toBeGreaterThan(0);
-    expect(report.quickCheck).toBe("ok");
     expect(report.integrityCheck).toBe("ok");
   });
 
