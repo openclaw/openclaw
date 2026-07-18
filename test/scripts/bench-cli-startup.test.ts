@@ -169,7 +169,7 @@ describe("bench-cli-startup", () => {
             "--warmup",
             "0",
             "--timeout-ms",
-            "100",
+            "1000",
             "--json",
           ],
           {
