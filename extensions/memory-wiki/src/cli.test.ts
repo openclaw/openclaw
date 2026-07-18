@@ -790,7 +790,9 @@ cli note
     const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
       Record<string, unknown>
     >;
-    expectDefined(conversations[0], "first ChatGPT conversation").update_time = 9_000_000_000_000;
+    const conversation = expectDefined(conversations[0], "first ChatGPT conversation");
+    conversation.create_time = -1;
+    conversation.update_time = 9_000_000_000_000;
     await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
 
     const result = JSON.parse(
