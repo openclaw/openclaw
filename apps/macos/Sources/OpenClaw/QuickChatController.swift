@@ -468,7 +468,11 @@ final class QuickChatController: NSObject, NSWindowDelegate {
                 guard !Task.isCancelled,
                       self.recentSessionsRequestID == requestID,
                       self.isVisible,
-                      self.model.activePresentationID == presentationID
+                      self.model.activePresentationID == presentationID,
+                      // Eligibility can lapse while the fetch is in flight (a send may
+                      // have started); a menu whose selections would be ignored is worse
+                      // than no menu.
+                      self.model.canSelectRecentSession
                 else { return }
                 self.presentRecentSessionsMenu(rows: rows)
             } catch {
