@@ -2625,7 +2625,7 @@ describe("update-cli", () => {
     mockOwnedGitService();
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
-      await options.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 9 } });
+      await options?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 9 } });
       return makeOkUpdateResult({ mode: "git" });
     });
     databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
@@ -2716,7 +2716,7 @@ describe("update-cli", () => {
     mockOwnedGitService();
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
-      await options.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
+      await options?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
       return makeOkUpdateResult({ mode: "git" });
     });
     databasePreflightMocks.preflightOpenClawDatabaseSchemas
@@ -2740,7 +2740,7 @@ describe("update-cli", () => {
 
   it("fails a post-stop git refusal when no managed service was running", async () => {
     vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
-      await options.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
+      await options?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
       return makeOkUpdateResult({ mode: "git" });
     });
     databasePreflightMocks.preflightOpenClawDatabaseSchemas
