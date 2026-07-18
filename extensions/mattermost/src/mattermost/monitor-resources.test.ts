@@ -7,12 +7,16 @@ const sendMattermostTyping = vi.hoisted(() => vi.fn());
 const updateMattermostPost = vi.hoisted(() => vi.fn());
 const buildButtonProps = vi.hoisted(() => vi.fn());
 
-vi.mock("./client.js", () => ({
-  fetchMattermostChannel,
-  fetchMattermostUser,
-  sendMattermostTyping,
-  updateMattermostPost,
-}));
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    fetchMattermostChannel,
+    fetchMattermostUser,
+    sendMattermostTyping,
+    updateMattermostPost,
+  };
+});
 
 vi.mock("./interactions.js", () => ({
   buildButtonProps,
@@ -21,16 +25,10 @@ vi.mock("./interactions.js", () => ({
 describe("mattermost monitor resources", () => {
   let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
   let formatMattermostInboundMediaText: typeof import("./monitor-resources.js").formatMattermostInboundMediaText;
-  let MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS: typeof import("./monitor-resources.js").MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS;
-  let MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS: typeof import("./monitor-resources.js").MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS;
 
   beforeAll(async () => {
-    ({
-      createMattermostMonitorResources,
-      formatMattermostInboundMediaText,
-      MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
-      MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
-    } = await import("./monitor-resources.js"));
+    ({ createMattermostMonitorResources, formatMattermostInboundMediaText } =
+      await import("./monitor-resources.js"));
   });
 
   it("keeps media-only download failures visible to the agent", () => {
@@ -105,9 +103,38 @@ describe("mattermost monitor resources", () => {
       filePathHint: "file-1",
       maxBytes: 1024,
       ssrfPolicy: { allowedHostnames: ["chat.example.com"] },
-      responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
-      readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
+      responseHeaderTimeoutMs: 120_000,
+      readIdleTimeoutMs: 30_000,
     });
+  });
+
+  it("rejects unsafe file paths before media download", async () => {
+    const saveRemoteMedia = vi.fn();
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: {
+        apiBaseUrl: "https://chat.example.com/api/v4",
+        baseUrl: "https://chat.example.com",
+        token: "test-token",
+      } as never,
+      logger: {},
+      mediaMaxBytes: 1024,
+      saveRemoteMedia,
+      mediaKindFromMime: () => "document",
+    });
+
+    await expect(
+      resources.resolveMattermostMedia([
+        "../users/me",
+        "%2e%2e/users/me",
+        "..\\users\\me",
+        ".%0a./users/me",
+        "%",
+      ]),
+    ).resolves.toEqual([]);
+
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
   it("times out inbound media downloads when response headers never arrive", async () => {
@@ -134,7 +161,7 @@ describe("mattermost monitor resources", () => {
         saveRemoteMedia({
           ...params,
           responseHeaderTimeoutMs: headerTimeoutMs,
-          readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
+          readIdleTimeoutMs: 30_000,
           ssrfPolicy: { ...params.ssrfPolicy, dangerouslyAllowPrivateNetwork: true },
         });
 

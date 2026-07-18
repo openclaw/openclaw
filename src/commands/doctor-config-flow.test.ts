@@ -4,6 +4,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -1536,30 +1538,6 @@ describe("doctor config flow", () => {
     runDoctorConfigPreflightOptionsMock.mockClear();
   });
 
-  it("grants config preflight cross-state imports only with repair and direct capability", async () => {
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: ({ options, confirm }) =>
-        loadAndMaybeMigrateDoctorConfig({
-          options: { ...options, crossStateDirImports: true },
-          confirm: async () => confirm(),
-        }),
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: true }),
-    );
-
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: false }),
-    );
-  });
-
   it("preserves invalid config for doctor repairs", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
@@ -2709,8 +2687,7 @@ describe("doctor config flow", () => {
     const result = await withTempHome(
       async (home) => {
         const configDir = path.join(home, ".openclaw");
-        const credentialsDir = path.join(configDir, "credentials");
-        await fs.mkdir(credentialsDir, { recursive: true });
+        await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(
           path.join(configDir, "openclaw.json"),
           JSON.stringify(
@@ -2727,11 +2704,11 @@ describe("doctor config flow", () => {
           ),
           "utf-8",
         );
-        await fs.writeFile(
-          path.join(credentialsDir, "telegram-allowFrom.json"),
-          JSON.stringify({ version: 1, allowFrom: ["12345"] }, null, 2),
-          "utf-8",
-        );
+        writeChannelPairingStateSnapshot("telegram", {
+          version: 1,
+          requests: [],
+          allowFrom: { default: ["12345"] },
+        });
         return await loadAndMaybeMigrateDoctorConfig({
           options: { nonInteractive: true, repair: true },
           confirm: async () => false,
@@ -2739,6 +2716,7 @@ describe("doctor config flow", () => {
       },
       { skipSessionCleanup: true },
     );
+    closeOpenClawStateDatabaseForTest();
 
     const cfg = result.cfg as {
       channels: {
@@ -3164,3 +3142,4 @@ describe("doctor config flow", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

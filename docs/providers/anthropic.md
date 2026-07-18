@@ -127,6 +127,18 @@ OpenClaw release:
     [OpenAI Codex](/providers/openai).
     </Warning>
 
+    ### Get a setup token
+
+    Run `claude setup-token` on any machine with Claude Code installed. It prints
+    a long-lived token starting with `sk-ant-oat01-`.
+
+    During onboarding, paste the token in the macOS app by choosing
+    **Anthropic setup-token** under **Connect with an API key or token**, or use:
+
+    ```bash
+    openclaw models auth login --provider anthropic --method setup-token
+    ```
+
     ### Config example
 
     Prefer the canonical Anthropic model ref plus a CLI runtime override:
@@ -200,16 +212,24 @@ Code sessions on the Gateway and on connected node hosts:
 - A CLI-only session has no archive flag, so it remains visible while its
   transcript is present.
 
-No additional OpenClaw config is required. The Anthropic plugin is bundled and
-enabled by default; a native macOS node advertises the read-only Claude session
-commands when the local `~/.claude/projects/` directory exists. Approve the
-node pairing upgrade when those commands first appear.
+No additional OpenClaw config is required for discovery. The Anthropic plugin
+is bundled and enabled by default; a native macOS node advertises the read-only
+Claude session commands when the local `~/.claude/projects/` directory exists.
+Approve the node pairing upgrade when those commands first appear.
 
-The sidebar starts with the newest bounded page from each host and refreshes on
-the normal 30-second cadence. Use **Load more sessions** below a catalog group
-to append the next page for every host that has more history; appended rows stay
-visible and are re-fetched to the same depth across refreshes. Catalog clients
-use `sessions.catalog.list`; opening a row uses `sessions.catalog.read`.
+The sidebar groups rows by their Gateway or paired-node host and shows each
+host's newest bounded page as soon as that computer answers. It reconciles again
+after host-connectivity changes, when the page regains focus, and at most every
+30 seconds while visible, so Claude sessions created outside OpenClaw appear
+without a reload. A changed catalog gets a faster follow-up pass. Use **Load more
+sessions** below a catalog group to append the next page for every host that has
+more history; appended rows stay visible and are re-fetched to the same depth
+across refreshes. Catalog clients use `sessions.catalog.list`; opening a row uses
+`sessions.catalog.read`.
+
+Terminal takeover resolves `claude` from the owning host user's login-shell
+PATH before the service/daemon PATH. This keeps app-launched sessions aligned
+with the Claude CLI the operator gets in a normal terminal.
 
 Selecting a row reads the newest transcript page first. **Load older transcript
 items** follows an opaque byte cursor and reads another bounded section from the
@@ -222,15 +242,39 @@ For a Gateway-local `claude-cli` row, typing in the normal composer calls
 creates or reuses a model-locked native session, imports at most 200 visible
 items or 512 KiB, and seeds the Claude CLI binding. The first turn resumes with
 `--fork-session`; Claude assigns the fork a new session ID, so later turns use
-the fork and the source session stays untouched. Claude Desktop and paired-node
-rows are view-only.
+the fork and the source session stays untouched.
+
+A headless node host can also make its Claude CLI rows continuable by enabling
+the node-local setting below and restarting the node host:
+
+```json5
+{
+  nodeHost: {
+    agentRuns: {
+      claude: { enabled: true },
+    },
+  },
+}
+```
+
+The node advertises `agent.cli.claude.run.v1` only when the setting is enabled
+and its local `claude` executable resolves. OpenClaw re-resolves the catalog
+record on that node, imports the same bounded history, and binds the adopted
+session to the node and catalog-reported working directory. Each turn runs the
+node's real `claude -p` process using that node's Claude files and login. The
+node's exec approval policy still applies; the Gateway cannot force the opt-in.
+
+Node continuation v1 is one-shot only. It omits Gateway loopback MCP config and
+Gateway skills plugin arguments, does not reseed from a Gateway transcript, and
+rejects attachments and images. Claude Desktop rows remain view-only. Native
+macOS app nodes also remain view-only until the app advertises the run command.
 
 <Note>
-Claude sessions on paired nodes are read-only. OpenClaw does not modify Claude
-Desktop metadata, archive Claude sessions, or start a second runner on the
-owning computer. The page requires an operator connection with write scope
-because it uses the authenticated `node.invoke` transport, even though both
-Claude node commands are read-only.
+Paired-node Claude sessions remain read-only unless the headless node explicitly
+advertises `agent.cli.claude.run.v1`. OpenClaw never modifies Claude Desktop
+metadata or archives Claude sessions. The page requires an operator connection
+with write scope because it uses authenticated `node.invoke`; list and read
+remain read-only even on a continuation-enabled node.
 </Note>
 
 See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)

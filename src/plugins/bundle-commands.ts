@@ -12,6 +12,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
+import { parseFrontmatterBool } from "../shared/frontmatter.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
@@ -24,27 +25,13 @@ import {
 } from "./config-state.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
-export type ClaudeBundleCommandSpec = {
+type ClaudeBundleCommandSpec = {
   pluginId: string;
   rawName: string;
   description: string;
   promptTemplate: string;
   sourceFilePath: string;
 };
-
-function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return fallback;
-  }
-  if (normalized === "true" || normalized === "yes" || normalized === "1") {
-    return true;
-  }
-  if (normalized === "false" || normalized === "no" || normalized === "0") {
-    return false;
-  }
-  return fallback;
-}
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
   const result = readRootJsonObjectSync({
@@ -121,7 +108,7 @@ function loadBundleCommandsFromRoot(params: {
       continue;
     }
     const frontmatter = parseFrontmatterBlock(raw);
-    if (parseFrontmatterBool(frontmatter["disable-model-invocation"], false)) {
+    if (!parseFrontmatterBool(frontmatter["user-invocable"], true)) {
       continue;
     }
     const promptTemplate = stripFrontmatterBlock(raw);

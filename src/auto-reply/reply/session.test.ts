@@ -4,13 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  testing as sessionMcpTesting,
-  getOrCreateSessionMcpRuntime,
-} from "../../agents/agent-bundle-mcp-tools.js";
+import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
+import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   listSessionEntries,
@@ -45,7 +43,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
-import { drainFormattedSystemEvents } from "./session-updates.js";
+import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 
@@ -786,6 +784,14 @@ describe("initSessionState thread forking", () => {
         updatedAt: Date.now(),
         totalTokens: 0,
         totalTokensFresh: true,
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "old-run", lifecycleGeneration: "old-generation" }],
+        mainRestartRecovery: {
+          cycleId: "old-cycle",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "old transcript exhausted" },
+        },
       },
     });
 
@@ -807,6 +813,9 @@ describe("initSessionState thread forking", () => {
     expect(first.sessionEntry.forkedFromParent).toBe(true);
     expect(first.sessionEntry.totalTokens).toBeUndefined();
     expect(first.sessionEntry.totalTokensFresh).toBe(false);
+    expect(first.sessionEntry.abortedLastRun).toBe(false);
+    expect(first.sessionEntry.restartRecoveryRuns).toBeUndefined();
+    expect((first.sessionEntry as SessionEntry).mainRestartRecovery).toBeUndefined();
 
     const second = await initSessionState({
       ctx: {
@@ -822,6 +831,8 @@ describe("initSessionState thread forking", () => {
     expect(second.sessionEntry.forkedFromParent).toBe(true);
     expect(second.sessionEntry.totalTokens).toBeUndefined();
     expect(second.sessionEntry.totalTokensFresh).toBe(false);
+    expect(second.sessionEntry.restartRecoveryRuns).toBeUndefined();
+    expect((second.sessionEntry as SessionEntry).mainRestartRecovery).toBeUndefined();
     warn.mockRestore();
   });
 
@@ -2208,6 +2219,37 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("pins a durably admitted session across an idle reset boundary", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-pinned-admission-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "durably-admitted-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg: {
+        session: {
+          store: storePath,
+          reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedExistingSessionId: existingSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("reuses an idle-expired session when a reconnecting client requests current session resume", async () => {
@@ -6701,3 +6743,4 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

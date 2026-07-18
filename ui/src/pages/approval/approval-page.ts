@@ -1,4 +1,6 @@
+import "../../styles/approval.css";
 import { consume } from "@lit/context";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import {
@@ -9,7 +11,7 @@ import {
   type ApprovalPresentation,
   type ApprovalResolveResult,
   type ApprovalSnapshot,
-} from "../../../../packages/gateway-protocol/src/index.js";
+} from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import {
@@ -20,16 +22,11 @@ import {
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 
 type ApprovalRequestError = "connection" | "unavailable" | null;
 type ResolutionOrigin = "here" | "elsewhere" | "observed";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isUnavailableApprovalError(error: unknown): boolean {
   if (!(error instanceof GatewayRequestError)) {
@@ -110,14 +107,20 @@ function renderPresentation(presentation: ApprovalPresentation) {
     <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
     <div class=${previewClass}>${presentation.description}</div>
     <dl class="approval-page__meta">
-      ${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
-      ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
-      ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}
+      ${
+        // severity/pluginId/toolName exist only on the plugin presentation.
+        // exec is rendered in its own branch above and carries no toolName
+        // (ExecApprovalPresentationSchema is closed); system-agent has none.
+        presentation.kind === "plugin"
+          ? html`${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
+            ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
+            ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}`
+          : nothing
+      }
       ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
     </dl>
   `;
 }
-
 function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
     return t("approvalPage.resolvedElsewhere");
@@ -362,7 +365,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       !this.connected ||
       !id ||
       approval?.status !== "pending" ||
-      !approval.presentation.allowedDecisions.includes(decision) ||
+      !Array.prototype.includes.call(approval.presentation.allowedDecisions, decision) ||
       this.resolving
     ) {
       return;
@@ -663,8 +666,4 @@ export class ApprovalPage extends OpenClawLightDomElement {
     document.title = title;
     this.activeDocumentTitle = title;
   }
-}
-
-if (!customElements.get("openclaw-approval-page")) {
-  customElements.define("openclaw-approval-page", ApprovalPage);
 }

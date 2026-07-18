@@ -15,7 +15,8 @@ const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 function runResolver(params: {
   request: unknown;
   env?: Record<string, string>;
-}): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  timeoutMs?: number;
+}): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [resolverPath], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -36,6 +37,14 @@ function runResolver(params: {
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timeout =
+      params.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill();
+          }, params.timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -46,7 +55,10 @@ function runResolver(params: {
     });
     child.on("error", reject);
     child.on("exit", (code) => {
-      resolve({ stdout, stderr, code });
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolve({ stdout, stderr, code, timedOut });
     });
     child.stdin.end(`${JSON.stringify(params.request)}\n`);
   });
@@ -119,6 +131,30 @@ async function startVaultErrorFixture() {
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture server did not bind to a TCP port");
+  }
+  return {
+    vaultAddr: `http://127.0.0.1:${address.port}`,
+  };
+}
+
+async function startVaultStalledBodyFixture() {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.write('{"data":{"data":{"value":"partial');
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
       }),
   });
   const address = server.address();
@@ -285,6 +321,7 @@ describe("plugin manifest", () => {
     expect(resolverSource).toContain("#!/usr/bin/env node");
     const pluginSdkRootImport = ["openclaw", "plugin-sdk"].join("/");
     expect(resolverSource).not.toContain(pluginSdkRootImport);
+    expect(resolverSource).toContain("@openclaw/fs-safe/secret");
     expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
       source: "./vault-secret-ref-resolver.js",
       output: "vault-secret-ref-resolver.js",
@@ -335,7 +372,7 @@ describe("vault SecretRef resolver", () => {
       },
       env: {
         VAULT_ADDR: fixture.vaultAddr,
-        VAULT_TOKEN: "not-a-real-auth-header",
+        VAULT_TOKEN: "test-token",
         VAULT_NAMESPACE: "team-a",
       },
     });
@@ -351,7 +388,7 @@ describe("vault SecretRef resolver", () => {
     expect(fixture.requests).toEqual([
       {
         url: "/v1/secret/data/providers/openai",
-        token: "not-a-real-auth-header",
+        token: "test-token",
         namespace: "team-a",
       },
     ]);
@@ -448,6 +485,35 @@ describe("vault SecretRef resolver", () => {
     ]);
   });
 
+  it("rejects oversized Vault token files before sending a request", async () => {
+    const fixture = await startVaultFixture();
+    const tokenFile = await writeTempFile("vault-token", "x".repeat(16 * 1024 + 1));
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN_FILE: tokenFile,
+        OPENCLAW_VAULT_AUTH_METHOD: "token_file",
+      },
+    });
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({
+      protocolVersion: 1,
+      values: {},
+      errors: {
+        "providers/openai/apiKey": {
+          message: expect.stringContaining("exceeds 16384 bytes"),
+        },
+      },
+    });
+    expect(fixture.requests).toEqual([]);
+  });
+
   it("exchanges a workload JWT for a Vault token before reading KV secrets", async () => {
     const fixture = await startVaultJwtFixture();
     const jwtFile = await writeTempFile("vault-jwt", "not-a-real-workload-jwt\n");
@@ -495,6 +561,39 @@ describe("vault SecretRef resolver", () => {
       },
     ]);
   });
+
+  it.each(["jwt", "kubernetes"])(
+    "rejects oversized Vault JWT files before %s login",
+    async (authMethod) => {
+      const fixture = await startVaultJwtFixture();
+      const jwtFile = await writeTempFile("vault-jwt", "x".repeat(16 * 1024 + 1));
+      const result = await runResolver({
+        request: {
+          protocolVersion: 1,
+          provider: "vault",
+          ids: ["providers/openai/apiKey"],
+        },
+        env: {
+          VAULT_ADDR: fixture.vaultAddr,
+          OPENCLAW_VAULT_AUTH_METHOD: authMethod,
+          OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
+          OPENCLAW_VAULT_JWT_FILE: jwtFile,
+        },
+      });
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        protocolVersion: 1,
+        values: {},
+        errors: {
+          "providers/openai/apiKey": {
+            message: expect.stringContaining("exceeds 16384 bytes"),
+          },
+        },
+      });
+      expect(fixture.requests).toEqual([]);
+    },
+  );
 
   it("uses Vault kubernetes auth defaults with a service account JWT file", async () => {
     const fixture = await startVaultJwtFixture();
@@ -621,5 +720,32 @@ describe("vault SecretRef resolver", () => {
       },
     });
     expect(result.stdout).not.toContain("not-a-real-sensitive-jwt");
+  });
+
+  it("times out while reading a stalled Vault JSON response body", async () => {
+    const fixture = await startVaultStalledBodyFixture();
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+      timeoutMs: 6_500,
+    });
+
+    expect(result).toMatchObject({ code: 0, stderr: "", timedOut: false });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      protocolVersion: 1,
+      values: {},
+      errors: {
+        "providers/openai/apiKey": {
+          message: expect.stringMatching(/abort/iu),
+        },
+      },
+    });
   });
 });

@@ -12,6 +12,7 @@ import {
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
+  validateModelsProbeParams,
   validateNodeEventResult,
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
@@ -181,6 +182,15 @@ describe("lazy protocol validators", () => {
         agentId: "work",
         limit: 50,
         offset: 100,
+      }),
+    ).toBe(true);
+    expect(
+      validateChatHistoryParams({
+        sessionKey: "global",
+        agentId: "work",
+        limit: 11,
+        messageId: "matching-message",
+        sessionId: "matching-session",
       }),
     ).toBe(true);
     expect(
@@ -499,6 +509,7 @@ describe("validateTalkClientCreateParams", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        capabilities: ["camera-frame"],
       }),
     ).toBe(true);
   });
@@ -513,6 +524,15 @@ describe("validateTalkClientCreateParams", () => {
     expect(formatValidationErrors(validateTalkClientCreateParams.errors)).toContain(
       "unexpected property 'instructions'",
     );
+  });
+
+  it("rejects unknown browser capabilities", () => {
+    expect(
+      validateTalkClientCreateParams({
+        sessionKey: "agent:main:main",
+        capabilities: ["screen-frame"],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -599,6 +619,7 @@ describe("validateTalkSession", () => {
         provider: "openai",
         model: "gpt-realtime-2",
         voice: "alloy",
+        language: "de",
         mode: "realtime",
         transport: "managed-room",
         brain: "agent-consult",
@@ -648,6 +669,7 @@ describe("validateTalkSession", () => {
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
       "unexpected property 'instructionsOverride'",
     );
+    expect(validateTalkSessionCreateParams({ mode: "realtime", language: "de-DE" })).toBe(false);
   });
 
   it("accepts managed-room join, turn lifecycle params, and results", () => {
@@ -839,6 +861,19 @@ describe("validateWakeParams", () => {
 });
 
 describe("validateChatEvent", () => {
+  it("accepts an explicitly yielded final turn", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-yielded",
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "final",
+        stopReason: "end_turn",
+        yielded: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts v4 chat delta text and replacement markers", () => {
     expect(
       validateChatEvent({
@@ -929,6 +964,19 @@ describe("validateChatSendParams", () => {
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
+
+  it("accepts one-turn queue mode overrides", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    for (const queueMode of ["steer", "followup", "collect", "interrupt"] as const) {
+      expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
+    }
+    expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
+  });
 });
 
 describe("validateModelsListParams", () => {
@@ -942,6 +990,21 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateModelsProbeParams", () => {
+  it("accepts one provider with optional profile and timeout", () => {
+    expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
+    expect(
+      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+    ).toBe(true);
+  });
+
+  it("rejects missing providers, invalid timeouts, and extra fields", () => {
+    expect(validateModelsProbeParams({})).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", timeoutMs: 0 })).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", extra: true })).toBe(false);
   });
 });
 

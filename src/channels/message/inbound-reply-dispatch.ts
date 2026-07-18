@@ -1,6 +1,5 @@
 /**
- * Shared inbound reply dispatch helpers for channel message adapters and
- * deprecated SDK compatibility facades.
+ * Shared inbound reply dispatch helpers for channel message adapters.
  */
 
 import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
@@ -21,6 +20,7 @@ import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   deliverInboundReplyWithMessageSendContext,
+  dispatchChannelInboundTurn as dispatchChannelInboundTurnCore,
   dispatchChannelInboundReply as dispatchChannelInboundReplyCore,
   isDurableInboundReplyDeliveryHandled,
   resolveChannelTurnDispatchCounts,
@@ -36,6 +36,7 @@ import type {
 } from "../turn/kernel.js";
 import type {
   AssembledChannelTurn,
+  ChannelTurnPlan,
   PreparedChannelTurn,
   RunChannelTurnParams,
 } from "../turn/types.js";
@@ -63,6 +64,7 @@ export type ChannelInboundEventRunnerParams<
 > = RunChannelTurnParams<TRaw, TDispatchResult>;
 export type PreparedInboundReply<TDispatchResult> = PreparedChannelTurn<TDispatchResult>;
 export type AssembledInboundReply = AssembledChannelTurn;
+export type ChannelInboundTurnPlan = ChannelTurnPlan;
 export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 
 /** Run an already prepared inbound reply through shared session-record + dispatch ordering. */
@@ -126,10 +128,13 @@ export async function dispatchChannelInboundReply(params: AssembledInboundReply)
   return await dispatchChannelInboundReplyCore(params);
 }
 
+export async function dispatchChannelInboundTurn(params: ChannelInboundTurnPlan) {
+  return await dispatchChannelInboundTurnCore(params);
+}
+
 export {
   hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
   hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
-  deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
   recordDroppedChannelInboundHistory as recordDroppedChannelTurnHistory,
   recordDroppedChannelInboundHistory,
@@ -196,7 +201,7 @@ export function buildInboundReplyDispatchBase(params: {
 }
 
 type BuildInboundReplyDispatchBaseParams = Parameters<typeof buildInboundReplyDispatchBase>[0];
-type RecordChannelMessageReplyDispatchParams = {
+type RecordInboundSessionAndDispatchReplyParams = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string;
@@ -221,15 +226,15 @@ type RecordChannelMessageReplyDispatchParams = {
  * sends through `deliverInboundReplyWithMessageSendContext(...)` or
  * `sendDurableMessageBatch(...)`.
  */
-export async function dispatchChannelMessageReplyWithBase(
+export async function dispatchInboundReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
     Pick<
-      RecordChannelMessageReplyDispatchParams,
+      RecordInboundSessionAndDispatchReplyParams,
       "deliver" | "durable" | "onRecordError" | "onDispatchError" | "replyOptions"
     >,
 ): Promise<void> {
   const dispatchBase = buildInboundReplyDispatchBase(params);
-  await recordChannelMessageReplyDispatch({
+  await recordInboundSessionAndDispatchReply({
     ...dispatchBase,
     deliver: params.deliver,
     durable: params.durable,
@@ -240,20 +245,6 @@ export async function dispatchChannelMessageReplyWithBase(
 }
 
 /**
- * Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn.
- *
- * @deprecated Legacy inbound reply helper. New channel plugins should expose a
- * `message` adapter via `defineChannelMessageAdapter(...)` and use
- * `dispatchChannelMessageReplyWithBase` only for compatibility dispatchers that
- * have not moved to the message lifecycle yet.
- */
-export async function dispatchInboundReplyWithBase(
-  params: Parameters<typeof dispatchChannelMessageReplyWithBase>[0],
-): Promise<void> {
-  await dispatchChannelMessageReplyWithBase(params);
-}
-
-/**
  * Record the inbound session first, then dispatch the reply using normalized outbound delivery.
  *
  * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
@@ -261,8 +252,8 @@ export async function dispatchInboundReplyWithBase(
  * sends through `deliverInboundReplyWithMessageSendContext(...)` or
  * `sendDurableMessageBatch(...)`.
  */
-export async function recordChannelMessageReplyDispatch(
-  params: RecordChannelMessageReplyDispatchParams,
+export async function recordInboundSessionAndDispatchReply(
+  params: RecordInboundSessionAndDispatchReplyParams,
 ): Promise<void> {
   await dispatchChannelInboundReplyCore({
     cfg: params.cfg,
@@ -305,26 +296,3 @@ export async function recordChannelMessageReplyDispatch(
     },
   });
 }
-
-/**
- * Record the inbound session first, then dispatch the reply using normalized outbound delivery.
- *
- * @deprecated Legacy inbound reply helper. New channel plugins should expose a
- * `message` adapter via `defineChannelMessageAdapter(...)` and use
- * `recordChannelMessageReplyDispatch` only for compatibility dispatchers that
- * have not moved to the message lifecycle yet.
- */
-export async function recordInboundSessionAndDispatchReply(
-  params: RecordChannelMessageReplyDispatchParams,
-): Promise<void> {
-  await recordChannelMessageReplyDispatch(params);
-}
-
-/** @deprecated Compatibility helper for legacy reply dispatch bridges. */
-export const buildChannelMessageReplyDispatchBase = buildInboundReplyDispatchBase;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;

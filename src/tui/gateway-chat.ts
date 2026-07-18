@@ -49,20 +49,20 @@ import type {
   TuiChatSendResult,
 } from "./tui-backend.js";
 
-export type GatewayConnectionOptions = {
+type GatewayConnectionOptions = {
   url?: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
 };
 
-export type GatewayEvent = TuiEvent;
+type GatewayEvent = TuiEvent;
 
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
-export type ResolvedGatewayConnection = {
+type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
@@ -117,9 +117,17 @@ function isLegacyPreserveSideRunsError(err: unknown): boolean {
   return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
 }
 
-export type GatewaySessionList = TuiSessionList;
-export type GatewayAgentsList = TuiAgentsList;
-export type GatewayModelChoice = TuiModelChoice;
+function isLegacySucceedsParentError(err: unknown): boolean {
+  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("invalid sessions.create params") && message.includes("succeedsparent");
+}
+
+type GatewaySessionList = TuiSessionList;
+type GatewayAgentsList = TuiAgentsList;
+type GatewayModelChoice = TuiModelChoice;
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
@@ -152,7 +160,11 @@ export class GatewayChatClient implements TuiBackend {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
-      caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      caps: [
+        GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
+        GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+        GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      ],
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -208,7 +220,9 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
-    this.client.stop();
+    // Keep TUI teardown ordered after the transport closes. Otherwise the
+    // late close callback can re-arm UI timers after shutdown cleared them.
+    return this.client.stopAndWait();
   }
 
   async subscribeSessionEvents() {
@@ -300,10 +314,33 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async createSession(opts: TuiSessionCreateOptions): Promise<TuiSessionMutationResult> {
-    return await this.client.request<TuiSessionMutationResult>("sessions.create", {
+    const params = {
       ...opts,
       emitCommandHooks: Boolean(opts.parentSessionKey),
-    });
+    };
+    try {
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", params);
+    } catch (err) {
+      if (opts.succeedsParent === undefined || !isLegacySucceedsParentError(err)) {
+        throw err;
+      }
+      const { succeedsParent: _succeedsParent, ...legacyParams } = params;
+      if (!opts.succeedsParent) {
+        // Older Gateways cannot express a linked parallel child. Preserve the
+        // parent's lifecycle by retrying as an unlinked child, never a rollover.
+        const {
+          parentSessionKey: _parentSessionKey,
+          emitCommandHooks: _emitCommandHooks,
+          ...parallelParams
+        } = legacyParams;
+        return await this.client.request<TuiSessionMutationResult>(
+          "sessions.create",
+          parallelParams,
+        );
+      }
+      // Legacy rollover is equivalent to an explicit successor request.
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", legacyParams);
+    }
   }
 
   async resetSession(
@@ -394,7 +431,7 @@ export class GatewayChatClient implements TuiBackend {
  * deliberately ignores global config and Gateway env overrides, including
  * credentials, while still applying the normal remote URL safety policy.
  */
-export function resolveBoundGatewayConnection(
+function resolveBoundGatewayConnection(
   opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
 ): ResolvedGatewayConnection {
   const url = buildGatewayConnectionDetails({
@@ -413,7 +450,7 @@ export function resolveBoundGatewayConnection(
   };
 }
 
-export async function resolveGatewayConnection(
+async function resolveGatewayConnection(
   opts: GatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
   const config = getRuntimeConfig();

@@ -26,15 +26,6 @@ import type { ChannelSetupInput } from "./types.core.js";
 
 export type {
   ChannelSetupWizard,
-  ChannelSetupWizardAllowFrom,
-  ChannelSetupWizardAllowFromEntry,
-  ChannelSetupWizardCredential,
-  ChannelSetupWizardCredentialState,
-  ChannelSetupWizardEnvShortcut,
-  ChannelSetupWizardFinalize,
-  ChannelSetupWizardGroupAccess,
-  ChannelSetupWizardNote,
-  ChannelSetupWizardPrepare,
   ChannelSetupWizardStatus,
   ChannelSetupWizardTextInput,
 } from "./setup-wizard-types.js";
@@ -562,7 +553,12 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         const allowFrom = wizard.allowFrom;
         // Allowlist resolution often needs the freshly entered credential, not
         // only the persisted config, because setup may not have been written yet.
-        const credentialInputKey = allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey;
+        const credentialInputKey =
+          allowFrom.credentialInputKey ??
+          wizard.credentials.find((credential) =>
+            normalizeOptionalString(credentialValues[credential.inputKey]),
+          )?.inputKey ??
+          wizard.credentials[0]?.inputKey;
         const allowFromCredentialValue = normalizeOptionalString(
           credentialInputKey === undefined ? undefined : credentialValues[credentialInputKey],
         );

@@ -10,11 +10,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
-  type SessionBindingAdapterCapabilities,
+  type SessionBindingAdapter,
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { resolveThinkingDefault } from "./model-selection.js";
+
+type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -56,7 +58,6 @@ const hoisted = vi.hoisted(() => {
   const initializeSessionMock = vi.fn();
   const getAcpSessionManagerMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
-  const resolveAcpSpawnStreamLogPathMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
   const readAcpSessionMetaMock = vi.fn();
   const resolveStorePathMock = vi.fn();
@@ -148,7 +149,6 @@ const hoisted = vi.hoisted(() => {
     initializeSessionMock,
     getAcpSessionManagerMock,
     startAcpSpawnParentStreamRelayMock,
-    resolveAcpSpawnStreamLogPathMock,
     loadSessionStoreMock,
     readAcpSessionMetaMock,
     resolveStorePathMock,
@@ -227,7 +227,6 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 }));
 
 vi.mock("./acp-spawn-parent-stream.js", () => ({
-  resolveAcpSpawnStreamLogPath: hoisted.resolveAcpSpawnStreamLogPathMock,
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
 }));
 
@@ -809,9 +808,6 @@ describe("spawnAcpDirect", () => {
     hoisted.startAcpSpawnParentStreamRelayMock
       .mockReset()
       .mockImplementation(() => createRelayHandle());
-    hoisted.resolveAcpSpawnStreamLogPathMock
-      .mockReset()
-      .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
     hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
     hoisted.readAcpSessionMetaMock.mockReset().mockReturnValue(undefined);
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
@@ -2422,7 +2418,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
       expectRecordFields(
@@ -2623,7 +2618,6 @@ describe("spawnAcpDirect", () => {
     );
 
     const accepted = expectAcceptedSpawn(result);
-    expect(accepted.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -2645,7 +2639,7 @@ describe("spawnAcpDirect", () => {
     expectRelayCallFields({
       parentSessionKey: "agent:main:main",
       agentId: "codex",
-      logPath: "/tmp/sess-main.acp-stream.jsonl",
+      childSessionId: "sess-123",
       emitStartNotice: false,
     });
     const relayRuns = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(
@@ -2653,11 +2647,6 @@ describe("spawnAcpDirect", () => {
     );
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
     expect(relayRuns).toContain(accepted.runId);
-    const streamPathInput = expectRecordFields(
-      firstMockCall(hoisted.resolveAcpSpawnStreamLogPathMock, "stream log path resolution")[0],
-      {},
-    );
-    expect(streamPathInput.childSessionKey).toMatch(/^agent:codex:acp:/);
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
@@ -2722,7 +2711,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -2733,7 +2721,7 @@ describe("spawnAcpDirect", () => {
     expectRelayCallFields({
       parentSessionKey: "agent:main:subagent:parent",
       agentId: "codex",
-      logPath: "/tmp/sess-main.acp-stream.jsonl",
+      childSessionId: "sess-123",
       deliveryContext: {
         channel: "discord",
         to: "channel:parent-channel",
@@ -2810,7 +2798,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2841,7 +2828,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2875,7 +2861,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2931,7 +2916,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2961,7 +2945,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2980,7 +2963,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2997,7 +2979,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -3018,7 +2999,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -3051,7 +3031,6 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
-    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -3253,3 +3232,4 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

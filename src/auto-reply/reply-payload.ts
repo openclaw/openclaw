@@ -18,6 +18,8 @@ export type ReplyPayload = {
   sensitiveMedia?: boolean;
   /** Channel-agnostic rich presentation. Core degrades or asks the channel renderer to map it. */
   presentation?: MessagePresentation;
+  /** Runtime-authored text is the exact fallback, not additional native presentation content. */
+  presentationTextMode?: "fallback";
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
   delivery?: ReplyPayloadDelivery;
   /**
@@ -73,7 +75,7 @@ export type ReplyPayload = {
 // through Plugin SDK; this is not a third-party plugin contract.
 const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
 
-export type PairingQrReplyChannelData = {
+type PairingQrReplyChannelData = {
   setupCode: string;
   expiresAtMs: number;
 };
@@ -84,17 +86,6 @@ function normalizePairingQrSetupCode(value: unknown): string | undefined {
 
 function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-export function buildPairingQrReplyChannelData(
-  params: PairingQrReplyChannelData,
-): Record<string, unknown> {
-  return {
-    [PAIRING_QR_REPLY_CHANNEL_DATA_KEY]: {
-      setupCode: params.setupCode,
-      expiresAtMs: params.expiresAtMs,
-    },
-  };
 }
 
 export function readPairingQrReplyChannelData(
@@ -261,6 +252,10 @@ export type ReplyPayloadMetadata = {
   beforeAgentRunBlocked?: boolean;
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
+  heartbeatTerminalToolFailure?: {
+    toolName: string;
+  };
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();

@@ -49,15 +49,15 @@ export type ChatItem =
       kind: "divider";
       key: string;
       label: string;
+      metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string };
-
-export const CHAT_HISTORY_RENDER_LIMIT = 100;
-export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;
+  | { kind: "reading-indicator"; key: string; startedAt: number }
+  | { kind: "question"; key: string; questionId: string; startedAt: number }
+  | { kind: "plan"; key: string };
 
 export type ChatStreamSegment = {
   text: string;
@@ -163,7 +163,13 @@ export type ToolCard = {
     className?: string;
     style?: string;
     sandbox?: "strict" | "scripts";
-    mcpApp?: { viewId: string };
+    mcpApp?: {
+      viewId: string;
+      serverName?: string;
+      toolName?: string;
+      uiResourceUri?: string;
+      toolCallId?: string;
+    };
   };
 };
 

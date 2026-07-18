@@ -548,10 +548,9 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="streamTo" type='"parent"'>
   `"parent"` streams initial ACP run progress summaries back to the requester
-  session as system events. Accepted responses include `streamLogPath`
-  pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you
-  can tail for full relay history. Parent progress streams show assistant
-  commentary and ACP status progress by default unless
+  session as system events. OpenClaw records the full relay history in the
+  child agent's SQLite state and removes it with the child session. Parent
+  progress streams show assistant commentary and ACP status progress by default unless
   `streaming.progress.commentary=false`. Discord also defaults parent
   previews to progress mode when no stream mode is configured. Status
   progress still honors `acp.stream.tagVisibility`, so tags such as `plan`

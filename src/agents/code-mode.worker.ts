@@ -6,13 +6,14 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+import type { Result } from "@openclaw/normalization-core/result";
+import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
-type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
+type CodeModeBridgeMethod = "search" | "describe" | "call" | "callValue" | "yield" | "namespace";
 
 type CodeModeConfig = {
   timeoutMs: number;
@@ -27,12 +28,7 @@ type PendingBridgeRequest = {
   args: unknown[];
 };
 
-type SettledBridgeRequest = {
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type SettledBridgeRequest = { id: string } & Result<unknown, string>;
 
 type SerializedCodeModeNamespaceValue =
   | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
@@ -124,15 +120,7 @@ class CodeModeGuestError extends Error {
 }
 
 function isQuickJsInterruptedError(error: unknown): boolean {
-  if (error instanceof CodeModeGuestError) {
-    return false;
-  }
-  // Match on the raw QuickJS message, not the formatted errorMessage() string,
-  // which now leads with the error name and appends backtrace frames.
-  if (error instanceof JSException) {
-    return error.message === "interrupted";
-  }
-  return errorMessage(error) === "interrupted";
+  return error instanceof JSException && error.message === "interrupted";
 }
 
 type VmRun = {
@@ -287,6 +275,7 @@ const CONTROLLER_SOURCE = String.raw`
     search: { value: (query, options) => request("search", [query, options]), enumerable: true },
     describe: { value: (id) => request("describe", [id]), enumerable: true },
     call: { value: (id, input) => request("call", [id, input]), enumerable: true },
+    callValue: { value: (id, input) => request("callValue", [id, input]), enumerable: true },
   });
 
   function normalizeApiPath(value) {
@@ -312,7 +301,10 @@ const CONTROLLER_SOURCE = String.raw`
   }
   const api = Object.freeze({
     list: async (prefix = "") => {
-      const normalizedPrefix = prefix == null || String(prefix).trim() === "" ? "" : normalizeApiPath(prefix);
+      // list takes a directory prefix, so tolerate a trailing slash (API.list("mcp/"))
+      // that read's exact-path normalizer would otherwise reject as an empty segment.
+      const rawPrefix = prefix == null ? "" : String(prefix).trim().replace(/\/+$/, "");
+      const normalizedPrefix = rawPrefix === "" ? "" : normalizeApiPath(rawPrefix);
       const files = [...apiFileMap.values()]
         .filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(normalizedPrefix.replace(/\/?$/, "/")))
         .map((file) => Object.freeze({
@@ -399,6 +391,7 @@ function createHostRequestHandler(params: {
       method !== "search" &&
       method !== "describe" &&
       method !== "call" &&
+      method !== "callValue" &&
       method !== "yield" &&
       method !== "namespace"
     ) {
@@ -435,44 +428,29 @@ async function createVm(params: {
   const vm = await QuickJS.create({
     wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
-    intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
     },
   });
-  const catalogHandle = vm.hostToHandle(params.catalog);
-  try {
-    vm.setProp(vm.global, "__openclawCatalog", catalogHandle);
-  } finally {
-    catalogHandle.dispose();
-  }
-  const namespacesHandle = vm.hostToHandle(params.namespaces);
-  try {
-    vm.setProp(vm.global, "__openclawNamespaces", namespacesHandle);
-  } finally {
-    namespacesHandle.dispose();
-  }
-  const apiFilesHandle = vm.hostToHandle(params.apiFiles);
-  try {
-    vm.setProp(vm.global, "__openclawApiFiles", apiFilesHandle);
-  } finally {
-    apiFilesHandle.dispose();
-  }
-  const hostRequest = vm.newFunction(
+  vm.hostToHandle(params.catalog).consume((handle) =>
+    vm.global.setProp("__openclawCatalog", handle),
+  );
+  vm.hostToHandle(params.namespaces).consume((handle) =>
+    vm.global.setProp("__openclawNamespaces", handle),
+  );
+  vm.hostToHandle(params.apiFiles).consume((handle) =>
+    vm.global.setProp("__openclawApiFiles", handle),
+  );
+  vm.newFunction(
     "__openclawHostRequest",
     createHostRequestHandler({
       vm,
       pendingRequests: params.pendingRequests,
       config: params.config,
     }),
-  );
-  try {
-    vm.setProp(vm.global, "__openclawHostRequest", hostRequest);
-  } finally {
-    hostRequest.dispose();
-  }
+  ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
   vm.evalCode(CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
@@ -489,7 +467,6 @@ async function restoreVm(params: {
   const vm = await QuickJS.restore(snapshot, {
     wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
-    intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
       timedOut = deadlineReached();
@@ -508,18 +485,12 @@ async function restoreVm(params: {
 }
 
 function takeOutput(vm: QuickJS): unknown[] {
-  const take = vm.global.getProp("__openclawTakeOutput");
-  try {
-    const output = vm.callFunction(take, vm.undefined);
-    try {
+  return vm.global.getProp("__openclawTakeOutput").consume((take) =>
+    vm.callFunction(take, vm.undefined).consume((output) => {
       const dumped = vm.dump(output);
       return Array.isArray(dumped) ? (dumped as unknown[]) : [];
-    } finally {
-      output.dispose();
-    }
-  } finally {
-    take.dispose();
-  }
+    }),
+  );
 }
 
 function takeOutputSafely(vm: QuickJS): unknown[] {
@@ -565,44 +536,25 @@ function throwWorkerFailureWithOutput(params: {
   throw params.error;
 }
 
-function drainPendingJobs(vm: QuickJS): void {
-  for (let index = 0; index < 1000; index += 1) {
-    if (vm.executePendingJobs() === 0) {
-      return;
-    }
-  }
-  throw new Error("code mode pending job limit exceeded");
-}
-
-function getResultHandle(vm: QuickJS): JSValueHandle {
-  return vm.global.getProp("__openclawResult");
-}
-
 async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Promise<unknown> {
   if (!resultHandle.isPromise) {
     return toJsonSafe(vm.dump(resultHandle));
   }
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
-    try {
+    return settled.error.consume((error) => {
       // vm.dump rebuilds a host Error carrying the QuickJS name/message/stack;
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
-      const dumped = vm.dump(settled.error);
+      const dumped = vm.dump(error);
       const text =
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
           : errorMessage(dumped);
       throw new CodeModeGuestError(text);
-    } finally {
-      settled.error.dispose();
-    }
+    });
   }
-  try {
-    return toJsonSafe(vm.dump(settled.value));
-  } finally {
-    settled.value.dispose();
-  }
+  return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
 }
 
 function waitingResult(params: {
@@ -633,9 +585,9 @@ async function runVmExecution(params: {
   let output: unknown[] = [];
   try {
     params.prepare();
-    drainPendingJobs(params.vm);
+    params.vm.executePendingJobs();
     output = takeOutput(params.vm);
-    const resultHandle = getResultHandle(params.vm);
+    const resultHandle = params.vm.global.getProp("__openclawResult");
     try {
       if (params.pendingRequests.length > 0) {
         // Pending host work suspends the VM instead of blocking in-worker; the
@@ -707,8 +659,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     pendingRequests,
     config: input.config,
     prepare: () => {
-      const settle = vm.global.getProp("__openclawSettleBridge");
-      try {
+      vm.global.getProp("__openclawSettleBridge").consume((settle) => {
         for (const request of input.settledRequests) {
           const id = vm.newString(request.id);
           const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
@@ -725,9 +676,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
             payload.dispose();
           }
         }
-      } finally {
-        settle.dispose();
-      }
+      });
     },
   });
 }

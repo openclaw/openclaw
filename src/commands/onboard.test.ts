@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { onboardCommand, setupWizardCommand } from "./onboard.js";
+import { setupWizardCommand } from "./onboard.js";
 
 const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
@@ -178,10 +178,6 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("keeps onboardCommand as an alias for setupWizardCommand", () => {
-    expect(onboardCommand).toBe(setupWizardCommand);
-  });
-
   it("routes flagless interactive onboarding to the guided flow", async () => {
     const runtime = makeRuntime();
 
@@ -194,6 +190,15 @@ describe("setupWizardCommand", () => {
     expect(mocks.runGuidedOnboarding).toHaveBeenCalledOnce();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("keeps --tui on guided onboarding", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ tui: true }, runtime);
+
+    expect(mocks.runGuidedOnboarding).toHaveBeenCalledWith({ tui: true }, runtime);
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 
   it.each([

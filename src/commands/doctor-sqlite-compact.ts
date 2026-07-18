@@ -13,16 +13,16 @@ export type DoctorSqliteCompactSnapshot = {
   walSizeBytes: number;
 };
 
-export type DoctorSqliteCompactResult = {
+type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
   before: DoctorSqliteCompactSnapshot;
   integrityCheck: "ok";
-  quickCheck: "ok";
   reclaimedBytes: number;
 };
 
 type DoctorSqliteCompactOptions = {
   afterMutation?: () => void;
+  busyTimeoutMs?: number;
   sqlitePath: string;
   validateBeforeMutation?: (database: DatabaseSync) => void;
 };
@@ -43,7 +43,9 @@ export function compactDoctorSqliteFile(
   let operationError: unknown;
   let result: DoctorSqliteCompactResult | undefined;
   try {
-    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    database.exec(
+      `PRAGMA busy_timeout = ${options.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`,
+    );
     database.exec("PRAGMA trusted_schema = OFF;");
     options.validateBeforeMutation?.(database);
     const before = readCompactSnapshot(database, options.sqlitePath);
@@ -53,7 +55,7 @@ export function compactDoctorSqliteFile(
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     database.exec("VACUUM;");
     checkpointTruncate(database, options.sqlitePath);
-    const { quickCheck, integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
     const afterBytes = after.dbSizeBytes + after.walSizeBytes;
@@ -61,7 +63,6 @@ export function compactDoctorSqliteFile(
       after,
       before,
       integrityCheck,
-      quickCheck,
       reclaimedBytes: Math.max(0, beforeBytes - afterBytes),
     };
   } catch (error) {

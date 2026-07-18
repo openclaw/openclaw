@@ -32,12 +32,6 @@ import {
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
 
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  resolveSubagentSessionStatus,
-} from "./subagent-session-metrics.js";
-
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
 const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
@@ -321,6 +315,11 @@ export function reconcileOrphanedRestoredRuns(params: {
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
+    if (entry.requesterSettleWake) {
+      // Requester-settle outbox rows can intentionally outlive delete-mode
+      // child sessions. Restore replays the obligation before retiring them.
+      continue;
+    }
     if (entry.killReconciliation || entry.terminalOwner === "interrupted-recovery") {
       // Provider completion or interrupted recovery still owns these rows.
       // Their bounded reconciliation runs even when the session vanished.

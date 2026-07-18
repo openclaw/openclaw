@@ -26,6 +26,8 @@ export type CliBackendPrepareExecutionContext = {
   agentDir?: string;
   provider: string;
   modelId: string;
+  /** Effective OpenClaw context budget selected for this run. */
+  contextTokenBudget?: number;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
 };
@@ -54,7 +56,7 @@ export type CliBackendThinkingLevel =
 export type CliBackendExecutionMode = "agent" | "side-question";
 
 /** Host-isolated tool grant for a CLI run with every native tool disabled. */
-export type CliBackendToolAvailability = {
+type CliBackendToolAvailability = {
   native: readonly [];
   /** MCP tools already isolated by the host transport that may be auto-approved. */
   mcp: readonly string[];
@@ -118,6 +120,16 @@ export type CliBackendPlugin = {
    * Set only when the backend bounds its own transcript and persists resumable state.
    */
   ownsNativeCompaction?: boolean;
+  /**
+   * Whether embedded runs opted into `cliBackendDispatch: "subscription-auth"`
+   * execute through this backend when the selected credential is
+   * subscription-scoped (oauth/token) or unresolvable.
+   *
+   * Set only when this backend's model provider rejects or meters direct API
+   * calls on subscription tokens, so the passthrough would fail or silently
+   * bill outside plan limits. API-key credentials always keep the passthrough.
+   */
+  subscriptionAuthDispatch?: boolean;
   /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
@@ -198,6 +210,13 @@ export type CliBackendPlugin = {
    * owner for session invalidation when one is present.
    */
   authEpochMode?: CliBackendAuthEpochMode;
+  /**
+   * Whether `prepareExecution` may auto-select a configured auth profile.
+   *
+   * Defaults to true for auth bridges. Set false for environment/config-only
+   * hooks that do not consume OpenClaw auth profiles.
+   */
+  autoSelectAuthProfile?: boolean;
   /**
    * Backend-owned execution bridge.
    *

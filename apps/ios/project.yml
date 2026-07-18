@@ -84,6 +84,7 @@ targets:
         product: SwabbleKit
       - package: WebRTC
       - sdk: AppIntents.framework
+      - sdk: HealthKit.framework
     preBuildScripts:
       - name: SwiftFormat (lint)
         basedOnDependencyAnalysis: false
@@ -180,6 +181,8 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
+        NSHealthShareUsageDescription: OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.
+        NSHealthUpdateUsageDescription: OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.
         NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
@@ -314,6 +317,15 @@ targets:
       # Universal talk waveform, compiled directly to keep the watch styling local.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
         group: Shared
+      # Universal mascot, compiled directly to keep the watch styling local.
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotAnimator.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotCanvas+Accessories.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTypography.swift
+        group: Shared
       - path: Sources/Fonts
         buildPhase: resources
       - path: Resources/Localizable.xcstrings
@@ -419,8 +431,24 @@ targets:
         group: ShareExtension
       - path: ShareExtension/ShareComposeState.swift
         group: ShareExtension
+      - path: ShareExtension/ShareAttachmentSummary.swift
+        group: ShareExtension
       - path: WatchApp/Sources/WatchVoiceTurnTracker.swift
         group: WatchApp/Sources
+      - path: WatchApp/Sources/WatchInboxMessages.swift
+        group: WatchApp/Sources
+      - path: WatchApp/Sources/WatchMascot.swift
+        group: WatchApp/Sources
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotAnimator.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotCanvas+Accessories.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTypography.swift
+        group: Shared
+      - path: Sources/Services/ExactOpaqueIdentifier.swift
+        group: Sources/Services
     dependencies:
       - package: OpenClawKit
     settings:

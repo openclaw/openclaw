@@ -12,11 +12,14 @@ import {
   claimAgentRunContext,
   clearAgentRunContext,
   emitAgentEvent,
+  getAgentEventLifecycleGeneration,
   getAgentRunContext,
   onAgentRuntimeEvent,
   sweepStaleRunContexts,
   type AgentEventRuntimePayload as Event,
 } from "../../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../../trajectory/runtime-store.sqlite.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
 import {
   createWorkerLiveEventReceiver,
@@ -33,6 +36,7 @@ const ID: Identity = {
   credentialHash: ["credential", "hash", "live"].join("-"),
   bundleHash: "b".repeat(64),
   sessionId: SID,
+  runId: RUN,
   ownerEpoch: EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-live-event-v1"],
@@ -124,7 +128,84 @@ describe("worker live events", () => {
   afterEach(async () => {
     unsubscribe?.();
     rx.clear();
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("persists cloud-worker progress for sessions tail", async () => {
+    const credential = ["trajectory", "credential", "secret"].join("-");
+    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    ack(
+      live(
+        2,
+        tool({
+          phase: "start",
+          name: "write",
+          toolCallId: "call-write",
+          args: { path: "proof.txt", credential },
+        }),
+      ),
+    );
+    ack(
+      live(
+        3,
+        tool({
+          phase: "result",
+          name: "write",
+          toolCallId: "call-write",
+          isError: false,
+          result: { status: "written", credential },
+        }),
+      ),
+    );
+    const terminal = live(4, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 }));
+    ack(terminal);
+    ack(terminal);
+    await Promise.resolve();
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      agentId: "main",
+      sessionId: SID,
+      storePath: store,
+    });
+    expect(rows.map((row) => row.event.type)).toEqual([
+      "session.started",
+      "tool.call",
+      "tool.result",
+      "model.completed",
+      "session.ended",
+    ]);
+    expect(rows[2]?.event.data).toMatchObject({ name: "write", success: true });
+    expect(rows[4]?.event.data).toMatchObject({ status: "success" });
+    expect(JSON.stringify(rows)).not.toContain(credential);
+  });
+
+  it("records aborted cloud-worker terminals as interrupted", async () => {
+    const credential = ["lifecycle", "credential", "value"].join("-");
+    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    ack(
+      live(
+        2,
+        lifecycle({
+          phase: "error",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          error: `cancelled after Bearer ${credential}`,
+        }),
+      ),
+    );
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      agentId: "main",
+      sessionId: SID,
+      storePath: store,
+    });
+    expect(rows.at(-1)?.event).toMatchObject({
+      type: "session.ended",
+      data: { status: "interrupted" },
+    });
+    expect(JSON.stringify(rows)).not.toContain(credential);
   });
 
   it("maps and sanitizes kinds", () => {
@@ -455,14 +536,78 @@ describe("worker live events", () => {
     fail(msg(1, "pending", 0, "run-pending"), "invalid-event");
   });
 
-  it("keeps run ids exclusive", () => {
-    const local = "run-local-first";
-    claimAgentRunContext(local, LOCAL);
-    fail(msg(1, "blocked", 0, local), "invalid-event");
-    clearAgentRunContext(local);
+  it("adopts a compatible pre-registered gateway run context", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(RUN, {
+      ...LOCAL,
+      isControlUiVisible: false,
+      lifecycleGeneration,
+    });
 
+    ack(msg(1, "worker"));
+
+    expect(getAgentRunContext(RUN)).toMatchObject({
+      ...LOCAL,
+      isControlUiVisible: false,
+      lifecycleGeneration,
+      projectSessionActive: true,
+    });
+    expect(deltas()).toEqual(["worker"]);
+  });
+
+  it("adopts a visible dispatch-owned run context so worker live events stay visible", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    // A worker-routed turn keeps its dispatch-owned Control UI visibility. The
+    // gateway claims the run context (isControlUiVisible: true for a visible
+    // turn) before handing the turn to the remote worker; adopting live events
+    // must inherit that visibility instead of forcing the run hidden.
+    claimAgentRunContext(RUN, {
+      ...LOCAL,
+      isControlUiVisible: true,
+      lifecycleGeneration,
+    });
+
+    ack(msg(1, "worker"));
+
+    expect(getAgentRunContext(RUN)).toMatchObject({
+      ...LOCAL,
+      isControlUiVisible: true,
+      lifecycleGeneration,
+      projectSessionActive: true,
+    });
+    expect(deltas()).toEqual(["worker"]);
+    expect(events[0]?.controlUiVisible).toBe(true);
+  });
+
+  it("rejects pre-registered gateway run contexts with mismatched identity", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const mismatches: Array<{
+      context: Parameters<typeof claimAgentRunContext>[1];
+      name: string;
+    }> = [
+      { name: "session-id", context: { ...LOCAL, sessionId: `${SID}-other` } },
+      { name: "session-key", context: { ...LOCAL, sessionKey: `${KEY}-other` } },
+      { name: "agent-id", context: { ...LOCAL, agentId: "other" } },
+      { name: "lifecycle", context: { ...LOCAL, lifecycleGeneration: "other-lifecycle" } },
+    ];
+
+    for (const mismatch of mismatches) {
+      const runId = `run-mismatch-${mismatch.name}`;
+      claimAgentRunContext(runId, {
+        isControlUiVisible: false,
+        lifecycleGeneration,
+        ...mismatch.context,
+      });
+      fail(msg(1, "blocked", 0, runId), "invalid-event");
+      clearAgentRunContext(runId);
+    }
+    expect(events).toEqual([]);
+  });
+
+  it("keeps a claimed run id exclusive against a later untracked local claim", () => {
     const worker = "run-worker-first";
     ack(msg(1, "worker", 0, worker));
+    // A same-identity untracked claim cannot hijack a run live events already own.
     claimAgentRunContext(worker, LOCAL);
     clearAgentRunContext(worker);
     emitAgentEvent({

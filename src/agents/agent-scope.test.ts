@@ -20,7 +20,6 @@ import {
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
-  resolveAgentModelPrimary,
   resolveRunModelFallbacksOverride,
   resolveSubagentModelConfigSelection,
   resolveSubagentModelFallbacksOverride,
@@ -239,7 +238,6 @@ describe("resolveAgentConfig", () => {
       },
     };
 
-    expect(resolveAgentModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentExplicitModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentEffectiveModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual(["openai/gpt-5.4"]);
@@ -1359,3 +1357,4 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
