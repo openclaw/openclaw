@@ -672,11 +672,7 @@ export function createEventHandlers(context: EventHandlerContext) {
           : undefined;
       const previous = toolValidationDiagnosticWatermarkByRun.get(evt.runId);
       let next = previous;
-      if (
-        previous?.lifecycleGeneration &&
-        lifecycleGeneration &&
-        lifecycleGeneration !== previous.lifecycleGeneration
-      ) {
+      if (previous && lifecycleGeneration && lifecycleGeneration !== previous.lifecycleGeneration) {
         if (
           previous.retiredGenerations.has(lifecycleGeneration) ||
           evt.stream !== "lifecycle" ||
@@ -689,7 +685,7 @@ export function createEventHandlers(context: EventHandlerContext) {
           lifecycleGeneration,
           retiredGenerations: new Set([
             ...previous.retiredGenerations,
-            previous.lifecycleGeneration,
+            ...(previous.lifecycleGeneration ? [previous.lifecycleGeneration] : []),
           ]),
         };
       } else {
