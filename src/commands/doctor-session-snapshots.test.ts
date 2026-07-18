@@ -1088,7 +1088,7 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("skips oversized session stores instead of reading them into memory", async () => {
+  it("reports oversized session stores without reading them into memory", async () => {
     const storePath = path.join(root, "state", "agents", "main", "sessions", "huge-sessions.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     const fd = await fs.open(storePath, "w");
@@ -1106,7 +1106,19 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
         storePaths: [storePath],
         bundledSkillsDir,
       });
-      expect(issues).toEqual([]);
+      expect(issues).toEqual([
+        {
+          kind: "store-too-large",
+          storePath,
+          size: 17 * 1024 * 1024,
+          maxBytes: 16 * 1024 * 1024,
+        },
+      ]);
+      expect(sessionSnapshotIssueToHealthFinding(issues[0]!)).toMatchObject({
+        severity: "warn",
+        message: expect.stringContaining("too large to scan"),
+        path: storePath,
+      });
       expect(
         readFileSyncSpy.mock.calls.some((call) => {
           const target = call[0];
@@ -1116,5 +1128,14 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     } finally {
       readFileSyncSpy.mockRestore();
     }
+
+    await noteSessionSnapshotHealth({
+      storePaths: [storePath],
+      bundledSkillsDir,
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped oversized session store"),
+      "Session snapshots",
+    );
   });
 });
