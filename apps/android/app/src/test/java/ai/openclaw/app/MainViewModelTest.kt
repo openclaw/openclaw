@@ -192,7 +192,11 @@ class MainViewModelTest {
         candidates = listOf(PendingAttachment("migrated", "photo.jpg", "image/jpeg", "YQ==")),
       ),
     )
-    assertEquals(1, viewModel.chatComposerState.attachments.value[resolved]?.size)
+    assertEquals(
+      1,
+      viewModel.chatComposerState.attachments.value[resolved]
+        ?.size,
+    )
   }
 
   @Test
@@ -321,8 +325,16 @@ class MainViewModelTest {
       assertEquals(null, viewModel.chatComposerState.attachments.value[alias])
       assertEquals(null, viewModel.chatComposerState.attachments.value[canonical])
       assertEquals(null, viewModel.chatComposerState.attachments.value[provisional])
-      assertEquals(1, viewModel.chatComposerState.attachments.value[sibling]?.size)
-      assertEquals(1, viewModel.chatComposerState.attachments.value[otherAgent]?.size)
+      assertEquals(
+        1,
+        viewModel.chatComposerState.attachments.value[sibling]
+          ?.size,
+      )
+      assertEquals(
+        1,
+        viewModel.chatComposerState.attachments.value[otherAgent]
+          ?.size,
+      )
       assertFalse(viewModel.chatComposerState.isMediaAcquisitionActive(mediaAuthorizationId))
       assertNull(
         viewModel.chatComposerState.addAuthorizedAttachments(
