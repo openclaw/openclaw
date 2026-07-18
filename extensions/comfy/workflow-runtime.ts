@@ -1,5 +1,4 @@
 // Comfy plugin module implements workflow runtime behavior.
-import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -35,6 +34,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readComfyWorkflowFile } from "./workflow-file.js";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -258,7 +258,7 @@ async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWork
   }
 
   const resolvedPath = resolveUserPath(source.workflowPath);
-  const raw = await fs.readFile(resolvedPath, "utf8");
+  const raw = await readComfyWorkflowFile(resolvedPath);
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
     throw new Error(`Comfy workflow at ${resolvedPath} must be a JSON object`);
