@@ -34,7 +34,6 @@ vi.mock("../infra/net/proxy-env.js", async () => {
 
 import {
   createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
@@ -139,6 +138,22 @@ describe("provider operation deadlines", () => {
     vi.setSystemTime(4_250);
 
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
+  });
+
+  it("resolves a lazy total timeout once when the deadline starts", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const resolveTimeoutMs = vi.fn(() => 5_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "generated media download",
+      timeoutMs: resolveTimeoutMs,
+    });
+    vi.setSystemTime(4_250);
+
+    expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
+    expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
   });
 
   it("throws once the operation deadline has expired", () => {
@@ -475,6 +490,7 @@ describe("provider operation deadlines", () => {
     const response = await fetchProviderDownloadResponse({
       url: "https://cdn.example.com/video.mp4",
       init: { method: "GET" },
+      // Keep the shipped timeoutMs call shape working for external plugins.
       timeoutMs: 5_000,
       fetchFn,
       provider: "test-video",
@@ -494,7 +510,7 @@ describe("provider operation deadlines", () => {
     const result = fetchProviderDownloadResponse({
       url: "https://cdn.example.com/video.mp4",
       init: { method: "GET" },
-      timeoutMs: 100,
+      deadline: createProviderOperationDeadline({ label: "download failed", timeoutMs: 100 }),
       fetchFn,
       provider: "test-video",
       requestFailedMessage: "download failed",
@@ -524,7 +540,7 @@ describe("provider operation deadlines", () => {
       fetchProviderDownloadResponse({
         url: "https://cdn.example.com/video.mp4",
         init: { method: "GET" },
-        timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs: 5_000 }),
+        deadline,
         fetchFn,
         provider: "test-video",
         requestFailedMessage: "download failed",

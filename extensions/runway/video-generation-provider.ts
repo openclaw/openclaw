@@ -307,19 +307,29 @@ async function downloadRunwayVideos(params: {
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
+    const deadline = createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      label: "Runway generated video download",
+    });
+    const timeoutMs = createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
     const response = await fetchProviderDownloadResponse({
       url,
       init: { method: "GET" },
-      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      deadline,
       fetchFn: params.fetchFn,
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
     });
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      onTimeout: ({ timeoutMs }) =>
-        new Error(`Runway generated video download timed out after ${timeoutMs}ms`),
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `Runway generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
     });

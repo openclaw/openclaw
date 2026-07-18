@@ -108,25 +108,22 @@ type GuardedProviderRequestParams = {
   mode?: GuardedFetchMode;
 };
 
-/** Creates a timer-safe absolute operation deadline from an optional total timeout. */
+/** Creates a timer-safe absolute deadline, resolving a lazy total timeout exactly once. */
 export function createProviderOperationDeadline(params: {
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   label: string;
 }): ProviderOperationDeadline {
-  if (
-    typeof params.timeoutMs !== "number" ||
-    !Number.isFinite(params.timeoutMs) ||
-    params.timeoutMs <= 0
-  ) {
+  const timeoutMs = typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return { label: params.label };
   }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const deadlineAtMs =
-    resolveExpiresAtMsFromDurationMs(timeoutMs) ?? resolveDateTimestampMs(Date.now());
+    resolveExpiresAtMsFromDurationMs(resolvedTimeoutMs) ?? resolveDateTimestampMs(Date.now());
   return {
     deadlineAtMs,
     label: params.label,
-    timeoutMs,
+    timeoutMs: resolvedTimeoutMs,
   };
 }
 
@@ -328,20 +325,37 @@ export async function fetchProviderOperationResponse(params: {
   });
 }
 
+/**
+ * Fetches generated-asset response headers and bounded error details under an absolute deadline.
+ * Successful-body readers must reuse the same deadline so header time cannot reset the budget.
+ */
 export async function fetchProviderDownloadResponse(params: {
   url: string;
   init?: RequestInit;
+  deadline?: ProviderOperationDeadline;
+  /** @deprecated Pass `deadline` so successful-body reads can reuse the same total budget. */
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   provider?: string;
   requestFailedMessage: string;
   retry?: TransientProviderRetryConfig;
 }): Promise<Response> {
+  // timeoutMs is a shipped Plugin SDK contract. Normalize it at this boundary;
+  // new callers pass the deadline through to their successful-body reader.
+  const deadline =
+    params.deadline ??
+    createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs,
+      label: params.requestFailedMessage,
+    });
   return await fetchProviderOperationResponse({
     stage: "download",
     url: params.url,
     init: params.init,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
+    }),
     fetchFn: params.fetchFn,
     provider: params.provider,
     requestFailedMessage: params.requestFailedMessage,

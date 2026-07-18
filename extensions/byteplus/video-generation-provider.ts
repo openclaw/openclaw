@@ -188,19 +188,29 @@ async function downloadBytePlusVideo(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "BytePlus generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const response = await fetchProviderDownloadResponse({
     url: params.url,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    deadline,
     fetchFn: params.fetchFn,
     provider: "byteplus",
     requestFailedMessage: "BytePlus generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    onTimeout: ({ timeoutMs }) =>
-      new Error(`BytePlus generated video download timed out after ${timeoutMs}ms`),
+    timeoutMs,
+    onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+      new Error(
+        `BytePlus generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+      ),
     onOverflow: ({ maxBytes }) =>
       new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
   });

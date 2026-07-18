@@ -10,6 +10,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
@@ -141,6 +142,14 @@ async function downloadTrackFromUrl(params: {
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedMusicAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "MiniMax generated music download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const result = await executeProviderOperationWithRetry({
     provider: "minimax",
     stage: "download",
@@ -148,7 +157,7 @@ async function downloadTrackFromUrl(params: {
       const guardedResult = await fetchWithTimeoutGuarded(
         params.url,
         { method: "GET" },
-        params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMs(),
         params.fetchFn,
         resolveMinimaxGuardedRequestOptions(params.policy),
       );
@@ -170,9 +179,11 @@ async function downloadTrackFromUrl(params: {
     const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
     return {
       buffer: await readResponseWithLimit(result.response, params.maxBytes, {
-        timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        onTimeout: ({ timeoutMs }) =>
-          new Error(`MiniMax generated music download timed out after ${timeoutMs}ms`),
+        timeoutMs,
+        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+          new Error(
+            `MiniMax generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+          ),
         onOverflow: ({ maxBytes }) =>
           new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
       }),
