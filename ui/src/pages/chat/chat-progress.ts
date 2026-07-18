@@ -6,7 +6,7 @@ const workingStartBySession = new Map<string, { runId: string | null; startedAt:
 
 export function buildCompactionDividerItem(
   marker: Record<string, unknown>,
-  timestamp: number,
+  timestamp: number | null,
   index: number,
 ): Extract<ChatItem, { kind: "divider" }> {
   const tokensBefore = marker.tokensBefore;
