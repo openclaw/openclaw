@@ -124,6 +124,7 @@ describe("MCP App standalone host", () => {
     vi.clearAllMocks();
     mocks.completeRetirement.mockResolvedValue(undefined);
     Object.assign(view, {
+      allowedAppToolNames: new Set(["shared", "app-only"]),
       readOnly: undefined,
       requestWindowStartedAtMs: nowMs,
       requestCount: 0,
@@ -281,6 +282,29 @@ describe("MCP App standalone host", () => {
       (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
         .statusCode,
     ).toBe(200);
+  });
+
+  it("does not accept standalone tool operations without explicit run authority", async () => {
+    Object.assign(view, { allowedAppToolNames: undefined });
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const invoke = (body: unknown) =>
+      request({
+        url: "/__openclaw__/mcp-app/view",
+        method: "POST",
+        authorization: `MCP-App ${issued.ticket}`,
+        body,
+      });
+
+    expect((await invoke({ method: "tools/list", params: {} })).res.statusCode).toBe(403);
+    expect(
+      (await invoke({ method: "tools/call", params: { name: "app-only", arguments: {} } })).res
+        .statusCode,
+    ).toBe(403);
+    expect(
+      (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
+        .statusCode,
+    ).toBe(200);
+    expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {

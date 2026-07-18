@@ -197,6 +197,12 @@ function ticketFromRequest(req: IncomingMessage): string | undefined {
   return value || undefined;
 }
 
+function supportsStandaloneToolOperations(
+  view: Pick<McpAppViewLease, "allowedAppToolNames" | "readOnly">,
+): boolean {
+  return view.allowedAppToolNames !== undefined && view.readOnly !== true;
+}
+
 function sendText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -620,6 +626,13 @@ export async function handleMcpAppStandaloneHttpRequest(
       sendJson(res, 401, { ok: false, error: "Unauthorized" });
       return true;
     }
+    if (
+      (operation.method === "tools/call" || operation.method === "tools/list") &&
+      !supportsStandaloneToolOperations(current.view)
+    ) {
+      sendJson(res, 403, { ok: false, error: "MCP App tool bridge is unavailable" });
+      return true;
+    }
     try {
       sendJson(res, 200, { ok: true, result: await executeMcpAppOperation(current, operation) });
     } catch (error) {
@@ -646,7 +659,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               ...(view.csp ? { csp: view.csp } : {}),
               toolInput: view.toolInput,
               toolResult: view.toolResult,
-              serverTools: view.allowedAppToolNames !== undefined && view.readOnly !== true,
+              serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
             }),
       );
