@@ -111,7 +111,7 @@ describe("root memory repair", () => {
     expect(canonical).toContain("# Added before archive");
   });
 
-  it("restores the legacy path when the archived file grows past the read limit", async () => {
+  it("preserves the archive when the archived file grows past the read limit", async () => {
     const canonicalPath = path.join(tmpDir, "MEMORY.md");
     const legacyPath = path.join(tmpDir, "memory.md");
     await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
@@ -126,13 +126,17 @@ describe("root memory repair", () => {
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
 
-    expect(migration.changed).toBe(false);
-    expect(migration.removedLegacy).toBe(false);
+    expect(migration.changed).toBe(true);
+    expect(migration.removedLegacy).toBe(true);
     expect(migration.readLimitExceeded).toBe(true);
-    await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("# Legacy");
+    await expectPathMissing(legacyPath);
+    if (!migration.archivedLegacyPath) {
+      throw new Error("expected preserved archive path");
+    }
+    await expect(fs.access(migration.archivedLegacyPath)).resolves.toBeUndefined();
   });
 
-  it("preserves the archive when the legacy path cannot be restored", async () => {
+  it("preserves a concurrent legacy replacement beside the archive", async () => {
     const canonicalPath = path.join(tmpDir, "MEMORY.md");
     const legacyPath = path.join(tmpDir, "memory.md");
     await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
@@ -143,10 +147,8 @@ describe("root memory repair", () => {
       await fs.appendFile(sourcePath, Buffer.alloc(9 * 1024 * 1024));
       rename.mockRestore();
       await fs.rename(sourcePath, targetPath);
+      await fs.writeFile(sourcePath, "# Concurrent replacement\n", "utf8");
     });
-    vi.spyOn(fs, "link").mockRejectedValueOnce(
-      Object.assign(new Error("hard link limit reached"), { code: "EMLINK" }),
-    );
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
 
@@ -156,7 +158,7 @@ describe("root memory repair", () => {
     if (!migration.archivedLegacyPath) {
       throw new Error("expected preserved archive path");
     }
-    await expectPathMissing(legacyPath);
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("# Concurrent replacement\n");
     await expect(fs.access(migration.archivedLegacyPath)).resolves.toBeUndefined();
   });
 

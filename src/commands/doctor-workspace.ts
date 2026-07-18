@@ -186,24 +186,6 @@ async function moveLegacyRootMemoryFileToArchive(params: {
   return archivePath;
 }
 
-async function restoreArchivedLegacyRootMemoryFile(params: {
-  archivedLegacyPath: string;
-  legacyPath: string;
-}): Promise<boolean> {
-  try {
-    // The successful archive rename proves both paths share a filesystem.
-    // link() restores atomically without overwriting a concurrent replacement.
-    await fs.promises.link(params.archivedLegacyPath, params.legacyPath);
-  } catch {
-    // A failed hard link is non-mutating. Preserve the archive for manual
-    // recovery regardless of whether the filesystem rejected links, ran out
-    // of space/link slots, or a concurrent writer recreated the legacy path.
-    return false;
-  }
-  await fs.promises.unlink(params.archivedLegacyPath);
-  return true;
-}
-
 function buildMergedLegacyRootMemorySection(params: {
   legacyText: string;
   archivedLegacyPath: string;
@@ -286,13 +268,10 @@ export async function migrateLegacyRootMemoryFile(
     ]);
   } catch (err) {
     const skipped = skippedForReadFailure(err);
-    const restored = await restoreArchivedLegacyRootMemoryFile({
-      archivedLegacyPath,
-      legacyPath: detection.legacyPath,
-    });
-    if (restored) {
-      return skipped;
-    }
+    // The archive is the independent recovery copy. Do not link or copy it
+    // back into the live path: linking lets later in-place writes corrupt the
+    // archive, while copying a concurrently growing file would reintroduce an
+    // unbounded read. A concurrent replacement at legacyPath stays untouched.
     return {
       ...skipped,
       changed: true,
