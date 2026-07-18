@@ -1,4 +1,5 @@
 // Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
+import fs from "node:fs";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,

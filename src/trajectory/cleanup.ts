@@ -14,8 +14,6 @@ import {
   safeTrajectorySessionFileName,
 } from "./paths.js";
 
-const TRAJECTORY_POINTER_MAX_BYTES = 1 * 1024 * 1024;
-
 type RemovedTrajectoryArtifact = {
   kind: "pointer" | "runtime";
   path: string;
