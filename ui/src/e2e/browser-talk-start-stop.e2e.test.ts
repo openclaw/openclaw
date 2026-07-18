@@ -538,14 +538,25 @@ describeControlUiE2e("Control UI browser Talk", () => {
           super();
           (
             window as Window & {
-              openclawVideoTalkE2e?: { peer: FakePeerConnection };
+              openclawVideoTalkE2e?: {
+                dataChannelCreated: boolean;
+                peer: FakePeerConnection;
+              };
             }
-          ).openclawVideoTalkE2e = { peer: this };
+          ).openclawVideoTalkE2e = { dataChannelCreated: false, peer: this };
         }
 
         addTrack() {}
 
         createDataChannel() {
+          const harness = (
+            window as Window & {
+              openclawVideoTalkE2e?: { dataChannelCreated: boolean };
+            }
+          ).openclawVideoTalkE2e;
+          if (harness) {
+            harness.dataChannelCreated = true;
+          }
           return this.channel;
         }
 
@@ -592,9 +603,9 @@ describeControlUiE2e("Control UI browser Talk", () => {
             Boolean(
               (
                 window as Window & {
-                  openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
+                  openclawVideoTalkE2e?: { dataChannelCreated: boolean };
                 }
-              ).openclawVideoTalkE2e?.peer.channel,
+              ).openclawVideoTalkE2e?.dataChannelCreated,
             ),
           ),
         )
