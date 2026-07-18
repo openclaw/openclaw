@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 import { hasErrnoCode } from "../infra/errors.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -44,6 +45,8 @@ export type ConfigSetBatchEntry = {
   ref?: unknown;
   provider?: unknown;
 };
+
+const BATCH_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
   return Boolean(
@@ -139,7 +142,7 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   }
   let raw: string;
   try {
-    raw = fs.readFileSync(pathname, "utf8");
+    raw = readRegularFileSync({ filePath: pathname, maxBytes: BATCH_FILE_MAX_BYTES });
   } catch (err) {
     if (hasErrnoCode(err, "ENOENT")) {
       throw new Error(`--batch-file not found: ${pathname}`, { cause: err });
