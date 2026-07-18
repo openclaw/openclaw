@@ -360,6 +360,31 @@ describe("provider error utils", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
+  it("rejects provider text responses with invalid UTF-8 bytes instead of silently replacing them", async () => {
+    const invalidUtf8Bytes = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f, 0xff, 0x21]);
+    const response = new Response(invalidUtf8Bytes.buffer, {
+      status: 200,
+      headers: { "Content-Type": "text/plain" },
+    });
+
+    await expect(readProviderTextResponse(response, "Provider text failed")).rejects.toThrow(
+      TypeError,
+    );
+  });
+
+  it("rejects provider JSON responses with invalid UTF-8 bytes instead of silently replacing them", async () => {
+    const invalidUtf8Bytes = new Uint8Array([0x7b, 0x22, 0x6b, 0x65, 0x79, 0x22, 0x3a, 0xff, 0x7d]);
+    const response = new Response(invalidUtf8Bytes.buffer, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    await expect(readProviderJsonResponse(response, "Provider JSON failed")).rejects.toMatchObject({
+      message: "Provider JSON failed: malformed JSON response",
+      cause: expect.any(TypeError) as unknown,
+    });
+  });
+
   it("caps successful text responses instead of buffering oversized bodies", async () => {
     const streamed = createStreamingTextResponse({
       chunkCount: 20,

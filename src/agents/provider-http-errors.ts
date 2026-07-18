@@ -86,7 +86,7 @@ export async function readProviderTextResponse(
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
   });
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 /** Formats common provider JSON error payload shapes into one readable detail string. */
@@ -341,7 +341,7 @@ export async function readProviderJsonResponse<T>(
       new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }
