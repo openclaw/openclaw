@@ -273,7 +273,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: ingress-effect-once factory.
       // +3: bounded raw transcript cursor request, result, and reader.
       // +3: bounded visible transcript cursor request, result, and reader.
-      8164,
+      // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
+      8165,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -335,7 +336,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
-      3005,
+      // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
+      3006,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
