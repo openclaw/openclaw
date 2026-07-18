@@ -1,6 +1,6 @@
 import Foundation
-import OpenClawNativeState
 import Testing
+@testable import OpenClawNativeState
 
 struct OpenClawNativeStateSQLiteTests {
     @Test
@@ -108,6 +108,53 @@ struct OpenClawNativeStateSQLiteTests {
         let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
         #expect(try database.scalarInt64(
             "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'") == 4)
+    }
+
+    @Test
+    func `vanished transient sidecar does not fail committed write cleanup`() throws {
+        let databaseURL = URL(fileURLWithPath: "/tmp/openclaw-native-state.sqlite")
+        var attemptedPaths: [String] = []
+
+        try OpenClawNativeStateSQLite.secureDatabaseFiles(
+            databaseURL,
+            fileExists: { _ in true },
+            setAttributes: { _, path in
+                attemptedPaths.append(path)
+                if path.hasSuffix("-wal") {
+                    throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+                }
+            })
+
+        #expect(attemptedPaths == [
+            databaseURL.path,
+            databaseURL.path + "-wal",
+            databaseURL.path + "-shm",
+            databaseURL.path + "-journal",
+        ])
+    }
+
+    @Test
+    func `missing database or nonmissing sidecar failure remains fatal`() {
+        let databaseURL = URL(fileURLWithPath: "/tmp/openclaw-native-state.sqlite")
+        let missing = NSError(domain: NSPOSIXErrorDomain, code: Int(POSIXErrorCode.ENOENT.rawValue))
+        let denied = NSError(domain: NSPOSIXErrorDomain, code: Int(POSIXErrorCode.EACCES.rawValue))
+
+        #expect(throws: NSError.self) {
+            try OpenClawNativeStateSQLite.secureDatabaseFiles(
+                databaseURL,
+                fileExists: { _ in true },
+                setAttributes: { _, path in
+                    if path == databaseURL.path { throw missing }
+                })
+        }
+        #expect(throws: NSError.self) {
+            try OpenClawNativeStateSQLite.secureDatabaseFiles(
+                databaseURL,
+                fileExists: { _ in true },
+                setAttributes: { _, path in
+                    if path.hasSuffix("-wal") { throw denied }
+                })
+        }
     }
 
     private enum TestError: Error {

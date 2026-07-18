@@ -430,19 +430,38 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         try fileManager.setAttributes(attributes, ofItemAtPath: url.path)
     }
 
-    private static func secureDatabaseFiles(_ databaseURL: URL) throws {
-        for url in [
-            databaseURL,
-            URL(fileURLWithPath: databaseURL.path + "-wal", isDirectory: false),
-            URL(fileURLWithPath: databaseURL.path + "-shm", isDirectory: false),
-            URL(fileURLWithPath: databaseURL.path + "-journal", isDirectory: false),
-        ] where FileManager.default.fileExists(atPath: url.path) {
+    static func secureDatabaseFiles(
+        _ databaseURL: URL,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        setAttributes: ([FileAttributeKey: Any], String) throws -> Void = {
+            try FileManager.default.setAttributes($0, ofItemAtPath: $1)
+        }) throws
+    {
+        for (url, isTransient) in [
+            (databaseURL, false),
+            (URL(fileURLWithPath: databaseURL.path + "-wal", isDirectory: false), true),
+            (URL(fileURLWithPath: databaseURL.path + "-shm", isDirectory: false), true),
+            (URL(fileURLWithPath: databaseURL.path + "-journal", isDirectory: false), true),
+        ] where fileExists(url.path) {
             var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
             #if os(iOS) || os(watchOS)
             attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
             #endif
-            try FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
+            do {
+                try setAttributes(attributes, url.path)
+            } catch where isTransient && Self.isMissingFileError(error) {
+                // SQLite can remove sidecars between the probe and chmod. A vanished sidecar is
+                // already secure; surfacing it after COMMIT would misreport a durable write.
+                continue
+            }
         }
+    }
+
+    private static func isMissingFileError(_ error: Error) -> Bool {
+        let error = error as NSError
+        return (error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError)
+            || (error.domain == NSPOSIXErrorDomain
+                && error.code == Int(POSIXErrorCode.ENOENT.rawValue))
     }
 }
 
