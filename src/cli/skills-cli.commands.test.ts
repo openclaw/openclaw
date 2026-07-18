@@ -353,13 +353,18 @@ describe("skills cli commands", () => {
     );
   }
 
-  it("searches ClawHub skills from the native CLI", async () => {
+  it("renders installable ClawHub refs in native skill search results", async () => {
     searchSkillsFromClawHubMock.mockResolvedValue([
       {
         slug: "calendar",
+        ownerHandle: "demo-owner",
         displayName: "Calendar",
         summary: "CalDAV helpers",
         version: "1.2.3",
+      },
+      {
+        slug: "legacy-calendar",
+        displayName: "Legacy Calendar",
       },
     ]);
 
@@ -370,8 +375,12 @@ describe("skills cli commands", () => {
       limit: undefined,
     });
     expect(
-      runtimeLogs.some((line) => line.includes("calendar v1.2.3  Calendar")),
-      "search result log",
+      runtimeLogs.some((line) => line.includes("@demo-owner/calendar v1.2.3  Calendar")),
+      "owner-qualified search result log",
+    ).toBe(true);
+    expect(
+      runtimeLogs.some((line) => line.includes("legacy-calendar  Legacy Calendar")),
+      "legacy search result log",
     ).toBe(true);
   });
 
