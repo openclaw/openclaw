@@ -470,7 +470,30 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
-  it("delivers error finals as standalone messages without clearing the draft preview", async () => {
+  it("delivers error finals standalone when the preview was already finalized by an assistant reply", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "Error", isError: true } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: true },
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
+  });
+
+  it("still cleans up an error-only draft when the preview was never finalized", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});
 
@@ -487,9 +510,9 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       deliverPayload: deliverFinal,
     });
 
-    expect(draftStream.flush).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    // When the preview was never finalized (no assistant reply), the error-only
+    // draft should still be cleaned up normally.
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(deliverFinal).toHaveBeenCalledTimes(1);
   });
 
