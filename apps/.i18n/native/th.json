@@ -7344,6 +7344,56 @@
       "translated": "ไฟล์แนบที่ไม่รองรับ"
     },
     {
+      "id": "native.android.bf40f9f9a508155d",
+      "source": "Other answer",
+      "translated": "คำตอบอื่น"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "ส่ง"
+    },
+    {
+      "id": "native.android.f68cd7a84be4089e",
+      "source": "Answered",
+      "translated": "ตอบแล้ว"
+    },
+    {
+      "id": "native.android.a0dc883947c2f980",
+      "source": "Answered elsewhere",
+      "translated": "ตอบจากที่อื่นแล้ว"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "หมดอายุแล้ว"
+    },
+    {
+      "id": "native.android.d6d8fc83cec68418",
+      "source": "Cancelled",
+      "translated": "ยกเลิกแล้ว"
+    },
+    {
+      "id": "native.android.73f64d0d54b7f9c0",
+      "source": "Pending",
+      "translated": "รอดำเนินการ"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "กำลังส่ง…"
+    },
+    {
+      "id": "native.android.c5e9ee99f9d9c612",
+      "source": "Expires in ${seconds / 60}m ${seconds % 60}s",
+      "translated": "หมดอายุใน ${seconds / 60} นาที ${seconds % 60} วินาที"
+    },
+    {
+      "id": "native.android.2ca602fbdf96f1e7",
+      "source": "Expires in ${seconds}s",
+      "translated": "หมดอายุใน ${seconds} วินาที"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "โมเดล"
@@ -20104,6 +20154,11 @@
       "translated": "Gateway ไม่สามารถวางแผน \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)) ได้ โปรดลองอีกครั้ง"
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "ตื่นได้แล้ว เพื่อนของฉัน!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<ข้อมูลลับถูกปกปิด>"
@@ -22554,9 +22609,49 @@
       "translated": "ใช้บริบทไปแล้ว %@%%"
     },
     {
+      "id": "native.apple.e57eb66d14768bdb",
+      "source": "%@ (override)",
+      "translated": "%@ (แทนที่)"
+    },
+    {
       "id": "native.apple.510c6dfa05924ae2",
       "source": "Thinking",
       "translated": "กำลังคิด"
+    },
+    {
+      "id": "native.apple.e47fcaaf47e5d6bc",
+      "source": "Full",
+      "translated": "เต็ม"
+    },
+    {
+      "id": "native.apple.f434793807b778ce",
+      "source": "Verbosity",
+      "translated": "ระดับรายละเอียด"
+    },
+    {
+      "id": "native.apple.d3426c54f223c4d8",
+      "source": "Default (inherited)",
+      "translated": "ค่าเริ่มต้น (สืบทอด)"
+    },
+    {
+      "id": "native.apple.575a78c2f3daf366",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.apple.75bebec90215a705",
+      "source": "Off",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.17481e3865493e34",
+      "source": "Fast",
+      "translated": "เร็ว"
+    },
+    {
+      "id": "native.apple.e5f91b8690e705e2",
+      "source": "Fast responses",
+      "translated": "ตอบกลับอย่างรวดเร็ว"
     },
     {
       "id": "native.apple.745b004e0b5b6b80",
@@ -22569,14 +22664,14 @@
       "translated": "ล่าสุด"
     },
     {
-      "id": "native.apple.aa321cf4820426ef",
-      "source": "Models",
-      "translated": "โมเดล"
-    },
-    {
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "โมเดล"
+    },
+    {
+      "id": "native.apple.6045352c168e07cb",
+      "source": "Default",
+      "translated": "ค่าเริ่มต้น"
     },
     {
       "id": "native.apple.75550b03f06d6abc",
@@ -22854,6 +22949,11 @@
       "translated": "กำลังเรียกใช้เครื่องมือ…"
     },
     {
+      "id": "native.apple.51ef5e41f9124819",
+      "source": "Other",
+      "translated": "อื่นๆ"
+    },
+    {
       "id": "native.apple.3b932a47b4223a43",
       "source": "Collapse plan",
       "translated": "ยุบแผน"
@@ -22862,6 +22962,41 @@
       "id": "native.apple.b6b3b9af4c618060",
       "source": "Expand plan",
       "translated": "ขยายแผน"
+    },
+    {
+      "id": "native.apple.da4494f9e875169d",
+      "source": "Other answer",
+      "translated": "คำตอบอื่น"
+    },
+    {
+      "id": "native.apple.e9c3855562d8e4e9",
+      "source": "Not selected",
+      "translated": "ไม่ได้เลือก"
+    },
+    {
+      "id": "native.apple.bd4335213464d4be",
+      "source": "Selected",
+      "translated": "เลือกแล้ว"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "ส่ง"
+    },
+    {
+      "id": "native.apple.6c1adc16e0a846e5",
+      "source": "Submitting…",
+      "translated": "กำลังส่ง…"
+    },
+    {
+      "id": "native.apple.698bdb0d6537edb6",
+      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
+      "translated": "หมดอายุใน \\(seconds / 60) นาที \\(seconds % 60) วินาที"
+    },
+    {
+      "id": "native.apple.30e1c342b3345290",
+      "source": "Expires in \\(seconds)s",
+      "translated": "หมดอายุใน \\(seconds) วินาที"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",
@@ -23319,6 +23454,11 @@
       "translated": "เซสชัน"
     },
     {
+      "id": "native.apple.c13dbe6b5c01e9bd",
+      "source": "%@ (override)",
+      "translated": "%@ (แทนที่)"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "กำลังคิด"
@@ -23327,6 +23467,41 @@
       "id": "native.apple.48dde5fe65b841a3",
       "source": "Thinking level",
       "translated": "ระดับการคิด"
+    },
+    {
+      "id": "native.apple.ca556b80c9adcae8",
+      "source": "Full",
+      "translated": "เต็ม"
+    },
+    {
+      "id": "native.apple.1ae2d7073bba214b",
+      "source": "Verbosity",
+      "translated": "ระดับรายละเอียด"
+    },
+    {
+      "id": "native.apple.b56645c4fa60fe23",
+      "source": "Default (inherited)",
+      "translated": "ค่าเริ่มต้น (สืบทอด)"
+    },
+    {
+      "id": "native.apple.17277ea10fd23846",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.apple.8f2830ece961d651",
+      "source": "Off",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.0acac602f7cc68fc",
+      "source": "Fast",
+      "translated": "เร็ว"
+    },
+    {
+      "id": "native.apple.16e00cf511074484",
+      "source": "Fast responses",
+      "translated": "ตอบกลับอย่างรวดเร็ว"
     },
     {
       "id": "native.apple.17ea1ddec4a7b7a8",
@@ -23339,14 +23514,14 @@
       "translated": "ล่าสุด"
     },
     {
-      "id": "native.apple.f41f892742244520",
-      "source": "Models",
-      "translated": "โมเดล"
-    },
-    {
       "id": "native.apple.273aa7b9194a8d0d",
       "source": "Model",
       "translated": "โมเดล"
+    },
+    {
+      "id": "native.apple.68c4c3dd439d182b",
+      "source": "Default",
+      "translated": "ค่าเริ่มต้น"
     },
     {
       "id": "native.apple.eb58552e43c8dde2",

@@ -94,6 +94,19 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
+    @Test func `initial draft populates an empty composer without replacing user text`() {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            initialDraft: "Wake up, my friend!",
+            presentation: .window,
+            transport: TestTransport())
+
+        #expect(controller._testDraft == "Wake up, my friend!")
+        controller.applyDraftIfEmpty("replacement")
+        #expect(controller._testDraft == "Wake up, my friend!")
+        controller.close()
+    }
+
     @Test func `controller explicit agent wins and nil falls back to cached default`() throws {
         let cachedIdentity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "global",
@@ -127,5 +140,28 @@ struct WebChatSwiftUISmokeTests {
             defaults.set(level, forKey: "openclaw.webchat.thinkingLevel")
             #expect(WebChatSwiftUIWindowController.persistedThinkingLevel(defaults: defaults) == level)
         }
+    }
+
+    @Test func `verbosity preference survives reopen`() throws {
+        let suiteName = "WebChatSwiftUISmokeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set("full", forKey: "openclaw.webchat.verboseLevel")
+        #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == "full")
+        defaults.set("invalid", forKey: "openclaw.webchat.verboseLevel")
+        #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == nil)
+    }
+
+    @Test func `inherited verbosity preference clears persisted override`() throws {
+        let suiteName = "WebChatSwiftUISmokeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        WebChatSwiftUIWindowController.persistVerbosePreference("full", defaults: defaults)
+        WebChatSwiftUIWindowController.persistVerbosePreference(nil, defaults: defaults)
+
+        #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == nil)
+        #expect(defaults.object(forKey: "openclaw.webchat.verboseLevel") == nil)
     }
 }

@@ -23,7 +23,6 @@ import type {
   AssembledChannelTurn,
   ChannelEventClass,
   ChannelTurnAdmission,
-  ChannelEventDeliveryAdapter,
   ChannelTurnLogEvent,
   ChannelTurnPlan,
   ChannelTurnResult,
@@ -121,15 +120,6 @@ function emit(params: {
     accountId: params.accountId,
     ...params.event,
   });
-}
-
-function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
-  // Observe-only channels still need an adapter shape for shared turn plumbing.
-  return {
-    deliver: async () => ({
-      visibleReplySent: false,
-    }),
-  };
 }
 
 function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: PreflightFacts) {
@@ -288,6 +278,13 @@ async function runChannelTurn<
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult<TDispatchResult>;
   try {
+    if ("runDispatch" in resolved && params.turnAdoptionLifecycle) {
+      // Prepared dispatchers already own their reply options. Accepting a top-level lifecycle
+      // here would silently orphan durable-ingress adoption.
+      throw new Error(
+        "runChannelInboundEvent cannot apply turnAdoptionLifecycle to a prepared turn; attach the lifecycle when creating runDispatch",
+      );
+    }
     const dispatchResult = (
       "runDispatch" in resolved
         ? await runPreparedInboundReply({
@@ -298,9 +295,6 @@ async function runChannelTurn<
           })
         : await dispatchAssembledChannelTurn({
             ...resolved,
-            ...(admission.kind === "observeOnly"
-              ? { delivery: createNoopChannelEventDeliveryAdapter() }
-              : {}),
             admission,
             log: params.log,
             messageId: input.id,

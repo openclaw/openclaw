@@ -1019,6 +1019,40 @@ describe("channel turn kernel", () => {
     expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
   });
 
+  it("uses noop delivery for direct assembled observe-only dispatch", async () => {
+    const events: string[] = [];
+    const deliver = vi.fn(async () => {
+      events.push("deliver");
+      return { visibleReplySent: true };
+    });
+
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "test",
+      agentId: "observer",
+      routeSessionKey: "agent:observer:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
+      recordInboundSession: createRecordInboundSession(events),
+      dispatchReplyWithBufferedBlockDispatcher: createDispatch(events),
+      delivery: { deliver },
+      admission: { kind: "observeOnly", reason: "broadcast-observer" },
+    });
+
+    expect(events).toEqual(["record", "dispatch"]);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
+    expect(result.dispatched).toBe(true);
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(resolveChannelTurnDispatchCounts(result.dispatchResult)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
+  });
+
   it("clears pending group history after a successful prepared turn", async () => {
     const historyMap = new Map([["room-1", [{ sender: "User", body: "queued before reply" }]]]);
 
@@ -1451,6 +1485,40 @@ describe("channel turn kernel", () => {
       throw new Error("expected dispatch");
     }
     expect(result.dispatchResult.queuedFinal).toBe(true);
+  });
+
+  it("rejects top-level adoption lifecycles for prepared turns", async () => {
+    const recordInboundSession = createRecordInboundSession();
+    const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
+    const onFinalize = vi.fn();
+
+    await expect(
+      runChannelInboundEvent({
+        channel: "test",
+        raw: { id: "msg-1", text: "hello" },
+        turnAdoptionLifecycle: { onAdopted: vi.fn(async () => undefined) },
+        adapter: {
+          ingest: () => ({ id: "msg-1", rawText: "hello" }),
+          resolveTurn: () => ({
+            channel: "test",
+            routeSessionKey: "agent:main:test:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx(),
+            recordInboundSession,
+            runDispatch,
+          }),
+          onFinalize,
+        },
+      }),
+    ).rejects.toThrow(
+      "runChannelInboundEvent cannot apply turnAdoptionLifecycle to a prepared turn",
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(runDispatch).not.toHaveBeenCalled();
+    expect(onFinalize).toHaveBeenCalledWith(
+      expect.objectContaining({ admission: { kind: "dispatch" }, dispatched: false }),
+    );
   });
 
   it("suppresses prepared dispatch for observe-only full turns", async () => {

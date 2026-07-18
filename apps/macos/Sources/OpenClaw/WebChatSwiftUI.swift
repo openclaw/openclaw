@@ -9,6 +9,7 @@ import SwiftUI
 
 private let webChatSwiftLogger = Logger(subsystem: "ai.openclaw", category: "WebChatSwiftUI")
 private let webChatThinkingLevelDefaultsKey = "openclaw.webchat.thinkingLevel"
+private let webChatVerboseLevelDefaultsKey = "openclaw.webchat.verboseLevel"
 
 private enum WebChatSwiftUILayout {
     static let windowSize = NSSize(width: 960, height: 700)
@@ -293,6 +294,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: agentID,
             model: patch.model,
             thinkingLevel: patch.thinkingLevel,
+            fastMode: patch.fastMode,
             verboseLevel: patch.verboseLevel)
     }
 
@@ -501,6 +503,16 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+    }
+
+    func listQuestions() async throws -> [QuestionRecord] {
+        let data = try await GatewayConnection.shared.request(OpenClawChatGatewayRequests.questionList())
+        return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
+    }
+
+    func resolveQuestion(id: String, answers: [String: [String]]) async throws {
+        _ = try await GatewayConnection.shared.request(
+            OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
     }
 
     func waitForRunCompletion(
@@ -802,6 +814,7 @@ final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
     private let initialActiveAgentID: String?
+    private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
     private let speech: OpenClawChatSpeechController
@@ -817,6 +830,7 @@ final class WebChatSwiftUIWindowController {
     convenience init(
         sessionKey: String,
         agentID: String? = nil,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation)
     {
         // Connection-mode changes tear chat windows down via resetTunnels(),
@@ -827,6 +841,7 @@ final class WebChatSwiftUIWindowController {
         self.init(
             sessionKey: sessionKey,
             agentID: agentID,
+            initialDraft: initialDraft,
             presentation: presentation,
             cachedRoutingIdentity: context?.routingIdentity,
             store: context?.store)
@@ -835,6 +850,7 @@ final class WebChatSwiftUIWindowController {
     convenience init(
         sessionKey: String,
         agentID: String?,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation,
         cachedRoutingIdentity: OpenClawChatSessionRoutingIdentity?,
         store: OpenClawChatSQLiteTranscriptCache?)
@@ -845,6 +861,7 @@ final class WebChatSwiftUIWindowController {
             cachedDefaultAgentID: cachedRoutingIdentity?.defaultAgentID)
         self.init(
             sessionKey: sessionKey,
+            initialDraft: initialDraft,
             presentation: presentation,
             transport: MacGatewayChatTransport(
                 outboxGatewayID: store?.gatewayID,
@@ -858,6 +875,7 @@ final class WebChatSwiftUIWindowController {
 
     init(
         sessionKey: String,
+        initialDraft: String? = nil,
         presentation: WebChatPresentation,
         transport: any OpenClawChatTransport,
         initialActiveAgentID: String? = nil,
@@ -893,12 +911,26 @@ final class WebChatSwiftUIWindowController {
             transcriptCache: transcriptCache,
             outbox: outbox,
             initialThinkingLevel: Self.persistedThinkingLevel(),
+            initialVerboseLevel: Self.persistedVerboseLevel(),
             onSessionChanged: { key in
                 sessionKeyRelay.onChange?(key)
             },
-            onThinkingLevelChanged: { level in
-                UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
+            onThinkingPreferenceChanged: { level in
+                if let level {
+                    UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: webChatThinkingLevelDefaultsKey)
+                }
+            },
+            onVerbosePreferenceChanged: { level in
+                Self.persistVerbosePreference(level)
             })
+        if let initialDraft,
+           !initialDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            vm.input = initialDraft
+        }
+        self.viewModel = vm
         let explicitAgentID = WebChatRoute.normalizedAgentID(explicitAgentID)
         Task { @MainActor [weak vm] in
             let pushes = await GatewayConnection.shared.subscribe()
@@ -965,6 +997,14 @@ final class WebChatSwiftUIWindowController {
 
     var isVisible: Bool {
         self.window?.isVisible ?? false
+    }
+
+    func applyDraftIfEmpty(_ draft: String?) {
+        guard self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let draft,
+              !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        self.viewModel.input = draft
     }
 
     func show() {
@@ -1062,6 +1102,21 @@ final class WebChatSwiftUIWindowController {
             return nil
         }
         return stored
+    }
+
+    static func persistedVerboseLevel(defaults: UserDefaults = .standard) -> String? {
+        let stored = defaults.string(forKey: webChatVerboseLevelDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return OpenClawChatViewModel.verboseLevelOptions.contains(stored ?? "") ? stored : nil
+    }
+
+    static func persistVerbosePreference(_ level: String?, defaults: UserDefaults = .standard) {
+        if let level {
+            defaults.set(level, forKey: webChatVerboseLevelDefaultsKey)
+        } else {
+            defaults.removeObject(forKey: webChatVerboseLevelDefaultsKey)
+        }
     }
 
     static func effectiveAgentID(
@@ -1204,6 +1259,10 @@ final class WebChatSwiftUIWindowController {
 
     var _testActiveAgentID: String? {
         self.initialActiveAgentID
+    }
+
+    var _testDraft: String {
+        self.viewModel.input
     }
     #endif
 }

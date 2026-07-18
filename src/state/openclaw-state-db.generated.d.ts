@@ -401,6 +401,14 @@ export interface CurrentConversationBindings {
   updated_at: number;
 }
 
+export interface DatabaseVerifications {
+  error: string | null;
+  kind: string;
+  path: string;
+  result: string;
+  verified_at: number;
+}
+
 export interface DeliveryQueueEntries {
   account_id: string | null;
   channel: string | null;
@@ -899,6 +907,7 @@ export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
   notified_sequence: Generated<number>;
+  provenance: Generated<string>;
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
@@ -1329,6 +1338,7 @@ export interface DB {
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
+  database_verifications: DatabaseVerifications;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;

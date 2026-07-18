@@ -1266,7 +1266,9 @@ html.openclaw-native-macos
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px;
+  /* 9px left matches .sidebar-recent-session__link text inset so zone labels
+     and session titles share one left edge. */
+  padding: 0 10px 0 9px;
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
@@ -1283,10 +1285,6 @@ html.openclaw-native-macos
   top: 0;
   z-index: 2;
   background: var(--sidebar-bg);
-}
-
-.sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
-  flex: 1 1 auto;
 }
 
 .sidebar-session-group-toggle {
@@ -1317,13 +1315,11 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-group-count {
-  width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
-  text-align: center;
 }
 
 .sidebar-session-group-count--error {
@@ -1716,11 +1712,35 @@ html.openclaw-native-macos
   width: 31px;
   height: 30px;
   flex: 0 0 31px;
-  padding: 0 1px 0 5px;
+  padding: 0 3px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
+}
+
+/* Expanded parents already show their children below, so the collapse control
+   is quiet until row hover; collapsed toggles stay visible because the count
+   and status tint are the only signal that hidden children exist. */
+.sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.session-row-host:hover .sidebar-child-session-toggle[aria-expanded="true"],
+.session-row-host:focus-within .sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch has no hover: keep the collapse control usable, matching the
+   session-action touch override in components.css. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-child-session-toggle[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .sidebar-child-session-toggle:hover,
@@ -1754,10 +1774,6 @@ html.openclaw-native-macos
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-}
-
-.sidebar-child-session-toggle + .sidebar-recent-session__link {
-  padding-left: 0;
 }
 
 .sidebar-recent-session__link:hover {
@@ -2160,6 +2176,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   font-size: 11px;
   font-weight: 550;
   letter-spacing: 0.04em;
+}
+
+.session-menu__info {
+  padding: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .session-menu__separator {

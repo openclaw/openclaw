@@ -526,7 +526,6 @@ src/agents/session-file-repair.test.ts
 src/agents/session-file-repair.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
-src/agents/session-transcript-repair.ts
 src/agents/session-write-lock.test.ts
 src/agents/session-write-lock.ts
 src/agents/sessions/extensions/runner.ts
@@ -589,7 +588,6 @@ src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/agent-runner.ts
 src/auto-reply/reply/commands-acp.test.ts
-src/auto-reply/reply/commands-acp/lifecycle.ts
 src/auto-reply/reply/commands-approve.test.ts
 src/auto-reply/reply/commands-models.ts
 src/auto-reply/reply/commands-session.ts
@@ -897,7 +895,6 @@ src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
-src/gateway/worker-environments/live-events.ts
 src/gateway/worker-environments/service.test.ts
 src/gateway/worker-environments/service.ts
 src/gateway/worker-environments/store.ts
@@ -1156,7 +1153,6 @@ ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/realtime-talk-gateway-relay.test.ts
 ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
-ui/src/pages/config/quick.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/config/view.ts
 ui/src/pages/cron/view.ts

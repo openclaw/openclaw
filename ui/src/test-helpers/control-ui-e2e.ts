@@ -63,6 +63,10 @@ export type ControlUiMockGatewayScenario = {
   historyMessages?: unknown[];
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
+  /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
+  inFlightRun?: { runId: string; text?: string; plan?: unknown } | null;
+  /** Session run state served alongside history (hasActiveRun/activeRunIds). */
+  sessionInfo?: Record<string, unknown> | null;
   models?: Array<{
     id: string;
     name: string;
@@ -253,7 +257,9 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
+    inFlightRun: scenario.inFlightRun ?? null,
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    sessionInfo: scenario.sessionInfo ?? null,
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -778,6 +784,8 @@ function installControlUiMockGateway(input: {
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
+          ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
         };
       case "chat.startup":
         return {
@@ -800,6 +808,8 @@ function installControlUiMockGateway(input: {
           },
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
+          ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
         };
       case "chat.metadata":
         return {
