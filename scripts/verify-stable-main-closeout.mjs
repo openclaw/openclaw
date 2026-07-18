@@ -50,6 +50,7 @@ function gitSha(dir) {
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], {
     encoding: "utf8",
     timeout: STABLE_CLOSEOUT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   }).trim();
 }
 
