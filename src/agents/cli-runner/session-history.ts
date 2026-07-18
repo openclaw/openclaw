@@ -120,9 +120,11 @@ function coerceHistoryText(content: unknown): string {
 function coerceSenderLabel(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) {
     const label = value.trim();
-    // Constrain to a single prompt line — line breaks (CR/LF) in channel/user
-    // names could inject spoofed transcript lines into model-visible history.
-    const firstLine = label.split(/[\r\n]/)[0]?.trim() ?? "";
+    // Constrain to a single prompt line — line breaks in channel/user names
+    // could inject spoofed transcript lines into model-visible history.
+    // Split on all ECMA-262 §11.3 LineTerminator sequences: CR (\r), LF (\n),
+    // LS (U+2028), PS (U+2029).
+    const firstLine = label.split(/[\r\n\u2028\u2029]/)[0]?.trim() ?? "";
     return firstLine || undefined;
   }
   return undefined;
