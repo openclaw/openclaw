@@ -398,4 +398,85 @@ describe("dispatchAgentHook trust handling", () => {
       ),
     );
   });
+
+  describe("concurrent same-session hook dispatch", () => {
+    beforeEach(() => {
+      resetGatewayWorkAdmission();
+      vi.clearAllMocks();
+      capturedDispatchAgentHook = undefined;
+      createGatewayHooksRequestHandler(buildMinimalParams());
+    });
+
+    afterEach(() => {
+      resetGatewayWorkAdmission();
+      vi.restoreAllMocks();
+    });
+
+    // Regression: concurrent hooks targeting the same sessionKey raced on the
+    // optimistic session claim; the first winner claimed the session and the
+    // losers were silently dropped (#110109). After the fix, same-session
+    // hooks chain sequentially so only one cron run is in progress at a time
+    // and no claim races occur.
+    it("serializes same-session hook dispatch so no claim race occurs", async () => {
+      const started: number[] = [];
+      let releaseFirst: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+        started.push(1);
+        await firstGate;
+        return { status: "ok" as const, summary: "first", delivered: false };
+      });
+      // second call: not started from dispatch; only the first hook is in-flight.
+      // After releaseFirst(), the first hook settles and the chain advances.
+
+      dispatchAgentHook(buildAgentPayload("First hook"));
+      await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+      // Second hook is dispatched while the first is still holding its claim.
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+        started.push(2);
+        return { status: "ok" as const, summary: "second", delivered: false };
+      });
+      dispatchAgentHook(buildAgentPayload("Second hook"));
+
+      // Second cron run must not have started yet — serialization blocks it.
+      expect(started).toEqual([1]);
+      releaseFirst();
+
+      await waitForFast(() => expect(logHooksInfoMock).toHaveBeenCalledTimes(2));
+      expect(started).toEqual([1, 2]);
+    });
+
+    it("serializes same-session hook dispatch", async () => {
+      let releaseFirst: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const started: number[] = [];
+
+      // First hook: gated — won't finish until releaseFirst().
+      runCronIsolatedAgentTurnMock.mockImplementation(async () => {
+        const index = started.length;
+        started.push(index);
+        if (index === 0) {
+          await gate;
+        }
+        return { status: "ok" as const, summary: `hook-${index}`, delivered: false };
+      });
+
+      dispatchAgentHook(buildAgentPayload("First hook"));
+      await waitForFast(() => expect(started).toContain(0));
+
+      // Second hook with same sessionKey: must queue behind the first.
+      dispatchAgentHook(buildAgentPayload("Second hook"));
+      // Second hook has not started yet (serialization blocks it).
+      expect(started).toEqual([0]);
+      releaseFirst();
+
+      await waitForFast(() => expect(logHooksInfoMock).toHaveBeenCalledTimes(2));
+      expect(started).toEqual([0, 1]);
+    });
+  });
 });

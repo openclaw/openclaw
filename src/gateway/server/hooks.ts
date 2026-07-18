@@ -114,6 +114,13 @@ export function createGatewayHooksRequestHandler(params: {
     }
   };
 
+  // Same-session hook events race on the optimistic session-claim when
+  // maxConcurrentRuns > 1; the first winner claims the session and the
+  // losers are silently dropped. Serialize dispatch per sessionKey so
+  // concurrent events targeting the same session queue up sequentially
+  // (different sessions still dispatch in parallel).
+  const sessionDispatchChains = new Map<string, Promise<void>>();
+
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = value.sessionKey;
     const safeName = sanitizeInboundSystemTags(value.name);
@@ -150,11 +157,21 @@ export function createGatewayHooksRequestHandler(params: {
       state: { nextRunAtMs: nowMs },
     };
 
+    // Serialize same-session dispatch by chaining onto the previous run for
+    // this sessionKey so concurrent hooks never race on the session claim.
     let hookEventSessionKey: string | undefined;
+    // Serialize same-session hooks: each hook waits for the previous one
+    // to settle before its body runs, so concurrent events targeting one
+    // session never race on the optimistic claim.
+    let settleChain: () => void;
+    const chain = new Promise<void>((resolve) => {
+      settleChain = resolve;
+    });
+    const previousChain = sessionDispatchChains.get(sessionKey) ?? Promise.resolve();
+    sessionDispatchChains.set(sessionKey, chain);
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       try {
-        // Agent hooks run after the HTTP response path has returned, so failure
-        // handling must record a system event instead of throwing to the caller.
+        await previousChain;
         const cfg = getRuntimeConfig();
         hookEventSessionKey = resolveHookEventSessionKey({
           cfg,
@@ -172,7 +189,10 @@ export function createGatewayHooksRequestHandler(params: {
         const summary = resolveHookRunSummary(result);
         const prefix =
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-        const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+        const shouldAnnounce = shouldAnnounceHookRunResult({
+          deliver: value.deliver,
+          result,
+        });
         if (result.status !== "ok") {
           logHooks.warn("hook agent run returned non-ok status", {
             sourcePath: value.sourcePath,
@@ -197,7 +217,11 @@ export function createGatewayHooksRequestHandler(params: {
             sessionKey: eventSessionKey,
           });
           if (value.wakeMode === "now") {
-            requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+            requestHeartbeat({
+              source: "hook",
+              intent: "immediate",
+              reason: `hook:${jobId}`,
+            });
           }
         } else if (result.status === "ok" && !value.deliver) {
           logHooks.info("hook agent run completed without announcement", {
@@ -221,6 +245,11 @@ export function createGatewayHooksRequestHandler(params: {
             intent: "immediate",
             reason: `hook:${jobId}:error`,
           });
+        }
+      } finally {
+        settleChain();
+        if (sessionDispatchChains.get(sessionKey) === chain) {
+          sessionDispatchChains.delete(sessionKey);
         }
       }
     });
