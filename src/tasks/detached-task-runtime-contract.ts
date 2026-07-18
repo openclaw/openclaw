@@ -110,6 +110,7 @@ type DetachedTaskCancelParams = {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;
+  runId?: string;
 };
 
 type DetachedTaskCancelResult = {

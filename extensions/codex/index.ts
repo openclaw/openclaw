@@ -1,3 +1,4 @@
+import { registerCodexNativeLiveTaskCancelHandler } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 /**
  * Bundled Codex plugin entry: app-server harness, media understanding,
  * migration provider, CLI-session commands, and binding hooks.
@@ -316,6 +317,17 @@ export default definePluginEntry({
           ...(config ? { config } : {}),
         }),
       );
+    });
+    registerCodexNativeLiveTaskCancelHandler(async (params) => {
+      const codexThreadId = params.runId?.startsWith("codex-thread:")
+        ? params.runId.slice("codex-thread:".length)
+        : undefined;
+      if (!codexThreadId) {
+        return { found: false, cancelled: false };
+      }
+      const { cancelCodexNativeSubagent } =
+        await import("./src/app-server/native-subagent-monitor.js");
+      return cancelCodexNativeSubagent(codexThreadId);
     });
   },
 });

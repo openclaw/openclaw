@@ -127,6 +127,7 @@ const config = {
       "enumMembers",
       "namespaceMembers",
     ],
+    "extensions/codex/src/app-server/native-subagent-monitor.ts": ["exports"],
   },
   workspaces,
 };

@@ -24,6 +24,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { getLiveTaskCancelHandler } from "./detached-task-runtime-state.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
   isProvisionalSubagentKillTask,
@@ -2383,9 +2384,27 @@ export async function cancelTaskById(params: {
         // The live cron service owns the abort signal; registry finalization below
         // keeps CLI/Gateway callers aligned while the run unwinds.
       } else if (!childSessionKey) {
-        // Codex native subagents are mirrored from the Codex app server and do
-        // not have OpenClaw child sessions to terminate. Cancellation clears
-        // the stale task-registry record only.
+        const cancelHandler = getLiveTaskCancelHandler();
+        if (cancelHandler) {
+          const result = await cancelHandler({
+            cfg: params.cfg,
+            taskId: task.taskId,
+            reason: params.reason?.trim() || "task-cancel",
+            runId: task.runId?.trim(),
+          });
+          if (result.found) {
+            if (result.cancelled) {
+              isProvisionalSubagentKill = true;
+            } else {
+              return {
+                found: true,
+                cancelled: false,
+                reason: result.reason ?? "Codex native subagent thread was not running.",
+                task: cloneTaskRecord(tasks.get(task.taskId) ?? task),
+              };
+            }
+          }
+        }
       } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({

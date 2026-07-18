@@ -5,7 +5,10 @@ import type {
   AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import {
+  cancelCodexNativeSubagent,
+  codexNativeSubagentMonitorRuntime,
+} from "./native-subagent-monitor.js";
 import type {
   CodexAppServerRequestResult,
   CodexServerNotification,
@@ -32,6 +35,9 @@ function createClient() {
   >();
   const threadTurns = new Map<string, JsonValue | Error>();
   const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "turn/interrupt") {
+      return {};
+    }
     if (method === "thread/turns/list") {
       const childThreadId = ((params as ThreadTurnsParams | undefined) ?? {}).threadId ?? "";
       const response = threadTurns.get(childThreadId);
@@ -871,6 +877,85 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ result: "resumed child result" }),
     );
+    client.close();
+  });
+
+  it("delivers a cancelled completion when turn/completed(interrupted) arrives after turn/interrupt", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseClient = vi.fn();
+    const retainClient = vi.fn(() => releaseClient);
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, { retainClient });
+    registerParent(monitor);
+    await notifyChildStarted(client);
+
+    await client.notify({
+      method: "turn/started",
+      params: { threadId: "child-thread", turnId: "child-turn" },
+    });
+
+    const result = await cancelCodexNativeSubagent("child-thread");
+    expect(result).toEqual({ found: true, cancelled: true });
+    expect(client.request).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "child-thread",
+      turnId: "child-turn",
+    });
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+
+    await client.notify(
+      childTurnCompletedNotification({ status: "interrupted", turnId: "child-turn" }),
+    );
+
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      }),
+    );
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled" }),
+    );
+    expect(releaseClient).toHaveBeenCalledTimes(1);
+
+    client.close();
+  });
+
+  it("does not set interruptRequested when turn/interrupt is rejected (stale or terminal thread)", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseClient = vi.fn();
+    const retainClient = vi.fn(() => releaseClient);
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, { retainClient });
+    registerParent(monitor);
+    await notifyChildStarted(client);
+
+    const resultStale = await cancelCodexNativeSubagent("nonexistent");
+    expect(resultStale).toEqual({ found: false, cancelled: false });
+
+    const resultNoTurn = await cancelCodexNativeSubagent("child-thread");
+    expect(resultNoTurn).toEqual({ found: true, cancelled: false });
+
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(releaseClient).toHaveBeenCalledTimes(0);
+
+    client.close();
+  });
+
+  it("does not deliver cancelled completion for a natural interrupted turn (no turn/interrupt)", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseClient = vi.fn();
+    const retainClient = vi.fn(() => releaseClient);
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, { retainClient });
+    registerParent(monitor);
+    await notifyChildStarted(client);
+
+    await client.notify(childTurnCompletedNotification({ status: "interrupted" }));
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(releaseClient).toHaveBeenCalledTimes(1);
+
     client.close();
   });
 

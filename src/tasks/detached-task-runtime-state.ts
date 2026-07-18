@@ -50,3 +50,19 @@ export function restoreDetachedTaskLifecycleRuntimeRegistration(
 export function clearDetachedTaskLifecycleRuntimeRegistration(): void {
   detachedTaskLifecycleRuntimeRegistration = undefined;
 }
+
+// Process-wide live task cancellation handler, populated by plugin activation
+// for childless tasks that need live interrupt (Codex-native, etc.).
+type LiveTaskCancelHandler = (
+  params: import("./detached-task-runtime-contract.js").DetachedTaskCancelParams,
+) => Promise<import("./detached-task-runtime-contract.js").DetachedTaskCancelResult>;
+
+let liveTaskCancelHandler: LiveTaskCancelHandler | undefined;
+
+export function registerCodexNativeLiveTaskCancelHandler(handler: LiveTaskCancelHandler): void {
+  liveTaskCancelHandler = handler;
+}
+
+export function getLiveTaskCancelHandler(): LiveTaskCancelHandler | undefined {
+  return liveTaskCancelHandler;
+}

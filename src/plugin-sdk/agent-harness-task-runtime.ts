@@ -284,3 +284,5 @@ function assertScopedRunId(runId: string, runIdPrefix: string | undefined): void
     throw new Error("Agent harness task runId is outside the configured scope");
   }
 }
+
+export { registerCodexNativeLiveTaskCancelHandler } from "../tasks/detached-task-runtime-state.js";
