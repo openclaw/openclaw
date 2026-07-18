@@ -49,6 +49,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     expect(result).toMatchObject({
       audioInputRouted: true,
       audioOutputRouted: false,
+      audioOutputRouteRetryable: true,
       manualActionReason: "teams-audio-choice-required",
     });
   });
@@ -178,6 +179,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     const first = await runStatusScript(params);
     expect(first.result.audioOutputRouted).toBe(false);
     expect(first.result.audioOutputRouteError).toBeUndefined();
+    expect(first.result.audioOutputRouteRetryable).toBe(true);
     expect(source.muted).toBe(true);
     expect(first.window["__openclawTeamsAudioOutputs"]).toEqual([
       expect.objectContaining({ source, sourceMuted: false, suspended: true }),
@@ -545,8 +547,9 @@ describe("Microsoft Teams meeting audio routing", () => {
       async setSinkId() {},
     };
 
-    const { window } = await runStatusScript({
+    const { result, window } = await runStatusScript({
       allowMicrophone: true,
+      devices: [{ deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" }],
       leave: control({ label: "Leave" }),
       media: [],
       priorAudioOutputs: [
@@ -563,6 +566,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     });
 
     expect(source.muted).toBe(true);
+    expect(result.audioOutputRouteRetryable).toBe(true);
     expect(source.srcObject).toBe(stream);
     expect(pauses).toBe(1);
     expect(removals).toBe(1);
@@ -587,7 +591,7 @@ describe("Microsoft Teams meeting audio routing", () => {
       remove: () => (removals += 1),
       async setSinkId() {},
     };
-    const { window } = await runStatusScript({
+    const { result, window } = await runStatusScript({
       allowMicrophone: true,
       devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
       leave: control({ label: "Leave" }),
@@ -608,6 +612,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     });
 
     expect(source.muted).toBe(true);
+    expect(result.audioOutputRouteRetryable).toBe(false);
     expect(pauses).toBe(1);
     expect(removals).toBe(1);
     expect(window["__openclawTeamsAudioOutputs"]).toEqual([

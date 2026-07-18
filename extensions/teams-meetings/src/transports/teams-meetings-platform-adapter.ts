@@ -298,8 +298,8 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
     shouldRetryJoinStatus: (health) =>
       health.inCall === true &&
       ((health.manualActionReason === "teams-audio-choice-required" &&
-        !health.audioInputRouteError &&
-        (!health.audioOutputRouteError || health.audioOutputRouteRetryable === true)) ||
+        health.audioInputRouted === true &&
+        health.audioOutputRouteRetryable === true) ||
         (health.manualActionRequired !== true &&
           health.captionCaptureRequested === true &&
           health.captioning !== true)),

@@ -33,7 +33,14 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("retries transient in-call audio routing while Teams renders its media controls", () => {
     const pending = { ...status("teams-audio-choice-required"), inCall: true };
 
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(true);
+    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(false);
+    expect(
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
+        ...pending,
+        audioInputRouted: true,
+        audioOutputRouteRetryable: true,
+      }),
+    ).toBe(true);
     expect(
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
         ...pending,
@@ -43,6 +50,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(
       TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
         ...pending,
+        audioInputRouted: true,
         audioOutputRouteError: "play interrupted",
         audioOutputRouteRetryable: true,
       }),

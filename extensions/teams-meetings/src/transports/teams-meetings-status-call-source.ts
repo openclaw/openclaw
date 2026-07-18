@@ -123,6 +123,7 @@ export function teamsMeetingStatusCallSource(): string {
               const hasLoadedPlaybackSource = Number(element.readyState) > 0;
               routed.push(false);
               if (hasLoadedPlaybackSource && directRouteError) routeErrors.push(directRouteError);
+              if (!hasLoadedPlaybackSource) audioOutputRouteRetryable = true;
               if (canMutateSession && originalMuteBySource.get(element) === false) {
                 // Teams may attach the remote MediaStream after creating its media element.
                 // Retain ownership so the muted element remains eligible on the next poll.
@@ -223,7 +224,23 @@ export function teamsMeetingStatusCallSource(): string {
       }
     } else {
       audioOutputRouted = false;
-      // Teams can briefly remove every media element during an in-call rerender.
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const output = devices.find(
+          (device) => device.kind === "audiooutput" && isBlackHole(device.label)
+        );
+        if (output?.deviceId) {
+          // Teams can briefly remove every media element during an in-call rerender.
+          // Retry only after proving the required output still exists.
+          audioOutputRouteRetryable = true;
+          audioOutputDeviceLabel = output.label || "BlackHole 2ch";
+        } else {
+          notes.push("BlackHole 2ch speaker output was not visible to Teams.");
+        }
+      } catch (error) {
+        audioOutputRouteError = error?.message || String(error);
+        notes.push("Could not inspect Teams speaker outputs: " + audioOutputRouteError);
+      }
       // Suspend ownership until the source returns; call teardown retires it.
       if (canMutateSession) suspendOwnedAudioBridges();
     }
