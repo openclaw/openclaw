@@ -32,6 +32,51 @@ class WearSessionScopeTest {
   }
 
   @Test
+  fun modelCatalogScopeTracksBothPhoneAndModel() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertEquals(false, wearModelCatalogScopeChanged(requested, requested.copy()))
+    assertEquals(true, wearModelCatalogScopeChanged(requested, requested.copy(phoneNodeId = "phone-b")))
+    assertEquals(true, wearModelCatalogScopeChanged(requested, requested.copy(modelRef = "openai/model-b")))
+  }
+
+  @Test
+  fun modelCatalogResultRequiresTheFullRequestedScope() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertEquals(true, wearModelCatalogRequestIsCurrent(requested, requested.copy(), "phone-a"))
+    assertEquals(
+      false,
+      wearModelCatalogRequestIsCurrent(requested, requested.copy(key = "agent:other"), "phone-a"),
+    )
+    assertEquals(
+      false,
+      wearModelCatalogRequestIsCurrent(requested, requested.copy(modelRef = "openai/model-b"), "phone-a"),
+    )
+    assertEquals(false, wearModelCatalogRequestIsCurrent(requested, requested.copy(), "phone-b"))
+    assertEquals(
+      false,
+      wearModelCatalogRequestIsCurrent(requested, requested.copy(phoneNodeId = "phone-b"), "phone-b"),
+    )
+  }
+
+  @Test
   fun agentSwitchDropsThePreviousSessionModelAndStreamTogether() {
     val previousSession =
       WearSession(
@@ -67,7 +112,7 @@ class WearSessionScopeTest {
   }
 
   @Test
-  fun sessionSwitchMovesModelAndClearsOnlyThePreviousTranscript() {
+  fun sessionSwitchMovesModelAndClearsThePreviousCatalogAndTranscript() {
     val nextSession =
       WearSession(
         key = "agent:main:thread-2",
@@ -92,7 +137,7 @@ class WearSessionScopeTest {
     assertEquals(nextSession, switched.selectedSession)
     assertEquals("openai/new", switched.selectedModelRef)
     assertEquals("main", switched.activeAgentId)
-    assertEquals(listOf(WearModel("openai/new", "New")), switched.models)
+    assertEquals(emptyList<WearModel>(), switched.models)
     assertEquals(emptyList<WearChatMessage>(), switched.messages)
     assertNull(switched.streamText)
     assertNull(switched.activeRunId)
