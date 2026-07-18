@@ -34,9 +34,9 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptIndexedWriteLock,
+  type SessionTranscriptIndexedWriteLockContext,
   type SessionTranscriptTargetParams,
-  type SessionTranscriptWriteLockContext,
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 
@@ -214,9 +214,9 @@ function resolveCopilotMirrorTranscriptTarget(params: {
 
 function withCopilotMirrorTranscriptWriteLock<T>(
   params: SessionTranscriptTargetParams & { config?: SessionTranscriptWriteLockParams["config"] },
-  run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
+  run: (context: SessionTranscriptIndexedWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  return withSessionTranscriptWriteLock(params, run);
+  return withSessionTranscriptIndexedWriteLock(params, run);
 }
 
 /**

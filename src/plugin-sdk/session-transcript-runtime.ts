@@ -17,6 +17,7 @@ import {
   type SessionTranscriptRawDeltaLimits,
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
+  type SessionTranscriptWriteLockAccessorContext,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import {
@@ -146,6 +147,11 @@ export type SessionTranscriptWriteLockContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
+  target: SessionTranscriptTarget;
+};
+
+/** Write-lock context with indexed persistence facts for transcript mirrors. */
+export type SessionTranscriptIndexedWriteLockContext = SessionTranscriptWriteLockContext & {
   /** Reads supplied keys that already identify a persisted message event. */
   readExistingMessageIdempotencyKeys: (idempotencyKeys: readonly string[]) => Promise<Set<string>>;
   /** Counts raw persisted message events for sequence assignment. */
@@ -154,7 +160,6 @@ export type SessionTranscriptWriteLockContext = {
   readUserMessagesByIdempotencyKey: (
     idempotencyKeys: readonly string[],
   ) => Promise<Map<string, Extract<AgentMessage, { role: "user" }>>>;
-  target: SessionTranscriptTarget;
 };
 
 type SessionTranscriptMirrorAppendResult =
@@ -383,6 +388,46 @@ export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
+  return await withProjectedSessionTranscriptWriteLock(params, run, (context) => context);
+}
+
+/** Runs transcript work with indexed mirror facts under the scoped write lock. */
+export async function withSessionTranscriptIndexedWriteLock<T>(
+  params: SessionTranscriptWriteLockParams,
+  run: (context: SessionTranscriptIndexedWriteLockContext) => Promise<T> | T,
+): Promise<T> {
+  return await withProjectedSessionTranscriptWriteLock(params, run, (context, locked) => ({
+    ...context,
+    readExistingMessageIdempotencyKeys: locked.readExistingMessageIdempotencyKeys,
+    readMessageEventCount: locked.readMessageEventCount,
+    readUserMessagesByIdempotencyKey: async (idempotencyKeys) => {
+      const messages = await locked.readUserMessagesByIdempotencyKey(idempotencyKeys);
+      const userMessagesByIdempotencyKey = new Map<
+        string,
+        Extract<AgentMessage, { role: "user" }>
+      >();
+      for (const [idempotencyKey, message] of messages) {
+        if (isAgentMessageRecord(message) && message.role === "user") {
+          userMessagesByIdempotencyKey.set(idempotencyKey, message);
+        }
+      }
+      return userMessagesByIdempotencyKey;
+    },
+  }));
+}
+
+/** Resolves, runs, and publishes one projected public write-lock context. */
+async function withProjectedSessionTranscriptWriteLock<
+  T,
+  TContext extends SessionTranscriptWriteLockContext,
+>(
+  params: SessionTranscriptWriteLockParams,
+  run: (context: TContext) => Promise<T> | T,
+  projectContext: (
+    context: SessionTranscriptWriteLockContext,
+    locked: SessionTranscriptWriteLockAccessorContext,
+  ) => TContext,
+): Promise<T> {
   const storageTarget = await resolveSessionTranscriptRuntimeTarget(params);
   const target = projectPublicTarget({
     ...storageTarget,
@@ -399,33 +444,23 @@ export async function withSessionTranscriptWriteLock<T>(
   const result = await withTranscriptWriteLock(
     boundScope,
     async (locked) =>
-      await run({
-        target,
-        readEvents: locked.readEvents,
-        readExistingMessageIdempotencyKeys: locked.readExistingMessageIdempotencyKeys,
-        readMessageEventCount: locked.readMessageEventCount,
-        readUserMessagesByIdempotencyKey: async (idempotencyKeys) => {
-          const messages = await locked.readUserMessagesByIdempotencyKey(idempotencyKeys);
-          const userMessagesByIdempotencyKey = new Map<
-            string,
-            Extract<AgentMessage, { role: "user" }>
-          >();
-          for (const [idempotencyKey, message] of messages) {
-            if (isAgentMessageRecord(message) && message.role === "user") {
-              userMessagesByIdempotencyKey.set(idempotencyKey, message);
-            }
-          }
-          return userMessagesByIdempotencyKey;
-        },
-        appendMessage: (options) =>
-          locked.appendMessage({
-            ...options,
-            ...(params.config !== undefined ? { config: params.config } : {}),
-          }),
-        publishUpdate: async (update) => {
-          queuedUpdates.push(update ? { ...update } : undefined);
-        },
-      }),
+      await run(
+        projectContext(
+          {
+            target,
+            readEvents: locked.readEvents,
+            appendMessage: (options) =>
+              locked.appendMessage({
+                ...options,
+                ...(params.config !== undefined ? { config: params.config } : {}),
+              }),
+            publishUpdate: async (update) => {
+              queuedUpdates.push(update ? { ...update } : undefined);
+            },
+          },
+          locked,
+        ),
+      ),
   );
   for (const update of queuedUpdates) {
     await publishSessionTranscriptUpdateByIdentity({

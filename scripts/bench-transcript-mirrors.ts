@@ -239,7 +239,7 @@ async function main(): Promise<void> {
       .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
       .get(sessionId) as { count: number };
     const expectedEvents = EVENT_COUNT + NEW_MESSAGES_PER_OPERATION * (WARMUPS + RUNS);
-    if (Number(row.count) !== expectedEvents) {
+    if (row.count !== expectedEvents) {
       throw new Error(`mirror wrote ${row.count} events; expected ${expectedEvents}`);
     }
     console.log(

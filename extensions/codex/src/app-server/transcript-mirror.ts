@@ -11,7 +11,7 @@ import {
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import {
   publishSessionTranscriptUpdateByIdentity,
-  withSessionTranscriptWriteLock,
+  withSessionTranscriptIndexedWriteLock,
   type SessionTranscriptTargetParams,
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -534,7 +534,7 @@ async function mirror(params: {
   );
 
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  const mirrorBatch = await withSessionTranscriptWriteLock(
+  const mirrorBatch = await withSessionTranscriptIndexedWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       const nextAppendedUpdates: Array<{

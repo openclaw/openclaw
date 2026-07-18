@@ -25,7 +25,9 @@ import {
   resolveSessionTranscriptIdentity,
   resolveSessionTranscriptTarget,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
+  withSessionTranscriptIndexedWriteLock,
   withSessionTranscriptWriteLock,
+  type SessionTranscriptWriteLockContext,
 } from "./session-transcript-runtime.js";
 
 describe("session transcript runtime SDK", () => {
@@ -669,6 +671,9 @@ describe("session transcript runtime SDK", () => {
 
     const target = await withSessionTranscriptWriteLock(scope, async (locked) => {
       expect(await locked.readEvents()).toEqual([]);
+      expect(locked).not.toHaveProperty("readExistingMessageIdempotencyKeys");
+      expect(locked).not.toHaveProperty("readMessageEventCount");
+      expect(locked).not.toHaveProperty("readUserMessagesByIdempotencyKey");
       await locked.appendMessage({
         message: {
           role: "assistant",
@@ -684,6 +689,13 @@ describe("session transcript runtime SDK", () => {
       targetKind: "runtime-session",
     });
     expect(target).not.toHaveProperty("sessionFile");
+    const legacyContext: SessionTranscriptWriteLockContext = {
+      appendMessage: async () => undefined,
+      publishUpdate: async () => undefined,
+      readEvents: async () => [],
+      target,
+    };
+    expect(legacyContext.target).toBe(target);
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({ type: "session" }),
       expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
@@ -698,7 +710,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
     await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    await withSessionTranscriptWriteLock(scope, async (locked) => {
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
       await locked.appendMessage({
         message: {
           role: "user",
@@ -716,7 +728,7 @@ describe("session transcript runtime SDK", () => {
         },
       });
     });
-    await withSessionTranscriptWriteLock(scope, async (locked) => {
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
       await locked.appendMessage({
         idempotencyLookup: "caller-checked",
         message: {
@@ -750,7 +762,7 @@ describe("session transcript runtime SDK", () => {
       .prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
       .run(scope.sessionId);
 
-    await withSessionTranscriptWriteLock(scope, async (locked) => {
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
       const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
         "user-key",
         "assistant-key",
@@ -799,7 +811,7 @@ describe("session transcript runtime SDK", () => {
         },
       },
     ]);
-    await withSessionTranscriptWriteLock(scope, async (locked) => {
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
       const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
         "user-key",
         "replacement-key",
@@ -817,7 +829,7 @@ describe("session transcript runtime SDK", () => {
     });
 
     await replaceTranscriptEvents(scope, []);
-    await withSessionTranscriptWriteLock(scope, async (locked) => {
+    await withSessionTranscriptIndexedWriteLock(scope, async (locked) => {
       expect(await locked.readExistingMessageIdempotencyKeys(["replacement-key"])).toEqual(
         new Set(),
       );
