@@ -5,8 +5,11 @@ import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { handleIrcInbound } from "./inbound.js";
-import { isChannelTarget } from "./normalize.js";
-import { makeIrcMessageId } from "./protocol.js";
+import {
+  createIrcIngressMonitor,
+  type IrcIngressLifecycle,
+  type IrcIngressMonitor,
+} from "./irc-ingress.js";
 import type { RuntimeEnv } from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -18,25 +21,14 @@ type IrcMonitorOptions = {
   abortSignal?: AbortSignal;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
+  ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
 
 const IRC_MONITOR_RECONNECT_DELAY_MS = 1000;
 
-function resolveIrcInboundTarget(params: { target: string; senderNick: string }): {
-  isGroup: boolean;
-  target: string;
-  rawTarget: string;
-} {
-  const rawTarget = params.target;
-  const isGroup = isChannelTarget(rawTarget);
-  if (isGroup) {
-    return { isGroup: true, target: rawTarget, rawTarget };
-  }
-  const senderNick = params.senderNick.trim();
-  return { isGroup: false, target: senderNick || rawTarget, rawTarget };
-}
-
-export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ stop: () => void }> {
+export async function monitorIrcProvider(
+  opts: IrcMonitorOptions,
+): Promise<{ stop: () => Promise<void> }> {
   const core = getIrcRuntime();
   const cfg = opts.config ?? (core.config.current() as CoreConfig);
   const account = resolveIrcAccount({
@@ -75,6 +67,49 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     }
   }
 
+  const ingress: IrcIngressMonitor = createIrcIngressMonitor({
+    accountId: account.accountId,
+    runtime,
+    ...(opts.ingressQueue ? { queue: opts.ingressQueue } : {}),
+    dispatch: async (message, turnAdoptionLifecycle: IrcIngressLifecycle) => {
+      const activeClient = client;
+      if (!activeClient || stopped || monitorAbort.signal.aborted) {
+        return {
+          kind: "failed-retryable",
+          error: new Error("IRC transport disconnected before ingress dispatch."),
+        };
+      }
+      if (
+        normalizeLowercaseStringOrEmpty(message.senderNick) ===
+        normalizeLowercaseStringOrEmpty(activeClient.nick)
+      ) {
+        return { kind: "completed" };
+      }
+      if (opts.onMessage) {
+        await opts.onMessage(message, activeClient);
+        return { kind: "completed" };
+      }
+      return await handleIrcInbound({
+        message,
+        account,
+        config: cfg,
+        runtime,
+        connectedNick: activeClient.nick,
+        turnAdoptionLifecycle,
+        sendReply: async (target, text) => {
+          activeClient.sendPrivmsg(target, text);
+          opts.statusSink?.({ lastOutboundAt: Date.now() });
+          core.channel.activity.record({
+            channel: "irc",
+            accountId: account.accountId,
+            direction: "outbound",
+          });
+        },
+        statusSink: opts.statusSink,
+      });
+    },
+  });
+
   function scheduleReconnect() {
     if (stopped || monitorAbort.signal.aborted || reconnectTimer) {
       return;
@@ -96,6 +131,7 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     if (stopped || monitorAbort.signal.aborted) {
       return;
     }
+    const ingressConnection = ingress.openConnection();
     const nextClient = await connectIrcClient(
       buildIrcConnectOptions(account, {
         channels: account.config.channels,
@@ -124,60 +160,12 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
           scheduleReconnect();
         },
         onPrivmsg: async (event) => {
-          if (!client) {
-            return;
-          }
-          if (
-            normalizeLowercaseStringOrEmpty(event.senderNick) ===
-            normalizeLowercaseStringOrEmpty(client.nick)
-          ) {
-            return;
-          }
-
-          const inboundTarget = resolveIrcInboundTarget({
-            target: event.target,
-            senderNick: event.senderNick,
-          });
-          const message: IrcInboundMessage = {
-            messageId: makeIrcMessageId(),
-            target: inboundTarget.target,
-            rawTarget: inboundTarget.rawTarget,
-            senderNick: event.senderNick,
-            senderUser: event.senderUser,
-            senderHost: event.senderHost,
-            text: event.text,
-            timestamp: Date.now(),
-            isGroup: inboundTarget.isGroup,
-          };
-
+          await ingressConnection.accept(event.rawLine);
           core.channel.activity.record({
             channel: "irc",
             accountId: account.accountId,
             direction: "inbound",
-            at: message.timestamp,
-          });
-
-          if (opts.onMessage) {
-            await opts.onMessage(message, client);
-            return;
-          }
-
-          await handleIrcInbound({
-            message,
-            account,
-            config: cfg,
-            runtime,
-            connectedNick: client.nick,
-            sendReply: async (target, text) => {
-              client?.sendPrivmsg(target, text);
-              opts.statusSink?.({ lastOutboundAt: Date.now() });
-              core.channel.activity.record({
-                channel: "irc",
-                accountId: account.accountId,
-                direction: "outbound",
-              });
-            },
-            statusSink: opts.statusSink,
+            at: Date.now(),
           });
         },
       }),
@@ -187,28 +175,41 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
       return;
     }
     client = nextClient;
+    ingress.start();
 
     logger.info(
       `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${nextClient.nick}`,
     );
   }
 
-  await connect();
+  try {
+    await connect();
+  } catch (error) {
+    removeAbortListener?.();
+    removeAbortListener = null;
+    await ingress.stop();
+    throw error;
+  }
 
+  let stopTask: Promise<void> | undefined;
   return {
     stop: () => {
-      stopped = true;
-      removeAbortListener?.();
-      removeAbortListener = null;
-      if (!monitorAbort.signal.aborted) {
-        monitorAbort.abort();
-      }
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      client?.quit("shutdown");
-      client = null;
+      stopTask ??= (async () => {
+        stopped = true;
+        removeAbortListener?.();
+        removeAbortListener = null;
+        if (!monitorAbort.signal.aborted) {
+          monitorAbort.abort();
+        }
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        client?.quit("shutdown");
+        client = null;
+        await ingress.stop();
+      })();
+      return stopTask;
     },
   };
 }

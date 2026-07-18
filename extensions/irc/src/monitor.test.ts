@@ -1,6 +1,14 @@
 // Irc tests cover monitor plugin behavior.
+import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createIrcIngressMonitor } from "./irc-ingress.js";
 import { monitorIrcProvider } from "./monitor.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -16,6 +24,25 @@ type InboundIrcServer = {
   port: number;
   close(): Promise<void>;
 };
+
+type IrcIngressQueue = NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
+type IrcIngressPayload = Parameters<IrcIngressQueue["enqueue"]>[1];
+
+async function withIngressQueue<T>(fn: (queue: IrcIngressQueue) => Promise<T>): Promise<T> {
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-irc-monitor-"));
+  const stateDir = await fs.realpath(created);
+  const queue = createChannelIngressQueueForTests<IrcIngressPayload>({
+    channelId: "irc",
+    accountId: "default",
+    stateDir,
+  });
+  try {
+    return await fn(queue);
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
 
 async function waitForIrcCondition(
   predicate: () => boolean,
@@ -64,8 +91,12 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
     });
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
   });
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -119,8 +150,12 @@ async function startInboundIrcServer(target: string): Promise<InboundIrcServer> 
     socket.on("close", () => sockets.delete(socket));
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
   });
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -166,37 +201,40 @@ function installMonitorRuntime() {
 
 describe("irc monitor reconnect", () => {
   it("reconnects when an established IRC socket closes", async () => {
-    installMonitorRuntime();
-    const server = await startDisconnectingIrcServer();
-    const config = {
-      channels: {
-        irc: {
-          host: "127.0.0.1",
-          port: server.port,
-          tls: false,
-          nick: "bot",
-          username: "bot",
-          realname: "OpenClaw",
-          channels: ["#openclaw"],
+    await withIngressQueue(async (ingressQueue) => {
+      installMonitorRuntime();
+      const server = await startDisconnectingIrcServer();
+      const config = {
+        channels: {
+          irc: {
+            host: "127.0.0.1",
+            port: server.port,
+            tls: false,
+            nick: "bot",
+            username: "bot",
+            realname: "OpenClaw",
+            channels: ["#openclaw"],
+          },
         },
-      },
-    } as CoreConfig;
-    let monitor: { stop: () => void } | undefined;
+      } as CoreConfig;
+      let monitor: { stop: () => Promise<void> } | undefined;
 
-    try {
-      monitor = await monitorIrcProvider({ config });
-      await waitForIrcCondition(
-        () =>
-          server.connectionCount >= 2 &&
-          server.lines.filter((line) => line === "USER bot 0 * :OpenClaw").length >= 2,
-        "expected IRC monitor to reconnect after the first socket closed",
-      );
-
-      expect(server.connectionCount).toBeGreaterThanOrEqual(2);
-    } finally {
-      monitor?.stop();
-      await server.close();
-    }
+      try {
+        monitor = await monitorIrcProvider({ config, ingressQueue });
+        await waitForIrcCondition(
+          () =>
+            server.connectionCount >= 2 &&
+            server.lines.filter((line) => line === "USER bot 0 * :OpenClaw").length >= 2,
+          "expected IRC monitor to reconnect after the first socket closed",
+        );
+        expect(server.connectionCount).toBeGreaterThanOrEqual(2);
+      } finally {
+        if (monitor) {
+          await monitor.stop();
+        }
+        await server.close();
+      }
+    });
   });
 });
 
@@ -213,37 +251,42 @@ describe("irc monitor inbound target", () => {
       expected: { isGroup: false, target: "alice", rawTarget: "openclaw-bot" },
     },
   ])("maps $label targets through the monitor boundary", async ({ serverTarget, expected }) => {
-    installMonitorRuntime();
-    const server = await startInboundIrcServer(serverTarget);
-    const messages: IrcInboundMessage[] = [];
-    let monitor: { stop: () => void } | undefined;
-    try {
-      monitor = await monitorIrcProvider({
-        config: {
-          channels: {
-            irc: {
-              host: "127.0.0.1",
-              port: server.port,
-              tls: false,
-              nick: "bot",
-              username: "bot",
-              realname: "OpenClaw",
+    await withIngressQueue(async (ingressQueue) => {
+      installMonitorRuntime();
+      const server = await startInboundIrcServer(serverTarget);
+      const messages: IrcInboundMessage[] = [];
+      let monitor: { stop: () => Promise<void> } | undefined;
+      try {
+        monitor = await monitorIrcProvider({
+          config: {
+            channels: {
+              irc: {
+                host: "127.0.0.1",
+                port: server.port,
+                tls: false,
+                nick: "bot",
+                username: "bot",
+                realname: "OpenClaw",
+              },
             },
+          } as CoreConfig,
+          ingressQueue,
+          onMessage: (message) => {
+            messages.push(message);
           },
-        } as CoreConfig,
-        onMessage: (message) => {
-          messages.push(message);
-        },
-      });
-      await waitForIrcCondition(() => messages.length === 1, "expected one inbound IRC message");
-      expect(messages[0]).toMatchObject({
-        ...expected,
-        senderNick: "alice",
-        text: "hello",
-      });
-    } finally {
-      monitor?.stop();
-      await server.close();
-    }
+        });
+        await waitForIrcCondition(() => messages.length === 1, "expected one inbound IRC message");
+        expect(messages[0]).toMatchObject({
+          ...expected,
+          senderNick: "alice",
+          text: "hello",
+        });
+      } finally {
+        if (monitor) {
+          await monitor.stop();
+        }
+        await server.close();
+      }
+    });
   });
 });
