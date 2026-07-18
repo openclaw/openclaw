@@ -164,12 +164,12 @@ function normalizeCitations(value: unknown): Array<{ url: string; title?: string
 // throwing out of the boundary.
 function snapshotProviderResult(result: Record<string, unknown>): Record<string, unknown> | null {
   try {
-    // JSON round-trip, not structuredClone: we specifically want non-JSON values
-    // (bigint, circular refs, functions, symbols) to flatten or fail here rather
-    // than survive and break a later serialization. structuredClone preserves
-    // them, so it would only move the crash downstream.
-    // oxlint-disable-next-line unicorn/prefer-structured-clone
-    const cloned = JSON.parse(JSON.stringify(result ?? {}));
+    // Serialize-then-parse, not structuredClone: we specifically want non-JSON
+    // values (bigint, circular refs, functions, symbols) to flatten or throw
+    // here rather than survive and break a later serialization. structuredClone
+    // preserves them, so it would only move the crash downstream.
+    const serialized = JSON.stringify(result ?? {});
+    const cloned: unknown = JSON.parse(serialized);
     return isRecord(cloned) ? cloned : {};
   } catch {
     return null;
