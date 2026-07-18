@@ -166,10 +166,10 @@ describe("exportClawAgent", () => {
     const packageJson = JSON.parse(await readFile(join(out, "package.json"), "utf8"));
     expect(packageJson).toMatchObject({
       name: "openclaw-claw-worker",
-      openclaw: { claw: "openclaw.claw.json" },
+      openclaw: { claw: "CLAW.md" },
     });
     expect(packageJson.version).toMatch(/^0\.0\.0-export\.[0-9a-f]{12}$/);
-    await expect(readFile(join(out, "openclaw.claw.json"), "utf8")).resolves.not.toContain(
+    await expect(readFile(join(out, "CLAW.md"), "utf8")).resolves.not.toContain(
       "resolved-secret-must-not-be-exported",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(
@@ -204,9 +204,8 @@ describe("exportClawAgent", () => {
     const avatarPath = join(fixture.plan.agent.workspace, "avatars", "worker.png");
     await mkdir(join(fixture.plan.agent.workspace, "avatars"), { recursive: true });
     await writeFile(avatarPath, "avatar bytes");
-    const agent = fixture.config.agents!.list![0]!;
     fixture.config.agents!.list![0] = {
-      ...agent,
+      ...fixture.config.agents!.list![0]!,
       identity: { avatar: "avatars/worker.png" },
     };
     const out = join(fixture.root, "exported-avatar");
@@ -229,9 +228,8 @@ describe("exportClawAgent", () => {
 
   it("omits a remote avatar from the portable agent", async () => {
     const fixture = await installedFixture();
-    const agent = fixture.config.agents!.list![0]!;
     fixture.config.agents!.list![0] = {
-      ...agent,
+      ...fixture.config.agents!.list![0]!,
       identity: { avatar: "https://example.com/worker.png" },
     };
 
@@ -246,9 +244,8 @@ describe("exportClawAgent", () => {
 
   it("omits valid empty optional arrays", async () => {
     const fixture = await installedFixture();
-    const agent = fixture.config.agents!.list![0]!;
     fixture.config.agents!.list![0] = {
-      ...agent,
+      ...fixture.config.agents!.list![0]!,
       tools: { allow: [], deny: [] },
       groupChat: { mentionPatterns: [] },
     };
@@ -274,9 +271,9 @@ describe("exportClawAgent", () => {
     });
 
     expect(result.outputDirectory).toBe(join(fixture.root, "exported-home"));
-    await expect(
-      readFile(join(result.outputDirectory, "openclaw.claw.json"), "utf8"),
-    ).resolves.toContain('"schemaVersion": 1');
+    await expect(readFile(join(result.outputDirectory, "CLAW.md"), "utf8")).resolves.toContain(
+      "schemaVersion: 1",
+    );
   });
 
   it("fails closed when a managed file is unavailable", async () => {
