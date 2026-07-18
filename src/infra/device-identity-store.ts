@@ -187,12 +187,11 @@ function salvageStoredIdentityRow(
     if (publicKey.asymmetricKeyType !== "ed25519" || privateKey.asymmetricKeyType !== "ed25519") {
       return null;
     }
-    const canonicalPublicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-    const canonicalPrivateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const canonicalPublicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+    const canonicalPrivateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
     const derivedPublicKeyPem = crypto
       .createPublicKey(canonicalPrivateKeyPem)
-      .export({ type: "spki", format: "pem" })
-      .toString();
+      .export({ type: "spki", format: "pem" });
     if (derivedPublicKeyPem !== canonicalPublicKeyPem) {
       return null;
     }
