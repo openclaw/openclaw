@@ -8,6 +8,14 @@ import {
   testing,
 } from "./swarm-scheduler.js";
 
+// queueMicrotask-driven starts need real microtask turns; fake timers'
+// runAllTicks only drains nextTick, so flush the microtask queue explicitly.
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
+};
+
 describe("swarm scheduler", () => {
   beforeEach(() => {
     testing.reset();
@@ -187,13 +195,13 @@ describe("swarm scheduler", () => {
         onStartFailure: vi.fn(() => true),
       });
     }
-    await vi.runAllTicks();
-    await vi.runAllTicks();
+    await flushMicrotasks();
+    await flushMicrotasks();
     expect(brokenAttempts).toBe(1);
     expect(started).toEqual(["holding"]);
 
     expect(releaseSwarmRun("holding")).toBe(true);
-    await vi.runAllTicks();
+    await flushMicrotasks();
     expect(brokenAttempts).toBe(1);
     expect(started).toEqual(["holding"]);
 

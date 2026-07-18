@@ -115,7 +115,9 @@ describe("swarm tools integration", () => {
       registryTesting.setDepsForTest({
         callGateway: vi.fn(async (request: unknown) => {
           const runId = String(requestParams(request).runId);
-          await new Promise<void>((resolve) => completionResolvers.set(runId, resolve));
+          await new Promise<void>((resolve) => {
+            completionResolvers.set(runId, resolve);
+          });
           return { status: "ok", startedAt: 1, endedAt: Date.now() };
         }) as never,
         captureSubagentCompletionReply: vi.fn(async (sessionKey: string) => {

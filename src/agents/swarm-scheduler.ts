@@ -23,7 +23,7 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
   }
   lane.active.add(item.runId);
   queueMicrotask(() => {
-    void start().catch(async (error) => {
+    void start().catch(async (error: unknown) => {
       let failurePersisted = false;
       try {
         failurePersisted = await onStartFailure(error);
