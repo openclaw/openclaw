@@ -390,6 +390,26 @@ describe("installSignalCliFromRelease", () => {
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["null", "null"],
+    ["array", "[]"],
+    ["non-string tag_name", JSON.stringify({ tag_name: 123, assets: [] })],
+    ["non-array assets", JSON.stringify({ tag_name: "v0.14.6", assets: {} })],
+  ])("returns an installer error for a valid JSON %s payload", async (_kind, body) => {
+    const fetchResult = okDownloadResponse(body, {
+      headers: { "content-type": "application/json" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+
+    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Failed to parse signal-cli release info.",
+    });
+    expect(fetchResult.release).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds oversized GitHub release metadata and cancels the stream", async () => {
     const chunkSize = 1024 * 1024;
     const chunkCount = 20; // 20 MiB — over the 16 MiB cap
@@ -517,13 +537,16 @@ describe("installSignalCliFromRelease", () => {
     }
   });
 
-  it("removes the download temp dir when the download throws", async () => {
+  it("skips malformed asset rows while retaining a valid download", async () => {
     setProcessPlatform("linux", "x64");
     fetchWithSsrFGuardMock.mockResolvedValueOnce(
       okDownloadResponse(
         JSON.stringify({
           tag_name: "v0.0.0-download-failure-test",
           assets: [
+            null,
+            { name: 42, browser_download_url: "https://example.com/wrong-name.tar.gz" },
+            { name: "signal-cli-wrong-url.tar.gz", browser_download_url: false },
             {
               name: "signal-cli-0.0.0-Linux-native.tar.gz",
               browser_download_url: "https://example.com/linux-native.tar.gz",
@@ -539,6 +562,10 @@ describe("installSignalCliFromRelease", () => {
       installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
     ).rejects.toThrow("download failed");
 
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: "https://example.com/linux-native.tar.gz" }),
+    );
     await expectTempDownloadDirMissing();
   });
 });

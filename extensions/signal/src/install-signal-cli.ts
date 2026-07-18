@@ -5,12 +5,15 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -325,7 +328,26 @@ export async function installSignalCliFromRelease(
       };
     }
     try {
-      payload = await readProviderJsonResponse<ReleaseResponse>(response, "signal.release-info");
+      const releaseInfo = await readProviderJsonObjectResponse(response, "signal.release-info");
+      const tagName = releaseInfo.tag_name;
+      if (tagName !== undefined && typeof tagName !== "string") {
+        throw new Error("Unexpected signal-cli release info");
+      }
+      const releaseAssets = releaseInfo.assets;
+      if (releaseAssets !== undefined && !Array.isArray(releaseAssets)) {
+        throw new Error("Unexpected signal-cli release info");
+      }
+      const assets = (releaseAssets ?? []).flatMap((asset): ReleaseAsset[] => {
+        if (
+          !isRecord(asset) ||
+          typeof asset.name !== "string" ||
+          typeof asset.browser_download_url !== "string"
+        ) {
+          return [];
+        }
+        return [{ name: asset.name, browser_download_url: asset.browser_download_url }];
+      });
+      payload = { tag_name: tagName, assets };
     } catch {
       return {
         ok: false,
