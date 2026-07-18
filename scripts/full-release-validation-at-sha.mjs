@@ -40,6 +40,8 @@ function run(command, args, options = {}) {
   const output = execFileSync(command, args, {
     encoding: "utf8",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
+    timeout: RELEASE_VALIDATION_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   return typeof output === "string" ? output.trim() : "";
 }
