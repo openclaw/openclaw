@@ -20,14 +20,22 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
-  it("uses the import timestamp when a native row has an invalid timestamp", async () => {
+  it("uses the import timestamp when a native row has an invalid or pre-epoch timestamp", async () => {
     appended.length = 0;
     const fallbackTimestamp = new Date("2026-07-18T12:00:00.000Z").getTime();
     vi.useFakeTimers();
     vi.setSystemTime(fallbackTimestamp);
     try {
       await importClaudeHistory({
-        items: [{ type: "userMessage", text: "continue", timestamp: "not-a-date", uuid: "u-1" }],
+        items: [
+          { type: "userMessage", text: "invalid", timestamp: "not-a-date", uuid: "u-1" },
+          {
+            type: "userMessage",
+            text: "pre-epoch",
+            timestamp: "1969-12-31T23:59:59.000Z",
+            uuid: "u-2",
+          },
+        ],
         threadId: "thread-1",
         sessionFile: "/tmp/unused.jsonl",
         sessionId: "session-1",
@@ -39,8 +47,12 @@ describe("importClaudeHistory", () => {
       vi.useRealTimers();
     }
 
-    expect(appended[0]?.timestamp).toBe(fallbackTimestamp);
-    expect(JSON.stringify(appended[0])).toContain(`"timestamp":${fallbackTimestamp}`);
+    expect(appended).toHaveLength(2);
+    expect(appended.map((message) => message.timestamp)).toEqual([
+      fallbackTimestamp,
+      fallbackTimestamp + 1,
+    ]);
+    expect(JSON.stringify(appended)).toContain(`"timestamp":${fallbackTimestamp}`);
   });
 
   it("tags imported native user rows so self-echo provenance excludes them", async () => {
