@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -55,10 +56,31 @@ import {
 
 const REEF_RUNTIME_LEGACY_FILENAMES = ["replay.jsonl", "reviews.json", "delivered.json"];
 
+// Legacy Reef state files (audit.jsonl, replay.jsonl) are append-only logs
+// that can grow unbounded. Cap individual file reads to prevent OOM during
+// doctor migration — audit/replay logs are typically under 50 MiB for heavy
+// use; reviews/delivered are under 10 MiB.
+const MAX_LEGACY_AUDIT_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_LEGACY_REPLAY_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_LEGACY_REVIEWS_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_LEGACY_DELIVERED_FILE_BYTES = 10 * 1024 * 1024;
+
+/** Read a legacy Reef state file with a size pre-check to avoid OOM on large append-only logs. */
+async function readLegacyReefFileSafely(filePath: string, maxBytes: number): Promise<string> {
+  const stat = statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`not a regular file: ${filePath}`);
+  }
+  if (stat.size > maxBytes) {
+    throw new Error(`file too large: ${stat.size} bytes exceeds ${maxBytes} bytes: ${filePath}`);
+  }
+  return await fs.readFile(filePath, "utf8");
+}
+
 type ReefAuditMigrationRecord = { pending: true; expectedEntries?: number };
 
 async function readLegacyReefAudit(filePath: string): Promise<AuditEntry[]> {
-  const raw = await fs.readFile(filePath, "utf8");
+  const raw = await readLegacyReefFileSafely(filePath, MAX_LEGACY_AUDIT_FILE_BYTES);
   const entries = raw
     .split("\n")
     .filter((line) => line.length > 0)
@@ -164,7 +186,7 @@ function parseLegacyReefReplayLine(value: unknown): LegacyReefReplayLogRecord {
 }
 
 async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[]> {
-  const raw = await fs.readFile(filePath, "utf8");
+  const raw = await readLegacyReefFileSafely(filePath, MAX_LEGACY_REPLAY_FILE_BYTES);
   const lines = raw.split("\n").filter((line) => line.length > 0);
   const records = new Map<string, ReefReplayRecord>();
   for (const [index, line] of lines.entries()) {
@@ -220,7 +242,8 @@ async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[
 }
 
 async function readLegacyReefReviews(filePath: string): Promise<Map<string, ReefReviewRecord>> {
-  const value = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  const raw = await readLegacyReefFileSafely(filePath, MAX_LEGACY_REVIEWS_FILE_BYTES);
+  const value = JSON.parse(raw) as unknown;
   if (!isRecord(value)) {
     throw new Error("invalid Reef reviews file");
   }
@@ -245,7 +268,8 @@ async function readLegacyReefReviews(filePath: string): Promise<Map<string, Reef
 }
 
 async function readLegacyReefDelivered(filePath: string): Promise<string[]> {
-  const value = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  const raw = await readLegacyReefFileSafely(filePath, MAX_LEGACY_DELIVERED_FILE_BYTES);
+  const value = JSON.parse(raw) as unknown;
   if (!Array.isArray(value) || value.some((id) => typeof id !== "string" || id.length === 0)) {
     throw new Error("invalid Reef delivered file");
   }
