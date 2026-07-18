@@ -9,7 +9,7 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
-import type { PluginHookLlmInputEvent } from "../../../plugins/hook-types.js";
+import type { PluginHookLlmInputEvent, PluginHookLlmInputResult } from "../../../plugins/hook-types.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
 import {
   type createTrajectoryRuntimeRecorder,
@@ -51,7 +51,7 @@ type TrajectoryRecorder = Pick<
 > | null;
 type TrajectoryTool = Parameters<typeof toTrajectoryToolDefinitions>[0][number];
 
-export function observeEmbeddedAttemptPrompt(input: {
+export async function observeEmbeddedAttemptPrompt(input: {
   attempt: AttemptPromptObservabilityParams;
   cacheTrace: CacheTrace;
   contextTokenBudget: number;
@@ -79,7 +79,7 @@ export function observeEmbeddedAttemptPrompt(input: {
   transcriptLeafId: string | null;
   transport: AgentSession["agent"]["transport"];
   uncompactedEffectiveTools: readonly TrajectoryTool[];
-}): { skipPromptSubmission: boolean } {
+}): Promise<{ skipPromptSubmission: boolean; llmInputResult?: PluginHookLlmInputResult }> {
   const { attempt } = input;
   let skipPromptSubmission = input.skipPromptSubmission;
 
@@ -178,9 +178,10 @@ export function observeEmbeddedAttemptPrompt(input: {
     );
   }
 
+  let llmInputResult: PluginHookLlmInputResult | undefined;
   if (!skipPromptSubmission && !input.isRawModelRun && input.hookRunner?.hasHooks("llm_input")) {
-    void input.hookRunner
-      .runLlmInput(
+    try {
+      llmInputResult = await input.hookRunner.runLlmInput(
         {
           runId: attempt.runId,
           sessionId: attempt.sessionId,
@@ -208,11 +209,11 @@ export function observeEmbeddedAttemptPrompt(input: {
             channelContext: attempt.channelContext,
           }),
         },
-      )
-      .catch((err: unknown) => {
-        log.warn(`llm_input hook failed: ${String(err)}`);
-      });
+      );
+    } catch (err: unknown) {
+      log.warn(`llm_input hook failed: ${String(err)}`);
+    }
   }
 
-  return { skipPromptSubmission };
+  return { skipPromptSubmission, llmInputResult };
 }

@@ -78,7 +78,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
   const reserveTokens = input.getCompactionReserveTokens();
   let state: PromptDispatchState = {
     ...input.state,
-    skipPromptSubmission: observeEmbeddedAttemptPrompt({
+    skipPromptSubmission: (await observeEmbeddedAttemptPrompt({
       ...input.observation,
       attempt,
       contextTokenBudget: promptContext.contextTokenBudget,
@@ -92,7 +92,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
       sessionMessages: activeSession.messages,
       skipPromptSubmission: input.state.skipPromptSubmission,
       systemPromptForHook: promptContext.systemPromptForHook,
-    }).skipPromptSubmission,
+    })).skipPromptSubmission,
   };
   // Publish each admission transition before the next fallible phase so outer cleanup sees it.
   input.publishState(state);

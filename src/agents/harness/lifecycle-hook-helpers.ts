@@ -13,7 +13,9 @@ import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
 } from "../../plugins/hook-types.js";
 import type { VoidHookRunOptions } from "../../plugins/hooks.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -69,32 +71,34 @@ export function runAgentHarnessLlmInputHook(params: {
   event: PluginHookLlmInputEvent;
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
-}): void {
+}): Promise<PluginHookLlmInputResult | undefined> {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
-    return;
+    return Promise.resolve(undefined);
   }
-  void hookRunner
+  return hookRunner
     .runLlmInput(params.event, buildAgentHookContext(params.ctx))
     .catch((error: unknown) => {
       log.warn(`llm_input hook failed: ${String(error)}`);
+      return undefined;
     });
 }
 
-/** Dispatches best-effort LLM output hooks for a harness attempt. */
+/** Dispatches LLM output hooks for a harness attempt. */
 export function runAgentHarnessLlmOutputHook(params: {
   event: PluginHookLlmOutputEvent;
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
-}): void {
+}): Promise<PluginHookLlmOutputResult | undefined> {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
-    return;
+    return Promise.resolve(undefined);
   }
-  void hookRunner
+  return hookRunner
     .runLlmOutput(params.event, buildAgentHookContext(params.ctx))
     .catch((error: unknown) => {
       log.warn(`llm_output hook failed: ${String(error)}`);
+      return undefined;
     });
 }
 

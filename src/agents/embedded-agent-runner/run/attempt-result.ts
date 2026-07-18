@@ -147,9 +147,9 @@ function hasVisiblePendingToolMediaReply(
 }
 
 /** Runs output hooks, classifies terminal effects, and returns the finalized attempt result. */
-export function completeEmbeddedAttemptResult(
+export async function completeEmbeddedAttemptResult(
   input: CompleteEmbeddedAttemptResultInput,
-): EmbeddedRunAttemptResult {
+): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state, subscription } = input;
   const {
     assistantTexts,
@@ -215,12 +215,13 @@ export function completeEmbeddedAttemptResult(
     }
   }
 
+  let llmOutputAssistantTextsOverride: string[] | undefined;
   if (
     input.hookRunner?.hasHooks("llm_output") &&
     shouldRunLlmOutputHooksForAttempt({ promptErrorSource: state.promptErrorSource })
   ) {
-    input.hookRunner
-      .runLlmOutput(
+    try {
+      const llmOutputResult = await input.hookRunner.runLlmOutput(
         {
           runId: attempt.runId,
           sessionId: attempt.sessionId,
@@ -242,7 +243,7 @@ export function completeEmbeddedAttemptResult(
             ? { harnessId: attempt.runtimePlan.observability.harnessId }
             : {}),
           assistantTexts,
-          lastAssistant: state.lastAssistant,
+          lastAssistant: state.lastAssistant ? structuredClone(state.lastAssistant) : state.lastAssistant,
           usage: state.attemptUsage,
         },
         {
@@ -270,10 +271,13 @@ export function completeEmbeddedAttemptResult(
             channelContext: attempt.channelContext,
           }),
         },
-      )
-      .catch((err: unknown) => {
-        log.warn(`llm_output hook failed: ${String(err)}`);
-      });
+      );
+      if (llmOutputResult?.assistantTexts !== undefined) {
+        llmOutputAssistantTextsOverride = llmOutputResult.assistantTexts;
+      }
+    } catch (err) {
+      log.warn(`llm_output hook failed: ${String(err)}`);
+    }
   }
 
   const acceptedSessionSpawns = getAcceptedSessionSpawns();
@@ -383,7 +387,7 @@ export function completeEmbeddedAttemptResult(
     setTerminalLifecycleMeta,
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
-    assistantTexts,
+    assistantTexts: llmOutputAssistantTextsOverride ?? assistantTexts,
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,

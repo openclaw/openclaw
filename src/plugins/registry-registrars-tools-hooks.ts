@@ -94,6 +94,20 @@ const constrainLegacyPromptInjectionHook = (
   };
 };
 
+const constrainLlmInputPromptInjectionHook = (
+  handler: PluginHookHandlerMap["llm_input"],
+): PluginHookHandlerMap["llm_input"] => {
+  return async (event, ctx) => {
+    const result = await handler(event, ctx);
+    if (!result || typeof result !== "object") {
+      return result;
+    }
+    // Strip prompt/systemPrompt overrides; keep block/blockReason.
+    const { prompt: _p, systemPrompt: _s, ...rest } = result;
+    return rest;
+  };
+};
+
 export function createToolHookRegistrars(state: PluginRegistryState) {
   const {
     registry,
@@ -431,7 +445,27 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     }
     let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
-      if (effectiveHookName !== "before_agent_start") {
+      if (effectiveHookName === "before_agent_start") {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        });
+        effectiveHandler = constrainLegacyPromptInjectionHook(
+          handler as PluginHookHandlerMap["before_agent_start"],
+        ) as PluginHookHandlerMap[K];
+      } else if (effectiveHookName === "llm_input") {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        });
+        effectiveHandler = constrainLlmInputPromptInjectionHook(
+          handler as PluginHookHandlerMap["llm_input"],
+        ) as PluginHookHandlerMap[K];
+      } else {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
@@ -440,15 +474,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         });
         return;
       }
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-      });
-      effectiveHandler = constrainLegacyPromptInjectionHook(
-        handler as PluginHookHandlerMap["before_agent_start"],
-      ) as PluginHookHandlerMap[K];
     }
     if (isConversationHookName(effectiveHookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
