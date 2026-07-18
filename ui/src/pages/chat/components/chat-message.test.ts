@@ -663,6 +663,43 @@ describe("grouped chat rendering", () => {
     ]);
   });
 
+  it("renders a confirmed rewind action only for user groups", () => {
+    const container = document.createElement("div");
+    const onRewind = vi.fn();
+    localStorageValues.delete("openclaw:skip-rewind-confirm");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup({ role: "user", content: "rewind me", timestamp: 1000 }, "user"),
+        createMessageGroup({ role: "assistant", content: "answer", timestamp: 1001 }, "assistant"),
+      ],
+      { onRewind },
+    );
+
+    const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
+    expect(rewindButtons).toHaveLength(1);
+    rewindButtons[0]!.click();
+    expect(container.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+      "Rewind to before this message?",
+    );
+    container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+    expect(onRewind).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables rewind while the agent is working", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [createMessageGroup({ role: "user", content: "busy", timestamp: 1000 }, "user")],
+      { onRewind: vi.fn(), rewindDisabled: true },
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
+    const tooltip = button?.closest("openclaw-tooltip");
+    expect(button?.disabled).toBe(true);
+    expect(tooltip?.content).toBe("Rewind is unavailable while the agent is working");
+  });
+
   it("places the delete confirm below the trigger near the top viewport edge", () => {
     stubDeleteConfirmGeometry({
       trigger: { left: 20, top: 4, width: 24, height: 24 },

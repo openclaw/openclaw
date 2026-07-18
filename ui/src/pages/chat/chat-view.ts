@@ -199,6 +199,8 @@ export type ChatProps = {
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
+  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+  onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;
   backgroundTasks?: BackgroundTasksProps;
   taskSuggestions?: TaskSuggestion[];
@@ -312,6 +314,8 @@ export function renderChat(props: ChatProps) {
       getDraft: props.getDraft,
       onSend: props.onSend,
       onSetReply: props.onSetReply,
+      onRewindMessage: props.onRewindMessage,
+      onForkMessage: props.onForkMessage,
       // Archived/non-composable sessions must not offer selection actions:
       // withholding the callback keeps the popup from rendering at all.
       onSideQuestion: props.canSend ? props.onSideQuestion : undefined,

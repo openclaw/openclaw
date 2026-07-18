@@ -1,15 +1,15 @@
-// Covers inline widget validation, materialization, preview extraction, and retention.
+// Core inline widget validation, byte stability, materialization, and retention.
+import { createHash } from "node:crypto";
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveCanvasDocumentDir } from "./documents.js";
-import {
-  createShowWidgetTool,
-  WIDGET_CODE_MAX_CHARS,
-  WIDGET_MAX_PER_SCOPE,
-} from "./widget-tool.js";
+import { resolveCanvasDocumentsDir } from "./documents.js";
+import { createShowWidgetTool } from "./widget-tool.js";
+import { buildWidgetDocument } from "./wrap.js";
 
+const WIDGET_CODE_MAX_CHARS = 262_144;
+const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -21,6 +21,10 @@ async function createStateDir(): Promise<string> {
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
   tempDirs.push(stateDir);
   return stateDir;
+}
+
+function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
+  return path.join(resolveCanvasDocumentsDir(stateDir), documentId);
 }
 
 async function executeWidget(params: {
@@ -42,8 +46,6 @@ async function executeWidget(params: {
   if (!text) {
     throw new Error("expected widget tool text result");
   }
-  // Parse the canvas-handle JSON directly; the web chat's extraction of this
-  // shape is covered by ui/src/pages/chat/components/chat-tool-cards.node.test.ts.
   const parsed = JSON.parse(text) as {
     kind?: string;
     presentation?: { target?: string; title?: string; sandbox?: string };
@@ -58,6 +60,18 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
+  it("keeps the pre-move wrapped document bytes stable", () => {
+    const html = buildWidgetDocument(
+      "Status <live>",
+      '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
+    );
+
+    expect(Buffer.byteLength(html)).toBe(1558);
+    expect(createHash("sha256").update(html).digest("hex")).toBe(
+      "ba5fd66ce29e864415c60fecc2b03290c05f1d66bd02b47de39ced8afec6e65c",
+    );
+  });
+
   it("rejects empty and oversized widget code", async () => {
     const stateDir = await createStateDir();
     const tool = createShowWidgetTool({ stateDir, sessionId: "validation" });
@@ -73,7 +87,7 @@ describe("show_widget", () => {
     ).rejects.toThrow(`widget_code exceeds maximum size (${WIDGET_CODE_MAX_CHARS} characters)`);
   });
 
-  it("wraps SVG widgets with the sandbox CSP and SVG layout", async () => {
+  it("wraps SVG widgets with the stable result and sandbox contracts", async () => {
     const stateDir = await createStateDir();
     const { viewId, url, sandbox, text } = await executeWidget({
       stateDir,
@@ -90,7 +104,7 @@ describe("show_widget", () => {
     });
     expect(sandbox).toBe("scripts");
     const html = await readFile(
-      path.join(resolveCanvasDocumentDir(viewId, { stateDir }), "index.html"),
+      path.join(resolveCanvasDocumentDir(stateDir, viewId), "index.html"),
       "utf8",
     );
     expect(html).toContain(
@@ -98,41 +112,30 @@ describe("show_widget", () => {
     );
     expect(html).toContain("<title>&lt;Status&gt;</title>");
     expect(html).toContain('<body class="svg-widget"><script>');
-    expect(html).toContain('</script><SvG viewBox="0 0 10 10">');
-    // The embedding chat fits the iframe to the reported content height.
     expect(html).toContain("openclaw:widget-size");
     const manifest = JSON.parse(
       await readFile(
-        path.join(resolveCanvasDocumentDir(viewId, { stateDir }), "manifest.json"),
+        path.join(resolveCanvasDocumentDir(stateDir, viewId), "manifest.json"),
         "utf8",
       ),
     ) as { cspSandbox?: string };
-    // The host keys the served CSP sandbox header off this manifest field.
     expect(manifest.cspSandbox).toBe("scripts");
   });
 
-  it("wraps HTML fragments without SVG layout", async () => {
+  it("keeps the prompt bridge ahead of HTML widget code", async () => {
     const stateDir = await createStateDir();
     const { viewId } = await executeWidget({
       stateDir,
       widgetCode: "<section><button>Run</button><script>document.title='ready'</script></section>",
     });
     const html = await readFile(
-      path.join(resolveCanvasDocumentDir(viewId, { stateDir }), "index.html"),
+      path.join(resolveCanvasDocumentDir(stateDir, viewId), "index.html"),
       "utf8",
     );
 
-    expect(html).toContain("<section><button>Run</button><script>");
     expect(html).not.toContain('<body class="svg-widget">');
-    // The prompt bridge must precede widget code so inline handlers can
-    // reference sendPrompt() while the widget's own scripts run.
     expect(html.indexOf("window.sendPrompt")).toBeLessThan(html.indexOf("<section>"));
-    // Prompts flow over a channel the bridge creates and offers to the chat at
-    // parse time, never directly to window.parent; the send endpoint stays
-    // private to the bridge closure and requires transient user activation.
     expect(html).toContain("openclaw:widget-prompt-offer");
-    // Natives are snapshotted before widget code runs: the bound port endpoint
-    // and the native userActivation getter cannot be patched away.
     expect(html).toContain("navigator.userActivation");
     expect(html).toContain("c.port1.postMessage.bind(c.port1)");
     expect(html).toContain('post({type:"openclaw:widget-prompt"');
@@ -149,7 +152,7 @@ describe("show_widget", () => {
       await executeWidget({ stateDir, widgetCode: `<p>${index}</p>` });
     }
 
-    await expect(access(resolveCanvasDocumentDir(first.viewId, { stateDir }))).rejects.toThrow();
+    await expect(access(resolveCanvasDocumentDir(stateDir, first.viewId))).rejects.toThrow();
     const entries = await readdir(path.join(stateDir, "canvas", "documents"));
     expect(entries).toHaveLength(WIDGET_MAX_PER_SCOPE);
   });
