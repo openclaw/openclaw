@@ -644,6 +644,10 @@ export function assertPluginReleaseVersionFloors(
 
 export type NpmLatestVersionResolver = (packageName: string) => string;
 
+function isNpmViewTimeoutError(error: unknown): error is Error & { code: "ETIMEDOUT" } {
+  return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
+}
+
 function runNpmView(args: string[]): string {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
@@ -658,10 +662,13 @@ function runNpmView(args: string[]): string {
         timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
       }).trim();
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ETIMEDOUT") {
-        throw new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
-          cause: error,
-        });
+      if (isNpmViewTimeoutError(error)) {
+        throw Object.assign(
+          new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
+            cause: error,
+          }),
+          { code: "ETIMEDOUT" as const },
+        );
       }
       throw error;
     }
@@ -733,7 +740,10 @@ function isPluginVersionPublished(packageName: string, version: string): boolean
   try {
     runNpmView([`${packageName}@${version}`, "version"]);
     return true;
-  } catch {
+  } catch (error) {
+    if (isNpmViewTimeoutError(error)) {
+      throw error;
+    }
     return false;
   }
 }

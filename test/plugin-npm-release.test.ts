@@ -7,6 +7,7 @@ import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-c
 import {
   collectChangedExtensionIdsFromPaths,
   collectPluginReleaseDependencyFreshnessErrors,
+  collectPluginReleasePlan,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
   collectPublishablePluginPackageErrors,
@@ -493,6 +494,48 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
     expect(collectPluginReleaseDependencyFreshnessErrors([plugin])).toEqual([
       "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: npm view timed out after 60000ms.",
     ]);
+  });
+});
+
+describe("collectPluginReleasePlan", () => {
+  it("fails closed when the published-version lookup times out", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10",
+      type: "module",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10"),
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    childProcessMock.execFileSyncOverride = ((command: string, args?: readonly string[]) => {
+      expect(command).toBe("npm");
+      expect(args).toEqual([
+        "view",
+        "@openclaw/demo-plugin@2026.4.10",
+        "version",
+        "--userconfig",
+        expect.stringContaining("openclaw-plugin-npm-view-"),
+      ]);
+      throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }) as ExecFileSync;
+
+    expect(() => collectPluginReleasePlan({ rootDir: repoDir })).toThrow(
+      "npm view timed out after 60000ms.",
+    );
   });
 });
 
