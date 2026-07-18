@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
-import { prepareLegacyAuditRecords } from "./state-migrations.audit-logs.js";
+import { prepareLegacyAuditRecords } from "./state-migrations.audit-records.js";
 import {
   readLegacyAuditRecoverySourceForBackup,
   readLegacyAuditSourcePrefixSnapshotForBackup,

@@ -1,14 +1,11 @@
 // Doctor-only import for retired core JSONL audit stores.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   CONFIG_AUDIT_MAX_ENTRIES,
   CONFIG_AUDIT_SCOPE,
-  sanitizeConfigAuditRecord,
   type ConfigAuditRecord,
 } from "../config/io.audit.js";
-import { redactSecrets } from "../logging/redact.js";
 import {
   SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
   SYSTEM_AGENT_AUDIT_SCOPE,
@@ -20,13 +17,17 @@ import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import {
   hasLegacyAuditRawCheckpointCapacity,
   legacyAuditSourceGenerationKey,
-  type LegacyAuditRawCheckpoint,
 } from "./state-migrations.audit-checkpoints.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 import type {
   LegacyAuditLogSource,
   LegacyAuditLogsDetection,
 } from "./state-migrations.audit-logs.types.js";
+import {
+  prepareLegacyAuditRecords,
+  serializePreparedAuditRecords,
+  type PreparedAuditRecord,
+} from "./state-migrations.audit-records.js";
 import {
   finalizeLegacyAuditRecoveryArchive,
   findPreviousLegacyAuditRawCheckpoint,
@@ -38,19 +39,8 @@ import {
   type AuditMigrationRoot,
   type LegacyAuditSourceSnapshot,
 } from "./state-migrations.audit-recovery.js";
+import { writeRecoveredSanitizedAuditArchive } from "./state-migrations.audit-sanitized.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-
-type PreparedAuditRecord = {
-  key: string;
-  value: ConfigAuditRecord | SystemAgentAuditEntry;
-  createdAt: number;
-};
-
-function serializePreparedAuditRecords(records: readonly PreparedAuditRecord[]): string {
-  return records.length > 0
-    ? `${records.map((record) => JSON.stringify(record.value)).join("\n")}\n`
-    : "";
-}
 
 function legacyAuditClaimPathForArchive(sourcePath: string, sanitizedArchivePath: string): string {
   const archivePrefix = `${sourcePath}.migrated`;
@@ -64,144 +54,7 @@ function legacyAuditClaimPathForArchive(sourcePath: string, sanitizedArchivePath
   );
 }
 
-function legacyAuditRecordCreatedAt(
-  source: LegacyAuditLogSource,
-  value: ConfigAuditRecord | SystemAgentAuditEntry,
-): number {
-  const timestamp =
-    source.kind === "config"
-      ? (value as Partial<ConfigAuditRecord>).ts
-      : (value as Partial<SystemAgentAuditEntry>).timestamp;
-  if (typeof timestamp !== "string") {
-    return 0;
-  }
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 export { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
-
-type PreparedLegacyAuditRecords =
-  | { ok: false; warnings: string[] }
-  | {
-      ok: true;
-      records: PreparedAuditRecord[];
-      sanitizedJsonl: string;
-    };
-
-export function prepareLegacyAuditRecords(
-  source: LegacyAuditLogSource,
-  raw: string,
-  sourceGeneration: string,
-  sourceOrdinalBase = 0,
-): PreparedLegacyAuditRecords {
-  const records: PreparedAuditRecord[] = [];
-  const warnings: string[] = [];
-  for (const [index, line] of raw.split(/\r?\n/u).entries()) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch (error) {
-      warnings.push(
-        `Failed reading ${source.label} record at ${source.sourcePath}:${index + 1}: ${String(error)}`,
-      );
-      continue;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      warnings.push(
-        `Skipped non-object ${source.label} record at ${source.sourcePath}:${index + 1}`,
-      );
-      continue;
-    }
-    const value =
-      source.kind === "config"
-        ? sanitizeConfigAuditRecord(parsed as ConfigAuditRecord)
-        : (redactSecrets(parsed) as SystemAgentAuditEntry);
-    const digest = createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
-    records.push({
-      key: `legacy:${source.kind}:${sourceGeneration}:${sourceOrdinalBase + index + 1}:${digest}`,
-      value,
-      createdAt: legacyAuditRecordCreatedAt(source, value),
-    });
-  }
-  if (warnings.length > 0) {
-    return { ok: false, warnings };
-  }
-  return {
-    ok: true,
-    records,
-    sanitizedJsonl: serializePreparedAuditRecords(records),
-  };
-}
-
-async function writeRecoveredSanitizedAuditArchive(params: {
-  source: LegacyAuditLogSource;
-  root: AuditMigrationRoot;
-  relativePath: string;
-  allRecords: readonly PreparedAuditRecord[];
-  candidateRecords: readonly PreparedAuditRecord[];
-  previousCheckpoint: LegacyAuditRawCheckpoint | undefined;
-  warnings: string[];
-}): Promise<boolean> {
-  const exists = await params.root.exists(params.relativePath);
-  const current = exists
-    ? await readLegacyAuditSourceSnapshot(params.root, params.relativePath)
-    : undefined;
-  const candidateJsonl = serializePreparedAuditRecords(params.candidateRecords);
-  let desired = Buffer.from(candidateJsonl, "utf8");
-  if (params.previousCheckpoint) {
-    if (!current || current.rawBytes.length < params.previousCheckpoint.sanitizedSize) {
-      params.warnings.push(
-        `Skipped ${params.source.label} recovery because its sanitized archive is missing or truncated`,
-      );
-      return false;
-    }
-    const checkpointedPrefix = current.rawBytes.subarray(
-      0,
-      params.previousCheckpoint.sanitizedSize,
-    );
-    if (
-      createHash("sha256").update(checkpointedPrefix).digest("hex") !==
-      params.previousCheckpoint.sanitizedContentHash
-    ) {
-      params.warnings.push(
-        `Skipped ${params.source.label} recovery because its sanitized archive changed after checkpoint`,
-      );
-      return false;
-    }
-    // `recordsAfterLegacyAuditRawCheckpoint` already removed the checkpoint's
-    // `recordCount`. For merge-intent, this prefix already contains that batch.
-    desired = Buffer.concat([checkpointedPrefix, Buffer.from(candidateJsonl, "utf8")]);
-    if (current.rawBytes.equals(desired)) {
-      return true;
-    }
-    const currentIsVerifiedDesiredPrefix = desired
-      .subarray(0, current.rawBytes.length)
-      .equals(current.rawBytes);
-    if (
-      current.rawBytes.length !== params.previousCheckpoint.sanitizedSize &&
-      !currentIsVerifiedDesiredPrefix
-    ) {
-      params.warnings.push(
-        `Skipped ${params.source.label} recovery because its sanitized archive has an uncheckpointed tail`,
-      );
-      return false;
-    }
-  } else {
-    // A checkpointless unscrubbed raw archive is the authoritative full source.
-    // Replacing from it is idempotent across a crash before checkpointing.
-    desired = Buffer.from(serializePreparedAuditRecords(params.allRecords), "utf8");
-    if (current?.rawBytes.equals(desired)) {
-      return true;
-    }
-  }
-  await params.root.write(params.relativePath, desired, { mkdir: false, mode: 0o600 });
-  return true;
-}
 
 type AuditArchiveRelativePaths = {
   sanitized: string;
@@ -554,11 +407,11 @@ async function migrateLegacyAuditLogSource(params: {
       }
       if (
         !(await writeRecoveredSanitizedAuditArchive({
-          source: params.source,
+          sourceLabel: params.source.label,
           root,
           relativePath: sanitizedRelativePath,
-          allRecords: prepared.records,
-          candidateRecords,
+          allRecordsJsonl: prepared.sanitizedJsonl,
+          candidateRecordsJsonl: serializePreparedAuditRecords(candidateRecords),
           previousCheckpoint,
           warnings,
         }))
