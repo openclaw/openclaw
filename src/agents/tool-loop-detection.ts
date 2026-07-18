@@ -42,7 +42,7 @@ export const UNKNOWN_TOOL_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
-  enabled: false,
+  enabled: true,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
