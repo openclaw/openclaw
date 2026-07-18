@@ -409,7 +409,16 @@ function escapeApprovalTextForTerminal(value: string): string {
   return escaped;
 }
 
+// Gateway-minted ids are UUID-shaped, but explicit ids from an agent host are
+// stored verbatim, so hostile ids (ANSI escapes, controls) are possible. Show
+// the raw id when it is terminal-safe; wrap only unsafe ids in a copyable
+// token that `resolve` decodes.
+const APPROVAL_ID_TERMINAL_SAFE_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
 function formatApprovalIdForTerminal(value: string): string {
+  if (APPROVAL_ID_TERMINAL_SAFE_RE.test(value)) {
+    return value;
+  }
   return `${APPROVAL_ID_TOKEN_PREFIX}${Buffer.from(value, "utf8").toString("base64url")}`;
 }
 

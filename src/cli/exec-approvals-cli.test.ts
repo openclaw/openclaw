@@ -163,7 +163,11 @@ function runtimeOutput(): string {
 }
 
 function approvalDisplayId(id: string): string {
-  return `id64_${Buffer.from(id).toString("base64url")}`;
+  // Mirrors the CLI: terminal-safe ids render raw; only unsafe ids get the
+  // copyable id64 token.
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(id)
+    ? id
+    : `id64_${Buffer.from(id).toString("base64url")}`;
 }
 
 function pendingApprovalSnapshot(params: {
@@ -620,7 +624,9 @@ describe("exec approvals CLI", () => {
   });
 
   it("rejects an id token that also exists as a raw approval id", async () => {
-    const displayId = approvalDisplayId("foo");
+    // Explicit token form: the display helper renders safe ids raw, but the
+    // resolve path must stay ambiguity-safe for pasted tokens regardless.
+    const displayId = `id64_${Buffer.from("foo").toString("base64url")}`;
     callGatewayFromCli.mockImplementation(
       async (method: string, _opts: unknown, params?: unknown) => {
         if (method !== "approval.get") {
