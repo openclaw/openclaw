@@ -1283,7 +1283,7 @@ describe("finalizeSetupWizard", () => {
     listConfiguredWebSearchProviders.mockReturnValue([
       createWebSearchProviderEntry({
         id: "firecrawl",
-        label: "Firecrawl Search",
+        label: "FireCrawl Search",
         hint: "Structured results",
         envVars: ["FIRECRAWL_API_KEY"],
         placeholder: "fc-...",

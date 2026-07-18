@@ -28,7 +28,7 @@ async function getJsonOutput(
 }
 
 describe("web provider boundaries", () => {
-  it("keeps Firecrawl-specific fetch logic out of core runtime/tooling", async () => {
+  it("keeps FireCrawl-specific fetch logic out of core runtime/tooling", async () => {
     const violations = await webFetchViolationsPromise;
     const jsonOutput = await webFetchJsonOutputPromise;
 

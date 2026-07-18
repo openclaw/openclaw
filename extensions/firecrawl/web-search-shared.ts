@@ -31,10 +31,10 @@ export function buildFirecrawlWebSearchProviderBase(): Omit<WebSearchProviderPlu
 
   return {
     id: "firecrawl",
-    label: "Firecrawl Search",
+    label: "FireCrawl Search",
     hint: "Structured results with optional result scraping",
     onboardingScopes: ["text-inference"],
-    credentialLabel: "Firecrawl API key",
+    credentialLabel: "FireCrawl API key",
     envVars: ["FIRECRAWL_API_KEY"],
     placeholder: "fc-...",
     signupUrl: "https://www.firecrawl.dev/",
@@ -71,8 +71,8 @@ export function buildFirecrawlFreeWebSearchProviderBase(): Omit<
 > {
   return {
     id: "firecrawl-free",
-    label: "Firecrawl Search (Free)",
-    hint: "Free web search via Firecrawl's hosted starter tier — no API key required",
+    label: "FireCrawl Search (Free)",
+    hint: "Free web search via FireCrawl's hosted starter tier — no API key required",
     onboardingScopes: ["text-inference"],
     requiresCredential: false,
     envVars: [],

@@ -107,7 +107,7 @@ describe("firecrawl tools", () => {
     });
     const pluginEntry = applied.plugins?.entries?.firecrawl;
     if (!pluginEntry) {
-      throw new Error("expected Firecrawl plugin entry");
+      throw new Error("expected FireCrawl plugin entry");
     }
     expect(pluginEntry.enabled).toBe(true);
     expect(applied.tools?.web?.fetch?.provider).toBe("firecrawl");
@@ -150,7 +150,7 @@ describe("firecrawl tools", () => {
     expect(result.truncated).toBe(false);
   });
 
-  it("extracts search items from flexible Firecrawl payload shapes", () => {
+  it("extracts search items from flexible FireCrawl payload shapes", () => {
     const items = firecrawlClientTesting.resolveSearchItems({
       success: true,
       data: [
@@ -175,7 +175,7 @@ describe("firecrawl tools", () => {
     ]);
   });
 
-  it("extracts search items from Firecrawl v2 data.web payloads", () => {
+  it("extracts search items from FireCrawl v2 data.web payloads", () => {
     const items = firecrawlClientTesting.resolveSearchItems({
       success: true,
       data: {
@@ -203,7 +203,7 @@ describe("firecrawl tools", () => {
     ]);
   });
 
-  it("wraps and safely truncates upstream error details from Firecrawl API failures", async () => {
+  it("wraps and safely truncates upstream error details from FireCrawl API failures", async () => {
     global.fetch = vi.fn(
       async () =>
         new Response(JSON.stringify({ error: `${"x".repeat(999)}🚀tail` }), {
@@ -220,7 +220,7 @@ describe("firecrawl tools", () => {
           timeoutSeconds: 5,
           apiKey: "firecrawl-key",
           body: { query: "openclaw" },
-          errorLabel: "Firecrawl search",
+          errorLabel: "FireCrawl search",
         },
         async () => "ok",
       ),
@@ -233,7 +233,7 @@ describe("firecrawl tools", () => {
     );
   });
 
-  it("normalizes Firecrawl authorization headers before requests", async () => {
+  it("normalizes FireCrawl authorization headers before requests", async () => {
     let capturedInit: RequestInit | undefined;
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedInit = init;
@@ -250,7 +250,7 @@ describe("firecrawl tools", () => {
         timeoutSeconds: 5,
         apiKey: "firecrawl-test-\r\nkey",
         body: { query: "openclaw" },
-        errorLabel: "Firecrawl search",
+        errorLabel: "FireCrawl search",
       },
       async () => "ok",
     );
@@ -259,7 +259,7 @@ describe("firecrawl tools", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("omits Firecrawl authorization for keyless scrape requests", async () => {
+  it("omits FireCrawl authorization for keyless scrape requests", async () => {
     let capturedInit: RequestInit | undefined;
     global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedInit = init;
@@ -322,10 +322,10 @@ describe("firecrawl tools", () => {
         url: "https://example.com/direct-scrape",
         extractMode: "markdown",
       }),
-    ).rejects.toThrow("firecrawl_scrape needs a Firecrawl API key");
+    ).rejects.toThrow("firecrawl_scrape needs a FireCrawl API key");
   });
 
-  it("omits Firecrawl authorization for keyless search requests", async () => {
+  it("omits FireCrawl authorization for keyless search requests", async () => {
     let capturedInit: RequestInit | undefined;
     global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedInit = init;
@@ -362,7 +362,7 @@ describe("firecrawl tools", () => {
     expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
   });
 
-  it("never sends a configured Firecrawl key on keyless search", async () => {
+  it("never sends a configured FireCrawl key on keyless search", async () => {
     let capturedInit: RequestInit | undefined;
     global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedInit = init;
@@ -440,7 +440,7 @@ describe("firecrawl tools", () => {
         } as OpenClawConfig,
         query: "direct firecrawl search",
       }),
-    ).rejects.toThrow("web_search (firecrawl) needs a Firecrawl API key");
+    ).rejects.toThrow("web_search (firecrawl) needs a FireCrawl API key");
   });
 
   it("rejects combining includeDomains and excludeDomains", async () => {
@@ -467,7 +467,7 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("includeDomains or excludeDomains, not both");
   });
 
-  it("forwards domain, time, and location search filters to Firecrawl", async () => {
+  it("forwards domain, time, and location search filters to FireCrawl", async () => {
     let capturedBody: Record<string, unknown> | undefined;
     global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const rawBody = typeof init?.body === "string" ? init.body : "{}";
@@ -512,7 +512,7 @@ describe("firecrawl tools", () => {
     expect(capturedBody?.includeDomains).toBeUndefined();
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
+  it("blocks private and non-http scrape targets before FireCrawl requests", () => {
     expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
     ).toBeUndefined();
@@ -534,7 +534,7 @@ describe("firecrawl tools", () => {
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("not-a-valid-url?token=secret");
       expect.fail("Expected invalid URL to be blocked");
     } catch (error) {
-      expect((error as Error).message).toBe("Invalid URL supplied to Firecrawl scrape");
+      expect((error as Error).message).toBe("Invalid URL supplied to FireCrawl scrape");
       expect((error as Error).message).not.toContain("token=secret");
     }
   });
@@ -596,7 +596,7 @@ describe("firecrawl tools", () => {
   it("is keyless and opt-in for the free search provider", () => {
     const provider = createFirecrawlFreeWebSearchProvider();
     expect(provider.id).toBe("firecrawl-free");
-    expect(provider.label).toBe("Firecrawl Search (Free)");
+    expect(provider.label).toBe("FireCrawl Search (Free)");
     expect(provider.requiresCredential).toBe(false);
     expect(provider.autoDetectOrder).toBeUndefined();
   });
@@ -650,7 +650,7 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("count must be an integer from 1 to 10");
   });
 
-  it("keeps the compare-helper fetch facade owned by the Firecrawl extension", async () => {
+  it("keeps the compare-helper fetch facade owned by the FireCrawl extension", async () => {
     await fetchFirecrawlContent({
       url: "https://docs.openclaw.ai",
       extractMode: "markdown",
@@ -706,7 +706,7 @@ describe("firecrawl tools", () => {
     expect(provider.requiresCredential).toBe(false);
     const pluginEntry = applied.plugins?.entries?.firecrawl;
     if (!pluginEntry) {
-      throw new Error("expected Firecrawl fetch plugin entry");
+      throw new Error("expected FireCrawl fetch plugin entry");
     }
     expect(pluginEntry.enabled).toBe(true);
   });
@@ -768,7 +768,7 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("maxChars must be a positive integer");
   });
 
-  it("normalizes optional search parameters before invoking Firecrawl", async () => {
+  it("normalizes optional search parameters before invoking FireCrawl", async () => {
     runFirecrawlSearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
       ok: true,
       params,
@@ -863,7 +863,7 @@ describe("firecrawl tools", () => {
     });
   });
 
-  it("rejects malformed numeric Firecrawl search options before dispatch", async () => {
+  it("rejects malformed numeric FireCrawl search options before dispatch", async () => {
     const searchTool = createFirecrawlSearchTool({
       config: { env: "test" },
     } as never);
@@ -884,7 +884,7 @@ describe("firecrawl tools", () => {
     expect(runFirecrawlSearch).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed numeric Firecrawl scrape options before dispatch", async () => {
+  it("rejects malformed numeric FireCrawl scrape options before dispatch", async () => {
     const scrapeTool = createFirecrawlScrapeTool({
       config: { env: "test" },
     } as never);
@@ -978,7 +978,7 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
   });
 
-  it("resolves env SecretRefs for Firecrawl API key without requiring a runtime snapshot", () => {
+  it("resolves env SecretRefs for FireCrawl API key without requiring a runtime snapshot", () => {
     vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-ref-key");
     const cfg = {
       plugins: {
@@ -1024,7 +1024,7 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
   });
 
-  it("does not read arbitrary env SecretRef ids for Firecrawl API key resolution", () => {
+  it("does not read arbitrary env SecretRef ids for FireCrawl API key resolution", () => {
     vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
     const cfg = {
       plugins: {
@@ -1109,7 +1109,7 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
   });
 
-  it("allows hosted Firecrawl and private self-hosted endpoints only", async () => {
+  it("allows hosted FireCrawl and private self-hosted endpoints only", async () => {
     await expect(
       firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape"),
     ).resolves.toEqual({
@@ -1133,16 +1133,16 @@ describe("firecrawl tools", () => {
     });
     await expect(
       firecrawlClientTesting.resolveEndpoint("http://api.firecrawl.dev", "/v2/scrape"),
-    ).rejects.toThrow("Firecrawl HTTP baseUrl must target a private or internal");
+    ).rejects.toThrow("FireCrawl HTTP baseUrl must target a private or internal");
     await expect(
       firecrawlClientTesting.resolveEndpoint("https://attacker.example", "/v2/search"),
-    ).rejects.toThrow("Firecrawl custom baseUrl must target a private or internal");
+    ).rejects.toThrow("FireCrawl custom baseUrl must target a private or internal");
     await expect(
       firecrawlClientTesting.resolveEndpoint("ftp://127.0.0.1:8787", "/v2/scrape"),
-    ).rejects.toThrow("Firecrawl baseUrl must use http:// or https://.");
+    ).rejects.toThrow("FireCrawl baseUrl must use http:// or https://.");
   });
 
-  it("routes private self-hosted Firecrawl endpoints through the self-hosted fetch guard", async () => {
+  it("routes private self-hosted FireCrawl endpoints through the self-hosted fetch guard", async () => {
     ssrfMock?.mockRestore();
     ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
     const fetchSpy = vi.fn(
@@ -1160,7 +1160,7 @@ describe("firecrawl tools", () => {
         timeoutSeconds: 5,
         apiKey: "firecrawl-key",
         body: { query: "openclaw" },
-        errorLabel: "Firecrawl Search",
+        errorLabel: "FireCrawl Search",
       },
       async (response) => (await response.json()) as Record<string, unknown>,
     );
@@ -1169,7 +1169,7 @@ describe("firecrawl tools", () => {
     expect(result.success).toBe(true);
   });
 
-  it("reports malformed Firecrawl search JSON with a stable provider error", async () => {
+  it("reports malformed FireCrawl search JSON with a stable provider error", async () => {
     global.fetch = vi.fn(
       async () =>
         new Response("{ nope", {
@@ -1196,10 +1196,10 @@ describe("firecrawl tools", () => {
         } as OpenClawConfig,
         query: "openclaw malformed search",
       }),
-    ).rejects.toThrow("Firecrawl Search API error: malformed JSON response");
+    ).rejects.toThrow("FireCrawl Search API error: malformed JSON response");
   });
 
-  it("bounds successful Firecrawl JSON bodies before parsing", async () => {
+  it("bounds successful FireCrawl JSON bodies before parsing", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,
       chunkSize: 1024 * 1024,
@@ -1211,16 +1211,16 @@ describe("firecrawl tools", () => {
     await expect(
       firecrawlClientTesting.readFirecrawlJsonResponse(
         streamed.response,
-        "Firecrawl Search API error",
+        "FireCrawl Search API error",
       ),
-    ).rejects.toThrow("Firecrawl Search API error: JSON response exceeds 16777216 bytes");
+    ).rejects.toThrow("FireCrawl Search API error: JSON response exceeds 16777216 bytes");
 
     expect(streamed.getReadCount()).toBeLessThan(32);
     expect(streamed.wasCanceled()).toBe(true);
     expect(jsonSpy).not.toHaveBeenCalled();
   });
 
-  it("reports malformed Firecrawl scrape JSON with a stable provider error", async () => {
+  it("reports malformed FireCrawl scrape JSON with a stable provider error", async () => {
     global.fetch = vi.fn(
       async () =>
         new Response("{ nope", {
@@ -1248,7 +1248,7 @@ describe("firecrawl tools", () => {
         url: "https://example.com/firecrawl-malformed-scrape",
         extractMode: "markdown",
       }),
-    ).rejects.toThrow("Firecrawl fetch failed: malformed JSON response");
+    ).rejects.toThrow("FireCrawl fetch failed: malformed JSON response");
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {
@@ -1347,7 +1347,7 @@ describe("firecrawl tools", () => {
         extractMode: "markdown",
         maxChars: 100,
       }),
-    ).toThrow("Firecrawl scrape returned no content.");
+    ).toThrow("FireCrawl scrape returned no content.");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

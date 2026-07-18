@@ -213,13 +213,13 @@
     },
     {
       "name": "@openclaw/firecrawl-plugin",
-      "description": "OpenClaw Firecrawl plugin.",
+      "description": "Search the live web for fresh results, scrape pages into LLM-ready Markdown, and interact with dynamic sites to extract hard-to-reach data.",
       "source": "official",
       "kind": "plugin",
       "openclaw": {
         "plugin": {
           "id": "firecrawl",
-          "label": "Firecrawl"
+          "label": "FireCrawl"
         },
         "contracts": {
           "webFetchProviders": [
@@ -237,12 +237,12 @@
         "webSearchProviders": [
           {
             "id": "firecrawl",
-            "label": "Firecrawl Search",
+            "label": "FireCrawl Search",
             "hint": "Structured results with optional result scraping",
             "onboardingScopes": [
               "text-inference"
             ],
-            "credentialLabel": "Firecrawl API key",
+            "credentialLabel": "FireCrawl API key",
             "envVars": [
               "FIRECRAWL_API_KEY"
             ],
@@ -254,8 +254,8 @@
           },
           {
             "id": "firecrawl-free",
-            "label": "Firecrawl Search (Free)",
-            "hint": "Free web search via Firecrawl's hosted starter tier — no API key required",
+            "label": "FireCrawl Search (Free)",
+            "hint": "Free web search via FireCrawl's hosted starter tier — no API key required",
             "onboardingScopes": [
               "text-inference"
             ],

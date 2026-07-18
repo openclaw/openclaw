@@ -302,8 +302,8 @@ describe("plugin contract registry scoped retries", () => {
               pluginId: "firecrawl",
               provider: {
                 id: "firecrawl",
-                label: "Firecrawl",
-                hint: "Fetch with Firecrawl",
+                label: "FireCrawl",
+                hint: "Fetch with FireCrawl",
                 envVars: ["FIRECRAWL_API_KEY"],
                 placeholder: "fc-...",
                 signupUrl: "https://firecrawl.dev",

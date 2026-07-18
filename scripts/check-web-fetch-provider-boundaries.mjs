@@ -58,7 +58,7 @@ export async function collectWebFetchProviderBoundaryViolations() {
         }
         const lines = content.split(/\r?\n/);
         for (const [index, line] of lines.entries()) {
-          if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
+          if (!line.toLowerCase().includes("firecrawl")) {
             continue;
           }
           if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
@@ -67,7 +67,7 @@ export async function collectWebFetchProviderBoundaryViolations() {
           violations.push({
             file: relativeFile,
             line: index + 1,
-            reason: "core web-fetch runtime/tooling contains Firecrawl-specific fetch logic",
+            reason: "core web-fetch runtime/tooling contains FireCrawl-specific fetch logic",
           });
         }
       }

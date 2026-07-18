@@ -113,7 +113,7 @@ describe("assertFirecrawlScrapeTargetAllowed", () => {
 // resolveSearchItems
 // ---------------------------------------------------------------------------
 describe("resolveSearchItems", () => {
-  it("extracts items from a top-level data array (Firecrawl Search API)", () => {
+  it("extracts items from a top-level data array (FireCrawl Search API)", () => {
     const result = firecrawlClient.resolveSearchItems({
       data: [
         { url: "https://example.com", title: "Example" },
@@ -166,7 +166,7 @@ describe("resolveSearchItems", () => {
     expect(requireSearchResult(result, 0).url).toBe("https://example.com/nested");
   });
 
-  it("extracts items from data.web array (Firecrawl web search format)", () => {
+  it("extracts items from data.web array (FireCrawl web search format)", () => {
     const result = firecrawlClient.resolveSearchItems({
       data: {
         web: [{ url: "https://example.com/web", title: "Web Result" }],

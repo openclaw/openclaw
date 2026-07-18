@@ -578,7 +578,7 @@ describe("runtime web tools resolution", () => {
     });
   });
 
-  it("selects the configured keyless Firecrawl fetch provider without an API key", async () => {
+  it("selects the configured keyless FireCrawl fetch provider without an API key", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -596,7 +596,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.fetch.selectedProviderKeySource).toBe("missing");
   });
 
-  it("does not auto-select keyless Firecrawl fetch without a credential", async () => {
+  it("does not auto-select keyless FireCrawl fetch without a credential", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -1469,7 +1469,7 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("resolves SecretRefs for verified installed Firecrawl fetch config", async () => {
+  it("resolves SecretRefs for verified installed FireCrawl fetch config", async () => {
     loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
       firecrawl: {
         source: "npm",
@@ -1764,7 +1764,7 @@ describe("runtime web tools resolution", () => {
     ).toBe("firecrawl-runtime-key");
   });
 
-  it("resolves legacy Firecrawl web fetch SecretRefs through the plugin-owned path", async () => {
+  it("resolves legacy FireCrawl web fetch SecretRefs through the plugin-owned path", async () => {
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
       config: asConfig({
         tools: {

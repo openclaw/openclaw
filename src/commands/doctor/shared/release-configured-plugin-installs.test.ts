@@ -378,7 +378,7 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
-  it("collects Firecrawl for env-only web fetch when search is disabled", async () => {
+  it("collects FireCrawl for env-only web fetch when search is disabled", async () => {
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         tools: {

@@ -6431,7 +6431,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/reference/firecrawl
 - Headings:
-  - H1: Firecrawl plugin
+  - H1: FireCrawl plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -8621,7 +8621,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Image and video generation
   - H3: Memory embeddings and semantic search
   - H3: Web search tool
-  - H3: Web fetch tool (Firecrawl)
+  - H3: Web fetch tool (FireCrawl)
   - H3: Provider usage snapshots (status/health)
   - H3: Compaction safeguard summarization
   - H3: Model scan / probe
@@ -9861,14 +9861,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Install plugin
   - H2: Keyless access and API keys
-  - H2: Configure Firecrawl search
-  - H2: Configure Firecrawl webfetch fallback
-  - H3: Self-hosted Firecrawl
-  - H2: Firecrawl plugin tools
+  - H2: Configure FireCrawl search
+  - H2: Configure FireCrawl webfetch fallback
+  - H3: Self-hosted FireCrawl
+  - H2: FireCrawl plugin tools
   - H3: firecrawlsearch
   - H3: firecrawlscrape
   - H2: Stealth / bot circumvention
-  - H2: How webfetch uses Firecrawl
+  - H2: How webfetch uses FireCrawl
   - H2: Related
 
 ## tools/gemini-search.md
@@ -10450,7 +10450,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Progress updates
   - H2: Config
-  - H2: Firecrawl fallback
+  - H2: FireCrawl fallback
   - H2: Trusted env proxy
   - H2: Limits and safety
   - H2: Tool profiles

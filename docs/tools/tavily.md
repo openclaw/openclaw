@@ -157,7 +157,7 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
   <Card title="Web Search overview" href="/tools/web" icon="magnifying-glass">
     All providers and auto-detection rules.
   </Card>
-  <Card title="Firecrawl" href="/tools/firecrawl" icon="fire">
+  <Card title="FireCrawl" href="/tools/firecrawl" icon="fire">
     Search plus scraping with content extraction.
   </Card>
   <Card title="Exa Search" href="/tools/exa-search" icon="binoculars">

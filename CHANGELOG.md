@@ -6583,7 +6583,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - Nextcloud Talk: report malformed room-info and bot-admin JSON with channel-owned errors instead of leaking raw parser failures.
 - Microsoft Teams: report malformed Graph and delegated OAuth JSON with channel-owned errors instead of leaking raw parser failures.
 - Google Chat: report malformed Chat API and certificate JSON with channel-owned errors instead of leaking raw parser failures.
-- Firecrawl: report malformed search and scrape API JSON with provider-owned errors instead of leaking raw parser failures.
+- FireCrawl: report malformed search and scrape API JSON with provider-owned errors instead of leaking raw parser failures.
 - Tavily: report malformed search and extract API JSON with provider-owned errors instead of leaking raw parser failures.
 - Perplexity: report malformed Search API and chat completion JSON with provider-owned errors instead of leaking raw parser failures.
 - Exa: report malformed search API JSON with a provider-owned error instead of leaking raw parser failures.
@@ -8309,7 +8309,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - External plugin installation now covers diagnostics, onboarding, doctor repair, channel setup, install/update records, and artifact metadata while keeping bare package installs on npm for the first cutover. Thanks @vincentkoc.
 - Gateway startup, session listing, task maintenance, prompt prep, plugin loading, and filesystem hot paths get targeted cache and fanout reductions for large or plugin-heavy installs.
 - Control UI and WebChat reliability improves across Sessions, Cron, long-running Gateway WebSockets, grouped-message width, slash-command feedback, iOS PWA bounds, selection contrast, and Talk diagnostics.
-- Channel and provider fixes cover Telegram topic commands and networking, Discord delivery and startup edge cases, OpenAI-compatible TTS/Realtime, OpenRouter/DeepSeek replay, Anthropic-compatible streaming, Brave/SearXNG/Firecrawl web search, and voice-call routing.
+- Channel and provider fixes cover Telegram topic commands and networking, Discord delivery and startup edge cases, OpenAI-compatible TTS/Realtime, OpenRouter/DeepSeek replay, Anthropic-compatible streaming, Brave/SearXNG/FireCrawl web search, and voice-call routing.
 
 ### Changes
 
@@ -8468,16 +8468,16 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - Codex/app-server: restart the shared Codex app-server client once when it closes during startup thread resume, preserving the existing thread binding instead of retrying `thread/start` on a closed client. Thanks @vincentkoc.
 - Gateway/watch: keep colored subsystem log prefixes in the managed tmux pane even when the parent shell exports `NO_COLOR`, while preserving explicit `FORCE_COLOR=0` opt-out. Thanks @vincentkoc.
 - Agents/compaction: submit a non-empty runtime-event marker for pre-compaction memory flush turns, so strict Anthropic providers no longer reject the silent flush as an empty user message. Fixes #75305. Thanks @sableassistant3777-source.
-- Plugin SDK: re-export `isPrivateIpAddress` from `plugin-sdk/ssrf-runtime`, restoring source-checkout builds for SearXNG and Firecrawl private-network guards. Thanks @vincentkoc.
+- Plugin SDK: re-export `isPrivateIpAddress` from `plugin-sdk/ssrf-runtime`, restoring source-checkout builds for SearXNG and FireCrawl private-network guards. Thanks @vincentkoc.
 - Discord/message actions: advertise `upload-file` and route it through Discord's send runtime with agent-scoped media reads, so agents can discover and send file attachments. Fixes #60652 and supersedes #60808, #61087, and #61100. Thanks @claw-io, @efe-arv, @joelnishanth, and @sjhddh.
 - Sessions: suppress exact inter-session control replies such as `NO_REPLY` and keep agent-to-agent announce bookkeeping out of visible transcripts. Fixes #53145. Thanks @TarahAssistant.
 - CLI/directory: report unsupported directory operations for installed channel plugins instead of prompting to reinstall the plugin when it lacks a directory adapter. Fixes #75770. Thanks @lawong888.
 - Web search/SearXNG: show the JSON API `search.formats` prerequisite during SearXNG setup before prompting for the base URL. Supersedes #65592. Thanks @evanpaul14.
 - Web search/SearXNG: pass through `img_src` image URLs from SearXNG image-category results. Supersedes #61416. Thanks @sghael.
 - Web search/Kimi: fail explicitly when Moonshot returns an ungrounded chat answer instead of native web-search evidence, so Kimi no longer reports generic fallback text as a successful search. Fixes #52573. Thanks @wangwllu.
-- Web search: keep public provider requests on the strict SSRF guard and reserve private-network access for explicit self-hosted SearXNG/Firecrawl endpoints. Fixes #74357 and supersedes #74360. Thanks @fede-kamel.
-- Firecrawl: reject private, loopback, metadata, and non-HTTP(S) `firecrawl_scrape` target URLs before forwarding them to Firecrawl. Supersedes #48133. Thanks @kn1ghtc.
-- Web search/Firecrawl: allow self-hosted private/internal Firecrawl `baseUrl` endpoints, including HTTP for private targets, while keeping hosted Firecrawl on the strict official endpoint. Fixes #63877 and supersedes #59666, #63941, and #74013. Thanks @jhthompson12, @jzakirov, @Mlightsnow, and @shad0wca7.
+- Web search: keep public provider requests on the strict SSRF guard and reserve private-network access for explicit self-hosted SearXNG/FireCrawl endpoints. Fixes #74357 and supersedes #74360. Thanks @fede-kamel.
+- FireCrawl: reject private, loopback, metadata, and non-HTTP(S) `firecrawl_scrape` target URLs before forwarding them to FireCrawl. Supersedes #48133. Thanks @kn1ghtc.
+- Web search/FireCrawl: allow self-hosted private/internal FireCrawl `baseUrl` endpoints, including HTTP for private targets, while keeping hosted FireCrawl on the strict official endpoint. Fixes #63877 and supersedes #59666, #63941, and #74013. Thanks @jhthompson12, @jzakirov, @Mlightsnow, and @shad0wca7.
 - CLI/models: report gateway model fallback attempts in `infer model run --json` and avoid double-prefixing provider-qualified defaults such as `openrouter/auto` in `models status`. Partially fixes #69527. Thanks @alexifra.
 - Providers/OpenRouter: strip trailing assistant prefill turns from verified OpenRouter Anthropic model requests when reasoning is enabled, so Claude 4.6 routes no longer fail with Anthropic's prefill rejection through the OpenAI-compatible adapter. Fixes #75395. Thanks @sbmilburn.
 - Voice Call: add per-number inbound routing for dialed-number greetings, response agents/models/prompts, and TTS voice overrides. Fixes #56604. Thanks @healthstatus.
@@ -10809,7 +10809,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - Agents/model selection: clear transient auto-failover session overrides before each turn so recovered primary models are retried immediately without emitting user-override reset warnings. (#69365) Thanks @hitesh-github99.
 - Auto-reply: apply silent `NO_REPLY` policy per conversation type, so direct chats get a helpful rewritten reply while groups and internal deliveries can remain quiet. (#68644) Thanks @Takhoffman.
 - Telegram/status reactions: honor `messages.removeAckAfterReply` when lifecycle status reactions are enabled, clearing or restoring the reaction after success/error using the configured hold timings. (#68067) Thanks @poiskgit.
-- Web search/plugins: resolve plugin-scoped SecretRef API keys for bundled Exa, Firecrawl, Gemini, Kimi, Perplexity, Tavily, and Grok web-search providers when they are selected through the shared web-search config. (#68424) Thanks @afurm.
+- Web search/plugins: resolve plugin-scoped SecretRef API keys for bundled Exa, FireCrawl, Gemini, Kimi, Perplexity, Tavily, and Grok web-search providers when they are selected through the shared web-search config. (#68424) Thanks @afurm.
 - Telegram/polling: raise the default polling watchdog threshold from 90s to 120s and add configurable `channels.telegram.pollingStallThresholdMs` (also per-account) so long-running Telegram work gets more room before polling is treated as stalled. (#57737) Thanks @Vitalcheffe.
 - Telegram/polling: bound the persisted-offset confirmation `getUpdates` probe with a client-side timeout so a zombie socket cannot hang polling recovery before the runner watchdog starts. (#50368) Thanks @boticlaw.
 - Agents/Pi runner: retry silent `stopReason=error` turns with no output when no side effects ran, so non-frontier providers that briefly return empty error turns get another chance instead of ending the session early. (#68310) Thanks @Chased1k.
@@ -11946,7 +11946,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 ### Breaking
 
 - Plugins/xAI: move `x_search` settings from the legacy core `tools.web.x_search.*` path to the plugin-owned `plugins.entries.xai.config.xSearch.*` path, standardize `x_search` auth on `plugins.entries.xai.config.webSearch.apiKey` / `XAI_API_KEY`, and migrate legacy config with `openclaw doctor --fix`. (#59674) Thanks @vincentkoc.
-- Plugins/web fetch: move Firecrawl `web_fetch` config from the legacy core `tools.web.fetch.firecrawl.*` path to the plugin-owned `plugins.entries.firecrawl.config.webFetch.*` path, route `web_fetch` fallback through the new fetch-provider boundary instead of a Firecrawl-only core branch, and migrate legacy config with `openclaw doctor --fix`. (#59465) Thanks @vincentkoc.
+- Plugins/web fetch: move FireCrawl `web_fetch` config from the legacy core `tools.web.fetch.firecrawl.*` path to the plugin-owned `plugins.entries.firecrawl.config.webFetch.*` path, route `web_fetch` fallback through the new fetch-provider boundary instead of a FireCrawl-only core branch, and migrate legacy config with `openclaw doctor --fix`. (#59465) Thanks @vincentkoc.
 
 ### Changes
 
@@ -12657,7 +12657,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - Plugins/Chutes: add a bundled Chutes provider with plugin-owned OAuth/API-key auth, dynamic model discovery, and default-on extension wiring. (#41416) Thanks @Veightor.
 - Web tools/Exa: add Exa as a bundled web-search plugin with Exa-native date filters, search-mode selection, and optional content extraction under `plugins.entries.exa.config.webSearch.*`. Thanks @V-Gutierrez and @vincentkoc.
 - Web tools/Tavily: add Tavily as a bundled web-search provider with dedicated `tavily_search` and `tavily_extract` tools, using canonical plugin-owned config under `plugins.entries.tavily.config.webSearch.*`. (#49200) thanks @lakshyaag-tavily.
-- Web tools/Firecrawl: add Firecrawl as an `onboard`/configure search provider via a bundled plugin, expose explicit `firecrawl_search` and `firecrawl_scrape` tools, and align core `web_fetch` fallback behavior with Firecrawl base-URL/env fallback plus guarded endpoint fetches.
+- Web tools/FireCrawl: add FireCrawl as an `onboard`/configure search provider via a bundled plugin, expose explicit `firecrawl_search` and `firecrawl_scrape` tools, and align core `web_fetch` fallback behavior with FireCrawl base-URL/env fallback plus guarded endpoint fetches.
 - Models/OpenAI: add native forward-compat support for `gpt-5.4-mini` and `gpt-5.4-nano` in the OpenAI provider catalog, runtime resolution, and reasoning capability gates. Thanks @vincentkoc.
 - Control UI/chat: add an expand-to-canvas button on assistant chat bubbles and in-app session navigation from Sessions and Cron views. Thanks @BunsDev.
 - Control UI/appearance: unify theme border radii across Claw, Knot, and Dash, and add a Roundness slider to the Appearance settings so users can adjust corner radius from sharp to fully rounded. Thanks @BunsDev.
@@ -12815,7 +12815,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - ACP/approvals: use canonical tool identity for prompting decisions and fail closed when conflicting tool identity hints are present. (#46817) Thanks @zpbrent and @vincentkoc.
 - ACP: require admin scope for mutating internal actions. (#46789) Thanks @tdjackey and @vincentkoc.
 - Subagents/follow-ups: require the same controller ownership checks for `/subagents send` as other control actions, so leaf sessions cannot message nested child runs they do not control. (#46801) Thanks @vincentkoc.
-- Web search/onboarding: clarify provider labels, key prompts, and missing-key notes so setup/configure more clearly names the required provider credential for Gemini, Kimi, Grok, Brave Search, Firecrawl, Perplexity, and Tavily. Thanks @vincentkoc.
+- Web search/onboarding: clarify provider labels, key prompts, and missing-key notes so setup/configure more clearly names the required provider credential for Gemini, Kimi, Grok, Brave Search, FireCrawl, Perplexity, and Tavily. Thanks @vincentkoc.
 - macOS/canvas actions: keep unattended local agent actions on trusted in-app canvas surfaces only, and stop exposing the deep-link fallback key to arbitrary page scripts. (#46790) Thanks @vincentkoc.
 - Agents/compaction: extend the enclosing run deadline once while compaction is actively in flight, and abort the underlying SDK compaction on timeout/cancel so large-session compactions stop freezing mid-run. (#46889) Thanks @asyncjason.
 - Gateway/Telegram shutdown: abort stalled Telegram polling fetches on shutdown, clean up per-cycle abort listeners, and keep the in-process watchdog ahead of supervisor stop timeouts so SIGTERM no longer leaves zombie gateways behind. (#51242) Thanks @juliabush.
@@ -16571,9 +16571,9 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Plugins: ship bundled plugins disabled by default and allow overrides by installed versions. (#1066) - thanks @ItzR3NO.
 - Plugins: add bundled Antigravity + Gemini CLI OAuth + Copilot Proxy provider plugins. (#1066) - thanks @ItzR3NO.
 - Tools: improve `web_fetch` extraction using Readability (with fallback).
-- Tools: add Firecrawl fallback for `web_fetch` when configured.
+- Tools: add FireCrawl fallback for `web_fetch` when configured.
 - Tools: send Chrome-like headers by default for `web_fetch` to improve extraction on bot-sensitive sites.
-- Tools: Firecrawl fallback now uses bot-circumvention + cache by default; remove basic HTML fallback when extraction fails.
+- Tools: FireCrawl fallback now uses bot-circumvention + cache by default; remove basic HTML fallback when extraction fails.
 - Tools: default `exec` exit notifications and auto-migrate legacy `tools.bash` to `tools.exec`.
 - Tools: add `exec` PTY support for interactive sessions. https://docs.openclaw.ai/tools/exec.
 - Tools: add tmux-style `process send-keys` and bracketed paste helpers for PTY sessions.

@@ -5,6 +5,7 @@
   },
   "name": "Lobster",
   "description": "Lobster workflow tool plugin for typed pipelines and resumable approvals.",
+  "icon": "https://raw.githubusercontent.com/openclaw/openclaw/401f278f111fa5ea1b79521112ba350852328dc0/ui/public/plugin-art/lobster.webp",
   "catalog": { "featured": true, "order": 50 },
   "contracts": {
     "tools": ["lobster"]

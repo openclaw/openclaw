@@ -20,7 +20,7 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
     ...FIRECRAWL_WEB_FETCH_PROVIDER_SHARED,
     applySelectionConfig: (config) => enablePluginInConfig(config, "firecrawl").config,
     createTool: ({ config }) => ({
-      description: "Fetch a page using Firecrawl.",
+      description: "Fetch a page using FireCrawl.",
       parameters: {},
       execute: async (args) => {
         const url = typeof args.url === "string" ? args.url : "";

@@ -1,6 +1,6 @@
-# OpenClaw Firecrawl Plugin
+# FireCrawl
 
-Official OpenClaw plugin for Firecrawl.
+Search the live web for fresh results, scrape pages into LLM-ready Markdown, and interact with dynamic sites to extract hard-to-reach data.
 
 Install from OpenClaw:
 

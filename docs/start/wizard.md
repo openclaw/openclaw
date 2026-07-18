@@ -62,7 +62,7 @@ openclaw agents add <name>
 
 <Tip>
 The classic wizard includes a web search step where you can pick a provider: Brave,
-DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web
+DuckDuckGo, Exa, FireCrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web
 Search, Perplexity, SearXNG, or Tavily. Some need an API key; others are
 key-free. Configure this later with `openclaw configure --section web`. Docs:
 [Web tools](/tools/web).

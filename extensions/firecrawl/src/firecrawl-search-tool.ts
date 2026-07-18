@@ -26,7 +26,7 @@ const FirecrawlSearchToolSchema = Type.Object(
     ),
     categories: Type.Optional(
       Type.Array(Type.String(), {
-        description: 'Optional Firecrawl categories, for example ["github"] or ["research"].',
+        description: 'Optional FireCrawl categories, for example ["github"] or ["research"].',
       }),
     ),
     includeDomains: Type.Optional(
@@ -60,12 +60,12 @@ const FirecrawlSearchToolSchema = Type.Object(
     ),
     scrapeResults: Type.Optional(
       Type.Boolean({
-        description: "Include scraped result content when Firecrawl returns it.",
+        description: "Include scraped result content when FireCrawl returns it.",
       }),
     ),
     timeoutSeconds: Type.Optional(
       Type.Integer({
-        description: "Timeout in seconds for the Firecrawl Search request.",
+        description: "Timeout in seconds for the FireCrawl Search request.",
         minimum: 1,
       }),
     ),
@@ -76,9 +76,9 @@ const FirecrawlSearchToolSchema = Type.Object(
 export function createFirecrawlSearchTool(api: OpenClawPluginApi) {
   return {
     name: "firecrawl_search",
-    label: "Firecrawl Search",
+    label: "FireCrawl Search",
     description:
-      "Search the web using Firecrawl v2/search. Can optionally include scraped content from result pages.",
+      "Search the web using FireCrawl v2/search. Can optionally include scraped content from result pages.",
     parameters: FirecrawlSearchToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const query = readStringParam(rawParams, "query", { required: true });

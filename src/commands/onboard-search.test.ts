@@ -20,7 +20,7 @@ const SEARCH_PROVIDER_PLUGINS: Record<
   { pluginId: string; envVars: string[]; label: string; credentialLabel?: string }
 > = {
   brave: { pluginId: "brave", envVars: ["BRAVE_API_KEY"], label: "Brave Search" },
-  firecrawl: { pluginId: "firecrawl", envVars: ["FIRECRAWL_API_KEY"], label: "Firecrawl" },
+  firecrawl: { pluginId: "firecrawl", envVars: ["FIRECRAWL_API_KEY"], label: "FireCrawl" },
   gemini: { pluginId: "google", envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"], label: "Gemini" },
   grok: { pluginId: "xai", envVars: ["XAI_API_KEY"], label: "Grok" },
   kimi: {
@@ -415,7 +415,7 @@ describe("setupSearch", () => {
     }
   });
 
-  it("keeps keyless Firecrawl fetch configured when search setup has no key", async () => {
+  it("keeps keyless FireCrawl fetch configured when search setup has no key", async () => {
     const original = process.env.FIRECRAWL_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
     try {

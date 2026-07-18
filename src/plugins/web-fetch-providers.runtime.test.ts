@@ -82,12 +82,12 @@ function createManifestRegistryFixture(origin: "bundled" | "global" = "bundled")
 function createRuntimeWebFetchProvider() {
   return {
     pluginId: "firecrawl",
-    pluginName: "Firecrawl",
+    pluginName: "FireCrawl",
     source: "test" as const,
     provider: {
       id: "firecrawl",
-      label: "Firecrawl",
-      hint: "Firecrawl runtime provider",
+      label: "FireCrawl",
+      hint: "FireCrawl runtime provider",
       envVars: ["FIRECRAWL_API_KEY"],
       placeholder: "firecrawl-...",
       signupUrl: "https://example.com/firecrawl",

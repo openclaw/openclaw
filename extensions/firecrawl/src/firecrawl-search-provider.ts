@@ -25,7 +25,7 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
     ...buildFirecrawlWebSearchProviderBase(),
     createTool: (ctx) => ({
       description:
-        "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
+        "Search the web using FireCrawl. Returns structured results with snippets from FireCrawl Search. Use firecrawl_search for FireCrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
       execute: async (args) => {
         const { runFirecrawlSearch } = await loadFirecrawlClientModule();

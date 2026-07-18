@@ -2,10 +2,10 @@
 summary: "Adds agent-callable tools. Adds web fetch provider support. Adds web search provider support."
 read_when:
   - You are installing, configuring, or auditing the firecrawl plugin
-title: "Firecrawl plugin"
+title: "FireCrawl plugin"
 ---
 
-# Firecrawl plugin
+# FireCrawl plugin
 
 Adds agent-callable tools. Adds web fetch provider support. Adds web search provider support.
 

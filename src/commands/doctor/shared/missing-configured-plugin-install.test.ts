@@ -4920,18 +4920,18 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
-  it("installs Firecrawl for env-only web fetch when search is disabled", async () => {
+  it("installs FireCrawl for env-only web fetch when search is disabled", async () => {
     mocks.resolveOfficialExternalWebProviderContractPluginIdsForEnv.mockReturnValue(["firecrawl"]);
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
         id: "firecrawl",
-        label: "Firecrawl",
+        label: "FireCrawl",
         install: {
           npmSpec: "@openclaw/firecrawl-plugin",
           defaultChoice: "npm",
         },
         openclaw: {
-          plugin: { id: "firecrawl", label: "Firecrawl" },
+          plugin: { id: "firecrawl", label: "FireCrawl" },
         },
       },
     ]);

@@ -558,7 +558,7 @@ describe("command secret target ids", () => {
     expect(scoped.forcedActivePaths).toEqual(new Set(["models.providers.ollama.apiKey"]));
   });
 
-  it("uses Firecrawl web fetch credentials as search fallback targets", () => {
+  it("uses FireCrawl web fetch credentials as search fallback targets", () => {
     const scoped = getCapabilityWebSearchCommandSecretTargets({
       tools: { web: { search: { provider: "firecrawl", enabled: true } } },
       plugins: {
@@ -845,7 +845,7 @@ describe("command secret target ids", () => {
     expect(fetchConfigured.forcedActivePaths).toBeUndefined();
   });
 
-  it("keeps selected legacy Firecrawl web fetch refs in command targets", () => {
+  it("keeps selected legacy FireCrawl web fetch refs in command targets", () => {
     const scoped = getCapabilityWebFetchCommandSecretTargets({
       tools: {
         web: {

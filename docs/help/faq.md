@@ -620,7 +620,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Brave | No | `BRAVE_API_KEY` |
     | DuckDuckGo | Yes (unofficial HTML-based) | - |
     | Exa | No | `EXA_API_KEY` |
-    | Firecrawl | No | `FIRECRAWL_API_KEY` |
+    | FireCrawl | No | `FIRECRAWL_API_KEY` |
     | Gemini | No | `GEMINI_API_KEY` |
     | Grok | No (xAI OAuth or key) | `XAI_API_KEY` |
     | Kimi | No | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
@@ -663,11 +663,11 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    Provider-specific web-search config lives under `plugins.entries.<plugin>.config.webSearch.*`. Legacy `tools.web.search.*` provider paths still load for compatibility but should not be used in new configs. Firecrawl web-fetch fallback config lives under `plugins.entries.firecrawl.config.webFetch.*`.
+    Provider-specific web-search config lives under `plugins.entries.<plugin>.config.webSearch.*`. Legacy `tools.web.search.*` provider paths still load for compatibility but should not be used in new configs. FireCrawl web-fetch fallback config lives under `plugins.entries.firecrawl.config.webFetch.*`.
 
     - Allowlists: add `web_search`/`web_fetch`/`x_search`, or `group:web` for all three.
     - `web_fetch` is enabled by default.
-    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials; the official Firecrawl plugin provides that fallback.
+    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials; the official FireCrawl plugin provides that fallback.
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 
     Docs: [Web tools](/tools/web).

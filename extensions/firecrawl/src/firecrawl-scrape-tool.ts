@@ -12,7 +12,7 @@ import { runFirecrawlScrape } from "./firecrawl-client.js";
 
 const FirecrawlScrapeToolSchema = Type.Object(
   {
-    url: Type.String({ description: "HTTP or HTTPS URL to scrape via Firecrawl." }),
+    url: Type.String({ description: "HTTP or HTTPS URL to scrape via FireCrawl." }),
     extractMode: optionalStringEnum(["markdown", "text"] as const, {
       description: 'Extraction mode ("markdown" or "text"). Default: markdown.',
     }),
@@ -24,26 +24,26 @@ const FirecrawlScrapeToolSchema = Type.Object(
     ),
     onlyMainContent: Type.Optional(
       Type.Boolean({
-        description: "Keep only main content when Firecrawl supports it.",
+        description: "Keep only main content when FireCrawl supports it.",
       }),
     ),
     maxAgeMs: Type.Optional(
       Type.Integer({
-        description: "Maximum Firecrawl cache age in milliseconds.",
+        description: "Maximum FireCrawl cache age in milliseconds.",
         minimum: 0,
       }),
     ),
     proxy: optionalStringEnum(["auto", "basic", "stealth"] as const, {
-      description: 'Firecrawl proxy mode ("auto", "basic", or "stealth").',
+      description: 'FireCrawl proxy mode ("auto", "basic", or "stealth").',
     }),
     storeInCache: Type.Optional(
       Type.Boolean({
-        description: "Whether Firecrawl should store the scrape in its cache.",
+        description: "Whether FireCrawl should store the scrape in its cache.",
       }),
     ),
     timeoutSeconds: Type.Optional(
       Type.Integer({
-        description: "Timeout in seconds for the Firecrawl scrape request.",
+        description: "Timeout in seconds for the FireCrawl scrape request.",
         minimum: 1,
       }),
     ),
@@ -54,9 +54,9 @@ const FirecrawlScrapeToolSchema = Type.Object(
 export function createFirecrawlScrapeTool(api: OpenClawPluginApi) {
   return {
     name: "firecrawl_scrape",
-    label: "Firecrawl Scrape",
+    label: "FireCrawl Scrape",
     description:
-      "Scrape a page using Firecrawl v2/scrape. Useful for JS-heavy or bot-protected pages where plain web_fetch is weak.",
+      "Scrape a page using FireCrawl v2/scrape. Useful for JS-heavy or bot-protected pages where plain web_fetch is weak.",
     parameters: FirecrawlScrapeToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const url = readStringParam(rawParams, "url", { required: true });

@@ -328,9 +328,9 @@ describe("runConfigureWizard", () => {
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
         id: "firecrawl",
-        label: "Firecrawl Search",
+        label: "FireCrawl Search",
         hint: "Structured results with optional result scraping",
-        credentialLabel: "Firecrawl API key",
+        credentialLabel: "FireCrawl API key",
         envVars: ["FIRECRAWL_API_KEY"],
         placeholder: "fc-...",
         signupUrl: "https://www.firecrawl.dev/",

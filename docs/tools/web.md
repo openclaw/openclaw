@@ -67,7 +67,7 @@ xAI Responses.
   <Card title="Exa" icon="brain" href="/tools/exa-search">
     Neural + keyword search with content extraction (highlights, text, summaries).
   </Card>
-  <Card title="Firecrawl" icon="flame" href="/tools/firecrawl">
+  <Card title="FireCrawl" icon="flame" href="/tools/firecrawl">
     Structured results. Best paired with `firecrawl_search` and `firecrawl_scrape` for deep extraction.
   </Card>
   <Card title="Gemini" icon="sparkles" href="/tools/gemini-search">
@@ -110,7 +110,7 @@ xAI Responses.
 | [Codex Hosted Search](/plugins/codex-harness)    | AI-synthesized + source URLs                                   | Domains, context size, user location             | None; uses Codex/OpenAI sign-in                                                         |
 | [DuckDuckGo](/tools/duckduckgo-search)           | Structured snippets                                            | --                                               | None (key-free)                                                                         |
 | [Exa](/tools/exa-search)                         | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
-| [Firecrawl](/tools/firecrawl)                    | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
+| [FireCrawl](/tools/firecrawl)                    | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
 | [Gemini](/tools/gemini-search)                   | AI-synthesized + citations                                     | --                                               | `GEMINI_API_KEY`                                                                        |
 | [Grok](/tools/grok-search)                       | AI-synthesized + citations                                     | --                                               | xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey`              |
 | [Kimi](/tools/kimi-search)                       | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
@@ -213,7 +213,7 @@ API-backed providers first:
 4. **Grok** -- xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
 5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
 6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
-7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
+7. **FireCrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
 8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
@@ -239,7 +239,7 @@ instead.
 <Note>
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
-  installed API-backed web search providers, including Brave, Exa, Firecrawl,
+  installed API-backed web search providers, including Brave, Exa, FireCrawl,
   Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
@@ -394,7 +394,7 @@ plugin or run `openclaw doctor --fix` to clean up the stale config.
 - non-sandboxed `web_fetch` can use installed plugin providers that declare
   `contracts.webFetchProviders`; sandboxed fetches allow bundled providers and
   verified official plugin installs, but exclude third-party external plugins
-- the official Firecrawl plugin is the only bundled `webFetchProviders`
+- the official FireCrawl plugin is the only bundled `webFetchProviders`
   contributor today, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
@@ -481,7 +481,7 @@ provider, OpenClaw does not show the `x_search` prompt.
   `max_tokens_per_page` support.
   SearXNG accepts `http://` only for trusted private-network or loopback hosts;
   public SearXNG endpoints must use `https://`.
-  Firecrawl and Tavily only support `query` and `count` through `web_search`
+  FireCrawl and Tavily only support `query` and `count` through `web_search`
   -- use their dedicated tools for advanced options.
 </Warning>
 

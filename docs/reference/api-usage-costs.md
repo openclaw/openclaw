@@ -84,7 +84,7 @@ See [Memory](/concepts/memory).
 | Brave Search           | `BRAVE_API_KEY`                                                                                                                                                        |
 | DuckDuckGo             | key-free; unofficial, HTML-based, no billing                                                                                                                           |
 | Exa                    | `EXA_API_KEY`                                                                                                                                                          |
-| Firecrawl              | `FIRECRAWL_API_KEY`                                                                                                                                                    |
+| FireCrawl              | `FIRECRAWL_API_KEY`                                                                                                                                                    |
 | Gemini (Google Search) | `GEMINI_API_KEY`                                                                                                                                                       |
 | Grok (xAI)             | xAI OAuth profile or `XAI_API_KEY`                                                                                                                                     |
 | Kimi (Moonshot)        | `KIMI_API_KEY` or `MOONSHOT_API_KEY`                                                                                                                                   |
@@ -101,9 +101,9 @@ Legacy `tools.web.search.*` config paths still load through a compatibility shim
 
 See [Web tools](/tools/web).
 
-### Web fetch tool (Firecrawl)
+### Web fetch tool (FireCrawl)
 
-`web_fetch` can call Firecrawl with keyless starter access; add `FIRECRAWL_API_KEY` (or `plugins.entries.firecrawl.config.webFetch.apiKey`) for higher limits. If Firecrawl isn't configured, the tool falls back to direct fetch plus the bundled `web-readability` plugin (no paid API). Disable `plugins.entries.web-readability.enabled` to skip local Readability extraction.
+`web_fetch` can call FireCrawl with keyless starter access; add `FIRECRAWL_API_KEY` (or `plugins.entries.firecrawl.config.webFetch.apiKey`) for higher limits. If FireCrawl isn't configured, the tool falls back to direct fetch plus the bundled `web-readability` plugin (no paid API). Disable `plugins.entries.web-readability.enabled` to skip local Readability extraction.
 
 See [Web tools](/tools/web).
 

@@ -87,7 +87,7 @@ async function fetchHtml(
 
 async function run() {
   if (!apiKey) {
-    console.log("FIRECRAWL_API_KEY not set. Firecrawl comparisons will be skipped.");
+    console.log("FIRECRAWL_API_KEY not set. FireCrawl comparisons will be skipped.");
   }
 
   for (const url of targets) {

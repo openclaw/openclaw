@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { migrateLegacyWebFetchConfig } from "./legacy-web-fetch-migrate.js";
 
 describe("legacy web fetch config", () => {
-  it("migrates legacy Firecrawl fetch config into plugin-owned config", () => {
+  it("migrates legacy FireCrawl fetch config into plugin-owned config", () => {
     const res = migrateLegacyWebFetchConfig({
       tools: {
         web: {

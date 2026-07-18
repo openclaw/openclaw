@@ -18,7 +18,7 @@ export function createFirecrawlFreeWebSearchProvider(): WebSearchProviderPlugin 
     ...buildFirecrawlFreeWebSearchProviderBase(),
     createTool: (ctx) => ({
       description:
-        "Search the web using Firecrawl's free hosted starter tier (no API key required). Returns structured results with snippets. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
+        "Search the web using FireCrawl's free hosted starter tier (no API key required). Returns structured results with snippets. Use firecrawl_search for FireCrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
       execute: async (args) => {
         const { runFirecrawlSearch } = await loadFirecrawlClientModule();

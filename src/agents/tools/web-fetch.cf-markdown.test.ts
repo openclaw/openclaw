@@ -187,7 +187,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(details?.text).toContain('"patch": true');
   });
 
-  it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
+  it("bypasses FireCrawl when runtime metadata marks FireCrawl inactive", async () => {
     // Runtime metadata is authoritative for the current credential snapshot; a
     // stale configured provider should not force provider fallback.
     const fetchSpy = vi

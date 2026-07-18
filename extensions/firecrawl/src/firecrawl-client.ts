@@ -47,9 +47,9 @@ const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
 const FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const ALLOWED_FIRECRAWL_HOSTS = new Set(["api.firecrawl.dev"]);
 const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
-  "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
+  "FireCrawl custom baseUrl must target a private or internal self-hosted endpoint.";
 const FIRECRAWL_HTTP_PRIVATE_ERROR =
-  "Firecrawl HTTP baseUrl must target a private or internal self-hosted endpoint. Use https:// for public hosts.";
+  "FireCrawl HTTP baseUrl must target a private or internal self-hosted endpoint. Use https:// for public hosts.";
 
 type FirecrawlEndpointMode = "selfHosted" | "strict";
 type FirecrawlResolvedEndpoint = {
@@ -108,16 +108,16 @@ export function assertFirecrawlScrapeTargetAllowed(url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new SsrFBlockedError("Invalid URL supplied to Firecrawl scrape");
+    throw new SsrFBlockedError("Invalid URL supplied to FireCrawl scrape");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new SsrFBlockedError(
-      `Blocked non-HTTP(S) protocol in Firecrawl scrape URL: ${parsed.protocol}`,
+      `Blocked non-HTTP(S) protocol in FireCrawl scrape URL: ${parsed.protocol}`,
     );
   }
   if (isBlockedHostnameOrIp(parsed.hostname)) {
     throw new SsrFBlockedError(
-      `Blocked hostname or private/internal IP in Firecrawl scrape URL: ${parsed.hostname}`,
+      `Blocked hostname or private/internal IP in FireCrawl scrape URL: ${parsed.hostname}`,
     );
   }
 }
@@ -152,11 +152,11 @@ async function validateFirecrawlBaseUrl(
   try {
     url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
   } catch {
-    throw new Error("Firecrawl baseUrl must be a valid http:// or https:// URL.");
+    throw new Error("FireCrawl baseUrl must be a valid http:// or https:// URL.");
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Firecrawl baseUrl must use http:// or https://.");
+    throw new Error("FireCrawl baseUrl must use http:// or https://.");
   }
   if (isOfficialFirecrawlEndpoint(url)) {
     return "strict";
@@ -372,7 +372,7 @@ export async function runFirecrawlSearch(
   const apiKey = keyless ? undefined : resolveFirecrawlApiKey(params.cfg);
   if (!apiKey && !keyless) {
     throw new Error(
-      "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webSearch.apiKey.",
+      "web_search (firecrawl) needs a FireCrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webSearch.apiKey.",
     );
   }
   const count =
@@ -390,7 +390,7 @@ export async function runFirecrawlSearch(
     ? params.excludeDomains.filter(Boolean)
     : [];
   if (includeDomains.length > 0 && excludeDomains.length > 0) {
-    throw new Error("Firecrawl search accepts includeDomains or excludeDomains, not both.");
+    throw new Error("FireCrawl search accepts includeDomains or excludeDomains, not both.");
   }
   const tbs = normalizeOptionalString(params.tbs);
   const location = normalizeOptionalString(params.location);
@@ -458,10 +458,10 @@ export async function runFirecrawlSearch(
       timeoutSeconds,
       apiKey,
       body,
-      errorLabel: "Firecrawl Search",
+      errorLabel: "FireCrawl Search",
     },
     async (response) => {
-      const payloadValue = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
+      const payloadValue = await readFirecrawlJsonResponse(response, "FireCrawl Search API error");
       if (payloadValue.success === false) {
         const error =
           typeof payloadValue.error === "string"
@@ -469,7 +469,7 @@ export async function runFirecrawlSearch(
             : typeof payloadValue.message === "string"
               ? payloadValue.message
               : "unknown error";
-        throw new Error(`Firecrawl Search API error: ${error}`);
+        throw new Error(`FireCrawl Search API error: ${error}`);
       }
       return payloadValue;
     },
@@ -514,7 +514,7 @@ export function parseFirecrawlScrapePayload(params: {
     (typeof data.content === "string" && data.content) ||
     "";
   if (!markdown) {
-    throw new Error("Firecrawl scrape returned no content.");
+    throw new Error("FireCrawl scrape returned no content.");
   }
   const rawText = params.extractMode === "text" ? markdownToText(markdown) : markdown;
   const truncated = truncateText(rawText, params.maxChars);
@@ -570,7 +570,7 @@ export async function runFirecrawlScrape(
   // Only the selected web_fetch provider opts into that access mode.
   if (!apiKey && params.access !== "keyless") {
     throw new Error(
-      "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
+      "firecrawl_scrape needs a FireCrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );
   }
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
@@ -608,7 +608,7 @@ export async function runFirecrawlScrape(
       mode: endpoint.mode,
       timeoutSeconds,
       apiKey,
-      errorLabel: "Firecrawl",
+      errorLabel: "FireCrawl",
       body: {
         url: params.url,
         formats: ["markdown"],
@@ -620,7 +620,7 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
-      const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed", {
+      const payloadLocal = await readFirecrawlJsonResponse(response, "FireCrawl fetch failed", {
         // Scrape can legitimately return page bodies before maxChars truncates parsed output.
         maxBytes: FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES,
       });
@@ -632,7 +632,7 @@ export async function runFirecrawlScrape(
               ? payloadLocal.message
               : response.statusText;
         throw new Error(
-          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail, "web_fetch")}`.trim(),
+          `FireCrawl fetch failed (${response.status}): ${wrapWebContent(detail, "web_fetch")}`.trim(),
         );
       }
       return payloadLocal;

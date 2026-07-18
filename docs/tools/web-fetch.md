@@ -2,7 +2,7 @@
 summary: "web_fetch tool -- HTTP fetch with readable content extraction"
 read_when:
   - You want to fetch a URL and extract readable content
-  - You need to configure web_fetch or its Firecrawl fallback
+  - You need to configure web_fetch or its FireCrawl fallback
   - You want to understand web_fetch limits and caching
 title: "Web fetch"
 sidebarTitle: "Web Fetch"
@@ -62,7 +62,7 @@ before external-content wrapping.
   </Step>
   <Step title="Fallback (optional)">
     If Readability fails and a fetch provider is available, retries through
-    that provider (for example Firecrawl's bot-circumvention mode).
+    that provider (for example FireCrawl's bot-circumvention mode).
   </Step>
   <Step title="Cache">
     Results are cached for 15 minutes (configurable) to reduce repeated
@@ -111,10 +111,10 @@ progress line is channel UI state only and never contains fetched page content.
 }
 ```
 
-## Firecrawl fallback
+## FireCrawl fallback
 
 If Readability extraction fails, `web_fetch` can fall back to
-[Firecrawl](/tools/firecrawl) for bot-circumvention and better extraction:
+[FireCrawl](/tools/firecrawl) for bot-circumvention and better extraction:
 
 ```json5
 {
@@ -149,12 +149,12 @@ Legacy `tools.web.fetch.firecrawl.*` config auto-migrates to
 `plugins.entries.firecrawl.config.webFetch` via `openclaw doctor --fix`.
 
 <Note>
-  If you configure a Firecrawl API-key SecretRef and it is unresolved with no
+  If you configure a FireCrawl API-key SecretRef and it is unresolved with no
   `FIRECRAWL_API_KEY` env fallback, gateway startup fails fast.
 </Note>
 
 <Note>
-  Firecrawl `baseUrl` overrides are locked down: hosted traffic uses
+  FireCrawl `baseUrl` overrides are locked down: hosted traffic uses
   `https://api.firecrawl.dev`; self-hosted overrides must target private or
   internal endpoints, and `http://` is accepted only for those private targets.
 </Note>
@@ -165,11 +165,11 @@ Current runtime behavior:
 - If `provider` is omitted, OpenClaw auto-detects the first ready web-fetch
   provider from configured credentials. Non-sandboxed `web_fetch` can use
   installed plugins that declare `contracts.webFetchProviders` and register a
-  matching provider at runtime. The official Firecrawl plugin provides this
+  matching provider at runtime. The official FireCrawl plugin provides this
   fallback today.
 - Sandboxed `web_fetch` calls allow bundled providers plus installed providers
   whose official npm or ClawHub provenance is verified. Today that permits the
-  official Firecrawl plugin; third-party external fetch plugins stay excluded.
+  official FireCrawl plugin; third-party external fetch plugins stay excluded.
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
 
@@ -222,4 +222,4 @@ If you use tool profiles or allowlists, add `web_fetch` or `group:web`:
 
 - [Web Search](/tools/web) -- search the web with multiple providers
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
-- [Firecrawl](/tools/firecrawl) -- Firecrawl search and scrape tools
+- [FireCrawl](/tools/firecrawl) -- FireCrawl search and scrape tools
