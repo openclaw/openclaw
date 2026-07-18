@@ -2115,11 +2115,20 @@ class ChatController internal constructor(
     cancel: Boolean,
   ) {
     val gatewayId = currentCacheScope()?.gatewayId
+    var claimed = false
     updateQuestions { prompts ->
       prompts.map { prompt ->
-        if (prompt.record.id == id) prompt.copy(submitting = true, errorText = null) else prompt
+        if (prompt.record.id == id && prompt.status() == ChatQuestionStatus.Pending) {
+          claimed = true
+          prompt.copy(submitting = true, errorText = null)
+        } else {
+          prompt
+        }
       }
     }
+    // updateQuestions owns the question-state lock, so competing answer/skip callbacks
+    // observe the first claim as Submitting and cannot launch a second mutation.
+    if (!claimed) return
     scope.launch {
       try {
         val params =

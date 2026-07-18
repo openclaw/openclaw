@@ -792,6 +792,51 @@ class ChatQuestionTest {
       )
     }
 
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun answerClaimBlocksCompetingSkip() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = Long.MAX_VALUE)
+      val requestStarted = CompletableDeferred<Unit>()
+      val releaseRequest = CompletableDeferred<Unit>()
+      val resolveParams = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, params ->
+            when (method) {
+              "question.list" -> json.encodeToString(QuestionListResult(listOf(pending)))
+              "question.resolve" -> {
+                resolveParams.add(checkNotNull(params))
+                requestStarted.complete(Unit)
+                releaseRequest.await()
+                "{}"
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      controller.resolveQuestion(pending.id, mapOf("meal" to listOf("Pizza")))
+      runCurrent()
+      requestStarted.await()
+      controller.skipQuestion(pending.id)
+      releaseRequest.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(1, resolveParams.size)
+      assertFalse("cancel" in resolveParams.single())
+      assertEquals(
+        ChatQuestionStatus.Answered,
+        controller.questions.value
+          .single()
+          .status(),
+      )
+    }
+
   private fun record(
     id: String = "ask_123",
     status: String = "pending",

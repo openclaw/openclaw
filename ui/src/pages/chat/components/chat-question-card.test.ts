@@ -261,6 +261,24 @@ describe("shared question panel", () => {
     expect(container.querySelector(".chat-question-panel__skip")).toBeNull();
   });
 
+  it("manages collapse state when no controlled callback is supplied", async () => {
+    render(
+      html`<openclaw-chat-question-panel
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), { nowMs: 2_000 })}
+      ></openclaw-chat-question-panel>`,
+      container,
+    );
+    const panel = await panelIn(container);
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
+    await panel.updateComplete;
+    expect(container.querySelector(".chat-question-panel--collapsed")).not.toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
+    await panel.updateComplete;
+    expect(container.querySelector(".chat-question-panel--collapsed")).toBeNull();
+  });
+
   it("retains answers with submit-only wiring", async () => {
     const onSubmit = vi.fn();
     render(

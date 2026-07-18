@@ -598,6 +598,9 @@ extension OpenClawChatViewModel {
         _ models: [OpenClawQuestionCardModel]) async
         -> [(OpenClawQuestionCardModel, QuestionLookupResult)]
     {
+        // The gateway enumerates pending questions only; terminal records remain addressable
+        // briefly by known ID. Cards observed by this view model persist without timed eviction,
+        // but session transcripts do not contain enough question data to recreate them on launch.
         var lookups: [(OpenClawQuestionCardModel, QuestionLookupResult)] = []
         for model in models {
             do {

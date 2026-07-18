@@ -193,6 +193,16 @@ class ChatQuestionPanel extends LitElement {
   private focusAfterUpdate = false;
   private syncedAnswersSignature: string | null = null;
 
+  private setCollapsed(collapsed: boolean): void {
+    if (this.props?.onCollapsedChange) {
+      this.props.onCollapsedChange(collapsed);
+      return;
+    }
+    this.collapsed = collapsed;
+    this.focusAfterUpdate = !collapsed;
+    this.requestUpdate();
+  }
+
   override willUpdate() {
     const model = this.props?.model;
     const nextRequestKey = model?.requestKey ?? null;
@@ -204,11 +214,14 @@ class ChatQuestionPanel extends LitElement {
       this.currentQuestionIndex = 0;
       this.pendingAction = null;
       this.syncedAnswersSignature = null;
+      this.collapsed = nextCollapsed;
       this.focusAfterUpdate = !nextCollapsed;
-    } else if (this.collapsed && !nextCollapsed) {
-      this.focusAfterUpdate = true;
+    } else if (this.props?.onCollapsedChange) {
+      if (this.collapsed && !nextCollapsed) {
+        this.focusAfterUpdate = true;
+      }
+      this.collapsed = nextCollapsed;
     }
-    this.collapsed = nextCollapsed;
     if (!model?.answersById) {
       return;
     }
@@ -463,7 +476,7 @@ class ChatQuestionPanel extends LitElement {
             class="chat-question-panel__collapsed-button"
             type="button"
             @click=${() => {
-              props.onCollapsedChange?.(false);
+              this.setCollapsed(false);
             }}
             aria-label=${t("chat.questions.expand")}
           >
@@ -525,7 +538,7 @@ class ChatQuestionPanel extends LitElement {
           <button
             class="chat-question-panel__collapse"
             type="button"
-            @click=${() => props.onCollapsedChange?.(true)}
+            @click=${() => this.setCollapsed(true)}
             aria-label=${t("chat.questions.collapse")}
           >
             ${icons.chevronDown}
