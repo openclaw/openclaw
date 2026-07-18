@@ -520,6 +520,8 @@ export function createOpenClawTools(
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
+    // Discord sessions get the Discord plugin's own show_widget (Activities
+    // delivery); registering the core tool there would collide on the name.
     ...(options?.agentChannel === "discord"
       ? []
       : [
