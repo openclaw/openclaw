@@ -13,6 +13,7 @@ import {
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 import {
+  BROWSER_FIELDS_FILE_MAX_BYTES,
   callBrowserAct,
   logBrowserActionResult,
   readFields,
@@ -44,7 +45,10 @@ export function registerBrowserFormWaitEvalCommands(
     .command("fill")
     .description("Fill a form with JSON field descriptors")
     .option("--fields <json>", "JSON array of field objects")
-    .option("--fields-file <path>", "Read JSON array from a file")
+    .option(
+      "--fields-file <path>",
+      `Read JSON array from a file, max ${BROWSER_FIELDS_FILE_MAX_BYTES} bytes`,
+    )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);

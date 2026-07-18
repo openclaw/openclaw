@@ -172,6 +172,7 @@ openclaw browser scrollintoview <ref>
 openclaw browser drag <startRef> <endRef>
 openclaw browser select <ref> OptionA OptionB
 openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
+openclaw browser fill --fields-file ./fields.json
 openclaw browser wait --text "Done"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
 openclaw browser evaluate --fn 'const title = document.title; return title;'
@@ -181,6 +182,8 @@ openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.re
 `evaluate --fn` accepts a function source, an expression, or a statement body. Statement bodies are wrapped as async functions, so use `return` for the value you want back. Use `--timeout-ms` when the page-side function may need longer than the default evaluate timeout. `browser.evaluateEnabled=false` (default: `true`) disables both `evaluate` and `wait --fn`.
 
 Action responses return the current raw `targetId` after action-triggered page replacement when OpenClaw can prove the replacement tab. Scripts should still store and pass `suggestedTargetId`/labels for long-lived workflows.
+
+`fill --fields-file` accepts a UTF-8 JSON array file up to 1 MiB (1,048,576 bytes). Larger files are rejected before JSON parsing so automation cannot accidentally buffer arbitrarily large form descriptors.
 
 File + dialog helpers:
 

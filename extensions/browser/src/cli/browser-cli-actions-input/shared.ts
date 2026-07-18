@@ -20,7 +20,7 @@ type BrowserActionContext = {
 };
 
 const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
-const BROWSER_FIELDS_FILE_MAX_BYTES = 1024 * 1024;
+export const BROWSER_FIELDS_FILE_MAX_BYTES = 1024 * 1024;
 
 /** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
 export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {

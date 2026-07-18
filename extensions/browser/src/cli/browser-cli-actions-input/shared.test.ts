@@ -58,6 +58,24 @@ describe("readFields", () => {
     }
   });
 
+  it("accepts a fields file at the documented byte limit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-fields-"));
+    try {
+      const fieldsFile = path.join(dir, "fields.json");
+      const prefix = '[{"ref":"exact","value":"';
+      const suffix = '"}]';
+      const valueLength =
+        BROWSER_FIELDS_FILE_MAX_BYTES - Buffer.byteLength(prefix + suffix, "utf8");
+      await fs.writeFile(fieldsFile, `${prefix}${"a".repeat(valueLength)}${suffix}`, "utf8");
+
+      await expect(readFields({ fieldsFile })).resolves.toEqual([
+        { ref: "exact", type: "text", value: "a".repeat(valueLength) },
+      ]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects oversized fields files before parsing", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-fields-"));
     const parseSpy = vi.spyOn(JSON, "parse");
