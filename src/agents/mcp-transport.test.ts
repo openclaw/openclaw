@@ -169,6 +169,50 @@ describe("resolveMcpTransport", () => {
     expect(logDebugMock).toHaveBeenLastCalledWith("bundle-mcp:unicode: final tail");
   });
 
+  it("flushes the final MCP stderr line when the stream ends", async () => {
+    const resolved = resolveMcpTransport("crash", {
+      command: process.execPath,
+    });
+    const stderr = (
+      resolved?.transport as {
+        stderr?: {
+          end: (chunk?: Buffer | string) => void;
+          once: (event: string, listener: () => void) => void;
+        };
+      }
+    ).stderr;
+    expect(stderr).toBeDefined();
+
+    const ended = new Promise<void>((resolve) => stderr?.once("end", resolve));
+    stderr?.end("fatal tail");
+    await ended;
+
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:crash: fatal tail");
+
+    resolved?.detachStderr?.();
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds newline-free MCP stderr while retaining its UTF-8-safe tail", () => {
+    const resolved = resolveMcpTransport("bounded", {
+      command: process.execPath,
+    });
+    const stderr = (
+      resolved?.transport as { stderr?: { write: (chunk: Buffer | string) => boolean } }
+    ).stderr;
+    expect(stderr).toBeDefined();
+
+    const oversizedLine = "x".repeat(10 * 1024);
+    stderr?.write(oversizedLine.slice(0, 6 * 1024));
+    stderr?.write(`${oversizedLine.slice(6 * 1024)}\n`);
+
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+    expect(logDebugMock).toHaveBeenCalledWith(
+      `bundle-mcp:bounded: [stderr line truncated] ${"x".repeat(8 * 1024)}`,
+    );
+  });
+
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {
     // Cross-origin redirects keep safe protocol headers but drop operator
     // secrets such as API keys before following the Location target.
