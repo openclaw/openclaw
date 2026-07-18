@@ -1296,7 +1296,7 @@ async function processResponsesStream(
     stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
     pendingMessageText = null;
   };
-  const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
+  const appendTerminalResponseTextItem = (item: Record<string, unknown>) => {
     const text = readResponsesOutputMessageText(item);
     if (!text) {
       return;
@@ -1362,7 +1362,10 @@ async function processResponsesStream(
       partial: output,
     });
   };
-  const backfillCompletedResponseOutput = (response: Record<string, unknown> | undefined) => {
+  const backfillTerminalResponseOutput = (
+    response: Record<string, unknown> | undefined,
+    options: { includeToolCalls: boolean },
+  ) => {
     if (output.content.length > 0 || !Array.isArray(response?.output)) {
       return;
     }
@@ -1371,13 +1374,13 @@ async function processResponsesStream(
         continue;
       }
       if (rawItem.type === "message") {
-        appendCompletedResponseTextItem(rawItem);
+        appendTerminalResponseTextItem(rawItem);
         continue;
       }
       // Any non-message item (reasoning, tool call) is a real boundary; a later
       // message must not collapse across it, mirroring the streaming path.
       lastTextBlock = null;
-      if (rawItem.type === "function_call") {
+      if (options.includeToolCalls && rawItem.type === "function_call") {
         appendCompletedResponseToolCallItem(rawItem);
       }
     }
@@ -1707,11 +1710,7 @@ async function processResponsesStream(
         output.responseId = response.id;
       }
       if (type === "response.completed") {
-        // Reconstructing output from the terminal payload is a completed-response contract: it
-        // recovers the final answer when item events never arrived. An incomplete turn has no
-        // final answer, so replaying its partial output would persist text the streaming path
-        // never emitted. Usage/stop-reason recording below still applies to both.
-        backfillCompletedResponseOutput(response);
+        backfillTerminalResponseOutput(response, { includeToolCalls: true });
       }
       recordResponsesTerminalOutcome({
         response,
@@ -1720,6 +1719,11 @@ async function processResponsesStream(
         serviceTier: options?.serviceTier,
         applyServiceTierPricing: options?.applyServiceTierPricing,
       });
+      if (type === "response.incomplete" && output.stopReason === "length") {
+        // Some compatible endpoints carry generated text only on the terminal event. Preserve
+        // that partial answer, but never materialize an incomplete function call for execution.
+        backfillTerminalResponseOutput(response, { includeToolCalls: false });
+      }
     } else if (type === "error") {
       throw new Error(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,

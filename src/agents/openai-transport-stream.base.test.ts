@@ -446,7 +446,7 @@ describe("openai transport stream", () => {
     expectRecordFields(output.usage, { input: 12, output: 0 });
   });
 
-  it("does not backfill message output from an incomplete Responses turn", async () => {
+  it("backfills partial message output but not tool calls from an incomplete Responses turn", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
 
@@ -465,6 +465,13 @@ describe("openai transport stream", () => {
                 role: "assistant",
                 content: [{ type: "text", text: "TRUNCATED_HALF_SENTENCE" }],
               },
+              {
+                type: "function_call",
+                id: "fc_truncated",
+                call_id: "call_truncated",
+                name: "write",
+                arguments: '{"path":"unfinished',
+              },
             ],
             usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
           },
@@ -475,10 +482,9 @@ describe("openai transport stream", () => {
       model,
     );
 
-    // Output reconstruction is a completed-response contract: it rebuilds the final answer when
-    // item events were absent. An incomplete turn has no final answer, so replaying its partial
-    // output would persist a truncated message the streaming path never emitted.
-    expect(output.content).toEqual([]);
+    expect(output.content).toMatchObject([
+      { type: "text", text: "TRUNCATED_HALF_SENTENCE" },
+    ]);
     expect(output.stopReason).toBe("length");
     expectRecordFields(output.usage, { input: 8, output: 4 });
   });
