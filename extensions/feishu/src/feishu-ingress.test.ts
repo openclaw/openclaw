@@ -8,6 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
 import { claimUnprocessedFeishuMessage } from "./dedup.js";
@@ -155,7 +156,7 @@ async function withWebhook(
     accountId: account.accountId,
     eventDispatcher: eventDispatcher as Lark.EventDispatcher,
     abortSignal: abortController.signal,
-    runtime: { log: vi.fn(), error: vi.fn() },
+    runtime: createNonExitingRuntimeEnv(),
   });
   const url = `http://127.0.0.1:${port}${webhookPath}`;
   await waitUntilServerReady(url);
@@ -402,7 +403,7 @@ describe("Feishu durable ingress", () => {
     const transport = createLifecycle();
     const onReplayCommitError = vi.fn();
     const replayClaim = {
-      keys: ["failing-adoption"],
+      keys: ["failing-adoption"] as const,
       commit: vi.fn(async () => {
         throw new Error("dedupe persistence failed");
       }),
@@ -428,7 +429,7 @@ describe("Feishu durable ingress", () => {
       throw new Error("queue completion failed");
     });
     const replayClaim = {
-      keys: ["transport-adoption-failure"],
+      keys: ["transport-adoption-failure"] as const,
       commit: vi.fn(async () => true),
       release: vi.fn(),
     };
@@ -451,7 +452,7 @@ describe("Feishu durable ingress", () => {
     });
     transport.lifecycle.onAbandoned = vi.fn(async () => await abandonmentGate);
     const replayClaim = {
-      keys: ["concurrent-terminal-state"],
+      keys: ["concurrent-terminal-state"] as const,
       commit: vi.fn(async () => true),
       release: vi.fn(),
     };

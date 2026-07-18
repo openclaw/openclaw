@@ -868,7 +868,7 @@ describe("broadcast dispatch", () => {
 
     expect(broadcastClaim.commit).toHaveBeenCalledTimes(1);
     expect(transport.calls.adopted.mock.invocationCallOrder[0]).toBeLessThan(
-      broadcastClaim.commit.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      vi.mocked(broadcastClaim.commit).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(broadcastClaim.release).not.toHaveBeenCalled();
   });

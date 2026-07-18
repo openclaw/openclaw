@@ -1,3 +1,4 @@
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Feishu ingress tests cover debounce ownership and constituent claim settlement.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -12,7 +13,11 @@ type DebounceEntry = Parameters<
   Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
 >[0][number];
 
-function createTextEvent(eventId: string, messageId: string, text: string): FeishuMessageEvent {
+function createTextEvent(
+  eventId: string,
+  messageId: string,
+  text: string,
+): FeishuMessageEvent & { event_id: string } {
   return {
     event_id: eventId,
     sender: {
@@ -107,7 +112,7 @@ function createHarness(params: {
     cfg: {} as ClawdbotConfig,
     channelRuntime,
     accountId: "default",
-    runtime: { error: runtimeError, log: vi.fn() } as RuntimeEnv,
+    runtime: { ...createNonExitingRuntimeEnv(), error: runtimeError } satisfies RuntimeEnv,
     chatHistories: new Map(),
     handleMessage,
     resolveDebounceText: () => "hello",
