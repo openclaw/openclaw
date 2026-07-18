@@ -17,7 +17,7 @@ const OVERSIZED_IGNORE_FILE = Symbol("oversizedIgnoreFile");
 const COMPLEX_IGNORE_FILE = Symbol("complexIgnoreFile");
 
 export type IgnoreMatcher = ReturnType<typeof ignore>;
-export type IgnoreMatcherOptions = {
+type IgnoreMatcherOptions = {
   /** Match node-ignore's ignorecase option for a supplied matcher. */
   ignoreCase?: boolean;
 };
