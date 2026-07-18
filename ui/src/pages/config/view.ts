@@ -1,7 +1,7 @@
 // Control UI view renders config screen content.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
@@ -836,28 +836,41 @@ type ThemeOption = {
   id: ThemeName;
   labelKey: string;
   descriptionKey: string;
-  icon: TemplateResult;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   {
     id: "claw",
     labelKey: "configView.themes.claw.label",
     descriptionKey: "configView.themes.claw.description",
-    icon: icons.zap,
   },
   {
     id: "knot",
     labelKey: "configView.themes.knot.label",
     descriptionKey: "configView.themes.knot.description",
-    icon: icons.link,
   },
   {
     id: "dash",
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
-    icon: icons.barChart,
   },
 ];
+
+/* Builtin cards preview their real palette (chip colors live in config.css,
+   mirrored from the base.css theme blocks). The custom card only has real
+   colors while active — its chips read the live CSS variables — so it falls
+   back to the spark icon otherwise. */
+function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
+  if (id === "custom" && activeTheme !== "custom") {
+    return html`<span class="settings-theme-card__icon" aria-hidden="true">${icons.spark}</span>`;
+  }
+  return html`
+    <span class="settings-theme-card__palette" aria-hidden="true">
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--bg"></span>
+    </span>
+  `;
+}
 
 function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
   return props.hasCustomTheme && props.customThemeLabel
@@ -1264,13 +1277,11 @@ function renderAppearanceSection(props: ConfigProps) {
     id: ThemeName;
     label: string;
     description: string;
-    icon: TemplateResult;
   }> = [
     ...BUILTIN_THEME_OPTIONS.map((option) => ({
       id: option.id,
       label: t(option.labelKey),
       description: t(option.descriptionKey),
-      icon: option.icon,
     })),
     {
       id: "custom",
@@ -1278,7 +1289,6 @@ function renderAppearanceSection(props: ConfigProps) {
       description: props.hasCustomTheme
         ? t("configView.appearance.importedFrom", { name: importedName })
         : t("configView.appearance.importHint"),
-      icon: icons.spark,
     },
   ];
   return html`
@@ -1294,7 +1304,8 @@ function renderAppearanceSection(props: ConfigProps) {
               ${themeOptions.map(
                 (opt) => html`
                   <button
-                    class="settings-theme-card ${opt.id === props.theme
+                    class="settings-theme-card settings-theme-card--${opt.id} ${opt.id ===
+                    props.theme
                       ? "settings-theme-card--active"
                       : ""}"
                     title=${opt.description}
@@ -1311,7 +1322,7 @@ function renderAppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
+                    ${renderThemeCardVisual(opt.id, props.theme)}
                     <span class="settings-theme-card__label">${opt.label}</span>
                     ${opt.id === props.theme
                       ? html`<span class="settings-theme-card__check" aria-hidden="true"
