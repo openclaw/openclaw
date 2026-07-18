@@ -569,7 +569,7 @@ struct DeviceIdentityStoreTests {
             contents: invalidJSON)
         let databaseURL = tempDir.appendingPathComponent("destination/openclaw.sqlite")
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: databaseURL.deletingLastPathComponent(),
@@ -597,7 +597,7 @@ struct DeviceIdentityStoreTests {
         let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
@@ -624,7 +624,7 @@ struct DeviceIdentityStoreTests {
         let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
@@ -682,7 +682,7 @@ struct DeviceIdentityStoreTests {
         let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
@@ -723,7 +723,7 @@ struct DeviceIdentityStoreTests {
         let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
@@ -755,7 +755,7 @@ struct DeviceIdentityStoreTests {
         let destination = tempDir.appendingPathComponent("destination", isDirectory: true)
         let databaseURL = destination.appendingPathComponent("openclaw.sqlite", isDirectory: false)
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
@@ -791,7 +791,7 @@ struct DeviceIdentityStoreTests {
             at: symbolic.identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: symbolic.identityURL, withDestinationURL: real.identityURL)
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: root.appendingPathComponent("symbolic.sqlite"),
                 destinationStateDirURL: root,
@@ -805,7 +805,7 @@ struct DeviceIdentityStoreTests {
         try FileManager.default.createSymbolicLink(
             at: traversing.identityURL.deletingLastPathComponent(),
             withDestinationURL: real.identityURL.deletingLastPathComponent())
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: root.appendingPathComponent("traversing.sqlite"),
                 destinationStateDirURL: root,
@@ -819,7 +819,7 @@ struct DeviceIdentityStoreTests {
             at: hard.identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         try FileManager.default.linkItem(at: real.identityURL, to: hard.identityURL)
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: root.appendingPathComponent("hard.sqlite"),
                 destinationStateDirURL: root,
@@ -846,7 +846,7 @@ struct DeviceIdentityStoreTests {
             profile: .primary,
             contents: Self.nodePEMIdentityJSON())
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: databaseURL,
                 destinationStateDirURL: destination,
@@ -906,7 +906,7 @@ struct DeviceIdentityStoreTests {
         let destinationAuth = #"{"version":1,"deviceId":"another-device","tokens":{}}"#
         try destinationAuth.write(to: destinationAuthURL, atomically: true, encoding: .utf8)
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
                 destinationStateDirURL: destination,
@@ -943,7 +943,7 @@ struct DeviceIdentityStoreTests {
         let destinationAuth = "{\"version\":1,\"deviceId\":\"\(Self.fixtureDeviceID)\",\"tokens\":{}}"
         try destinationAuth.write(to: destinationAuthURL, atomically: true, encoding: .utf8)
 
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: destination.appendingPathComponent("openclaw.sqlite"),
                 destinationStateDirURL: destination,
@@ -1021,7 +1021,7 @@ struct DeviceIdentityStoreTests {
 
         let missing = root.appendingPathComponent("missing.sqlite")
         try Self.execute(missing, "CREATE TABLE unrelated (id INTEGER PRIMARY KEY) STRICT")
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: missing,
                 destinationStateDirURL: root,
@@ -1036,7 +1036,7 @@ struct DeviceIdentityStoreTests {
         ) STRICT;
         CREATE INDEX idx_device_identities_device ON device_identities(device_id);
         """)
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: wrong,
                 destinationStateDirURL: root,
@@ -1045,7 +1045,7 @@ struct DeviceIdentityStoreTests {
 
         let newer = root.appendingPathComponent("newer.sqlite")
         try Self.execute(newer, "PRAGMA user_version = 4")
-        #expect(throws: DeviceIdentityStoreError.self) {
+        #expect(throws: NSError.self) {
             try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: newer,
                 destinationStateDirURL: root,
@@ -1099,7 +1099,7 @@ extension DeviceIdentityStoreTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         guard let json = String(bytes: data, encoding: .utf8) else {
-            throw DeviceIdentityStoreError("Could not encode fixture identity JSON")
+            throw DeviceIdentityStore.storageError("Could not encode fixture identity JSON")
         }
         return json + "\n"
     }
@@ -1168,11 +1168,11 @@ extension DeviceIdentityStoreTests {
     fileprivate static func execute(_ databaseURL: URL, _ sql: String) throws {
         var database: OpaquePointer?
         guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK, let database else {
-            throw DeviceIdentityStoreError("Could not open test database")
+            throw DeviceIdentityStore.storageError("Could not open test database")
         }
         defer { sqlite3_close(database) }
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
-            throw DeviceIdentityStoreError(String(cString: sqlite3_errmsg(database)))
+            throw DeviceIdentityStore.storageError(String(cString: sqlite3_errmsg(database)))
         }
     }
 
@@ -1193,16 +1193,16 @@ extension DeviceIdentityStoreTests {
     {
         var database: OpaquePointer?
         guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK, let database else {
-            throw DeviceIdentityStoreError("Could not open test database")
+            throw DeviceIdentityStore.storageError("Could not open test database")
         }
         defer { sqlite3_close(database) }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw DeviceIdentityStoreError(String(cString: sqlite3_errmsg(database)))
+            throw DeviceIdentityStore.storageError(String(cString: sqlite3_errmsg(database)))
         }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else {
-            throw DeviceIdentityStoreError(String(cString: sqlite3_errmsg(database)))
+            throw DeviceIdentityStore.storageError(String(cString: sqlite3_errmsg(database)))
         }
         return transform(statement)
     }

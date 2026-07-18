@@ -177,21 +177,6 @@ enum DeviceIdentityPaths {
     }
 }
 
-// periphery:ignore - Package tests assert the concrete storage failure category.
-struct DeviceIdentityStoreError: Error, LocalizedError, Sendable {
-    // periphery:ignore - LocalizedError exposes the storage detail through errorDescription.
-    let message: String
-
-    // periphery:ignore - Foundation reads this protocol witness dynamically.
-    var errorDescription: String? {
-        self.message
-    }
-
-    init(_ message: String) {
-        self.message = message
-    }
-}
-
 struct DeviceIdentityMaterial: Equatable {
     let identity: DeviceIdentity
     let publicKeyPEM: String
@@ -207,6 +192,13 @@ public enum DeviceIdentityStore {
         0x30, 0x2E, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
         0x03, 0x2B, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
     ])
+
+    static func storageError(_ message: String) -> NSError {
+        NSError(
+            domain: "ai.openclaw.device-identity-store",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message])
+    }
 
     public static func loadOrCreate() -> DeviceIdentity {
         self.loadOrCreate(profile: .primary)
@@ -296,7 +288,7 @@ public enum DeviceIdentityStore {
 
     static func material(fromLegacyData data: Data) throws -> DeviceIdentityMaterial {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw DeviceIdentityStoreError("Legacy device identity is not a JSON object")
+            throw DeviceIdentityStore.storageError("Legacy device identity is not a JSON object")
         }
         let keys = Set(object.keys)
         let decoder = JSONDecoder()
@@ -308,7 +300,8 @@ public enum DeviceIdentityStore {
                   let publicKeyData = Data(base64Encoded: normalized.publicKey),
                   let privateKeyData = Data(base64Encoded: normalized.privateKey)
             else {
-                throw DeviceIdentityStoreError("Legacy raw device identity has invalid key material or deviceId")
+                throw DeviceIdentityStore
+                    .storageError("Legacy raw device identity has invalid key material or deviceId")
             }
             return DeviceIdentityMaterial(
                 identity: normalized,
@@ -323,14 +316,14 @@ public enum DeviceIdentityStore {
                   let privateKeyData = rawPrivateKey(fromPEM: decoded.privateKeyPem),
                   keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
             else {
-                throw DeviceIdentityStoreError("Legacy PEM device identity has invalid key material")
+                throw DeviceIdentityStore.storageError("Legacy PEM device identity has invalid key material")
             }
             return self.material(
                 publicKeyData: publicKeyData,
                 privateKeyData: privateKeyData,
                 createdAtMs: decoded.createdAtMs)
         }
-        throw DeviceIdentityStoreError("Legacy device identity has an unsupported shape")
+        throw DeviceIdentityStore.storageError("Legacy device identity has an unsupported shape")
     }
 
     static func material(
@@ -344,17 +337,17 @@ public enum DeviceIdentityStore {
               let privateKeyData = rawPrivateKey(fromPEM: privateKeyPEM),
               keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
         else {
-            throw DeviceIdentityStoreError("SQLite device identity has invalid key material")
+            throw DeviceIdentityStore.storageError("SQLite device identity has invalid key material")
         }
         let canonical = self.material(
             publicKeyData: publicKeyData,
             privateKeyData: privateKeyData,
             createdAtMs: createdAtMs)
         guard canonical.identity.deviceId == deviceId else {
-            throw DeviceIdentityStoreError("SQLite device identity deviceId does not match its public key")
+            throw DeviceIdentityStore.storageError("SQLite device identity deviceId does not match its public key")
         }
         guard canonical.publicKeyPEM == publicKeyPEM, canonical.privateKeyPEM == privateKeyPEM else {
-            throw DeviceIdentityStoreError("SQLite device identity PEM is not canonical")
+            throw DeviceIdentityStore.storageError("SQLite device identity PEM is not canonical")
         }
         return canonical
     }

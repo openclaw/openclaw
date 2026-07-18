@@ -66,13 +66,13 @@ enum DeviceIdentitySQLiteStore {
         func release() throws {
             guard let database else { return }
             self.database = nil
-            var releaseError: DeviceIdentityStoreError?
+            var releaseError: NSError?
             if sqlite3_exec(database, "ROLLBACK", nil, nil, nil) != SQLITE_OK {
-                releaseError = DeviceIdentityStoreError(
+                releaseError = DeviceIdentityStore.storageError(
                     "Could not release device identity coordinator: \(String(cString: sqlite3_errmsg(database)))")
             }
             if sqlite3_close(database) != SQLITE_OK, releaseError == nil {
-                releaseError = DeviceIdentityStoreError("Could not close device identity coordinator")
+                releaseError = DeviceIdentityStore.storageError("Could not close device identity coordinator")
             }
             if let releaseError { throw releaseError }
         }
@@ -102,7 +102,7 @@ enum DeviceIdentitySQLiteStore {
             do {
                 try coordinator.release()
             } catch let releaseError {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Device identity operation failed: \(error.localizedDescription); " +
                         "coordinator release failed: \(releaseError.localizedDescription)")
             }
@@ -137,7 +137,7 @@ enum DeviceIdentitySQLiteStore {
             do {
                 try self.restoreClaimedLegacyIdentities(claims)
             } catch let restoreError {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Device identity migration failed: \(error.localizedDescription); " +
                         "native claim restoration failed: \(restoreError.localizedDescription)")
             }
@@ -162,7 +162,7 @@ enum DeviceIdentitySQLiteStore {
         guard openResult == SQLITE_OK, let database else {
             let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
             if let database { sqlite3_close(database) }
-            throw DeviceIdentityStoreError("Could not open device identity database: \(message)")
+            throw DeviceIdentityStore.storageError("Could not open device identity database: \(message)")
         }
         defer {
             sqlite3_close(database)
@@ -188,13 +188,13 @@ enum DeviceIdentitySQLiteStore {
             if let migrated = claims.first?.material,
                !self.hasSameKeyMaterial(migrated, existing)
             {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Legacy device identity conflicts with SQLite identity key \(profile.rawValue); source preserved")
             }
             selected = existing
         } else {
             guard let candidate = claims.first?.material ?? generatedMaterial else {
-                throw DeviceIdentityStoreError("Device identity candidate is unavailable")
+                throw DeviceIdentityStore.storageError("Device identity candidate is unavailable")
             }
             selected = candidate
             try self.insertIdentity(
@@ -209,7 +209,7 @@ enum DeviceIdentitySQLiteStore {
         guard let authoritative = try self.readIdentity(database, key: profile.rawValue),
               authoritative == selected
         else {
-            throw DeviceIdentityStoreError("SQLite did not preserve the authoritative device identity")
+            throw DeviceIdentityStore.storageError("SQLite did not preserve the authoritative device identity")
         }
         try self.ensureSchema(database, allowFreshCreation: false)
         try self.execute(database, sql: "COMMIT")
@@ -223,7 +223,7 @@ enum DeviceIdentitySQLiteStore {
             guard let committedIdentity = try self.readIdentity(database, key: profile.rawValue),
                   committedIdentity == authoritative
             else {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Committed SQLite identity changed before legacy cleanup; native claim preserved")
             }
             try self.relocateLegacyAuthIfNeeded(
@@ -253,7 +253,7 @@ enum DeviceIdentitySQLiteStore {
         guard openResult == SQLITE_OK, let database else {
             let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
             if let database { sqlite3_close(database) }
-            throw DeviceIdentityStoreError("Could not open device identity coordinator: \(message)")
+            throw DeviceIdentityStore.storageError("Could not open device identity coordinator: \(message)")
         }
         do {
             guard sqlite3_busy_timeout(database, self.busyTimeoutMilliseconds) == SQLITE_OK else {
@@ -285,7 +285,7 @@ enum DeviceIdentitySQLiteStore {
         guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
               info.st_uid == geteuid()
         else {
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "Device identity coordinator directory must be a user-owned real directory")
         }
         guard chmod(url.path, mode_t(0o700)) == 0 else {
@@ -296,7 +296,7 @@ enum DeviceIdentitySQLiteStore {
               info.st_uid == geteuid(),
               info.st_mode & mode_t(0o077) == 0
         else {
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "Device identity coordinator directory permissions are not private")
         }
     }
@@ -325,7 +325,7 @@ enum DeviceIdentitySQLiteStore {
             let message =
                 "Device identity database uses newer schema version \(userVersion); " +
                 "this build supports \(self.maximumSupportedSchemaVersion)"
-            throw DeviceIdentityStoreError(message)
+            throw DeviceIdentityStore.storageError(message)
         }
 
         if try !self.schemaObjectExists(database, type: "table", name: self.tableName) {
@@ -333,7 +333,7 @@ enum DeviceIdentitySQLiteStore {
                 database,
                 sql: "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
             guard allowFreshCreation, userVersion == 0, objectCount == 0 else {
-                throw DeviceIdentityStoreError("Nonempty OpenClaw database is missing device_identities")
+                throw DeviceIdentityStore.storageError("Nonempty OpenClaw database is missing device_identities")
             }
             try self.execute(database, sql: self.createSchemaSQL)
         }
@@ -348,7 +348,7 @@ enum DeviceIdentitySQLiteStore {
             Column(name: "updated_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
         ]
         guard try self.tableColumns(database) == expectedColumns else {
-            throw DeviceIdentityStoreError("device_identities has an incompatible schema")
+            throw DeviceIdentityStore.storageError("device_identities has an incompatible schema")
         }
         let tableSQL = try self.queryText(
             database,
@@ -358,10 +358,10 @@ enum DeviceIdentitySQLiteStore {
             .joined(separator: " ")
             .uppercased()
         guard normalizedTableSQL.hasSuffix(") STRICT") else {
-            throw DeviceIdentityStoreError("device_identities must be a STRICT table")
+            throw DeviceIdentityStore.storageError("device_identities must be a STRICT table")
         }
         guard try self.validRequiredIndex(database) else {
-            throw DeviceIdentityStoreError("idx_device_identities_device has an incompatible schema")
+            throw DeviceIdentityStore.storageError("idx_device_identities_device has an incompatible schema")
         }
     }
 
@@ -394,7 +394,7 @@ enum DeviceIdentitySQLiteStore {
                   objects[0].0 == "index", objects[0].1 == self.indexName,
                   objects[1].0 == "table", objects[1].1 == self.tableName
             else {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Schema version zero database contains objects not owned by the Swift identity store")
             }
             return
@@ -410,7 +410,7 @@ enum DeviceIdentitySQLiteStore {
               sqlite3_column_int64(statement, 1) == userVersion,
               sqlite3_step(statement) == SQLITE_DONE
         else {
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "OpenClaw state database schema metadata does not match its global schema version")
         }
     }
@@ -492,7 +492,7 @@ enum DeviceIdentitySQLiteStore {
               sqlite3_column_type(statement, 4) == SQLITE_INTEGER,
               sqlite3_column_int64(statement, 4) >= 0
         else {
-            throw DeviceIdentityStoreError("SQLite device identity timestamps must be integers")
+            throw DeviceIdentityStore.storageError("SQLite device identity timestamps must be integers")
         }
         let material = try DeviceIdentityStore.material(
             deviceId: self.requiredText(statement, column: 0, field: "device_id"),
@@ -500,7 +500,7 @@ enum DeviceIdentitySQLiteStore {
             privateKeyPEM: self.requiredText(statement, column: 2, field: "private_key_pem"),
             createdAtMs: sqlite3_column_int64(statement, 3))
         guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw DeviceIdentityStoreError("SQLite returned duplicate device identity keys")
+            throw DeviceIdentityStore.storageError("SQLite returned duplicate device identity keys")
         }
         return material
     }
@@ -546,12 +546,12 @@ enum DeviceIdentitySQLiteStore {
         var ownsNativeClaim = false
         for _ in 0..<3 {
             if self.pathMayExist(doctorClaimURL) {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Device identity Doctor import is pending; run openclaw doctor --fix before starting the app")
             }
             if self.pathMayExist(nativeClaimURL) {
                 guard !self.pathMayExist(source.identityURL) else {
-                    throw DeviceIdentityStoreError(
+                    throw DeviceIdentityStore.storageError(
                         "Legacy device identity source and interrupted native claim both exist")
                 }
                 ownsNativeClaim = true
@@ -572,12 +572,12 @@ enum DeviceIdentitySQLiteStore {
 
             let renameError = errno
             guard renameError == ENOENT || renameError == EEXIST else {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Could not claim legacy device identity: \(String(cString: strerror(renameError)))")
             }
         }
         guard ownsNativeClaim else {
-            throw DeviceIdentityStoreError("Legacy device identity changed while being claimed")
+            throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
         }
 
         do {
@@ -587,14 +587,14 @@ enum DeviceIdentitySQLiteStore {
                 maximumBytes: self.maximumLegacyIdentityBytes)
             let data = try Data(contentsOf: nativeClaimURL, options: [.mappedIfSafe])
             guard data.count <= self.maximumLegacyIdentityBytes else {
-                throw DeviceIdentityStoreError("Legacy device identity exceeds the maximum supported size")
+                throw DeviceIdentityStore.storageError("Legacy device identity exceeds the maximum supported size")
             }
             let after = try self.legacyFileSnapshot(
                 nativeClaimURL,
                 beneath: source.stateDirURL,
                 maximumBytes: self.maximumLegacyIdentityBytes)
             guard before == after, UInt64(data.count) == before.size else {
-                throw DeviceIdentityStoreError("Legacy device identity changed while being claimed")
+                throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
             }
             let material = try DeviceIdentityStore.material(fromLegacyData: data)
             return LegacyClaim(
@@ -609,7 +609,7 @@ enum DeviceIdentitySQLiteStore {
                     identityURL: nativeClaimURL,
                     sourceURL: source.identityURL)
             } catch let restoreError {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Legacy device identity validation failed: \(error.localizedDescription); " +
                         "native claim restoration failed: \(restoreError.localizedDescription)")
             }
@@ -637,7 +637,7 @@ enum DeviceIdentitySQLiteStore {
         try self.requireNoSymlinkTraversal(url, beneath: rootURL)
         let resourceValues = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
         guard resourceValues.isSymbolicLink != true, resourceValues.isRegularFile == true else {
-            throw DeviceIdentityStoreError("Legacy device identity source must be a regular non-symbolic file")
+            throw DeviceIdentityStore.storageError("Legacy device identity source must be a regular non-symbolic file")
         }
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         guard attributes[.type] as? FileAttributeType == .typeRegular,
@@ -648,7 +648,7 @@ enum DeviceIdentitySQLiteStore {
               let size = attributes[.size] as? NSNumber,
               size.uint64Value <= UInt64(maximumBytes)
         else {
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "Legacy device identity source must be a bounded regular file with exactly one link")
         }
         return LegacyFileSnapshot(
@@ -663,21 +663,21 @@ enum DeviceIdentitySQLiteStore {
         let candidate = url.standardizedFileURL
         let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         guard candidate.path.hasPrefix(rootPrefix) else {
-            throw DeviceIdentityStoreError("Legacy device identity path escaped its state directory")
+            throw DeviceIdentityStore.storageError("Legacy device identity path escaped its state directory")
         }
         let relativePath = String(candidate.path.dropFirst(rootPrefix.count))
         let expected = root.resolvingSymlinksInPath()
             .appendingPathComponent(relativePath, isDirectory: false)
             .standardizedFileURL
         guard candidate.resolvingSymlinksInPath().standardizedFileURL == expected else {
-            throw DeviceIdentityStoreError("Legacy device identity path must not traverse symbolic links")
+            throw DeviceIdentityStore.storageError("Legacy device identity path must not traverse symbolic links")
         }
     }
 
     private static func requireConsistentClaims(_ claims: [LegacyClaim]) throws {
         guard let first = claims.first else { return }
         guard claims.dropFirst().allSatisfy({ self.hasSameKeyMaterial($0.material, first.material) }) else {
-            throw DeviceIdentityStoreError("Legacy device identity sources conflict; all sources preserved")
+            throw DeviceIdentityStore.storageError("Legacy device identity sources conflict; all sources preserved")
         }
     }
 
@@ -714,7 +714,7 @@ enum DeviceIdentitySQLiteStore {
         if let firstSourceAuth = sourceAuth.first,
            !sourceAuth.dropFirst().allSatisfy({ $0.store == firstSourceAuth.store })
         {
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "Legacy device auth sources conflict; all identity sources preserved")
         }
         if fileManager.fileExists(atPath: destinationAuthURL.path) {
@@ -723,7 +723,7 @@ enum DeviceIdentitySQLiteStore {
                 beneath: destinationStateDirURL,
                 deviceId: deviceId)
             guard sourceAuth.allSatisfy({ $0.store == destinationAuth.store }) else {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Destination device auth differs from legacy auth; identity source preserved")
             }
             return
@@ -750,7 +750,7 @@ enum DeviceIdentitySQLiteStore {
         if renameResult != 0 {
             let renameError = errno
             guard renameError == EEXIST else {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Could not publish migrated device auth: \(String(cString: strerror(renameError)))")
             }
             let destinationAuth = try self.readDeviceAuth(
@@ -758,7 +758,7 @@ enum DeviceIdentitySQLiteStore {
                 beneath: destinationStateDirURL,
                 deviceId: deviceId)
             guard destinationAuth.store == selectedAuth.store else {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Concurrently created device auth differs from legacy auth; identity source preserved")
             }
             return
@@ -781,13 +781,13 @@ enum DeviceIdentitySQLiteStore {
             beneath: stateDirURL,
             maximumBytes: self.maximumLegacyAuthBytes)
         guard before == after, UInt64(data.count) == before.size else {
-            throw DeviceIdentityStoreError("Device auth changed during identity migration")
+            throw DeviceIdentityStore.storageError("Device auth changed during identity migration")
         }
         guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data),
               let normalized = DeviceAuthStore.normalizedStore(decoded),
               normalized.deviceId == deviceId
         else {
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "Device auth does not belong to the migrated device identity; source preserved")
         }
         return LegacyAuthCandidate(data: data, store: normalized)
@@ -797,12 +797,12 @@ enum DeviceIdentitySQLiteStore {
         let fileManager = FileManager.default
         for claim in claims {
             guard !self.pathMayExist(claim.source.identityURL) else {
-                throw DeviceIdentityStoreError(
+                throw DeviceIdentityStore.storageError(
                     "Legacy device identity source reappeared during migration; native claim preserved")
             }
             guard fileManager.fileExists(atPath: claim.identityURL.path) else {
                 if (try? fileManager.destinationOfSymbolicLink(atPath: claim.identityURL.path)) != nil {
-                    throw DeviceIdentityStoreError(
+                    throw DeviceIdentityStore.storageError(
                         "Legacy device identity changed to a symbolic link; source preserved")
                 }
                 continue
@@ -813,7 +813,8 @@ enum DeviceIdentitySQLiteStore {
                 maximumBytes: self.maximumLegacyIdentityBytes)
             let current = try Data(contentsOf: claim.identityURL, options: [.mappedIfSafe])
             guard snapshot == claim.snapshot, current == claim.data else {
-                throw DeviceIdentityStoreError("Legacy device identity changed during migration; source preserved")
+                throw DeviceIdentityStore
+                    .storageError("Legacy device identity changed during migration; source preserved")
             }
         }
         for claim in claims where fileManager.fileExists(atPath: claim.identityURL.path) {
@@ -833,7 +834,7 @@ enum DeviceIdentitySQLiteStore {
             }
         }
         if !restorationErrors.isEmpty {
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "Could not restore every native device identity claim: " +
                     restorationErrors.joined(separator: "; "))
         }
@@ -851,7 +852,7 @@ enum DeviceIdentitySQLiteStore {
             if renameError == ENOENT, !self.pathMayExist(identityURL) {
                 return
             }
-            throw DeviceIdentityStoreError(
+            throw DeviceIdentityStore.storageError(
                 "Could not restore legacy device identity: \(String(cString: strerror(renameError)))")
         }
     }
@@ -883,7 +884,7 @@ enum DeviceIdentitySQLiteStore {
         }
         let value = sqlite3_column_int64(statement, 0)
         guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw DeviceIdentityStoreError("SQLite integer query returned multiple rows")
+            throw DeviceIdentityStore.storageError("SQLite integer query returned multiple rows")
         }
         return value
     }
@@ -898,7 +899,7 @@ enum DeviceIdentitySQLiteStore {
         }
         let value = try self.requiredText(statement, column: 0, field: "query result")
         guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw DeviceIdentityStoreError("SQLite text query returned multiple rows")
+            throw DeviceIdentityStore.storageError("SQLite text query returned multiple rows")
         }
         return value
     }
@@ -909,7 +910,7 @@ enum DeviceIdentitySQLiteStore {
         guard result == SQLITE_OK else {
             let detail = errorMessage.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(database))
             sqlite3_free(errorMessage)
-            throw DeviceIdentityStoreError("SQLite operation failed: \(detail)")
+            throw DeviceIdentityStore.storageError("SQLite operation failed: \(detail)")
         }
     }
 
@@ -941,16 +942,16 @@ enum DeviceIdentitySQLiteStore {
         guard sqlite3_column_type(statement, column) == SQLITE_TEXT,
               let pointer = sqlite3_column_text(statement, column)
         else {
-            throw DeviceIdentityStoreError("SQLite \(field) must be text")
+            throw DeviceIdentityStore.storageError("SQLite \(field) must be text")
         }
         return String(cString: pointer)
     }
 
     private static func databaseError(
         _ database: OpaquePointer,
-        operation: String) -> DeviceIdentityStoreError
+        operation: String) -> NSError
     {
-        DeviceIdentityStoreError("Could not \(operation): \(String(cString: sqlite3_errmsg(database)))")
+        DeviceIdentityStore.storageError("Could not \(operation): \(String(cString: sqlite3_errmsg(database)))")
     }
 }
 
