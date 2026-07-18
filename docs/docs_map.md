@@ -9345,10 +9345,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Phase 1 — app recommendations (PR #109668)
   - H3: Phase 2 — CLI custodian spine (PR #109841)
   - H3: Phase 3 — browser-first handoff (PR #110054, merged)
-  - H3: Phase 4 — web custodian surface (planned)
-  - H3: Phase 5 — hatch and bootstrap (planned)
-  - H3: Phase 6 — custodian presence (planned)
-  - H3: Phase 7 — resilience (follow-up)
+  - H3: Phase 4 — web custodian surface (merged: #110141, #110242)
+  - H3: Phase 5 — hatch and bootstrap (merged: #110173, #110331)
+  - H3: Phase 6 — custodian presence (PR1 merged: #110269; commentary/summon are PR2)
+  - H3: Phase 7 — resilience (needs an owner decision before building)
   - H2: Testing and landing playbook (hard-won; read before phases 4-6)
   - H2: Decision log
   - H2: Known gaps and follow-ups
