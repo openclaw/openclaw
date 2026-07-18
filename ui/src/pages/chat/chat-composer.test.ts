@@ -533,7 +533,7 @@ describe("renderChatComposer status", () => {
       },
     });
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 46k of 200k (23%)",
+      "Thread context usage: 46k of 200k (23%)",
     );
     expect(container.querySelector(".context-usage__plan-header")?.textContent).toContain(
       "Plan usage",

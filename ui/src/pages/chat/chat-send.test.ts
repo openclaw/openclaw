@@ -1247,7 +1247,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
 
-    expect(confirm).toHaveBeenCalledWith("Start a new session? This will reset the current chat.");
+    expect(confirm).toHaveBeenCalledWith("Start a new thread? This will reset the current chat.");
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("keep this draft");
     expect(host.chatMessages).toStrictEqual([]);
