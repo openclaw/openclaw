@@ -11,6 +11,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -2413,6 +2414,7 @@ class NodeRuntime private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
@@ -2426,6 +2428,11 @@ class NodeRuntime private constructor(
   fun retryChatOutboxCommand(id: String) = chat.retryOutboxCommand(id)
 
   fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
+
+  fun resolveChatQuestion(
+    id: String,
+    answers: Map<String, List<String>>,
+  ) = chat.resolveQuestion(id, answers)
 
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
@@ -7455,7 +7462,7 @@ class NodeRuntime private constructor(
         .split(' ', '-', '_')
         .filter { it.isNotBlank() }
         .take(2)
-        .mapNotNull { token -> token.firstOrNull()?.uppercaseChar()?.toString() }
+        .mapNotNull { token -> token.uppercaseFirstGraphemeOrNull() }
         .joinToString("")
     return if (initials.isNotEmpty()) initials else "OC"
   }

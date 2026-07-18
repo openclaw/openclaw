@@ -12,9 +12,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import "../../components/session-menu.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import "../../components/session-menu.ts";
 import { isStoppableCloudWorkerPlacement } from "../../components/session-row-badges.ts";
+import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
@@ -1148,6 +1149,14 @@ class SessionsPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("sessions")}</div>
         </div>
+        ${renderSessionsHubTabs({
+          active: "sessions",
+          onSelect: (tab) => {
+            if (tab !== "sessions") {
+              context.navigate(tab);
+            }
+          },
+        })}
         ${renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
@@ -1256,6 +1265,7 @@ class SessionsPage extends OpenClawLightDomElement {
           onRestoreCheckpoint: (sessionKey, checkpointId) =>
             void this.restoreCheckpoint(sessionKey, checkpointId),
         }),
+        { id: "sessions-hub-panel" },
       )}
       ${this.renderSessionMenu()}
     `;

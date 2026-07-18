@@ -49,7 +49,7 @@ function installOutboundRuntime(convertMarkdownTables = vi.fn((text: string) => 
 }
 
 async function startOutboundAccount(accountId?: string) {
-  const sendDm = vi.fn(async () => {});
+  const sendDm = vi.fn(async () => "a".repeat(64));
   const bus = {
     sendDm,
     close: vi.fn(),
@@ -138,6 +138,28 @@ describe("nostr outbound cfg threading", () => {
     expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
 
     await cleanup.stop();
+  });
+
+  it("returns the relay-confirmed event id in the delivery receipt", async () => {
+    installOutboundRuntime();
+    const { cleanup, sendDm } = await startOutboundAccount();
+    const eventId = "b".repeat(64);
+    sendDm.mockResolvedValueOnce(eventId);
+
+    const result = await nostrOutboundAdapter.sendText({
+      cfg: createCfg() as OpenClawConfig,
+      to: "NPUB123",
+      text: "hello",
+      accountId: "default",
+    });
+
+    expect(result.messageId).toBe(eventId);
+
+    await cleanup.stop();
+  });
+
+  it("recognizes uppercase npub targets", () => {
+    expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.("NPUB1XYZ123")).toBe(true);
   });
 
   it("backs declared message adapter capabilities with outbound sends", async () => {

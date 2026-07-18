@@ -434,6 +434,9 @@ export class CodexAppServerEventProjector {
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
       attemptUsage: projectedUsage,
+      ...(this.completedCompactionCount > 0
+        ? { compactionCount: this.completedCompactionCount }
+        : {}),
       replayMetadata: {
         hadPotentialSideEffects,
         replaySafe: !hadPotentialSideEffects,
@@ -442,9 +445,6 @@ export class CodexAppServerEventProjector {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
         completedCount: this.completedItemIds.size,
         activeCount: this.activeItemIds.size,
-        ...(this.completedCompactionCount > 0
-          ? { compactionCount: this.completedCompactionCount }
-          : {}),
       },
       yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt:

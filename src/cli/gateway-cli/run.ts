@@ -17,7 +17,10 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
-import { isInvalidConfigError } from "../../config/io.invalid-config.js";
+import {
+  isDoctorRecoverableInvalidConfigError,
+  isInvalidConfigError,
+} from "../../config/io.invalid-config.js";
 import {
   CONFIG_PATH,
   normalizeStateDirEnv,
@@ -48,6 +51,10 @@ import {
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import {
+  findVerifiedGatewayListenerPidsOnPortSync,
+  formatGatewayPidList,
+} from "../../infra/gateway-processes.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeFingerprint } from "../../infra/tls/fingerprint.js";
@@ -58,8 +65,13 @@ import { defaultRuntime } from "../../runtime.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 import { withProgress } from "../progress.js";
 import { parsePort } from "../shared/parse-port.js";
+import {
+  isTerminalInteractive,
+  NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE,
+} from "../terminal-interactivity.js";
 import {
   enforceGatewayRunFutureConfigGuard,
   isGatewayRunFutureConfigAllowed,
@@ -640,7 +652,7 @@ async function maybeWriteGatewayStartupFailureBundle(
   }
 }
 
-export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
+async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
   // Reparenting can hide the running service from the ancestor walk.
   // Preserve its inherited PID before config env rebuilding overwrites it.
   const inheritedGatewayServicePid = parseStrictPositiveInteger(
@@ -827,12 +839,38 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     }
   }
   if (opts.force) {
+    const interactive = isTerminalInteractive();
+    const describeNonInteractiveGatewayOwner = () => {
+      const gatewayPids = findVerifiedGatewayListenerPidsOnPortSync(port);
+      if (gatewayPids.length === 0) {
+        return undefined;
+      }
+      return `${NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE} Existing gateway listener pid${gatewayPids.length === 1 ? "" : "s"}: ${formatGatewayPidList(gatewayPids)}.`;
+    };
+    if (!interactive) {
+      const refusal = describeNonInteractiveGatewayOwner();
+      if (refusal) {
+        defaultRuntime.error(refusal);
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
     try {
       const { forceFreePortAndWait, waitForPortBindable } = await import("../ports.js");
       const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
         timeoutMs: 2000,
         intervalMs: 100,
         sigtermTimeoutMs: 700,
+        ...(interactive
+          ? {}
+          : {
+              beforeSignal: () => {
+                const refusal = describeNonInteractiveGatewayOwner();
+                if (refusal) {
+                  throw new Error(refusal);
+                }
+              },
+            }),
       });
       if (killed.length === 0) {
         // Nothing was freed; keep the no-op out of normal startup output.
@@ -1162,11 +1200,44 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       );
       return;
     }
+    if (isInvalidConfigError(err)) {
+      throw err;
+    }
     await maybeWriteGatewayStartupFailureBundle(err);
     defaultRuntime.error(
       `Gateway failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for diagnostics.`,
     );
     defaultRuntime.exit(resolveGatewayStartupFailureExitCode(err));
+  }
+}
+
+/** Run foreground Gateway startup with one consent-gated invalid-config repair attempt. */
+export async function runGatewayCommand(
+  opts: GatewayRunOpts,
+  hooks: GatewayRunRuntimeHooks = {},
+  recoveryDeps?: InvalidConfigRecoveryDeps,
+) {
+  try {
+    await runGatewayCommandOnce(opts, hooks);
+  } catch (error) {
+    if (!isInvalidConfigError(error)) {
+      throw error;
+    }
+    defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(error)}`);
+    if (opts.allowUnconfigured || !isDoctorRecoverableInvalidConfigError(error)) {
+      defaultRuntime.exit(EXIT_CONFIG_ERROR);
+      return;
+    }
+    const { offerInvalidConfigRecovery } = await import("../invalid-config-recovery.js");
+    const recovery = await offerInvalidConfigRecovery({
+      runtime: defaultRuntime,
+      deps: recoveryDeps,
+      retry: async () => await runGatewayCommandOnce(opts, hooks),
+    });
+    if (recovery.status === "recovered") {
+      return;
+    }
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
   }
 }
 

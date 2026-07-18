@@ -66,7 +66,7 @@ type ModelSelectionState = {
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
-  resetModelOverrideReason?: "disallowed" | "stale";
+  resetModelOverrideReason?: "disallowed" | "stale" | "temporarily-unavailable";
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: (selection?: ThinkingDefaultSelection) => Promise<ThinkLevel>;
   hasConfiguredThinkingDefault?: boolean;
@@ -212,9 +212,12 @@ export async function createModelSelectionState(params: {
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
   let modelCatalog: ModelCatalog | null = null;
+  // Whether the loaded catalog is a complete/live snapshot. A degraded catalog
+  // (discovery threw, static/empty fallback) must not destroy a pinned override.
+  let catalogAuthoritative = true;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
-  let resetModelOverrideReason: "disallowed" | "stale" | undefined;
+  let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const normalizedDirectStoredOverride = normalizeStoredOverrideModel({
     providerOverride: sessionEntry?.providerOverride,
@@ -272,8 +275,16 @@ export async function createModelSelectionState(params: {
     staleLegacyAutoFallbackWithoutOrigin;
 
   if (needsModelCatalog) {
-    modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
-    logStage("catalog-loaded", `entries=${modelCatalog.length}`);
+    const catalogSnapshot = await (
+      await loadModelCatalogRuntime()
+    ).loadModelCatalogSnapshot({ config: cfg });
+    modelCatalog = catalogSnapshot.entries;
+    // Only an explicit false is degraded; absent means authoritative.
+    catalogAuthoritative = catalogSnapshot.authoritative !== false;
+    logStage(
+      "catalog-loaded",
+      `entries=${modelCatalog.length} authoritative=${catalogAuthoritative}`,
+    );
     visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: modelCatalog,
@@ -319,7 +330,19 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (staleDirectStoredOverride || !visibilityPolicy.allowsKey(key)) {
+    const overrideAllowed = visibilityPolicy.allowsKey(key);
+    // A degraded catalog (discovery failed, static/empty fallback) makes the
+    // allow-list unreliable, so `!allowsKey` cannot prove a pin is really
+    // disallowed. Never destroy the pin for that: the turn already falls back to
+    // the primary via the allowsKey gate below, and the override is re-evaluated
+    // once discovery recovers. Stale is a config fact (override model absent from
+    // config), catalog-independent, so it still resets.
+    const overrideTemporarilyUnavailable =
+      !staleDirectStoredOverride && !overrideAllowed && !catalogAuthoritative;
+    if (overrideTemporarilyUnavailable) {
+      resetModelOverrideRef = key;
+      resetModelOverrideReason = "temporarily-unavailable";
+    } else if (staleDirectStoredOverride || !overrideAllowed) {
       const initialSessionEntry = { ...sessionEntry };
       const nextSessionEntry = { ...sessionEntry };
       const { updated } = applyModelOverrideToSessionEntry({

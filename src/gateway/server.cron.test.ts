@@ -481,6 +481,7 @@ describe("gateway server cron", () => {
       expect(internalJob).toBeDefined();
       if (internalJob) {
         internalJob.state.queuedAtMs = Date.now();
+        internalJob.state.startupCatchupAtMs = Date.now() + 5_000;
       }
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: String(dailyJobId),
@@ -490,12 +491,18 @@ describe("gateway server cron", () => {
       expect(
         (updateRes.payload as { state?: Record<string, unknown> } | null)?.state,
       ).not.toHaveProperty("queuedAtMs");
+      expect(
+        (updateRes.payload as { state?: Record<string, unknown> } | null)?.state,
+      ).not.toHaveProperty("startupCatchupAtMs");
       const updateEvent = await cronEvents.wait(
         (payload) => payload.jobId === dailyJobId && payload.action === "updated",
       );
       expect(
         (updateEvent.job as { state?: Record<string, unknown> } | undefined)?.state,
       ).not.toHaveProperty("queuedAtMs");
+      expect(
+        (updateEvent.job as { state?: Record<string, unknown> } | undefined)?.state,
+      ).not.toHaveProperty("startupCatchupAtMs");
 
       const listRes = await directCronReq(cronState, "cron.list", {
         includeDisabled: true,
@@ -506,6 +513,9 @@ describe("gateway server cron", () => {
       expect((jobs as unknown[]).length).toBe(1);
       expect((jobs as Array<{ state?: Record<string, unknown> }>)[0]?.state).not.toHaveProperty(
         "queuedAtMs",
+      );
+      expect((jobs as Array<{ state?: Record<string, unknown> }>)[0]?.state).not.toHaveProperty(
+        "startupCatchupAtMs",
       );
       expect(((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "").toBe("daily");
       expect(
@@ -561,6 +571,9 @@ describe("gateway server cron", () => {
       expect(
         (getRes.payload as { state?: Record<string, unknown> } | null)?.state,
       ).not.toHaveProperty("queuedAtMs");
+      expect(
+        (getRes.payload as { state?: Record<string, unknown> } | null)?.state,
+      ).not.toHaveProperty("startupCatchupAtMs");
 
       const missingGetRes = await directCronReq(cronState, "cron.get", { id: "missing-job-id" });
       expect(missingGetRes.ok).toBe(false);

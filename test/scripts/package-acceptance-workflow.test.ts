@@ -4693,6 +4693,52 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });
 
+  it("executes shared release candidate identity validation with its JSON input", () => {
+    const selectedSha = "a".repeat(40);
+    const candidate = {
+      packageArtifactName: "docker-e2e-package-123-1",
+      packageArtifactId: "123",
+      packageArtifactDigest: "b".repeat(64),
+      packageArtifactRunId: "456",
+      packageArtifactRunAttempt: "1",
+      packageFileName: "openclaw-current.tgz",
+      packageSourceSha: selectedSha,
+      packageSha256: "c".repeat(64),
+      packageVersion: "2026.7.2",
+      imageArtifactName: "docker-e2e-shared-images-123-1",
+      imageArtifactId: "789",
+      imageArtifactDigest: "d".repeat(64),
+      imageArtifactRunId: "456",
+      imageArtifactRunAttempt: "1",
+      imageArchiveSha256: "e".repeat(64),
+    };
+    const validation = workflowStep(
+      workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
+      "Validate shared release candidate identity",
+    ).run;
+    expect(validation).toBeDefined();
+
+    const valid = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
+        SELECTED_SHA: selectedSha,
+      },
+    });
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const mismatched = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
+        SELECTED_SHA: "f".repeat(40),
+      },
+    });
+    expect(mismatched.status).not.toBe(0);
+  });
+
   it("keeps release history checks blobless", () => {
     const fullHistoryCheckouts: Array<[string, string, string]> = [
       [RELEASE_PUBLISH_WORKFLOW, "resolve_release_target", "Checkout release tag"],

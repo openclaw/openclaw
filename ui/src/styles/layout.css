@@ -864,8 +864,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   display: flex;
   align-items: center;
   gap: 4px;
-  flex: 1 1 auto;
-  justify-content: flex-end;
+  flex: 0 0 auto;
 }
 
 .sidebar-brand__icon {
@@ -1267,7 +1266,9 @@ html.openclaw-native-macos
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px;
+  /* 9px left matches .sidebar-recent-session__link text inset so zone labels
+     and session titles share one left edge. */
+  padding: 0 10px 0 9px;
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
@@ -1284,10 +1285,6 @@ html.openclaw-native-macos
   top: 0;
   z-index: 2;
   background: var(--sidebar-bg);
-}
-
-.sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
-  flex: 1 1 auto;
 }
 
 .sidebar-session-group-toggle {
@@ -1318,13 +1315,11 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-group-count {
-  width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
-  text-align: center;
 }
 
 .sidebar-session-group-count--error {
@@ -1717,11 +1712,35 @@ html.openclaw-native-macos
   width: 31px;
   height: 30px;
   flex: 0 0 31px;
-  padding: 0 1px 0 5px;
+  padding: 0 3px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
+}
+
+/* Expanded parents already show their children below, so the collapse control
+   is quiet until row hover; collapsed toggles stay visible because the count
+   and status tint are the only signal that hidden children exist. */
+.sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.session-row-host:hover .sidebar-child-session-toggle[aria-expanded="true"],
+.session-row-host:focus-within .sidebar-child-session-toggle[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch has no hover: keep the collapse control usable, matching the
+   session-action touch override in components.css. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-child-session-toggle[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .sidebar-child-session-toggle:hover,
@@ -1755,10 +1774,6 @@ html.openclaw-native-macos
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-}
-
-.sidebar-child-session-toggle + .sidebar-recent-session__link {
-  padding-left: 0;
 }
 
 .sidebar-recent-session__link:hover {
@@ -2163,6 +2178,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   letter-spacing: 0.04em;
 }
 
+.session-menu__info {
+  padding: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
@@ -2266,17 +2287,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-agent-card {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin: 0 8px 10px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg, 12px);
-  background: color-mix(in srgb, var(--bg-hover) 40%, transparent);
-}
-
-.sidebar-agent-card--active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent-subtle, var(--bg-hover)) 55%, transparent);
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .sidebar-agent-card__main {
@@ -2285,7 +2297,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   gap: 10px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 6px;
+  padding: 4px 6px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -2295,7 +2307,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-agent-card__main:hover,
-.sidebar-agent-card__main:focus-visible {
+.sidebar-agent-card__main:focus-visible,
+.sidebar-agent-card--open .sidebar-agent-card__main {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
@@ -2326,7 +2339,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   object-fit: cover;
 }
 
-/* Presence fuses connection state into the identity: no separate online dot. */
 .sidebar-agent-card__presence {
   position: absolute;
   right: -1px;
@@ -2335,13 +2347,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 10px;
   border-radius: var(--radius-full);
   border: 2px solid var(--sidebar-bg);
-}
-
-.sidebar-agent-card__presence.sidebar-connection-status--online {
-  background: var(--ok);
-}
-
-.sidebar-agent-card__presence.sidebar-connection-status--offline {
   background: var(--danger);
 }
 
@@ -2353,6 +2358,9 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-agent-card__name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   color: var(--text-strong);
   font-size: 14px;
@@ -2360,6 +2368,22 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-agent-card__chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.sidebar-agent-card__chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-agent-card__subtitle {
@@ -2371,18 +2395,30 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   white-space: nowrap;
 }
 
-.sidebar-agent-card__state {
+.sidebar-agent-card__menu-unread {
   flex: none;
   margin-left: auto;
+  width: 6px;
+  height: 6px;
 }
 
-.sidebar-agent-card__switcher {
-  position: relative;
+/* "Pages" section head: zone-style label plus the pin-editor affordance. */
+.sidebar-nav__head {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px 2px 12px;
+}
+
+.sidebar-nav__head .sidebar-recent-sessions__label-text {
+  flex: 1 1 auto;
+}
+
+.sidebar-nav__head-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   flex: none;
   border: none;
   border-radius: var(--radius-md);
@@ -2394,21 +2430,15 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
     background var(--duration-fast) ease;
 }
 
-.sidebar-agent-card__switcher:hover,
-.sidebar-agent-card__switcher:focus-visible,
-.sidebar-agent-card__switcher--open {
+.sidebar-nav__head-action:hover,
+.sidebar-nav__head-action:focus-visible {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.sidebar-agent-card__switcher:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
-}
-
-.sidebar-agent-card__switcher svg {
-  width: 15px;
-  height: 15px;
+.sidebar-nav__head-action svg {
+  width: 13px;
+  height: 13px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -2416,12 +2446,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   stroke-linejoin: round;
 }
 
-.sidebar-agent-card__switcher-unread {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 6px;
-  height: 6px;
+/* Home carries the main session's unread/running state at the row's edge. */
+.nav-item__state {
+  flex: none;
+  margin-left: auto;
 }
 
 /* Zone 5: product chrome in one slim footer bar. */
@@ -2449,17 +2477,23 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-footer-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
-  width: 8px;
-  height: 8px;
+  padding: 3px 7px;
   border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-.sidebar-footer-bar__status.sidebar-connection-status--online {
-  background: var(--ok);
-}
-
-.sidebar-footer-bar__status.sidebar-connection-status--offline {
+.sidebar-footer-bar__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
   background: var(--danger);
 }
 

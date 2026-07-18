@@ -85,7 +85,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ? session.subtitle
         : undefined;
     const meta = display?.meta ?? session.meta;
-    const metaId = meta ? sidebarSessionMetaId(session.key) : undefined;
+    const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
+    const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
+    const menuSession = display ? { ...session, meta } : session;
     const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
     const rowClass = [
       "sidebar-recent-session",
@@ -123,11 +125,29 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           ? nothing
           : (event: MouseEvent) => {
               event.preventDefault();
-              this.openSessionMenuForRow(session, event.clientX, event.clientY);
+              this.openSessionMenuForRow(menuSession, event.clientX, event.clientY);
             }}
         @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
         @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
       >
+        <a
+          href=${session.href}
+          class="sidebar-recent-session__link"
+          draggable="false"
+          title=${title}
+          aria-current=${session.visuallyActive ? "page" : nothing}
+          aria-describedby=${metaId ?? nothing}
+          @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
+        >
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            ${subtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
+              : nothing}
+          </span>
+          ${this.renderSessionState(session)}
+          ${session.isChild ? nothing : renderSessionRowBadges(session)}
+        </a>
         ${session.childSessionKeys.length > 0
           ? html`<button
               class="sidebar-child-session-toggle ${session.runningChildCount > 0
@@ -151,29 +171,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   ? icons.chevronDown
                   : icons.chevronRight}</span
               >
-              <span class="sidebar-child-session-toggle__count"
-                >${session.childSessionKeys.length}</span
-              >
+              ${this.isSessionChildrenExpanded(session)
+                ? nothing
+                : html`<span class="sidebar-child-session-toggle__count"
+                    >${session.childSessionKeys.length}</span
+                  >`}
             </button>`
           : nothing}
-        <a
-          href=${session.href}
-          class="sidebar-recent-session__link"
-          draggable="false"
-          title=${title}
-          aria-current=${session.visuallyActive ? "page" : nothing}
-          aria-describedby=${metaId ?? nothing}
-          @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
-        >
-          <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
-            ${subtitle
-              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
-              : nothing}
-          </span>
-          ${this.renderSessionState(session)}
-          ${session.isChild ? nothing : renderSessionRowBadges(session)}
-        </a>
         <span class="sidebar-recent-session__aside session-row-aside">
           <span class="session-row-trail" id=${metaId ?? nothing}
             >${session.isChild && session.runtimeMs != null
@@ -187,7 +191,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                     .startMs=${session.startedAt}
                     .endMs=${session.endedAt ?? null}
                   ></openclaw-elapsed-time>`
-                : meta}</span
+                : nothing}</span
           >
           ${session.isChild
             ? nothing
@@ -223,7 +227,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                     }
                     const trigger = event.currentTarget as HTMLElement;
                     const rect = trigger.getBoundingClientRect();
-                    this.openSessionMenuForRow(session, rect.right, rect.bottom + 4, trigger);
+                    this.openSessionMenuForRow(menuSession, rect.right, rect.bottom + 4, trigger);
                   }}
                 >
                   ${icons.moreHorizontal}
@@ -361,13 +365,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   aria-label=${label}
                   @click=${() => this.toggleSessionSection(section.id)}
                 >
+                  <span class="sidebar-recent-sessions__label-text">${label}</span>
                   <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
                     >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                   >
-                  <span class="sidebar-recent-sessions__label-text">${label}</span>
-                  ${section.work && totalRowCount === 0
-                    ? nothing
-                    : html`<span class="sidebar-session-group-count">${totalRowCount}</span>`}
+                  ${collapsed && totalRowCount > 0
+                    ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
+                    : nothing}
                   ${collapsedRunningDot
                     ? html`<span
                         class="session-run-spinner sidebar-session-group-running"
@@ -377,6 +381,39 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                       ></span>`
                     : nothing}
                 </button>
+                ${section.id === "ungrouped"
+                  ? html`
+                      <button
+                        type="button"
+                        class="sidebar-session-group-actions sidebar-session-sort"
+                        title=${t("chat.sidebar.sortSessions")}
+                        aria-label=${t("chat.sidebar.sortSessions")}
+                        aria-haspopup="menu"
+                        aria-expanded=${String(this.sessionSortMenuPosition !== null)}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          this.toggleSessionSortMenu(event.currentTarget as HTMLElement);
+                        }}
+                      >
+                        ${icons.listFilter}
+                      </button>
+                      <button
+                        type="button"
+                        class="sidebar-session-group-actions sidebar-new-session"
+                        title=${this.connected
+                          ? t("chat.runControls.newSession")
+                          : t("chat.runControls.newSessionDisconnected")}
+                        aria-label=${t("chat.runControls.newSession")}
+                        ?disabled=${!this.connected}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          this.onOpenNewSession?.(this.expandedAgentId());
+                        }}
+                      >
+                        ${icons.plus}
+                      </button>
+                    `
+                  : nothing}
                 ${group
                   ? html`
                       <button
@@ -520,21 +557,6 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             `
           : nothing}
         <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
-          <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
-            <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
-            <button
-              type="button"
-              class="sidebar-session-sort"
-              title=${t("chat.sidebar.sortSessions")}
-              aria-label=${t("chat.sidebar.sortSessions")}
-              aria-haspopup="menu"
-              aria-expanded=${String(this.sessionSortMenuPosition !== null)}
-              @click=${(event: MouseEvent) =>
-                this.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
-            >
-              ${icons.listFilter}
-            </button>
-          </div>
           ${this.renderSessionListBody(visibleSessions, {
             showDraft:
               Boolean(this.draftSessionAgentId) &&

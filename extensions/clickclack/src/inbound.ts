@@ -233,6 +233,7 @@ export async function handleClickClackInbound(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },
@@ -276,7 +277,7 @@ export async function handleClickClackInbound(params: {
     cfg: params.config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
-    route: { agentId: route.agentId, sessionKey: route.sessionKey },
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     toolsAllow: params.account.toolsAllow,
     // Provenance stamping shares the agentActivity opt-in: with the flag off

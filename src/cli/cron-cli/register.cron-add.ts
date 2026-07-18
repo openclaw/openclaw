@@ -332,12 +332,12 @@ export function registerCronAddCommand(cron: Command) {
               hasThreadId;
 
             if (
-              (accountId || hasThreadId) &&
+              hasChatDeliveryTarget &&
               (!isIsolatedLikeSessionTarget ||
                 (payload.kind !== "agentTurn" && payload.kind !== "command"))
             ) {
               throw new Error(
-                "--account and --thread-id require a non-main agentTurn or command job with delivery.",
+                "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
               );
             }
             if (hasWebhook && hasChatDeliveryTarget) {
