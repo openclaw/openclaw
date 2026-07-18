@@ -5,6 +5,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { channelDocsUrl, channelHubMeta, renderChannelArt } from "./hub-meta.ts";
 import type {
   ChannelWizardState,
@@ -52,11 +53,7 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     ${message
       ? html`
           <div class="channels-wizard__links">
-            <button
-              type="button"
-              class="btn btn--sm"
-              @click=${() => void navigator.clipboard?.writeText(message)}
-            >
+            <button type="button" class="btn btn--sm" @click=${() => void copyToClipboard(message)}>
               ${t("channels.setup.copyText")}
             </button>
           </div>
