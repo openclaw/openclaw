@@ -817,6 +817,7 @@ describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
   });
 
   it("does not inspect KeepAlive supervision outside macOS", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const isLoaded = vi.fn().mockResolvedValue(true);
 
     await expect(
@@ -825,6 +826,8 @@ describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
       }),
     ).resolves.toBe(false);
     expect(isLoaded).not.toHaveBeenCalled();
+
+    platformSpy.mockRestore();
   });
 });
 
