@@ -317,6 +317,7 @@ describe("chat.abort authorization", () => {
         ops: createChatAbortOps(context as never),
         sessionKey,
         sessionKeyAliases: [broadAlias],
+        replyRunExplicitSessionKey: sessionKey,
         sessionId: "main-session",
         defaultAgentId: "main",
         abortOrigin: "rpc",

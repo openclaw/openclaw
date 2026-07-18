@@ -414,6 +414,7 @@ export function createAgentEventHandler({
   };
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
+  const agentRunLifecycleGeneration = new Map<string, string>();
 
   type AgentTextThrottleStream = "assistant" | "thinking";
 
@@ -798,6 +799,8 @@ export function createAgentEventHandler({
     clearRunContextForEvent(evt);
     agentRunSeq.delete(evt.runId);
     agentRunSeq.delete(clientRunId);
+    agentRunLifecycleGeneration.delete(evt.runId);
+    agentRunLifecycleGeneration.delete(clientRunId);
 
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
@@ -1374,10 +1377,24 @@ export function createAgentEventHandler({
         0
       : false;
     const previousSeq = agentRunSeq.get(evt.runId) ?? 0;
-    // A lifecycle start that survives the ownership/recovery checks above can
-    // begin a same-run retry whose event sequence restarts from one.
-    const last = lifecyclePhase === "start" && evt.seq <= previousSeq ? 0 : previousSeq;
-    const isNewerEvent = evt.seq > last;
+    const previousLifecycleGeneration = agentRunLifecycleGeneration.get(evt.runId);
+    const eventLifecycleGeneration = evt.lifecycleGeneration;
+    // A same-run retry resets sequence only when the internal owner generation
+    // changes. Phase and sequence alone cannot distinguish a delayed old start.
+    const isLifecycleGenerationTransition = Boolean(
+      lifecyclePhase === "start" &&
+      eventLifecycleGeneration &&
+      previousLifecycleGeneration &&
+      eventLifecycleGeneration !== previousLifecycleGeneration,
+    );
+    const matchesTrackedLifecycleGeneration = Boolean(
+      !eventLifecycleGeneration ||
+      !previousLifecycleGeneration ||
+      eventLifecycleGeneration === previousLifecycleGeneration,
+    );
+    const last = isLifecycleGenerationTransition ? 0 : previousSeq;
+    const isNewerEvent =
+      (matchesTrackedLifecycleGeneration || isLifecycleGenerationTransition) && evt.seq > last;
     if (isNewerEvent && lifecyclePhase === "start") {
       if (chatLink) {
         chatLink.toolErrorSummary = undefined;
@@ -1434,7 +1451,12 @@ export function createAgentEventHandler({
         },
       );
     }
-    agentRunSeq.set(evt.runId, Math.max(last, evt.seq));
+    if (isNewerEvent) {
+      agentRunSeq.set(evt.runId, evt.seq);
+      if (eventLifecycleGeneration) {
+        agentRunLifecycleGeneration.set(evt.runId, eventLifecycleGeneration);
+      }
+    }
     if (isNewerEvent && evt.stream === "assistant") {
       if (chatLink) {
         chatLink.toolErrorSummary = undefined;
@@ -1706,6 +1728,7 @@ export function createAgentEventHandler({
         clearTimeout(pending.timer);
       }
       pendingTerminalLifecycleErrors.clear();
+      agentRunLifecycleGeneration.clear();
     },
   });
 }

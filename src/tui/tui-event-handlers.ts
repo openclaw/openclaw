@@ -662,6 +662,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     const data = evt.data ?? {};
     const phase = asString(data.phase, "");
     const seq = typeof evt.seq === "number" && Number.isFinite(evt.seq) ? evt.seq : undefined;
+    // Once ordered frames establish a watermark, an unsequenced projection
+    // cannot prove freshness and must not restore an older diagnostic.
+    if (seq === undefined && toolValidationDiagnosticSeqByRun.has(evt.runId)) {
+      return;
+    }
     if (seq !== undefined) {
       const previousSeq = toolValidationDiagnosticSeqByRun.get(evt.runId);
       const isLifecycleStart = evt.stream === "lifecycle" && phase === "start";

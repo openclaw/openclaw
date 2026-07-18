@@ -446,17 +446,28 @@ describe("agent event handler", () => {
   });
 
   it("resets validation diagnostic sequence state for an owned same-id retry", () => {
+    let activeLifecycleGeneration = "attempt-a";
     const updateRunToolErrorSummary = vi.fn();
     const { agentRunSeq, chatRunState, handler } = createHarness({
       updateRunToolErrorSummary,
-      resolveActiveLifecycleGenerationForRun: () => "attempt-b",
+      resolveActiveLifecycleGenerationForRun: () => activeLifecycleGeneration,
     });
     chatRunState.registry.add("provider-run", {
       sessionKey: "session-1",
       clientRunId: "client-run",
-      toolErrorSummary: "edit tool validation failed: attempt a",
     });
-    agentRunSeq.set("provider-run", 5);
+    handler({
+      runId: "provider-run",
+      lifecycleGeneration: "attempt-a",
+      seq: 5,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: attempt a",
+      },
+    });
+    activeLifecycleGeneration = "attempt-b";
     handler({
       runId: "provider-run",
       lifecycleGeneration: "attempt-b",
@@ -464,6 +475,17 @@ describe("agent event handler", () => {
       stream: "lifecycle",
       ts: 1_100,
       data: { phase: "start" },
+    });
+    handler({
+      runId: "provider-run",
+      lifecycleGeneration: "attempt-a",
+      seq: 6,
+      stream: "tool",
+      ts: 1_050,
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: stale attempt a",
+      },
     });
 
     expect(updateRunToolErrorSummary).toHaveBeenLastCalledWith({
@@ -473,6 +495,41 @@ describe("agent event handler", () => {
     });
     expect(chatRunState.registry.peek("provider-run")?.toolErrorSummary).toBeUndefined();
     expect(agentRunSeq.get("provider-run")).toBe(1);
+  });
+
+  it("does not reset diagnostic sequence state for a delayed start from the same owner", () => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { agentRunSeq, chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-1",
+      clientRunId: "client-run",
+    });
+    const summary = "edit tool validation failed: current attempt";
+
+    handler({
+      runId: "provider-run",
+      lifecycleGeneration: "attempt-a",
+      seq: 2,
+      stream: "tool",
+      ts: 1_100,
+      data: { phase: "result", toolErrorSummary: summary },
+    });
+    handler({
+      runId: "provider-run",
+      lifecycleGeneration: "attempt-a",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: { phase: "start" },
+    });
+
+    expect(updateRunToolErrorSummary).toHaveBeenLastCalledWith({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      summary,
+    });
+    expect(chatRunState.registry.peek("provider-run")?.toolErrorSummary).toBe(summary);
+    expect(agentRunSeq.get("provider-run")).toBe(2);
   });
 
   function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {

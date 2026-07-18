@@ -569,6 +569,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
   });
 
+  it("does not restore a sequenced diagnostic from a later unsequenced event", () => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-validation-loop", sessionInfo: { verboseLevel: "off" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 2,
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+      sessionKey: state.currentSessionKey,
+    });
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      seq: 3,
+      stream: "assistant",
+      data: { text: "Recovered" },
+      sessionKey: state.currentSessionKey,
+    });
+    handleAgentEvent({
+      runId: "run-validation-loop",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: unsequenced stale arguments",
+      },
+      sessionKey: state.currentSessionKey,
+    });
+    handleChatEvent({
+      runId: "run-validation-loop",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
+  });
+
   it("accepts a lifecycle start that resets the per-run sequence", () => {
     const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-validation-loop", sessionInfo: { verboseLevel: "off" } },
