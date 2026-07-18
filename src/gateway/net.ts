@@ -44,6 +44,7 @@ export function resolveHostName(hostHeader?: string): string {
     if (end !== -1) {
       return host.slice(1, end);
     }
+    return "";
   }
   // Unbracketed IPv6 host (e.g. "::1") has no port and should be returned as-is.
   if (net.isIP(host) === 6) {
@@ -98,6 +99,7 @@ function stripOptionalPort(ip: string): string {
     if (end !== -1) {
       return ip.slice(1, end);
     }
+    return "";
   }
   if (net.isIP(ip)) {
     return ip;

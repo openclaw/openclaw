@@ -53,8 +53,13 @@ describe("resolveHostName", () => {
     { input: "127.0.0.1:18789", expected: "127.0.0.1" },
     { input: "[::1]:18789", expected: "::1" },
     { input: "::1", expected: "::1" },
+    { input: "[::1", expected: "" },
   ] as const)("normalizes host form for $input", ({ input, expected }) => {
     expect(resolveHostName(input), input).toBe(expected);
+  });
+
+  it("returns empty string for unmatched opening bracket", () => {
+    expect(resolveHostName("[::1")).toBe("");
   });
 });
 
@@ -328,6 +333,14 @@ describe("resolveClientIp", () => {
       name: "ignores invalid X-Real-IP even when fallback enabled",
       remoteAddr: "127.0.0.1",
       realIp: "not-an-ip",
+      trustedProxies: ["127.0.0.1"],
+      allowRealIpFallback: true,
+      expected: undefined,
+    },
+    {
+      name: "rejects realIp with unmatched opening bracket (stripOptionalPort path)",
+      remoteAddr: "127.0.0.1",
+      realIp: "[::1",
       trustedProxies: ["127.0.0.1"],
       allowRealIpFallback: true,
       expected: undefined,
