@@ -542,7 +542,9 @@ export async function attachWebInboxToSocket(
         },
         onAbandoned: async () => {
           handedOff = true;
-          await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAbandoned()));
+          await Promise.all(
+            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
+          );
         },
       } satisfies WhatsAppIngressLifecycle,
       // Gated or otherwise terminal no-dispatch turns still own every merged claim.
@@ -554,7 +556,9 @@ export async function attachWebInboxToSocket(
       abandon: async () => {
         if (!handedOff) {
           handedOff = true;
-          await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAbandoned()));
+          await Promise.all(
+            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
+          );
         }
       },
     };
@@ -1498,7 +1502,6 @@ export async function attachWebInboxToSocket(
     return "deferred";
   };
 
-  let durableInboundDrain!: ReturnType<typeof createWhatsAppIngressDrain>;
   let durableDrainPass: Promise<void> | undefined;
   let durableDrainRequested = false;
   let durableDrainClosed = false;
@@ -1566,7 +1569,8 @@ export async function attachWebInboxToSocket(
       requestDrainAfterLaneSettlement();
     },
   });
-  durableInboundDrain = createWhatsAppIngressDrain({
+  // Lazy closures above only run post-start, so the const-after-use is TDZ-safe.
+  const durableInboundDrain = createWhatsAppIngressDrain({
     queue: durableInboundQueue,
     dispatch: async (msg, payload, lifecycle) => {
       const remoteJid = msg.key?.remoteJid;
@@ -1653,7 +1657,7 @@ export async function attachWebInboxToSocket(
           preparedInboundByDurableId.delete(durableId);
         }
       };
-      let result: Awaited<ReturnType<typeof enqueueWhatsAppDurableInbound>> | undefined;
+      let result: { kind: string } | undefined;
       let appendError: unknown;
       // Bounded retry for transient store blips. The retired live-dispatch
       // fallback is gone deliberately: with the replay guard deleted it
@@ -1661,7 +1665,9 @@ export async function attachWebInboxToSocket(
       // reply/session race for availability against an already-broken store.
       for (const delayMs of [0, 100, 300]) {
         if (delayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         try {
           result = await enqueueWhatsAppDurableInbound({
