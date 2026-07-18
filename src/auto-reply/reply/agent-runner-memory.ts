@@ -1017,9 +1017,16 @@ export async function runPreflightCompactionIfNeeded(params: {
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
+      // A hard preflight compaction failure (timeout, rate limit, provider 5xx)
+      // must not abort the whole reply — compaction is a guardrail, not a hard
+      // dependency. Degrade gracefully: skip compaction and let the agent run
+      // continue so the user can still send messages and the Composer is not
+      // left in a permanently "terminated" state. See #100778.
       await notifyTerminalCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      logVerbose(
+        `preflightCompaction failed but continuing without it: sessionKey=${params.sessionKey} reason=${reason}`,
+      );
+      return entry ?? params.sessionEntry;
     }
 
     if (!result.compacted) {
@@ -1029,9 +1036,13 @@ export async function runPreflightCompactionIfNeeded(params: {
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
+      // Hard compaction failure: degrade gracefully (guardrail, not a hard
+      // dependency) instead of aborting the reply and locking the Composer.
       await notifyTerminalCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      logVerbose(
+        `preflightCompaction did not compact but continuing without it: sessionKey=${params.sessionKey} reason=${reason}`,
+      );
+      return entry ?? params.sessionEntry;
     }
 
     await deps.incrementCompactionCount({

@@ -151,4 +151,36 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
 
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
+
+  it("degrades gracefully when preflight compaction hard-fails (does not throw, returns entry) (#100778)", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(2_000) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+    };
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
+    // Simulate a provider/timeout failure of the compaction LLM call.
+    compactEmbeddedAgentSessionMock.mockResolvedValue({
+      ok: false,
+      reason: "provider_error_5xx",
+    });
+
+    // Must not throw: preflight compaction is a guardrail, not a hard
+    // dependency. The reply should continue and the Composer must not be
+    // left permanently "terminated".
+    const entry = await runWithEntry(sessionEntry, sessionFile);
+    expect(entry).toBe(sessionEntry);
+  });
 });
