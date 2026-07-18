@@ -157,7 +157,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
   if (/^agent:[^:]+:dashboard:/.test(key)) {
-    return { prefix: "", fallbackName: "New session" };
+    return { prefix: "", fallbackName: "New thread" };
   }
 
   // Remaining agent keys are named subsessions (CLI --session-id and friends):

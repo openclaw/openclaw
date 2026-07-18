@@ -1484,7 +1484,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       // Names and subtitles never show raw node ids or raw agent keys.
       const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
-      expect(names).toContain("New session");
+      expect(names).toContain("New thread");
       expect(names).toContain("clawdbot ⎇ wt-1 · …0357");
       expect(names).toContain("node-mcp-debug-…8b2e");
       const subtitles = await trimmedTextContents(
