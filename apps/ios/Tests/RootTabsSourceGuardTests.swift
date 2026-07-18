@@ -119,6 +119,8 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("RootTabsPhoneControlHub("))
         #expect(source.contains("if Self.screenshotPresentation != nil"))
         #expect(source.contains("ReferenceSplashView()"))
+        #expect(source.contains("if !self.usesSidebarTabs, self.showsLaunchSplash"))
+        #expect(source.contains("Task.sleep(for: .milliseconds(850))"))
         #expect(source.contains("ReferencePairingView("))
         #expect(!phoneTabContent.contains("directRoute: .agents"))
         #expect(shellSource.contains(".padding(.bottom, 58)"))
@@ -127,6 +129,18 @@ struct RootTabsSourceGuardTests {
         #expect(shellSource.contains("let pendingApprovalCount: Int"))
         #expect(shellSource.contains(".accessibilityValue(\"\\(badgeCount) pending approvals\")"))
         #expect(shellSource.contains("agents.first(where: { $0.id == defaultID })"))
+        #expect(shellSource.contains("Live task history from the gateway"))
+        #expect(!shellSource.contains("isScreenshotFixtureModeEnabled"))
+        #expect(!shellSource.contains("Rename branch + push"))
+
+        let onboardingStepsURL = Self.onboardingWizardSourceURL()
+            .deletingLastPathComponent()
+            .appendingPathComponent("OnboardingWizardSteps.swift")
+        let onboardingSteps = try String(contentsOf: onboardingStepsURL, encoding: .utf8)
+        #expect(onboardingSteps.contains("ReferencePairingView("))
+        #expect(onboardingSteps.contains("scan: self.onScanQRCode"))
+        #expect(onboardingSteps.contains("manual: self.onManualSetup"))
+        #expect(!onboardingSteps.contains("OnboardingCommandChip"))
     }
 
     @Test func `phone chat keeps one composer voice control without a tab bar accessory`() throws {

@@ -55,6 +55,7 @@ struct RootTabs: View {
     @State private var didApplyInitialChatSession: Bool = false
     @State private var gatewaySetupRequest: GatewaySetupRequest?
     @State private var suppressedExecApprovalForNotificationSettings: NodeAppModel.ExecApprovalInboxKey?
+    @State private var showsLaunchSplash: Bool = true
 
     private static var screenshotPresentation: String? {
         let arguments = ProcessInfo.processInfo.arguments
@@ -154,11 +155,26 @@ struct RootTabs: View {
             self.tabContent
                 .tint(OpenClawBrand.accent)
         } else {
-            self.rootPresentation(
-                self.rootLifecycle(
-                    self.rootOverlays(
-                        self.tabContent
-                            .tint(OpenClawBrand.accent))))
+            ZStack {
+                self.rootPresentation(
+                    self.rootLifecycle(
+                        self.rootOverlays(
+                            self.tabContent
+                                .tint(OpenClawBrand.accent))))
+
+                if !self.usesSidebarTabs, self.showsLaunchSplash {
+                    ReferenceSplashView()
+                        .transition(.opacity)
+                        .zIndex(100)
+                }
+            }
+            .task {
+                guard self.showsLaunchSplash else { return }
+                try? await Task.sleep(for: .milliseconds(850))
+                withAnimation(.easeOut(duration: 0.24)) {
+                    self.showsLaunchSplash = false
+                }
+            }
         }
     }
 

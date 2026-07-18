@@ -1,11 +1,12 @@
 import SwiftUI
 
-struct ReferenceSettingsHome: View {
+struct ReferenceSettingsHome<Appearance: View>: View {
     @Environment(NodeAppModel.self) private var appModel
     @Binding var path: [SettingsRoute]
     let openDestination: (RootTabs.SidebarDestination) -> Void
     let reconnect: () -> Void
     let diagnose: () -> Void
+    @ViewBuilder let appearance: () -> Appearance
 
     var body: some View {
         ScrollView {
@@ -148,7 +149,7 @@ struct ReferenceSettingsHome: View {
             self.settingsRouteRow(title: "Voice & Talk", systemImage: "waveform", route: .voice)
             Divider().padding(.leading, 48)
             NavigationLink {
-                AppearanceSettingsScreen()
+                self.appearance()
             } label: {
                 self.rowLabel(title: "Appearance", systemImage: "circle.lefthalf.filled", value: nil)
             }

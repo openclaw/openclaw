@@ -15,7 +15,7 @@ struct SettingsIcon: View {
     }
 }
 
-struct AppearanceSettingsRow: View {
+private struct AppearanceSettingsRow: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
 
     private var preference: AppAppearancePreference {
@@ -52,7 +52,7 @@ struct AppearanceSettingsRow: View {
     }
 }
 
-struct AppearanceSettingsScreen: View {
+private struct AppearanceSettingsScreen: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(\.dismiss) private var dismiss
 
@@ -104,6 +104,10 @@ struct AppearanceSettingsScreen: View {
 }
 
 extension SettingsProTab {
+    var appearanceSettingsDestination: some View {
+        AppearanceSettingsScreen()
+    }
+
     var appearanceRow: some View {
         AppearanceSettingsRow()
     }

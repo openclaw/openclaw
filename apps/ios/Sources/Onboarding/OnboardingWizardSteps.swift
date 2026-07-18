@@ -1,6 +1,5 @@
 import OpenClawChatUI
 import SwiftUI
-import UIKit
 
 private enum OnboardingVisual {
     static let maxWidth: CGFloat = 430
@@ -58,19 +57,6 @@ struct OnboardingHeroHeader: View {
             }
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-private struct OnboardingWelcomePrompt: View {
-    let text: LocalizedStringKey
-
-    var body: some View {
-        Text(self.text)
-            .font(OpenClawType.body)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -185,59 +171,6 @@ private struct OnboardingSecurityNotice: View {
     }
 }
 
-private struct OnboardingCommandChip: View {
-    @State private var didCopy = false
-    private let command = "openclaw qr"
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(self.command)
-                .font(OpenClawType.mono)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
-            Button {
-                self.copyCommand()
-            } label: {
-                Image(systemName: self.didCopy ? "checkmark" : "doc.on.doc")
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(
-                        self.didCopy ? OpenClawBrand.activationPrimaryAction : Color.secondary.opacity(0.56))
-                    .frame(width: 38, height: 38)
-                    .contentTransition(.symbolEffect(.replace))
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            .accessibilityLabel("Copy setup code command")
-            .accessibilityValue(self.didCopy ? "Copied" : self.command)
-        }
-        .foregroundStyle(OpenClawBrand.activationPrimaryAction)
-        .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 54)
-        .background {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(OpenClawBrand.activationNeutralSurface)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(OpenClawBrand.activationNeutralStroke, lineWidth: 0.5)
-        }
-    }
-
-    private func copyCommand() {
-        UIPasteboard.general.string = self.command
-        withAnimation(.smooth(duration: 0.14)) {
-            self.didCopy = true
-        }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
-            withAnimation(.smooth(duration: 0.16)) {
-                self.didCopy = false
-            }
-        }
-    }
-}
-
 struct OnboardingIntroStep: View {
     let onContinue: () -> Void
 
@@ -290,68 +223,11 @@ struct OnboardingWelcomeStep: View {
     let onManualSetup: () -> Void
 
     var body: some View {
-        let statusText = self.statusLine.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        OnboardingActivationCanvas {
-            VStack(alignment: .leading, spacing: 0) {
-                OnboardingHeroHeader(
-                    title: "Connect Gateway",
-                    subtitle: nil,
-                    mood: self.isConnecting ? .working : .idle)
-                    .padding(.top, 18)
-
-                VStack(spacing: 36) {
-                    VStack(spacing: 14) {
-                        OnboardingWelcomePrompt(text: "Run this on your gateway host and scan the code")
-
-                        OnboardingCommandChip()
-
-                        Button(action: self.onScanQRCode) {
-                            if self.isConnecting {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                        .tint(OpenClawBrand.activationPrimaryActionText)
-                                    Text("Connecting…")
-                                        .font(OpenClawType.subheadSemiBold)
-                                }
-                            } else {
-                                Text("Scan QR")
-                                    .font(OpenClawType.subheadSemiBold)
-                            }
-                        }
-                        .buttonStyle(OnboardingPrimaryButtonStyle())
-                        .disabled(self.isConnecting)
-                    }
-
-                    VStack(spacing: 14) {
-                        OnboardingWelcomePrompt(text: "or")
-
-                        Button(action: self.onManualSetup) {
-                            Text("Connect Manually")
-                                .font(OpenClawType.subheadSemiBold)
-                        }
-                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54, shadowOpacity: 0.018))
-                        .disabled(self.isConnecting)
-                    }
-                }
-                .padding(.top, 46)
-
-                if !statusText.isEmpty {
-                    Text(verbatim: statusText)
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 6)
-                        .padding(.top, 14)
-                        .transition(.opacity)
-                }
-
-                Spacer(minLength: 40)
-            }
-            .animation(.smooth(duration: 0.18), value: statusText)
-        }
+        ReferencePairingView(
+            statusLine: self.statusLine,
+            isConnecting: self.isConnecting,
+            scan: self.onScanQRCode,
+            manual: self.onManualSetup)
     }
 }
 

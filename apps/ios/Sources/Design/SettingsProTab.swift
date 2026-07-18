@@ -160,7 +160,8 @@ struct SettingsProTab: View {
                     path: self.$navigationPath,
                     openDestination: openRootDestination,
                     reconnect: { Task { await self.reconnectGateway() } },
-                    diagnose: { Task { await self.runDiagnostics() } })
+                    diagnose: { Task { await self.runDiagnostics() } },
+                    appearance: { self.appearanceSettingsDestination })
             } else {
                 List {
                     self.gatewaySection

@@ -223,36 +223,16 @@ struct ReferenceActivityTab: View {
             Text("Recent tasks")
                 .font(OpenClawType.headline)
             VStack(spacing: 0) {
-                if self.appModel.isScreenshotFixtureModeEnabled {
+                Button {
+                    self.showsBackgroundTasks = true
+                } label: {
                     ReferenceTaskRow(
-                        title: "Rename branch + push",
-                        subtitle: "In-progress  1 min ago",
-                        systemImage: "progress.indicator",
-                        color: .blue)
-                    Divider().padding(.leading, 48)
-                    ReferenceTaskRow(
-                        title: "Summarize server logs",
-                        subtitle: "Completed  4 min ago",
-                        systemImage: "checkmark.circle",
-                        color: OpenClawBrand.statusSuccess)
-                    Divider().padding(.leading, 48)
-                    ReferenceTaskRow(
-                        title: "Summarize what changed",
-                        subtitle: "Queued",
-                        systemImage: "circle.dotted",
-                        color: .secondary)
-                } else {
-                    Button {
-                        self.showsBackgroundTasks = true
-                    } label: {
-                        ReferenceTaskRow(
-                            title: "View background tasks",
-                            subtitle: "Live task history from the gateway",
-                            systemImage: "clock.arrow.circlepath",
-                            color: OpenClawBrand.info)
-                    }
-                    .buttonStyle(.plain)
+                        title: "View background tasks",
+                        subtitle: "Live task history from the gateway",
+                        systemImage: "clock.arrow.circlepath",
+                        color: OpenClawBrand.info)
                 }
+                .buttonStyle(.plain)
             }
             .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 18))
             .overlay { RoundedRectangle(cornerRadius: 18).stroke(Color(uiColor: .separator).opacity(0.3)) }
@@ -396,6 +376,8 @@ struct ReferenceSplashView: View {
 }
 
 struct ReferencePairingView: View {
+    var statusLine = ""
+    var isConnecting = false
     let scan: () -> Void
     let manual: () -> Void
 
@@ -420,10 +402,28 @@ struct ReferencePairingView: View {
                 .padding(.bottom, 12)
 
             HStack(spacing: 12) {
-                self.action(title: "Scan QR", systemImage: "barcode.viewfinder", action: self.scan)
-                self.action(title: "Set up manually", systemImage: "desktopcomputer", action: self.manual)
+                self.action(
+                    title: "Scan QR",
+                    accessibilityLabel: "Scan QR",
+                    systemImage: "barcode.viewfinder",
+                    action: self.scan)
+                self.action(
+                    title: "Set up manually",
+                    accessibilityLabel: "Connect Manually",
+                    systemImage: "desktopcomputer",
+                    action: self.manual)
             }
             .padding(.horizontal, 16)
+
+            let statusText = self.statusLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !statusText.isEmpty {
+                Text(verbatim: statusText)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 14)
+            }
 
             Spacer()
 
@@ -436,7 +436,12 @@ struct ReferencePairingView: View {
         .accessibilityIdentifier("reference-pairing-screen")
     }
 
-    private func action(title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func action(
+        title: LocalizedStringKey,
+        accessibilityLabel: LocalizedStringKey,
+        systemImage: String,
+        action: @escaping () -> Void) -> some View
+    {
         Button(action: action) {
             VStack(spacing: 11) {
                 Image(systemName: systemImage)
@@ -450,6 +455,8 @@ struct ReferencePairingView: View {
             .overlay { Circle().stroke(Color(uiColor: .separator).opacity(0.42)) }
         }
         .buttonStyle(.plain)
+        .disabled(self.isConnecting)
+        .accessibilityLabel(Text(accessibilityLabel))
     }
 }
 

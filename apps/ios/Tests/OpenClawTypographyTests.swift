@@ -150,6 +150,9 @@ struct OpenClawTypographyTests {
         let onboardingSteps = try String(
             contentsOf: Self.sourceURL("Onboarding/OnboardingWizardSteps.swift"),
             encoding: .utf8)
+        let referenceShell = try String(
+            contentsOf: Self.sourceURL("Design/ReferencePhoneShell.swift"),
+            encoding: .utf8)
         let onboardingWizard = try [
             "Onboarding/OnboardingWizardView.swift",
             "Onboarding/OnboardingWizardConnectionSections.swift",
@@ -237,14 +240,15 @@ struct OpenClawTypographyTests {
         #expect(gatewayProblem.contains("Text(\"Copy command\")"))
         #expect(gatewayProblem.contains(".font(OpenClawType.subheadSemiBold)"))
 
-        #expect(onboardingSteps.contains("title: \"Connect Gateway\""))
-        #expect(onboardingSteps.contains("Text(\"Scan QR\")"))
-        #expect(onboardingSteps.contains("Text(\"Connect Manually\")"))
+        #expect(onboardingSteps.contains("ReferencePairingView("))
+        #expect(referenceShell.contains("title: \"Scan QR\""))
+        #expect(referenceShell.contains("title: \"Set up manually\""))
+        #expect(referenceShell.contains("accessibilityLabel: \"Connect Manually\""))
         #expect(onboardingSteps.contains("Label(\"Go to Chat\", systemImage: \"bubble.left.and.bubble.right.fill\")"))
         #expect(onboardingSteps.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(onboardingSteps.contains("let title: LocalizedStringKey"))
         #expect(onboardingSteps.contains("let subtitle: LocalizedStringKey?"))
-        #expect(onboardingSteps.contains("let text: LocalizedStringKey"))
+        #expect(referenceShell.contains("title: LocalizedStringKey"))
 
         #expect(onboardingWizard.contains("Text(\"Scan Setup Code\")")
             || onboardingWizard.contains(".navigationTitle(\"Scan Setup Code\")"))

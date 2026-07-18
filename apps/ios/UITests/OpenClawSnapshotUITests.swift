@@ -445,7 +445,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-empty-starters-german")
     }
 
-    func testOnboardingPairCommandAndCompletionOpenChat() throws {
+    func testReferencePairingAndCompletionOpenChat() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone onboarding proof only")
         self.addUIInterruptionMonitor(withDescription: "Local network access") { alert in
             guard alert.buttons["Allow"].exists else { return false }
@@ -471,11 +471,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         app.buttons["Continue"].tap()
         app.tap()
 
-        let copySetupCommand = app.buttons["Copy setup code command"]
-        XCTAssertTrue(copySetupCommand.waitForExistence(timeout: 8))
-        copySetupCommand.tap()
-        XCTAssertEqual(copySetupCommand.value as? String, "Copied")
-        self.attachScreenshot(named: "onboarding-copy-setup-code-command")
+        XCTAssertTrue(app.staticTexts["Connect your machine to get started"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Scan QR"].exists)
+        XCTAssertTrue(app.buttons["Connect Manually"].exists)
+        self.attachScreenshot(named: "onboarding-reference-pairing")
 
         app.buttons["Connect Manually"].tap()
         let setupCode = app.textFields["Enter setup code"]
