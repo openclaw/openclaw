@@ -243,9 +243,7 @@ async function listPiNodeHost(
       command: PI_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim()
-          ? { searchTerm: query.search.trim().slice(0, MAX_SEARCH_LENGTH) }
-          : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,

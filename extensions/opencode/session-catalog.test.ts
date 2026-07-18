@@ -469,7 +469,7 @@ describe("OpenCode session catalog", () => {
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
       command: OPENCODE_SESSIONS_LIST_COMMAND,
-      params: {},
+      params: { searchTerm: "   " },
       timeoutMs: 35_000,
       scopes: ["operator.write"],
     });

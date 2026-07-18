@@ -835,7 +835,7 @@ describe("Pi session catalog", () => {
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
       command: PI_SESSIONS_LIST_COMMAND,
-      params: {},
+      params: { searchTerm: "   " },
       timeoutMs: 20_000,
       scopes: ["operator.write"],
     });
