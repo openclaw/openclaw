@@ -226,9 +226,7 @@ class AppSidebar extends AppSidebarSessionListElement {
             alt=""
             aria-hidden="true"
           />
-          <openclaw-lobster-logo-standin
-            .visit=${this.logoVisit}
-          ></openclaw-lobster-logo-standin>
+          <openclaw-lobster-logo-standin .visit=${this.logoVisit}></openclaw-lobster-logo-standin>
         </span>
         <openclaw-sidebar-build-chip
           .basePath=${this.basePath}
