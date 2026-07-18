@@ -90,7 +90,9 @@ describe("stageIMessageAttachments", () => {
       size: 10,
       contentType: "image/jpeg",
     }));
-    const convertHeicToJpeg = vi.fn(async () => Buffer.from("jpeg-bytes"));
+    const convertHeicToJpeg = vi.fn<(sourcePath: string, maxBytes: number) => Promise<Buffer>>(
+      async () => Buffer.from("jpeg-bytes"),
+    );
 
     await stageIMessageAttachments(
       [{ original_path: sourcePath, mime_type: "image/heic", missing: false }],
@@ -98,7 +100,7 @@ describe("stageIMessageAttachments", () => {
     );
 
     expect(convertHeicToJpeg).toHaveBeenCalledOnce();
-    const [convertedPath, convertedMaxBytes] = convertHeicToJpeg.mock.calls[0] ?? [];
+    const [convertedPath, convertedMaxBytes] = convertHeicToJpeg.mock.calls[0]!;
     expect(convertedPath).not.toBe(sourcePath);
     expect(path.basename(String(convertedPath))).toBe("IMG_0001.HEIC");
     expect(convertedMaxBytes).toBe(1024);
@@ -166,7 +168,9 @@ describe("stageIMessageAttachments", () => {
     });
 
     const saveMediaBuffer = vi.fn();
-    const convertHeicToJpeg = vi.fn(async () => Buffer.from("jpeg-bytes"));
+    const convertHeicToJpeg = vi.fn<(sourcePath: string, maxBytes: number) => Promise<Buffer>>(
+      async () => Buffer.from("jpeg-bytes"),
+    );
     const logVerbose = vi.fn();
 
     await expect(
