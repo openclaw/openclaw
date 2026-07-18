@@ -42,6 +42,10 @@ import {
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { VERSION } from "../version.js";
+import {
+  clearOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import {
   ensureColumn,
@@ -162,29 +166,6 @@ type OpenClawDatabaseVerificationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "database_verifications"
 >;
-type OpenClawDatabaseVerification = {
-  error: string | null;
-  result: string;
-};
-
-function readDatabaseVerificationRow(
-  database: DatabaseSync,
-  pathname: string,
-): OpenClawDatabaseVerification | undefined {
-  if (!tableExists(database, "database_verifications")) {
-    return undefined;
-  }
-  const db = getNodeSqliteKysely<OpenClawDatabaseVerificationDatabase>(database);
-  return executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("database_verifications")
-      .select(["result", "error"])
-      .where("path", "=", path.resolve(pathname))
-      .limit(1),
-  ).rows[0];
-}
-
 function clearDatabaseVerificationRow(database: DatabaseSync, pathname: string): void {
   if (!tableExists(database, "database_verifications")) {
     return;
@@ -196,27 +177,8 @@ function clearDatabaseVerificationRow(database: DatabaseSync, pathname: string):
   );
 }
 
-/** Read one durable verification row through the cached shared state database. */
-export function readOpenClawDatabaseVerification(
-  pathname: string,
-  options: OpenClawStateDatabaseOptions = {},
-): OpenClawDatabaseVerification | undefined {
-  const statePath = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
-  if (!existsSync(statePath)) {
-    return undefined;
-  }
-  return readDatabaseVerificationRow(openOpenClawStateDatabase(options).db, pathname);
-}
-
-/**
- * Remove a persisted quarantine row after doctor repairs a database.
- * Returns false when the row could not be cleared: callers must surface that,
- * or the next open re-quarantines a healthy repaired file while doctor
- * reported success.
- */
-export function clearOpenClawDatabaseVerification(
+/** Best-effort deletion of one verification-history row after repair. */
+export function clearOpenClawDatabaseVerificationHistory(
   pathname: string,
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
@@ -992,7 +954,16 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
         operationLabel: "state.schema.repair",
       },
     );
-    const quarantineCleared = clearOpenClawDatabaseVerification(pathname, { path: pathname });
+    try {
+      runSqliteImmediateTransactionSync(db, () => clearDatabaseVerificationRow(db, pathname), {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: pathname,
+        operationLabel: "state.database-verifications.clear-history",
+      });
+    } catch {
+      // History cleanup must not override authoritative quarantine repair.
+    }
+    const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
     clearOpenClawStateDatabaseOpenFailure(pathname);
     return {
       changes,
@@ -1848,6 +1819,23 @@ export function openOpenClawStateDatabase(
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
   }
+  let quarantineFailure: Error | undefined;
+  try {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      quarantineFailure = createOpenClawDatabaseVerificationError(
+        "state",
+        pathname,
+        quarantine.reason,
+      );
+    }
+  } catch {
+    // A broken quarantine store must not brick every state open.
+    // The process latch and daily verifier still cover known damage.
+  }
+  if (quarantineFailure) {
+    throw quarantineFailure;
+  }
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
@@ -1857,10 +1845,6 @@ export function openOpenClawStateDatabase(
       db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       assertSupportedSchemaVersion(db, pathname);
       assertStateDatabaseIntegrityBeforeMutation(db, pathname);
-      const verification = readDatabaseVerificationRow(db, pathname);
-      if (verification?.result === "error") {
-        throw createOpenClawDatabaseVerificationError("state", pathname, verification.error);
-      }
       configureSqlitePreSchemaPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       });
