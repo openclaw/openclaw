@@ -125,7 +125,8 @@ function createTestRuntime(params: {
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
     refreshBrowserHealth: async () => {},
     refreshStatus: async () => {},
-    refreshReusableSession: params.refreshReusableSession ?? (async () => {}),
+    refreshReusableSession: async (session, request, resolved) =>
+      await params.refreshReusableSession?.(session, request, resolved),
     ensureRealtimeBridge: async () => undefined,
     captureTranscript: async () => undefined,
     speakViaTransport: async () => undefined,
