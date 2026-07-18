@@ -897,6 +897,142 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
   });
 
+  it("does not publish stale degradation after a provider-auth descendant recovers", async () => {
+    const config = gatewayTokenConfig(
+      asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
+    );
+    const initial = preparedSnapshot(config);
+    const degraded = {
+      ...preparedSnapshot(config),
+      degradedOwners: [
+        {
+          ownerKind: "provider" as const,
+          ownerId: "openai",
+          state: "unavailable" as const,
+          degradationState: "stale" as const,
+          paths: ["models.providers.openai.apiKey"],
+          refKeys: ["env:default:OPENAI_API_KEY"],
+          reason: "secret reference was not found" as const,
+        },
+      ],
+    };
+    const emitStateEvent = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config: candidate }) =>
+        preparedSnapshot(candidate),
+      ),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        degraded,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, deferStatePublication: true },
+      ),
+    ).resolves.toBe(degraded);
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const recovered = preparedSnapshot(config);
+
+    await expect(
+      activateProviderAuthRuntimeSnapshot({
+        snapshot: recovered,
+        expectedRevision: outerRevision,
+        activateSnapshotIfCurrent: () =>
+          activateSecretsRuntimeSnapshotStateIfCurrent({
+            snapshot: recovered,
+            expectedRevision: outerRevision,
+            refreshContext: null,
+            refreshHandler: null,
+            preserveActivationLineage: true,
+          }),
+      }),
+    ).resolves.toBe(true);
+
+    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, degraded);
+    expect(emitStateEvent).not.toHaveBeenCalled();
+  });
+
+  it("recovers prior full degradation when a deferred degraded snapshot is healed", async () => {
+    const config = gatewayTokenConfig(
+      asConfig({ models: { providers: { openai: { apiKey: "fixture", models: [] } } } }),
+    );
+    const initial = preparedSnapshot(config);
+    const fullDegraded = {
+      ...preparedSnapshot(config),
+      degradedOwners: [
+        {
+          ownerKind: "capability" as const,
+          ownerId: "tts",
+          state: "unavailable" as const,
+          degradationState: "cold" as const,
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason: "secret reference was not found" as const,
+        },
+      ],
+    };
+    const providerDegraded = {
+      ...preparedSnapshot(config),
+      degradedOwners: [
+        {
+          ownerKind: "provider" as const,
+          ownerId: "openai",
+          state: "unavailable" as const,
+          degradationState: "stale" as const,
+          paths: ["models.providers.openai.apiKey"],
+          refKeys: ["env:default:OPENAI_API_KEY"],
+          reason: "secret reference was not found" as const,
+        },
+      ],
+    };
+    const emitStateEvent = vi.fn();
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config: candidate }) =>
+        preparedSnapshot(candidate),
+      ),
+      activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
+    });
+    activateSecretsRuntimeSnapshotForTest(initial);
+    await activateRuntimeSecrets.activatePreparedSnapshot?.(fullDegraded, {
+      reason: "reload",
+      activate: true,
+    });
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+        providerDegraded,
+        getActiveSecretsRuntimeSnapshotRevision(),
+        { reason: "reload", activate: true, deferStatePublication: true },
+      ),
+    ).resolves.toBe(providerDegraded);
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const recovered = preparedSnapshot(config);
+
+    await expect(
+      activateProviderAuthRuntimeSnapshot({
+        snapshot: recovered,
+        expectedRevision: outerRevision,
+        activateSnapshotIfCurrent: () =>
+          activateSecretsRuntimeSnapshotStateIfCurrent({
+            snapshot: recovered,
+            expectedRevision: outerRevision,
+            refreshContext: null,
+            refreshHandler: null,
+            preserveActivationLineage: true,
+          }),
+      }),
+    ).resolves.toBe(true);
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
+
+    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, providerDegraded);
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+      "SECRETS_RELOADER_DEGRADED",
+      "SECRETS_RELOADER_RECOVERED",
+    ]);
+  });
+
   it("publishes deferred recovery after a provider-auth descendant activation", async () => {
     const initial = preparedSnapshot(gatewayTokenConfig({}));
     const degraded = {

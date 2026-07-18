@@ -83,9 +83,13 @@ type ResolvedRuntimeWebTools = {
   secretOwners: SecretOwnerRefState[];
 };
 
+type RuntimeWebProviderFailure = Omit<RuntimeWebUnavailableProvider, "contractDigest"> & {
+  contractDigest?: string;
+};
+
 function createUnavailableWebProviderOwner(params: {
   kind: "search" | "fetch";
-  unavailable: RuntimeWebUnavailableProvider;
+  unavailable: Pick<RuntimeWebUnavailableProvider, "providerId" | "path" | "refKey" | "reason">;
   degradationState?: "cold" | "stale";
 }): DegradedSecretOwner {
   return {
@@ -180,7 +184,7 @@ function associateWebProviderResolutionError(params: {
   kind: "search" | "fetch";
   config: OpenClawConfig;
   error: unknown;
-  unavailableProviders: RuntimeWebUnavailableProvider[];
+  unavailableProviders: RuntimeWebProviderFailure[];
 }): void {
   const failureByRefKey = new Map(
     params.unavailableProviders.map((unavailable) => [unavailable.refKey, unavailable] as const),

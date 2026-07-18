@@ -72,19 +72,11 @@ type RuntimeSecretsActivationParams = {
   deferStatePublication?: boolean;
 };
 
-type DeferredSecretsStateTransition =
-  | {
-      kind: "degraded";
-      activationRevision: number;
-      reason: RuntimeSecretsActivationParams["reason"];
-      stateScope: SecretsStateScope;
-      activationScope: SecretsStateScope;
-    }
-  | {
-      kind: "recovered";
-      activationRevision: number;
-      degradationGeneration: number;
-    };
+type DeferredSecretsStateTransition = {
+  activationRevision: number;
+  reason: RuntimeSecretsActivationParams["reason"];
+  activationScope: SecretsStateScope;
+} & ({ kind: "degraded" } | { kind: "recovered"; degradationGeneration: number });
 
 type SecretsStateScope = "full" | "provider-auth";
 
@@ -341,7 +333,6 @@ export function createRuntimeSecretsActivator(params: {
           kind: "degraded",
           activationRevision: getActiveSecretsRuntimeSnapshotRevision(),
           reason: activationParams.reason,
-          stateScope,
           activationScope,
         });
       } else {
@@ -354,6 +345,8 @@ export function createRuntimeSecretsActivator(params: {
             kind: "recovered",
             activationRevision: getActiveSecretsRuntimeSnapshotRevision(),
             degradationGeneration: activeDegradationGeneration,
+            reason: activationParams.reason,
+            activationScope,
           });
         }
       } else {
@@ -613,23 +606,32 @@ export function createRuntimeSecretsActivator(params: {
     if (!hasActiveSecretsRuntimeSnapshotLineage(transition.activationRevision)) {
       return;
     }
-    if (transition.kind === "degraded") {
+    const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+    if (!activeSnapshot) {
+      return;
+    }
+    if ((activeSnapshot.degradedOwners?.length ?? 0) > 0) {
       publishDegradation(
-        snapshot,
+        activeSnapshot,
         transition.reason,
-        transition.stateScope,
+        resolvePreparedSecretsStateScope(activeSnapshot),
         transition.activationScope,
       );
       return;
     }
-    const sourceOnlyContractRecovered =
-      options?.sourceOnly !== true ||
-      (activeDegradationSupportsSourceOnlyRecovery &&
-        activeDegradationConfig !== null &&
-        !hasSameSecretReloadContract(activeDegradationConfig, snapshot.sourceConfig));
-    if (sourceOnlyContractRecovered) {
-      publishRecovery(snapshot.config, transition.degradationGeneration);
+    if (
+      options?.sourceOnly === true &&
+      (!activeDegradationSupportsSourceOnlyRecovery ||
+        activeDegradationConfig === null ||
+        hasSameSecretReloadContract(activeDegradationConfig, activeSnapshot.sourceConfig))
+    ) {
+      return;
     }
+    publishRecovery(
+      activeSnapshot.config,
+      transition.kind === "recovered" ? transition.degradationGeneration : undefined,
+      transition.activationScope,
+    );
   });
 
   return activateRuntimeSecrets;
