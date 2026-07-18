@@ -45,10 +45,16 @@ const BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES = new Set([
   "discord",
   "feishu",
   "matrix",
-  "mattermost",
   "msteams",
   "slack",
 ]);
+
+// Providers can take ownership of narrower action-specific read gates without
+// relaxing the host exact-current restriction for their other actions.
+const BUNDLED_CHANNEL_ACTIONS_WITH_PROVIDER_READ_GATES = new Map<
+  string,
+  ReadonlySet<ChannelMessageActionName>
+>([["mattermost", new Set<ChannelMessageActionName>(["read"])]]);
 
 type HostConversationTargetKind =
   | "user"
@@ -360,7 +366,10 @@ function assertConversationReadAllowed(params: {
 }): void {
   const usesBundledProviderReadGate =
     params.pluginOrigin === "bundled" &&
-    BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES.has(params.ctx.channel);
+    (BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES.has(params.ctx.channel) ||
+      BUNDLED_CHANNEL_ACTIONS_WITH_PROVIDER_READ_GATES.get(params.ctx.channel)?.has(
+        params.ctx.action,
+      ) === true);
   if (
     normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
       "direct-operator" ||
