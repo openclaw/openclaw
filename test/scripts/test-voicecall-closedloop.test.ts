@@ -1,8 +1,15 @@
-import type { ExecFileSyncOptions } from "node:child_process";
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { execFileSyncMock } = vi.hoisted(() => ({
+const MANAGED_COMMAND_TIMEOUT_CODE = "OPENCLAW_MANAGED_COMMAND_TIMEOUT";
+const expectedTestFiles = [
+  "extensions/voice-call/src/manager.closed-loop.test.ts",
+  "extensions/voice-call/src/media-stream.test.ts",
+  "extensions/voice-call/index.test.ts",
+];
+const { execFileSyncMock, runManagedCommandMock } = vi.hoisted(() => ({
   execFileSyncMock: vi.fn(),
+  runManagedCommandMock: vi.fn(),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -13,21 +20,57 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+vi.mock("../../scripts/lib/managed-child-process.mjs", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../scripts/lib/managed-child-process.mjs")
+  >("../../scripts/lib/managed-child-process.mjs");
+  return {
+    ...actual,
+    MANAGED_COMMAND_TIMEOUT_CODE,
+    runManagedCommand: runManagedCommandMock,
+  };
+});
+
 describe("test-voicecall-closedloop", () => {
   beforeEach(() => {
     vi.resetModules();
     execFileSyncMock.mockReset();
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("legacy execFileSync path was used");
+    });
+    runManagedCommandMock.mockReset();
+    runManagedCommandMock.mockResolvedValue(0);
   });
 
-  it("enforces a total deadline and reports all target test files", async () => {
-    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    execFileSyncMock.mockImplementation(
-      (_command: string, _args: readonly string[], options: ExecFileSyncOptions) =>
-        actual.execFileSync(process.execPath, ["--eval", "setInterval(() => {}, 1_000)"], {
-          ...options,
-          stdio: "ignore",
-          timeout: 50,
-        }),
+  it("runs the current three-file slice through the managed total deadline", async () => {
+    await import("../../scripts/test-voicecall-closedloop.mjs");
+
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(runManagedCommandMock).toHaveBeenCalledOnce();
+    expect(runManagedCommandMock).toHaveBeenCalledWith({
+      args: [
+        "scripts/run-vitest.mjs",
+        "run",
+        "--config",
+        "vitest.config.ts",
+        ...expectedTestFiles,
+        "--maxWorkers=1",
+      ],
+      bin: process.execPath,
+      shell: false,
+      stdio: "inherit",
+      timeoutMs: 10 * 60 * 1000,
+    });
+    for (const file of expectedTestFiles) {
+      expect(fs.existsSync(file), file).toBe(true);
+    }
+  });
+
+  it("reports every selected file when the total deadline expires", async () => {
+    runManagedCommandMock.mockRejectedValue(
+      Object.assign(new Error("managed command timed out"), {
+        code: MANAGED_COMMAND_TIMEOUT_CODE,
+      }),
     );
 
     const error = await import("../../scripts/test-voicecall-closedloop.mjs").then(
@@ -35,15 +78,10 @@ describe("test-voicecall-closedloop", () => {
       (cause: unknown) => cause,
     );
 
-    expect(execFileSyncMock).toHaveBeenCalledOnce();
-    expect(execFileSyncMock.mock.calls[0]?.[2]).toMatchObject({
-      killSignal: "SIGTERM",
-      timeout: 10 * 60 * 1000,
-    });
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("closed-loop voice-call test slice timed out");
-    expect((error as Error).message).toContain("extensions/voice-call/src/manager.test.ts");
-    expect((error as Error).message).toContain("extensions/voice-call/src/media-stream.test.ts");
-    expect((error as Error).message).toContain("src/plugins/voice-call.plugin.test.ts");
+    for (const file of expectedTestFiles) {
+      expect((error as Error).message).toContain(file);
+    }
   });
 });

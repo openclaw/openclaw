@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   createManagedCommandSpawnSpec,
+  MANAGED_COMMAND_TIMEOUT_CODE,
   runManagedCommand,
   signalExitCode,
   terminateManagedChild,
@@ -304,6 +305,65 @@ import { runManagedCommand } from ${JSON.stringify(helperUrl)};
       }
     },
   );
+
+  posixIt("force-cleans descendants when a managed command deadline expires", async () => {
+    const dir = createTempDir("openclaw-managed-timeout-");
+    const childPath = path.join(dir, "child.mjs");
+    const childPidPath = path.join(dir, "child.pid");
+    const descendantPidPath = path.join(dir, "descendant.pid");
+
+    fs.writeFileSync(
+      childPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const descendant = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(process.pid));
+fs.writeFileSync(process.argv[3], String(descendant.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1_000);
+`,
+      "utf8",
+    );
+
+    let childPid = 0;
+    let descendantPid = 0;
+    const command = runManagedCommand({
+      args: [childPath, childPidPath, descendantPidPath],
+      bin: process.execPath,
+      onReady: (child) => {
+        childPid = expectProcessPid(child.pid);
+      },
+      shell: false,
+      stdio: "ignore",
+      timeoutMs: 500,
+    });
+
+    try {
+      await waitFor(() => fs.existsSync(descendantPidPath));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      expect(isProcessAlive(childPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
+
+      await expect(command).rejects.toMatchObject({
+        code: MANAGED_COMMAND_TIMEOUT_CODE,
+        timeoutMs: 500,
+      });
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
+      await waitFor(() => !isProcessAlive(descendantPid), 1_500);
+    } finally {
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
 });
 
 async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
@@ -325,8 +385,18 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  if (process.platform === "linux") {
+    try {
+      const state = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0];
+      if (state === "Z") {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }

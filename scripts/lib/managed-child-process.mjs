@@ -6,6 +6,7 @@ import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
+export const MANAGED_COMMAND_TIMEOUT_CODE = "OPENCLAW_MANAGED_COMMAND_TIMEOUT";
 const managedChildren = new Set();
 const signalHandlers = new Map();
 
@@ -85,6 +86,7 @@ export function terminateManagedChild(
  *   platform?: NodeJS.Platform;
  *   comSpec?: string;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
+ *   timeoutMs?: number;
  * }} options
  * @returns {Promise<number>}
  */
@@ -99,7 +101,11 @@ export async function runManagedCommand({
   windowsVerbatimArguments,
   comSpec,
   onReady,
+  timeoutMs,
 }) {
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
+    throw new TypeError("managed command timeoutMs must be a positive integer");
+  }
   const spawnSpec = createManagedCommandSpawnSpec({
     bin,
     args,
@@ -116,19 +122,40 @@ export async function runManagedCommand({
     child,
     forceKillTimer: null,
     receivedSignal: null,
+    timedOut: false,
   };
   addManagedChild(managedChild);
   onReady?.(child);
+  const timeoutTimer =
+    timeoutMs === undefined
+      ? null
+      : setTimeout(() => {
+          managedChild.timedOut = true;
+          terminateManagedChild(child, "SIGTERM", { platform });
+          managedChild.forceKillTimer ??= setTimeout(() => {
+            terminateManagedChild(child, "SIGKILL", { platform });
+          }, FORCE_KILL_DELAY_MS);
+        }, timeoutMs);
 
   try {
     return await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (status, signal) => {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+        }
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
         }
-        if (managedChild.receivedSignal) {
-          terminateManagedChild(child, "SIGKILL");
+        if (managedChild.receivedSignal || managedChild.timedOut) {
+          terminateManagedChild(child, "SIGKILL", { platform });
+        }
+        if (managedChild.timedOut) {
+          const error = new Error(`managed command timed out after ${timeoutMs}ms`);
+          error.code = MANAGED_COMMAND_TIMEOUT_CODE;
+          error.timeoutMs = timeoutMs;
+          reject(error);
+          return;
         }
         resolve(
           managedChild.receivedSignal
@@ -140,6 +167,12 @@ export async function runManagedCommand({
       });
     });
   } finally {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+    }
+    if (managedChild.forceKillTimer) {
+      clearTimeout(managedChild.forceKillTimer);
+    }
     removeManagedChild(managedChild);
   }
 }
@@ -151,6 +184,7 @@ export async function runManagedCommand({
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;
  *   receivedSignal: string | null;
+ *   timedOut: boolean;
  * }} managedChild
  */
 function addManagedChild(managedChild) {
@@ -165,6 +199,7 @@ function addManagedChild(managedChild) {
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;
  *   receivedSignal: string | null;
+ *   timedOut: boolean;
  * }} managedChild
  */
 function removeManagedChild(managedChild) {
