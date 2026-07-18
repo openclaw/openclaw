@@ -319,8 +319,10 @@ describe("legacy device identity normalization", () => {
 
     expect(normalized?.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
     expect(normalized?.createdAtMs).toBe(1_700_000_000_000);
-    expect(normalized?.publicKeyPem.startsWith("-----BEGIN PUBLIC KEY-----\n")).toBe(true);
-    expect(normalized?.privateKeyPem.startsWith("-----BEGIN PRIVATE KEY-----\n")).toBe(true);
+    expect(crypto.createPublicKey(normalized?.publicKeyPem ?? "").asymmetricKeyType).toBe("ed25519");
+    expect(crypto.createPrivateKey(normalized?.privateKeyPem ?? "").asymmetricKeyType).toBe(
+      "ed25519",
+    );
   });
 
   it("rejects mismatched or malformed legacy key material", () => {
