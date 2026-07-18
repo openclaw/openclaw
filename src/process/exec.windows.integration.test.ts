@@ -7,7 +7,7 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
     "keeps truncated UTF-8 head output on a code point boundary",
     async () => {
       const result = await runUtf8CommandWithTimeout(
-        [process.execPath, "-e", "process.stdout.write('a😀z')"],
+        [process.execPath, "-e", "process.stdout.write('a😀z'); process.stderr.write('b😀y')"],
         {
           maxOutputBytes: 3,
           outputCapture: "head",
@@ -16,7 +16,9 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
       );
 
       expect(result.stdout).toBe("a");
+      expect(result.stderr).toBe("b");
       expect(result.stdoutTruncatedBytes).toBe(5);
+      expect(result.stderrTruncatedBytes).toBe(5);
     },
   );
 });

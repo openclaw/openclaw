@@ -139,7 +139,7 @@ async function runCommandWithOutputEncoding(
     MAX_PRESERVED_PENDING_LINE_BYTES,
   );
   const maxPreservedOutputLines = Math.max(0, Math.floor(options.maxPreservedOutputLines ?? 16));
-  const windowsEncoding = resolveWindowsConsoleEncoding();
+  const windowsEncoding = forceUtf8 ? null : resolveWindowsConsoleEncoding();
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;

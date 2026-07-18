@@ -533,7 +533,10 @@ describe("Windows command execution", () => {
 
   it("keeps truncated UTF-8 head output on a code point boundary", async () => {
     execaMock.mockImplementationOnce(() =>
-      createMockSubprocess({ stdoutChunks: [Buffer.from("a😀z", "utf8")] }),
+      createMockSubprocess({
+        stdoutChunks: [Buffer.from("a😀z", "utf8")],
+        stderrChunks: [Buffer.from("b😀y", "utf8")],
+      }),
     );
     await withMockedWindowsPlatform(async () => {
       await expect(
@@ -544,8 +547,11 @@ describe("Windows command execution", () => {
         }),
       ).resolves.toMatchObject({
         stdout: "a",
+        stderr: "b",
         stdoutTruncatedBytes: 5,
+        stderrTruncatedBytes: 5,
       });
+      expect(spawnSyncMock).not.toHaveBeenCalled();
     });
   });
 
