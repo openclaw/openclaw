@@ -573,7 +573,14 @@ function installControlUiMockGateway(input: {
       return;
     }
     const patch = { ...sessionPatches.get(params.key) };
-    for (const key of ["model", "thinkingLevel", "fastMode", "category", "pinned"] as const) {
+    for (const key of [
+      "model",
+      "thinkingLevel",
+      "fastMode",
+      "category",
+      "pinned",
+      "archived",
+    ] as const) {
       if (hasOwn(params, key)) {
         patch[key] = params[key];
       }
@@ -581,13 +588,13 @@ function installControlUiMockGateway(input: {
     sessionPatches.set(params.key, patch);
   }
 
-  function applySessionPatches(response: unknown): unknown {
+  function applySessionPatches(response: unknown, params: unknown): unknown {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
     }
-    return {
-      ...response,
-      sessions: response.sessions.map((row) => {
+    const showArchived = isRecord(params) && params.archived === true;
+    const sessions = response.sessions
+      .map((row) => {
         if (!isRecord(row) || typeof row.key !== "string") {
           return row;
         }
@@ -607,7 +614,12 @@ function installControlUiMockGateway(input: {
           next.category = category;
         }
         return next;
-      }),
+      })
+      .filter((row) => isRecord(row) && (row.archived === true) === showArchived);
+    return {
+      ...response,
+      count: sessions.length,
+      sessions,
     };
   }
 
@@ -700,7 +712,9 @@ function installControlUiMockGateway(input: {
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      return method === "sessions.list" ? applySessionPatches(configured.value) : configured.value;
+      return method === "sessions.list"
+        ? applySessionPatches(configured.value, params)
+        : configured.value;
     }
     switch (method) {
       case "connect":
@@ -841,17 +855,20 @@ function installControlUiMockGateway(input: {
       case "models.list":
         return { models: scenario.models };
       case "sessions.list":
-        return applySessionPatches({
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
+        return applySessionPatches(
+          {
+            count: 1,
+            defaults: {
+              contextTokens: null,
+              model: "gpt-5.5",
+              modelProvider: "openai",
+            },
+            path: "",
+            sessions: [sessionRow()],
+            ts: Date.now(),
           },
-          path: "",
-          sessions: [sessionRow()],
-          ts: Date.now(),
-        });
+          params,
+        );
       case "sessions.groups.list":
         return groupsPayload();
       case "sessions.groups.put": {
