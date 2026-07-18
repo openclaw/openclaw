@@ -12,7 +12,11 @@ import { readStringValue } from "../../dist/normalization-core/string-coerce.js"
 import { createGatewayWsClient, type GatewayEventFrame } from "../lib/gateway-ws-client.ts";
 import { resolveGatewaySuccessPayload } from "./lib/gateway-frame-payload.mjs";
 import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
-import { createMcpClientTempState, type McpClientTempState } from "./mcp-client-temp-state.ts";
+import {
+  createMcpClientTempState,
+  maybeApprovePendingBridgePairing as approvePendingBridgePairing,
+  type McpClientTempState,
+} from "./mcp-client-temp-state.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
@@ -281,32 +285,5 @@ export async function connectMcpClient(params: {
 export async function maybeApprovePendingBridgePairing(
   gateway: GatewayRpcClient,
 ): Promise<boolean> {
-  let pairingState:
-    | {
-        pending?: Array<{ requestId?: string; role?: string }>;
-      }
-    | undefined;
-  try {
-    pairingState = await gateway.request<{
-      pending?: Array<{ requestId?: string; role?: string }>;
-    }>("device.pair.list", {});
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    if (
-      message.includes("missing scope: operator.pairing") ||
-      message.includes("device.pair.list")
-    ) {
-      return false;
-    }
-    throw error;
-  }
-  if (!pairingState) {
-    return false;
-  }
-  const pendingRequest = pairingState.pending?.find((entry) => entry.role === "operator");
-  if (!pendingRequest?.requestId) {
-    return false;
-  }
-  await gateway.request("device.pair.approve", { requestId: pendingRequest.requestId });
-  return true;
+  return approvePendingBridgePairing({ formatError: formatErrorMessage, gateway });
 }

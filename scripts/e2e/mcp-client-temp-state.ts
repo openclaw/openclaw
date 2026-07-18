@@ -16,6 +16,51 @@ export type ReconnectableMcpClientHandle = {
   transport: { close: () => Promise<unknown> };
 };
 
+export type PairingGatewayRpcClient = {
+  request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T>;
+};
+
+export async function maybeApprovePendingBridgePairing(params: {
+  formatError: (error: unknown) => string;
+  gateway: PairingGatewayRpcClient;
+}): Promise<boolean> {
+  let pairingState:
+    | {
+        pending?: Array<{ requestId?: string; role?: string }>;
+      }
+    | undefined;
+  try {
+    pairingState = await params.gateway.request<{
+      pending?: Array<{ requestId?: string; role?: string }>;
+    }>("device.pair.list", {});
+  } catch (error) {
+    const message = params.formatError(error);
+    if (
+      message.includes("missing scope: operator.pairing") ||
+      message.includes("device.pair.list")
+    ) {
+      return false;
+    }
+    throw error;
+  }
+  if (!pairingState) {
+    return false;
+  }
+  const pendingRequest = pairingState.pending?.find((entry) => entry.role === "operator");
+  if (!pendingRequest?.requestId) {
+    return false;
+  }
+  try {
+    await params.gateway.request("device.pair.approve", { requestId: pendingRequest.requestId });
+  } catch (error) {
+    if (params.formatError(error).includes("unknown requestId")) {
+      return false;
+    }
+    throw error;
+  }
+  return true;
+}
+
 export function createMcpClientTempState(params: {
   gatewayToken: string;
   tempRoot?: string;
