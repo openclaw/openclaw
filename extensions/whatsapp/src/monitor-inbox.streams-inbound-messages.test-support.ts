@@ -372,6 +372,30 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("keeps the first delivery's prepared entry when a duplicate arrives", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("dup-prepared");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "first",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    // Duplicate delivery of the same message id: its pending verdict must not
+    // delete the first delivery's kept preparation.
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+    await settleInboundWork();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(inboundMessage(onMessage).payload.body).toBe("first");
+    await listener.close();
+  });
+
   it("retries a transient persistence failure and still delivers through the drain", async () => {
     const onMessage = vi.fn(async () => undefined);
     const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);

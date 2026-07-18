@@ -1625,6 +1625,16 @@ export async function attachWebInboxToSocket(
       // A redelivery must not clobber the first delivery's in-flight
       // preparation: the drain consumes exactly one entry per durable id.
       if (durableId && !preparedInboundByDurableId.has(durableId)) {
+        // Queue pruning caps pending rows, but evicted rows' entries would
+        // linger here forever on a blocked lane; evict oldest-first well above
+        // the queue's own pending cap. Dispatch falls back to re-normalizing
+        // the journaled payload when its entry is gone.
+        if (preparedInboundByDurableId.size >= 1000) {
+          const oldest = preparedInboundByDurableId.keys().next().value;
+          if (oldest !== undefined) {
+            preparedInboundByDurableId.delete(oldest);
+          }
+        }
         preparedInboundByDurableId.set(
           durableId,
           new Promise((resolve) => {
@@ -1637,7 +1647,10 @@ export async function attachWebInboxToSocket(
         keepForDrain = false,
       ) => {
         resolvePrepared?.(inbound);
-        if (!keepForDrain && durableId) {
+        // Only the delivery that installed the entry may remove it; a
+        // duplicate pending delivery (resolvePrepared undefined) must not
+        // delete the first delivery's kept preparation.
+        if (!keepForDrain && durableId && resolvePrepared) {
           preparedInboundByDurableId.delete(durableId);
         }
       };
