@@ -5,8 +5,8 @@ type WizardGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-// The browser gateway client does not expose per-request timeouts, so race a
-// local ceiling; timed-out or superseded late responses are cleaned up explicitly.
+// Keep the wire request alive behind a local ceiling: protocol-level timeouts
+// discard late responses, but wizard.start carries the session id needed for cleanup.
 async function requestWithTimeout<T>(
   client: WizardGatewayClient,
   method: string,
@@ -67,6 +67,15 @@ type WizardNextResult = {
   channels?: string[];
   accounts?: Array<{ channel: string; accountId: string }>;
 };
+
+function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardNextResult): void {
+  if (!result.sessionId || result.done) {
+    return;
+  }
+  // A start response can outlive its owning UI generation. Release only live
+  // sessions; the gateway already purges terminal results before responding.
+  void client.request("wizard.cancel", { sessionId: result.sessionId }).catch(() => {});
+}
 
 export type ChannelWizardState =
   | { phase: "idle" }
@@ -129,22 +138,12 @@ export class ChannelWizardController {
           flow: "channels",
           ...(channel ? { channel } : {}),
         },
-        (lateResult) => {
-          // A local timeout cannot stop the gateway request. If it eventually
-          // creates a running session, release it so a retry is not blocked.
-          if (lateResult.sessionId && !lateResult.done) {
-            void client
-              .request("wizard.cancel", { sessionId: lateResult.sessionId })
-              .catch(() => {});
-          }
-        },
+        (lateResult) => cancelRunningWizardResult(client, lateResult),
       );
       if (this.generation !== generation) {
         // The modal was closed/superseded mid-start, but the gateway already
         // created a running session; cancel it or later starts get rejected.
-        if (result.sessionId && !result.done) {
-          void client.request("wizard.cancel", { sessionId: result.sessionId }).catch(() => {});
-        }
+        cancelRunningWizardResult(client, result);
         return;
       }
       this.sessionId = result.sessionId ?? null;

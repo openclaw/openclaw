@@ -192,6 +192,36 @@ describe("ChannelWizardController", () => {
     }
   });
 
+  it("does not cancel a terminal start result that arrives after the local timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveStart: (value: unknown) => void = () => {};
+      const { controller, request } = createController(async (method) => {
+        if (method === "wizard.start") {
+          return await new Promise((resolve) => {
+            resolveStart = resolve;
+          });
+        }
+        if (method === "wizard.cancel") {
+          return { status: "cancelled" };
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+
+      const timedOutStart = controller.start("telegram");
+      await vi.advanceTimersByTimeAsync(120_000);
+      await timedOutStart;
+
+      resolveStart({ sessionId: "s-done", done: true, status: "done" });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the gateway-reported channels for completion", async () => {
     const { controller } = createController(async (method) => {
       if (method === "wizard.start") {
