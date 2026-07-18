@@ -5,7 +5,11 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { IdentityConfig } from "../config/types.base.js";
 import { readRegularFile, readRegularFileSync } from "../infra/regular-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
@@ -40,6 +44,45 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "your signature - pick one that feels right",
   "workspace-relative path, http(s) url, or data uri",
 ]);
+
+/** Collapse user-facing identity fields to one safe Markdown line. */
+export function sanitizeAgentIdentityLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/** Build the config identity shared by agent creation and update surfaces. */
+export function createAgentIdentityConfig(params: {
+  name?: string;
+  emoji?: unknown;
+  avatar?: unknown;
+}): IdentityConfig | undefined {
+  const emoji = normalizeOptionalString(params.emoji);
+  const avatar = normalizeOptionalString(params.avatar);
+  const identity = {
+    ...(params.name ? { name: sanitizeAgentIdentityLine(params.name) } : {}),
+    ...(emoji ? { emoji: sanitizeAgentIdentityLine(emoji) } : {}),
+    ...(avatar ? { avatar: sanitizeAgentIdentityLine(avatar) } : {}),
+  } satisfies IdentityConfig;
+  return identity.name || identity.emoji || identity.avatar ? identity : undefined;
+}
+
+/** Trim config identity values before merging them into IDENTITY.md. */
+export function normalizeIdentityConfigForFile(
+  identity: IdentityConfig | undefined,
+): IdentityConfig | undefined {
+  if (!identity) {
+    return undefined;
+  }
+  const resolved = {
+    name: identity.name?.trim() || undefined,
+    theme: identity.theme?.trim() || undefined,
+    emoji: identity.emoji?.trim() || undefined,
+    avatar: identity.avatar?.trim() || undefined,
+  } satisfies IdentityConfig;
+  return resolved.name || resolved.theme || resolved.emoji || resolved.avatar
+    ? resolved
+    : undefined;
+}
 
 function normalizeIdentityValue(value: string): string {
   // Normalize markdown decoration and punctuation so generated template

@@ -237,6 +237,7 @@ type PersistentApplyContext = {
 type PersistentApplyOutcome = {
   summary: string;
   bootstrapPending?: boolean;
+  agentId?: string;
   details?: Record<string, unknown>;
   /** Overrides the after-snapshot config path in the audit record. */
   configPath?: string;
@@ -286,6 +287,7 @@ export async function applyPersistentOperation(params: {
     ...(outcome.bootstrapPending === undefined
       ? {}
       : { bootstrapPending: outcome.bootstrapPending }),
+    ...(outcome.agentId ? { agentId: outcome.agentId } : {}),
   };
 }
 
