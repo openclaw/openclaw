@@ -146,7 +146,10 @@ function createSummarizeTextDeps() {
   };
 }
 
-function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
+function createOpenAiTelephonyCfg(
+  model: "tts-1" | "gpt-4o-mini-tts",
+  baseUrl?: string,
+): OpenClawConfig {
   return asLegacyTtsConfig({
     messages: {
       tts: {
@@ -154,6 +157,7 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
         providers: {
           openai: {
             apiKey: "test-key",
+            ...(baseUrl ? { baseUrl } : {}),
             model,
             voice: "alloy",
             instructions: "Speak warmly",
@@ -176,6 +180,10 @@ async function withMockedSpeechFetch(
   const fetchMock = vi.fn(async () => ({
     ok: true,
     arrayBuffer: async () => new ArrayBuffer(audioLength),
+    // Contract providers cancel the unread body so the underlying HTTP
+    // connection is released. Mock `body.cancel` so regression tests can
+    // assert the contract providers do not leak the response stream.
+    body: { cancel: vi.fn(async () => undefined) },
   }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   try {
@@ -269,14 +277,23 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
       typeof process.env.OPENAI_API_KEY === "string",
     synthesize: async ({ text, providerConfig, providerOverrides }) => {
       const config = providerConfig as Record<string, unknown> | undefined;
-      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
-        method: "POST",
-        body: JSON.stringify({
-          input: text,
-          model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
-          voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
-        }),
-      });
+      const response = await fetch(
+        `${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            input: text,
+            model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
+            voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`OpenAI TTS contract request failed: HTTP ${response.status}`);
+      }
+      // The contract suite validates the request shape but returns a synthetic
+      // audio buffer. Cancel the unread body so the HTTP connection is released.
+      await response.body?.cancel().catch(() => undefined);
       return {
         audioBuffer: createAudioBuffer(1),
         outputFormat: "mp3",
@@ -292,15 +309,22 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
         typeof config?.instructions === "string" ? config.instructions : undefined;
       const instructions =
         model === "gpt-4o-mini-tts" ? configuredInstructions || undefined : undefined;
-      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
-        method: "POST",
-        body: JSON.stringify({
-          input: text,
-          model,
-          voice: config?.voice ?? "alloy",
-          instructions,
-        }),
-      });
+      const response = await fetch(
+        `${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            input: text,
+            model,
+            voice: config?.voice ?? "alloy",
+            instructions,
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`OpenAI TTS telephony contract request failed: HTTP ${response.status}`);
+      }
+      await response.body?.cancel().catch(() => undefined);
       return {
         audioBuffer: createAudioBuffer(2),
         outputFormat: "mp3",
@@ -1205,6 +1229,96 @@ export function describeTtsProviderRuntimeContract() {
           await expectTelephonyInstructions(testCase.model, testCase.expectedInstructions);
         },
       );
+    });
+
+    describe("openai provider response body release", () => {
+      // Regression: the OpenAI contract provider calls fetch() to validate the
+      // request shape but returns a synthetic audio buffer, leaving the real
+      // response body unread. On keep-alive connections this leaks a socket
+      // until the server closes it. The provider must cancel the body so the
+      // underlying connection is released.
+      it("cancels the unread response body after synthesizeSpeech", async () => {
+        await withMockedSpeechFetch(async (fetchMock) => {
+          const result = await ttsRuntime.synthesizeSpeech({
+            text: "release the body",
+            cfg: createOpenAiTelephonyCfg("gpt-4o-mini-tts"),
+          });
+
+          expect(result.success).toBe(true);
+          expect(fetchMock).toHaveBeenCalledTimes(1);
+          const response = (await fetchMock.mock.results[0]?.value) as {
+            body?: { cancel: ReturnType<typeof vi.fn> };
+          };
+          expect(response?.body?.cancel).toHaveBeenCalled();
+        }, 1);
+      });
+
+      it("cancels the unread response body after textToSpeechTelephony", async () => {
+        await withMockedSpeechFetch(async (fetchMock) => {
+          const result = await ttsRuntime.textToSpeechTelephony({
+            text: "release the telephony body",
+            cfg: createOpenAiTelephonyCfg("tts-1"),
+          });
+
+          expect(result.success).toBe(true);
+          expect(fetchMock).toHaveBeenCalledTimes(1);
+          const response = (await fetchMock.mock.results[0]?.value) as {
+            body?: { cancel: ReturnType<typeof vi.fn> };
+          };
+          expect(response?.body?.cancel).toHaveBeenCalled();
+        }, 2);
+      });
+    });
+
+    describe("openai provider real HTTP keep-alive connection release", () => {
+      // Real behavior proof: start a local HTTP server that streams a large
+      // response body. The provider calls fetch but returns a synthetic buffer
+      // without consuming the real response. Without body.cancel(), the
+      // unread stream keeps the socket open. With body.cancel(), the stream
+      // is cancelled and the socket is released.
+      it("releases the socket after synthesizeSpeech with a streaming response", async () => {
+        const { createServer } = await import("node:http");
+        let activeConnections = 0;
+        const server = createServer((req, res) => {
+          res.writeHead(200, {
+            "Content-Type": "audio/mpeg",
+            Connection: "keep-alive",
+            "Keep-Alive": "timeout=30",
+          });
+          // Stream a large body slowly so it's not fully received when
+          // body.cancel() is called.
+          const chunk = Buffer.alloc(64 * 1024);
+          const interval = setInterval(() => {
+            res.write(chunk);
+          }, 50);
+          req.on("close", () => clearInterval(interval));
+        });
+        server.on("connection", (socket) => {
+          activeConnections += 1;
+          socket.on("close", () => {
+            activeConnections -= 1;
+          });
+        });
+
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const port = (server.address() as { port: number }).port;
+
+        try {
+          const result = await ttsRuntime.synthesizeSpeech({
+            text: "release the streaming socket",
+            cfg: createOpenAiTelephonyCfg("gpt-4o-mini-tts", `http://127.0.0.1:${port}`),
+          });
+          expect(result.success).toBe(true);
+
+          // With body.cancel(), the socket should close within ~200ms.
+          // Without body.cancel(), the socket would stay open indefinitely
+          // because the streaming body is never consumed.
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          expect(activeConnections).toBe(0);
+        } finally {
+          server.close();
+        }
+      });
     });
   });
 }
