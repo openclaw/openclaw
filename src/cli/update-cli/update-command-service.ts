@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -10,7 +11,6 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayPort } from "../../config/config.js";
@@ -36,7 +36,7 @@ import {
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
-import { fetchNpmPackageTargetStatus } from "../../infra/update-check.js";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -202,8 +202,21 @@ async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     port: params.port,
     expectedVersion: params.expectedVersion,
     env: params.env,
+    supervisorKeepsAlive: true,
   });
   return { health, launchAgentRecovery };
+}
+
+async function hasLoadedLaunchdKeepAliveSupervisor(params: {
+  service: GatewayService;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  // OpenClaw's loaded LaunchAgent has canonical KeepAlive policy. Read this once before
+  // polling so an unloaded agent can still reach the existing recovery path promptly.
+  return await params.service.isLoaded({ env: params.env }).catch(() => false);
 }
 
 function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
@@ -248,6 +261,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
       formatPostUpdateGatewayRecoveryInstructions,
       recoverInstalledLaunchAgentAfterUpdate,
       recoverLaunchAgentAndRecheckGatewayHealth,
+      hasLoadedLaunchdKeepAliveSupervisor,
       shouldUseLegacyProcessRestartAfterUpdate,
     };
 }
@@ -720,8 +734,7 @@ export function tryResolveInvocationCwd(): string | undefined {
   }
 }
 
-type PackageRuntimePreflightResult = {
-  error: string | null;
+type PackageRuntimePreflight = {
   nodeRunner?: string;
   replacedNodeRunner?: string;
   targetVersion?: string;
@@ -736,21 +749,18 @@ export async function resolvePackageRuntimePreflight(params: {
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<PackageRuntimePreflightResult> {
+}): Promise<Result<PackageRuntimePreflight, string>> {
   const nodeRunner = normalizeOptionalString(params.nodeRunner);
-  const unchanged = (): PackageRuntimePreflightResult => ({
-    error: null,
-    ...(nodeRunner ? { nodeRunner } : {}),
-  });
+  const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
   if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
-    return unchanged();
+    return ok(unchanged());
   }
   if (params.spec && !canResolveRegistryVersionForPackageTarget(params.spec)) {
-    return unchanged();
+    return ok(unchanged());
   }
   const target = params.tag.trim();
   if (!target) {
-    return unchanged();
+    return ok(unchanged());
   }
   const status = await fetchNpmPackageTargetStatus({
     target,
@@ -761,7 +771,7 @@ export async function resolvePackageRuntimePreflight(params: {
     env: params.env,
   });
   if (status.error) {
-    return unchanged();
+    return ok(unchanged());
   }
   const runtime = await resolvePackageRuntimeForPreflight({
     nodeRunner,
@@ -770,11 +780,10 @@ export async function resolvePackageRuntimePreflight(params: {
   const satisfies = nodeVersionSatisfiesEngine(runtime.version, status.nodeEngine);
   const targetVersion = status.version ?? target;
   if (satisfies === true) {
-    return {
-      error: null,
+    return ok({
       ...(nodeRunner ? { nodeRunner } : {}),
       targetVersion,
-    };
+    });
   }
   const fallbackNodeRunner = normalizeOptionalString(params.fallbackNodeRunner);
   if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
@@ -787,26 +796,24 @@ export async function resolvePackageRuntimePreflight(params: {
       status.nodeEngine,
     );
     if (fallbackSatisfies === true) {
-      return {
-        error: null,
+      return ok({
         nodeRunner: fallbackNodeRunner,
         replacedNodeRunner: nodeRunner,
         targetVersion,
-      };
+      });
     }
   }
   if (satisfies !== false) {
-    return {
-      error: null,
+    return ok({
       ...(nodeRunner ? { nodeRunner } : {}),
       targetVersion,
-    };
+    });
   }
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
-  return {
-    error: [
+  return resultError(
+    [
       `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
       `The requested package requires ${status.nodeEngine}.`,
       runtime.nodeRunner
@@ -815,9 +822,7 @@ export async function resolvePackageRuntimePreflight(params: {
       "Bare `npm i -g openclaw` can silently install an older compatible release.",
       "After upgrading Node, use `npm i -g openclaw@latest`.",
     ].join("\n"),
-    ...(nodeRunner ? { nodeRunner } : {}),
-    targetVersion,
-  };
+  );
 }
 
 async function resolvePackageRuntimeForPreflight(params: {
@@ -888,7 +893,6 @@ export function resolvePostInstallDoctorEnv(params?: {
 }): NodeJS.ProcessEnv {
   const resolvedEnv: NodeJS.ProcessEnv = {
     ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
-    [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
   };
   if (!params?.serviceEnv) {
     return resolvedEnv;
@@ -974,6 +978,7 @@ async function runUpdatedInstallGatewayRestart(params: {
   invocationCwd?: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  timeoutMs: number;
 }): Promise<boolean> {
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
@@ -991,7 +996,9 @@ async function runUpdatedInstallGatewayRestart(params: {
     {
       cwd: params.result.root,
       env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
-      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+      // Restart health owns migration-aware readiness. Keep only the caller's bounded update
+      // budget outside it so the former fixed 60-second watchdog cannot preempt that wait.
+      timeoutMs: params.timeoutMs,
     },
   );
   if (res.code === 0) {
@@ -1190,6 +1197,7 @@ export async function maybeRestartService(params: {
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
   requireRunningServiceAfterRestart?: boolean;
+  timeoutMs: number;
 }): Promise<boolean> {
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
@@ -1203,6 +1211,7 @@ export async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         return;
       }
@@ -1211,12 +1220,17 @@ export async function maybeRestartService(params: {
       }
     };
     const service = resolveGatewayService();
+    let supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
+      service,
+      env: params.serviceEnv,
+    });
     let health = await waitForGatewayHealthyRestart({
       service,
       port: params.gatewayPort,
       expectedVersion: expectedGatewayVersion,
       env: params.serviceEnv,
       requireRunningService: opts.requireRunningService,
+      supervisorKeepsAlive,
     });
     if (!health.healthy && health.staleGatewayPids.length > 0) {
       if (!params.opts.json) {
@@ -1228,12 +1242,17 @@ export async function maybeRestartService(params: {
       }
       await terminateStaleGatewayPids(health.staleGatewayPids);
       await restartAfterStaleCleanup();
+      supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
+        service,
+        env: params.serviceEnv,
+      });
       health = await waitForGatewayHealthyRestart({
         service,
         port: params.gatewayPort,
         expectedVersion: expectedGatewayVersion,
         env: params.serviceEnv,
         requireRunningService: opts.requireRunningService,
+        supervisorKeepsAlive,
       });
     }
 
@@ -1379,6 +1398,7 @@ export async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         if (
           updatedInstallRestartNeedsServiceRootProof &&
@@ -1438,7 +1458,6 @@ export async function maybeRestartService(params: {
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
-            crossStateDirImports: false,
           });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));

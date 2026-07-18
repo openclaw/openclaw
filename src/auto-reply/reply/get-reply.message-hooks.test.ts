@@ -82,6 +82,25 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   });
 }
 
+function buildConfiguredAudioCfg() {
+  return withFastReplyConfig({
+    tools: {
+      media: {
+        audio: {
+          enabled: true,
+          models: [
+            {
+              type: "cli",
+              command: "/usr/local/bin/stt-transcribe",
+              args: ["{{MediaPath}}"],
+            },
+          ],
+        },
+      },
+    },
+  });
+}
+
 function hookEventCall(index: number): [string, string, string, Record<string, unknown>] {
   const call = mocks.createInternalHookEvent.mock.calls[index];
   if (!call) {
@@ -276,22 +295,7 @@ describe("getReplyFromConfig message hooks", () => {
     await getReplyFromConfig(
       buildCtx({ SessionKey: sessionKey }),
       undefined,
-      withFastReplyConfig({
-        tools: {
-          media: {
-            audio: {
-              enabled: true,
-              models: [
-                {
-                  type: "cli",
-                  command: "/usr/local/bin/stt-transcribe",
-                  args: ["{{MediaPath}}"],
-                },
-              ],
-            },
-          },
-        },
-      }),
+      buildConfiguredAudioCfg(),
     );
 
     expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
@@ -314,27 +318,41 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it("runs normal media understanding for an unlocked voice note", async () => {
+  it("recognizes locked-harness audio from its filename when MIME metadata is missing", async () => {
+    const sessionKey = "agent:main:harness:claude-cli:locked-audio-filename";
+    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
+      sessionEntry: {
+        sessionId: "locked-filename-session",
+        updatedAt: 1,
+        agentHarnessId: "claude-cli",
+        modelSelectionLocked: true,
+      },
+      sessionKey,
+      storePath: "/tmp/sessions.json",
+    });
+
     await getReplyFromConfig(
-      buildCtx(),
-      undefined,
-      withFastReplyConfig({
-        tools: {
-          media: {
-            audio: {
-              enabled: true,
-              models: [
-                {
-                  type: "cli",
-                  command: "/usr/local/bin/stt-transcribe",
-                  args: ["{{MediaPath}}"],
-                },
-              ],
-            },
-          },
-        },
+      buildCtx({
+        SessionKey: sessionKey,
+        Body: "<media:file>",
+        BodyForAgent: "<media:file>",
+        BodyForCommands: "<media:file>",
+        RawBody: "<media:file>",
+        CommandBody: "<media:file>",
+        MediaType: undefined,
       }),
+      undefined,
+      buildConfiguredAudioCfg(),
     );
+
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
+    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ processingMode: "audio-only" }),
+    );
+  });
+
+  it("runs normal media understanding for an unlocked voice note", async () => {
+    await getReplyFromConfig(buildCtx(), undefined, buildConfiguredAudioCfg());
 
     expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
     expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).not.toHaveProperty("processingMode");

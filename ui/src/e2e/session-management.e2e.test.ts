@@ -41,6 +41,9 @@ function sessionRow(
     hasActiveRun?: boolean;
     status?: string;
     spawnedBy?: string;
+    startedAt?: number;
+    endedAt?: number;
+    childSessions?: string[];
     execNode?: string;
     worktree?: { branch?: string; repoRoot?: string };
   } = {},
@@ -194,6 +197,84 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("expands child sessions inline and opens a child chat", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const parentKey = "agent:main:release-plan";
+    const childOneKey = "agent:main:research-sources";
+    const childTwoKey = "agent:main:verify-tests";
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { spawnedBy: parentKey },
+              response: sessionsListResponse([
+                sessionRow(childOneKey, "Research sources", baseTime - 1_000, {
+                  hasActiveRun: true,
+                  spawnedBy: parentKey,
+                  startedAt: baseTime - 61_000,
+                  status: "running",
+                }),
+                sessionRow(childTwoKey, "Verify tests", baseTime - 2_000, {
+                  endedAt: baseTime - 2_000,
+                  spawnedBy: parentKey,
+                  startedAt: baseTime - 62_000,
+                  status: "done",
+                }),
+              ]),
+            },
+            {
+              response: sessionsListResponse([
+                sessionRow(parentKey, "Plan release", baseTime, {
+                  childSessions: [childOneKey, childTwoKey],
+                }),
+              ]),
+            },
+          ],
+        },
+      },
+      sessionKey: parentKey,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(parentKey)}`);
+      const parent = page.locator(`[data-session-key="${parentKey}"]`);
+      await parent.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
+      await captureUiProof(page, "child-sessions-collapsed.png");
+
+      await parent.getByRole("button", { name: "Show 2 child sessions for Plan release" }).click();
+      await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list")).some(
+            (request) => requireRecord(request.params).spawnedBy === parentKey,
+          ),
+        )
+        .toBe(true);
+
+      const childRows = page.locator(".sidebar-recent-session--child");
+      await expect.poll(() => childRows.count()).toBe(2);
+      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
+      await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
+      await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+      await captureUiProof(page, "child-sessions-expanded.png");
+
+      await childRows.nth(1).getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(childTwoKey);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps a rejected sidebar mutation visible until the user dismisses it", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -329,15 +410,17 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
 
-      // Sidebar: pinned rows form their own group ahead of the Sessions group.
+      // Sidebar: pinned rows form their own headerless group ahead of the
+      // Sessions group, styled like the nav entries above them.
       const sidebarRows = page.locator(".sidebar-recent-sessions__list .sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebarRows.first().textContent()).toContain("Release planning");
       const groups = page.locator(".sidebar-recent-sessions__group");
       await expect.poll(() => groups.count()).toBe(2);
+      await expect.poll(() => groups.first().getAttribute("data-session-section")).toBe("pinned");
       await expect
-        .poll(() => groups.first().locator(".sidebar-recent-sessions__label-text").textContent())
-        .toContain("Pinned");
+        .poll(() => groups.first().locator(".sidebar-recent-sessions__head").count())
+        .toBe(0);
 
       // Chats keep recency order with the open session highlighted in place —
       // selecting a row must not reshuffle the list.
@@ -1464,7 +1547,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
         await seeMore.click();
       }
-      await page.locator(".sidebar-recent-sessions").evaluate((element) => {
+      await page.locator(".sidebar-shell__body").evaluate((element) => {
         element.scrollTop = 0;
       });
       await expect
@@ -1496,9 +1579,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       expect(overlaps).toBe(0);
 
       // The squeeze regression compressed sections into the viewport with no
-      // overflow; a healthy list is taller than its container and scrolls.
+      // overflow; a healthy sidebar body is taller than its viewport and scrolls.
       const scroll = await page.evaluate(() => {
-        const list = document.querySelector(".sidebar-recent-sessions");
+        const list = document.querySelector(".sidebar-shell__body");
         if (!list) {
           return null;
         }

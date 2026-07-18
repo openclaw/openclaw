@@ -8,15 +8,16 @@ import type {
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ChatFollowUpMode, ChatSendShortcut } from "../../app/settings.ts";
+import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
+import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
@@ -24,7 +25,6 @@ import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
-  renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import {
@@ -34,9 +34,7 @@ import {
 } from "./components/chat-composer.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
-  renderSessionDiffToggle,
   renderSessionWorkspaceRail,
-  renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
@@ -61,7 +59,7 @@ import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
+import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
@@ -83,6 +81,11 @@ export type ChatProps = {
   runStatus?: ChatRunUiStatus | null;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
+  planStatus?: PlanStatus | null;
+  gatewayQuestionPrompts?: readonly QuestionPrompt[];
+  onGatewayQuestionChange?: () => void;
+  onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
+  onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
   messages: unknown[];
   historyPagination?: {
     loading: boolean;
@@ -102,9 +105,15 @@ export type ChatProps = {
   realtimeTalkDetail?: string | null;
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+  realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkVideoCapable?: boolean;
+  realtimeTalkVideoPending?: boolean;
+  realtimeTalkCameraError?: boolean;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
+  disabledActionLabel?: string | null;
+  onDisabledAction?: (() => void) | null;
   error: string | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
@@ -126,7 +135,7 @@ export type ChatProps = {
   chatMessageMaxWidth?: string | null;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
-  followUpMode?: ChatFollowUpMode;
+  followUpMode?: ControlUiFollowUpMode;
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -150,6 +159,7 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -191,12 +201,6 @@ export type ChatProps = {
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
   backgroundTasks?: BackgroundTasksProps;
-  /** True when a split pane header hosts the workspace toggle; suppresses the
-   * single-pane floating opener so only one affordance renders. */
-  paneHeaderActive?: boolean;
-  /** Split-view opener shown in the floating toggle cluster. Only set for the
-   * single wide pane — split mode owns its controls in pane headers. */
-  onOpenSplitView?: () => void;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
   canAcceptTaskSuggestions?: boolean;
@@ -279,6 +283,8 @@ export function renderChat(props: ChatProps) {
       showToolCalls: props.showToolCalls,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      planStatus: props.planStatus,
+      questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
       assistantName: props.assistantName,
@@ -326,11 +332,15 @@ export function renderChat(props: ChatProps) {
     connected: props.connected,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
+    disabledActionLabel: props.disabledActionLabel,
+    onDisabledAction: props.onDisabledAction,
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
+    planStatus: props.planStatus,
+    gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
     stream: props.stream,
     queue: props.queue,
@@ -348,6 +358,10 @@ export function renderChat(props: ChatProps) {
     realtimeTalkDetail: props.realtimeTalkDetail,
     realtimeTalkInputLevel: props.realtimeTalkInputLevel,
     realtimeTalkConversation: props.realtimeTalkConversation,
+    realtimeTalkVideoStream: props.realtimeTalkVideoStream,
+    realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
+    realtimeTalkVideoPending: props.realtimeTalkVideoPending,
+    realtimeTalkCameraError: props.realtimeTalkCameraError,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -357,12 +371,16 @@ export function renderChat(props: ChatProps) {
     onSend: props.onSend,
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
+    onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
     onGoalCommand: props.onGoalCommand,
+    onGatewayQuestionChange: props.onGatewayQuestionChange,
+    onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
+    onGatewayQuestionSkip: props.onGatewayQuestionSkip,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
     onAttachmentsChange: props.onAttachmentsChange,
@@ -429,7 +447,6 @@ export function renderChat(props: ChatProps) {
         }
       }}
     >
-      ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error
         ? html`
             <div class="callout danger callout--dismissible" role="alert">
@@ -509,41 +526,6 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
-          <!-- Floating openers share the top-right corner with the detail
-               panel's header controls; hide them while the sidebar is open. -->
-          ${!props.paneHeaderActive &&
-          !sidebarOpen &&
-          (props.onOpenSplitView ||
-            props.sessionWorkspace?.collapsed ||
-            props.backgroundTasks?.collapsed)
-            ? html`
-                <div class="chat-floating-toggles">
-                  ${props.onOpenSplitView
-                    ? html`
-                        <openclaw-tooltip .content=${t("chat.splitView.open")}>
-                          <button
-                            class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
-                            type="button"
-                            aria-label=${t("chat.splitView.open")}
-                            @click=${props.onOpenSplitView}
-                          >
-                            ${icons.columns2}
-                          </button>
-                        </openclaw-tooltip>
-                      `
-                    : nothing}
-                  ${props.sessionWorkspace?.collapsed
-                    ? renderSessionDiffToggle(props.sessionWorkspace)
-                    : nothing}
-                  ${props.backgroundTasks?.collapsed
-                    ? renderBackgroundTasksToggle(props.backgroundTasks)
-                    : nothing}
-                  ${props.sessionWorkspace?.collapsed
-                    ? renderSessionWorkspaceToggle(props.sessionWorkspace)
-                    : nothing}
-                </div>
-              `
-            : nothing}
           <div
             class="chat-split-container ${sidebarOpen
               ? "chat-split-container--open"

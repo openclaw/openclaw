@@ -235,6 +235,11 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
+/** Partial failure-alert update; null clears an inherited field override. */
+export type CronFailureAlertPatch = {
+  [K in keyof CronFailureAlert]?: CronFailureAlert[K] | null;
+};
+
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
   | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
@@ -308,6 +313,10 @@ type CronCommandPayloadPatch = {
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;
+  /** Exact startup catch-up slot protected from future-slot repair across restarts. */
+  startupCatchupAtMs?: number;
+  /** Durable pre-admission reservation. Cleared on restart without recording a run. */
+  queuedAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
@@ -418,6 +427,7 @@ export type CronJobPatch = Partial<
     | "state"
     | "payload"
     | "delivery"
+    | "failureAlert"
     | "declarationKey"
     | "displayName"
     | "owner"
@@ -427,5 +437,6 @@ export type CronJobPatch = Partial<
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
+  failureAlert?: CronFailureAlertPatch | false | null;
   state?: Partial<CronJobState>;
 };

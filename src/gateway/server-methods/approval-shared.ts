@@ -293,12 +293,14 @@ export function resolveApprovalDecisionParams<TParams extends ApprovalResolvePar
 
 /** Resolves the approval clients that should receive request or resolution events. */
 export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
+  approvalKind: "exec" | "plugin" | "system-agent";
   context: GatewayRequestContext;
   record: ExecApprovalRecord<TPayload>;
   excludeConnId?: string;
 }): ReadonlySet<string> | null {
   return (
     params.context.getApprovalClientConnIds?.({
+      approvalKind: params.approvalKind,
       excludeConnId: params.excludeConnId,
       record: params.record,
       filter: (client) =>
@@ -456,6 +458,7 @@ export async function handlePendingApprovalRequest<
     const approvalClientConnIds = suppressDelivery
       ? null
       : resolveApprovalRequestRecipientConnIds({
+          approvalKind: params.approvalKind ?? "exec",
           context: params.context,
           record: params.record,
           excludeConnId: params.clientConnId,
@@ -588,6 +591,7 @@ export async function handlePendingApprovalRequest<
 
 /** Resolves a pending approval and broadcasts the final decision exactly once. */
 export async function handleApprovalResolve<TPayload, TResolvedEvent extends object>(params: {
+  approvalKind: "exec" | "plugin";
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
   decision: ExecApprovalDecision;
@@ -609,7 +613,6 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     snapshot: ExecApprovalRecord<TPayload>;
   }) => boolean;
   resolvedEventName: string;
-  approvalKind?: "exec" | "plugin";
   buildResolvedEvent: (params: {
     approvalId: string;
     decision: ExecApprovalDecision;
@@ -729,6 +732,7 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     nowMs: Date.now(),
   });
   const resolvedEventConnIds = resolveApprovalRequestRecipientConnIds({
+    approvalKind: params.approvalKind,
     context: params.context,
     record: resolved.snapshot,
   });

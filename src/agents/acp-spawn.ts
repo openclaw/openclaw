@@ -77,7 +77,6 @@ import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
-  resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
@@ -206,7 +205,6 @@ type SpawnAcpResultFields = {
   mode?: SpawnAcpMode;
   runTimeoutSeconds?: number;
   inlineDelivery?: boolean;
-  streamLogPath?: string;
   note?: string;
 };
 
@@ -1017,8 +1015,11 @@ function resolveAcpSpawnRuntimeOptions(params: {
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
-}): { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions } | { ok: false; error: string } {
+}):
+  | { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions; modelExplicit: boolean }
+  | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
+  const modelExplicit = normalizeOptionalString(params.model) !== undefined;
   const model = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: policyAgentId,
@@ -1059,7 +1060,7 @@ function resolveAcpSpawnRuntimeOptions(params: {
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
-  return { ok: true, runtimeOptions };
+  return { ok: true, runtimeOptions, modelExplicit };
 }
 
 async function initializeAcpSpawnRuntime(params: {
@@ -1069,6 +1070,7 @@ async function initializeAcpSpawnRuntime(params: {
   runtimeMode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
+  modelExplicit?: boolean;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
@@ -1096,6 +1098,7 @@ async function initializeAcpSpawnRuntime(params: {
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions: params.runtimeOptions,
+    modelExplicit: params.modelExplicit,
     cwd: params.cwd,
     backendId: params.cfg.acp?.backend,
   });
@@ -1473,6 +1476,7 @@ export async function spawnAcpDirect(
 
   let binding: SessionBindingRecord | null = null;
   let sessionCreated = false;
+  let childSessionId: string | undefined;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   try {
     await callGateway({
@@ -1495,9 +1499,11 @@ export async function spawnAcpDirect(
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
       runtimeOptions: runtimeOptionsResult.runtimeOptions,
+      modelExplicit: runtimeOptionsResult.modelExplicit,
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
+    childSessionId = initializedSession.sessionId;
 
     if (preparedBinding) {
       ({ binding } = await bindPreparedAcpThread({
@@ -1542,12 +1548,6 @@ export async function spawnAcpDirect(
     requesterSessionKey: requesterInternalKey,
     agentId: targetAgentId,
   });
-  const streamLogPath =
-    effectiveStreamToParent && parentSessionKey
-      ? resolveAcpSpawnStreamLogPath({
-          childSessionKey: sessionKey,
-        })
-      : undefined;
   const parentAgentId = parentSessionKey
     ? resolveAgentIdFromSessionKey(parentSessionKey)
     : undefined;
@@ -1565,6 +1565,7 @@ export async function spawnAcpDirect(
       : undefined;
 
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
+  const parentRelayStateEnv = { ...process.env };
   const parentEventRouting = parentSessionKey
     ? resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey })
     : undefined;
@@ -1574,11 +1575,12 @@ export async function spawnAcpDirect(
       runId: childIdem,
       parentSessionKey,
       childSessionKey: sessionKey,
+      childSessionId,
       agentId: targetAgentId,
+      env: parentRelayStateEnv,
       mainKey: cfg.session?.mainKey,
       sessionScope: cfg.session?.scope,
       eventRouting: parentEventRouting,
-      logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
       cfg,
@@ -1634,11 +1636,12 @@ export async function spawnAcpDirect(
         runId: childRunId,
         parentSessionKey,
         childSessionKey: sessionKey,
+        childSessionId,
         agentId: targetAgentId,
+        env: parentRelayStateEnv,
         mainKey: cfg.session?.mainKey,
         sessionScope: cfg.session?.scope,
         eventRouting: parentEventRouting,
-        logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
         cfg,
@@ -1681,7 +1684,6 @@ export async function spawnAcpDirect(
       runId: childRunId,
       mode: spawnMode,
       runTimeoutSeconds,
-      ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }
