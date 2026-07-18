@@ -201,7 +201,7 @@ describe("model setup first-run redirect", () => {
     await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
 
     expect(secondRequest).toHaveBeenCalledOnce();
-    expect(replace).toHaveBeenCalledWith("model-setup");
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
     expect(consumeCachedModelSetupDetection(secondClient)).toEqual(result);
   });
 
