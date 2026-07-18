@@ -143,7 +143,12 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionScopeKey = scopeKey;
     this.sessionStarted = true;
     this.clearConversation();
-    void this.requestReply(client, { sessionId: this.sessionId, welcomeVariant: "onboarding" });
+    // The onboarding variant seeds the first-run setup proposal; the permanent
+    // presence surface gets the normal caretaker greeting instead.
+    void this.requestReply(client, {
+      sessionId: this.sessionId,
+      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
+    });
   }
 
   private clearConversation(): void {
@@ -223,7 +228,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.input = "";
     void this.requestReply(client, {
       sessionId: this.sessionId,
-      welcomeVariant: "onboarding",
+      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
       message,
     });
   }

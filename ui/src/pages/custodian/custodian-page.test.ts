@@ -91,12 +91,18 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
   };
 }
 
-async function mountPage(context: ApplicationContext): Promise<{
+async function mountPage(
+  context: ApplicationContext,
+  options: { onboarding?: boolean } = {},
+): Promise<{
   page: TestCustodianPage;
   provider: ApplicationContextProvider;
 }> {
   const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  const page = document.createElement("openclaw-custodian-page") as TestCustodianPage & {
+    onboarding: boolean;
+  };
+  page.onboarding = options.onboarding ?? true;
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -559,6 +565,31 @@ describe("custodian page", () => {
     expect(page.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.disabled).toBe(
       true,
     );
+  });
+
+  it("requests the normal caretaker greeting outside onboarding", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "OpenClaw here. Everything is healthy.",
+      action: "none",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    // The onboarding variant seeds the first-run setup proposal; permanent
+    // presence visits must not re-enter that flow.
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("welcomeVariant");
+
+    const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.value = "status";
+    composer.dispatchEvent(new Event("input"));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });
   });
 
   it("exits setup through normal chat navigation", async () => {
