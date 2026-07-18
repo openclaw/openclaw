@@ -154,7 +154,7 @@ enum DeviceIdentityPaths {
         // Node doctor cannot traverse sandboxed Apple App Group/Application Support containers.
         // Native startup therefore owns this one-time import before runtime becomes SQLite-only.
         let selectedStateDirURL = self.stateDirURL()
-        let roots: [URL] = if self.stateDirOverrideURL() != nil {
+        let roots: [URL] = if self.scopedStateDirURL != nil || self.stateDirOverrideURL() != nil {
             // Explicit and task-local stores must never import the machine's real identity.
             [selectedStateDirURL]
         } else {

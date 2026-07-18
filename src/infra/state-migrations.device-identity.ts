@@ -7,11 +7,16 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   normalizeLegacyDeviceIdentity,
   type NormalizedLegacyDeviceIdentity,
 } from "./device-identity-legacy.js";
-import { validateStoredDeviceIdentity, type DeviceIdentity } from "./device-identity-store.js";
+import {
+  resolveDeviceIdentityStore,
+  validateStoredDeviceIdentity,
+  type DeviceIdentity,
+} from "./device-identity-store.js";
 import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
@@ -394,6 +399,18 @@ async function cleanupReceiptSources(params: {
   env: NodeJS.ProcessEnv;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
+  if (
+    await params.stateRoot.exists(
+      relativeLegacyPath(params.stateDir, params.detected.nativeClaimPath),
+    )
+  ) {
+    return {
+      changes: [],
+      warnings: [
+        "Native device identity import is pending; restart the native app before running Doctor cleanup.",
+      ],
+    };
+  }
   const changes: string[] = [];
   const warnings: string[] = [];
   let removed = 0;
@@ -447,6 +464,19 @@ async function migrateWithExclusiveStateOwnership(params: {
   const receipt = readMigrationReceipt(params.detected.sourcePath, params.env);
   if (receipt) {
     return await cleanupReceiptSources({ ...params, receipt });
+  }
+
+  if (
+    await params.stateRoot.exists(
+      relativeLegacyPath(params.stateDir, params.detected.nativeClaimPath),
+    )
+  ) {
+    return {
+      changes: [],
+      warnings: [
+        "Native device identity import is pending; restart the native app before running Doctor.",
+      ],
+    };
   }
 
   const hasSource = await params.stateRoot.exists(
@@ -618,27 +648,44 @@ export async function migrateLegacyDeviceIdentity(params: {
 
   let result: MigrationMessages = { changes: [], warnings: [] };
   let releaseError: unknown;
+  let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;
   try {
     try {
-      const hasLegacyNow = hasLegacyDeviceIdentityPath(params.detected);
-      if (hasLegacyNow) {
-        const stateRoot = await root(params.stateDir, {
-          hardlinks: "reject",
-          maxBytes: MAX_LEGACY_IDENTITY_BYTES,
-          symlinks: "reject",
-        });
-        result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
-      } else if (params.detected.hasInvalidCanonical) {
-        result = repairInvalidCanonicalIdentity(env);
-      }
+      identityCoordinator = acquireDeviceIdentityCoordinator({
+        databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
+      });
     } catch (error) {
-      result.warnings.push(`Failed reading legacy device identity state: ${String(error)}`);
+      result.warnings.push(
+        `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
+      );
+    }
+    if (identityCoordinator) {
+      try {
+        const hasLegacyNow = hasLegacyDeviceIdentityPath(params.detected);
+        if (hasLegacyNow) {
+          const stateRoot = await root(params.stateDir, {
+            hardlinks: "reject",
+            maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+            symlinks: "reject",
+          });
+          result = await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+        } else if (params.detected.hasInvalidCanonical) {
+          result = repairInvalidCanonicalIdentity(env);
+        }
+      } catch (error) {
+        result.warnings.push(`Failed reading legacy device identity state: ${String(error)}`);
+      }
     }
   } finally {
     try {
-      await lock.release();
+      identityCoordinator?.release();
     } catch (error) {
       releaseError = error;
+    }
+    try {
+      await lock.release();
+    } catch (error) {
+      releaseError ??= error;
     }
   }
   if (releaseError) {

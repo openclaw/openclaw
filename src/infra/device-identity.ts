@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
@@ -25,6 +26,7 @@ export type { DeviceIdentity } from "./device-identity-store.js";
 
 const LEGACY_DEVICE_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
+const NATIVE_CLAIM_SUFFIX = ".native-importing";
 
 class DeviceIdentityMigrationRequiredError extends Error {
   constructor(filePath: string) {
@@ -74,15 +76,49 @@ function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): voi
     return;
   }
   const legacyPath = resolveLegacyDeviceIdentityPath(options);
-  if (pathMayExist(legacyPath) || pathMayExist(`${legacyPath}${DOCTOR_CLAIM_SUFFIX}`)) {
+  if (
+    // Claims first, source last: both migration owners restore claim -> source atomically.
+    pathMayExist(`${legacyPath}${DOCTOR_CLAIM_SUFFIX}`) ||
+    pathMayExist(`${legacyPath}${NATIVE_CLAIM_SUFFIX}`) ||
+    pathMayExist(legacyPath)
+  ) {
     throw new DeviceIdentityMigrationRequiredError(legacyPath);
   }
 }
 
-/** Load a valid canonical identity or atomically create its SQLite row. */
-export function loadOrCreateDeviceIdentity(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity {
+function withDeviceIdentityCoordinator<T>(
+  options: DeviceIdentityStoreOptions,
+  operation: (
+    resolved: ReturnType<typeof resolveDeviceIdentityStore>,
+    resolvedOptions: DeviceIdentityStoreOptions,
+  ) => T,
+): T {
+  const resolved = resolveDeviceIdentityStore(options);
+  const resolvedOptions: DeviceIdentityStoreOptions = {
+    ...options,
+    path: resolved.databasePath,
+    identityKey: resolved.identityKey,
+  };
+  const coordinator = acquireDeviceIdentityCoordinator({ databasePath: resolved.databasePath });
+  let result: T;
+  try {
+    result = operation(resolved, resolvedOptions);
+  } catch (operationError) {
+    try {
+      coordinator.release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [operationError, releaseError],
+        "device identity operation and coordinator release both failed",
+      );
+    }
+    throw operationError;
+  }
+  coordinator.release();
+  return result;
+}
+
+function loadOrCreateDeviceIdentityOwned(options: DeviceIdentityStoreOptions): DeviceIdentity {
   assertNoPendingLegacyIdentity(options);
   const existing = readStoredDeviceIdentity(options);
   if (existing) {
@@ -95,6 +131,15 @@ export function loadOrCreateDeviceIdentity(
   return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, options));
 }
 
+/** Load a valid canonical identity or atomically create its SQLite row. */
+export function loadOrCreateDeviceIdentity(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity {
+  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) =>
+    loadOrCreateDeviceIdentityOwned(resolvedOptions),
+  );
+}
+
 const processDeviceIdentities = new Map<string, DeviceIdentity>();
 const MAX_PROCESS_DEVICE_IDENTITIES = 32;
 
@@ -102,31 +147,34 @@ const MAX_PROCESS_DEVICE_IDENTITIES = 32;
 export function loadOrCreateProcessDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity {
-  assertNoPendingLegacyIdentity(options);
-  const resolved = resolveDeviceIdentityStore(options);
-  const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
-  const cached = processDeviceIdentities.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const identity = loadOrCreateDeviceIdentity(options);
-  if (processDeviceIdentities.size >= MAX_PROCESS_DEVICE_IDENTITIES) {
-    const oldestKey = processDeviceIdentities.keys().next().value;
-    if (oldestKey !== undefined) {
-      processDeviceIdentities.delete(oldestKey);
+  return withDeviceIdentityCoordinator(options, (resolved, resolvedOptions) => {
+    assertNoPendingLegacyIdentity(resolvedOptions);
+    const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
+    const cached = processDeviceIdentities.get(cacheKey);
+    if (cached) {
+      return cached;
     }
-  }
-  processDeviceIdentities.set(cacheKey, identity);
-  return identity;
+    const identity = loadOrCreateDeviceIdentityOwned(resolvedOptions);
+    if (processDeviceIdentities.size >= MAX_PROCESS_DEVICE_IDENTITIES) {
+      const oldestKey = processDeviceIdentities.keys().next().value;
+      if (oldestKey !== undefined) {
+        processDeviceIdentities.delete(oldestKey);
+      }
+    }
+    processDeviceIdentities.set(cacheKey, identity);
+    return identity;
+  });
 }
 
 /** Load a valid persisted identity without creating or mutating SQLite state. */
 export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity | null {
-  assertNoPendingLegacyIdentity(options);
-  const stored = readStoredDeviceIdentityReadOnly(options);
-  return stored ? toDeviceIdentity(stored) : null;
+  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) => {
+    assertNoPendingLegacyIdentity(resolvedOptions);
+    const stored = readStoredDeviceIdentityReadOnly(resolvedOptions);
+    return stored ? toDeviceIdentity(stored) : null;
+  });
 }
 
 /** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */

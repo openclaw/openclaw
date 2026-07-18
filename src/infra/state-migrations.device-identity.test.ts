@@ -204,6 +204,7 @@ describe("legacy device identity Doctor migration", () => {
     expect(disabled).toEqual({
       sourcePath,
       claimPath: `${sourcePath}.doctor-importing`,
+      nativeClaimPath: `${sourcePath}.native-importing`,
       hasLegacy: false,
       hasInvalidCanonical: false,
     });
@@ -212,6 +213,10 @@ describe("legacy device identity Doctor migration", () => {
       detectLegacyDeviceIdentity({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
     ).toBe(true);
     await fsp.rename(sourcePath, `${sourcePath}.doctor-importing`);
+    expect(
+      detectLegacyDeviceIdentity({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
+    ).toBe(true);
+    await fsp.rename(`${sourcePath}.doctor-importing`, `${sourcePath}.native-importing`);
     expect(
       detectLegacyDeviceIdentity({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
     ).toBe(true);
@@ -611,6 +616,21 @@ describe("legacy device identity Doctor migration", () => {
     expect(identityRow(env)?.device_id).toBe(SWIFT_RAW_DEVICE_ID);
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(fs.existsSync(claimPath)).toBe(false);
+  });
+
+  it("preserves an interrupted native claim for native startup", async () => {
+    const { env, stateDir } = useStateDir();
+    const sourcePath = await writeLegacy({ stateDir });
+    const nativeClaimPath = `${sourcePath}.native-importing`;
+    await fsp.rename(sourcePath, nativeClaimPath);
+
+    const result = await migrate(stateDir, env);
+
+    expect(result.warnings.join("\n")).toContain("Native device identity import is pending");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(nativeClaimPath)).toBe(true);
+    expect(identityRow(env)).toBeUndefined();
+    expect(receipt(env)).toBeUndefined();
   });
 
   it("refuses source and interrupted claim together", async () => {

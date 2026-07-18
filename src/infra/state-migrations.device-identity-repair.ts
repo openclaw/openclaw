@@ -13,6 +13,7 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
+const NATIVE_CLAIM_SUFFIX = ".native-importing";
 const IDENTITY_KEY = "primary";
 
 function pathMayExist(filePath: string): boolean {
@@ -32,6 +33,7 @@ export function detectLegacyDeviceIdentity(params: {
 }): LegacyDeviceIdentityDetection {
   const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
+  const nativeClaimPath = `${sourcePath}${NATIVE_CLAIM_SUFFIX}`;
   const doctorAuthorized = params.doctorOnlyStateMigrations === true;
   let hasInvalidCanonical = false;
   if (doctorAuthorized) {
@@ -47,13 +49,20 @@ export function detectLegacyDeviceIdentity(params: {
   return {
     sourcePath,
     claimPath,
-    hasLegacy: doctorAuthorized && (pathMayExist(sourcePath) || pathMayExist(claimPath)),
+    nativeClaimPath,
+    hasLegacy:
+      doctorAuthorized &&
+      (pathMayExist(claimPath) || pathMayExist(nativeClaimPath) || pathMayExist(sourcePath)),
     hasInvalidCanonical,
   };
 }
 
 export function hasLegacyDeviceIdentityPath(detected: LegacyDeviceIdentityDetection): boolean {
-  return pathMayExist(detected.sourcePath) || pathMayExist(detected.claimPath);
+  return (
+    pathMayExist(detected.claimPath) ||
+    pathMayExist(detected.nativeClaimPath) ||
+    pathMayExist(detected.sourcePath)
+  );
 }
 
 /** Generate a replacement only after the caller acquires Doctor's exclusive state lock. */

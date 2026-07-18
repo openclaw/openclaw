@@ -2,6 +2,7 @@
 export type LegacyDeviceIdentityDetection = {
   sourcePath: string;
   claimPath: string;
+  nativeClaimPath: string;
   hasLegacy: boolean;
   hasInvalidCanonical: boolean;
 };

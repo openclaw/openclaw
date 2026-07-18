@@ -9,6 +9,10 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import {
+  acquireDeviceIdentityCoordinator,
+  DeviceIdentityCoordinatorError,
+} from "./device-identity-coordinator.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import {
@@ -130,6 +134,42 @@ async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdenti
 }
 
 describe("device identity SQLite store", () => {
+  it("serializes identity ownership with the shared SQLite coordinator", async () => {
+    await withTempDir("openclaw-device-identity-coordinator-", async (rootDir) => {
+      const databasePath = path.join(rootDir, "state", "openclaw.sqlite");
+      const lockDir = path.join(rootDir, "locks");
+      const first = acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 });
+      try {
+        expect(() =>
+          acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 }),
+        ).toThrow(DeviceIdentityCoordinatorError);
+      } finally {
+        first.release();
+      }
+
+      const next = acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 });
+      next.release();
+
+      fs.chmodSync(lockDir, 0o755);
+      const secured = acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 });
+      try {
+        expect(fs.statSync(lockDir).mode & 0o077).toBe(0);
+      } finally {
+        secured.release();
+      }
+
+      const symlinkLockDir = path.join(rootDir, "symlink-locks");
+      fs.symlinkSync(lockDir, symlinkLockDir);
+      expect(() =>
+        acquireDeviceIdentityCoordinator({
+          databasePath,
+          lockDir: symlinkLockDir,
+          busyTimeoutMs: 0,
+        }),
+      ).toThrow(/real directory/);
+    });
+  });
+
   it("reads a missing database without creating files", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (rootDir) => {
       const options = storeOptions(rootDir);
@@ -263,7 +303,7 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it.each(["device.json", "device.json.doctor-importing"])(
+  it.each(["device.json", "device.json.doctor-importing", "device.json.native-importing"])(
     "blocks SQLite access while legacy %s may exist",
     async (legacyName) => {
       await withTempDir("openclaw-device-identity-legacy-", async (rootDir) => {
