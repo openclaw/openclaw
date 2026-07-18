@@ -35,6 +35,19 @@ func chatReaderHasNewerContent(
     return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
 }
 
+/// `hasNewerContentBelow` is derived structurally (a later message or streaming text exists),
+/// which is true from the first Writing tick of a turn even when the whole transcript is on
+/// screen. Gating on the live-edge geometry keeps the jump affordance hidden until content is
+/// actually below the viewport; without it the button flashes during every reply (#108693).
+func chatReaderShowsJumpToLatest(
+    hasNewerContentBelow: Bool,
+    isAtLiveEdge: Bool,
+    hasVisibleContent: Bool,
+    isLoading: Bool) -> Bool
+{
+    hasNewerContentBelow && !isAtLiveEdge && hasVisibleContent && !isLoading
+}
+
 /// The view's own one-shot positioning always runs in a nil-animation transaction, so
 /// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
 /// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
@@ -608,7 +621,11 @@ public struct OpenClawChatView: View {
     }
 
     private var showsJumpToLatest: Bool {
-        self.hasNewerContentBelow && self.hasVisibleMessageListContent && !self.viewModel.isLoading
+        chatReaderShowsJumpToLatest(
+            hasNewerContentBelow: self.hasNewerContentBelow,
+            isAtLiveEdge: self.isAtLiveEdge,
+            hasVisibleContent: self.hasVisibleMessageListContent,
+            isLoading: self.viewModel.isLoading)
     }
 
     private var jumpToLatestButton: some View {
