@@ -124,6 +124,9 @@ const hoisted = vi.hoisted(() => {
     inboundReplayClaim,
     logger,
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
+    ingressDispatch: null as
+      | null
+      | ((roomId: string, event: unknown, lifecycle: unknown) => Promise<void>),
     releaseSharedClientInstance,
     resolveSharedMatrixClient,
     resolveTextChunkLimit,
@@ -325,17 +328,56 @@ vi.mock("./events.js", () => ({
   registerMatrixMonitorEvents: vi.fn(
     (params: {
       getHealthySyncSinceMs?: () => number | undefined;
-      onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
+      ingress: { accept: (roomId: string, event: unknown) => Promise<void> };
       runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
     }) => {
       hoisted.callOrder.push("register-events");
       hoisted.registeredHealthySyncGetter = params.getHealthySyncSinceMs;
       hoisted.registeredOnRoomMessage = (roomId: string, event: unknown) =>
-        params.runDetachedTask
-          ? params.runDetachedTask("test room message", async () => {
-              await params.onRoomMessage(roomId, event);
-            })
-          : params.onRoomMessage(roomId, event);
+        params.ingress.accept(roomId, event);
+    },
+  ),
+}));
+
+vi.mock("./ingress.js", () => ({
+  createMatrixIngressMonitor: vi.fn(
+    (params: {
+      dispatch: (roomId: string, event: unknown, lifecycle: unknown) => Promise<void>;
+      onUnjournaledEvent: (roomId: string, event: unknown) => void;
+    }) => {
+      hoisted.callOrder.push("create-ingress");
+      hoisted.ingressDispatch = (roomId, event, lifecycle) =>
+        params.dispatch(roomId, event, lifecycle);
+      const inFlight = new Set<Promise<void>>();
+      const lifecycle = {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+      };
+      return {
+        // Faithful stand-in: accept dispatches through the same dispatch
+        // callback the real drain would use, and stop() awaits in-flight
+        // dispatches like the real drain shutdown.
+        accept: vi.fn(async (roomId: string, event: unknown) => {
+          const task = Promise.resolve().then(() => params.dispatch(roomId, event, lifecycle));
+          inFlight.add(task);
+          try {
+            await task;
+          } finally {
+            inFlight.delete(task);
+          }
+        }),
+        start: vi.fn(() => {
+          hoisted.callOrder.push("ingress-start");
+        }),
+        stop: vi.fn(async () => {
+          hoisted.callOrder.push("ingress-stop");
+          await Promise.all(inFlight);
+        }),
+        waitForIdle: vi.fn(async () => {}),
+      };
     },
   ),
 }));
@@ -438,6 +480,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.accountConfig.dm = {};
+    hoisted.ingressDispatch = null;
     delete (hoisted.accountConfig as { streaming?: unknown }).streaming;
     delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
@@ -623,12 +666,8 @@ describe("monitorMatrixProvider", () => {
     }
   });
 
-  it("contains room-message handler rejections inside monitor task tracking", async () => {
+  it("surfaces room-message handler failures to the ingress drain", async () => {
     const abortController = new AbortController();
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => {
-      unhandled.push(reason);
-    };
 
     hoisted.createMatrixRoomMessageHandler.mockReturnValue(
       vi.fn(async () => {
@@ -636,30 +675,22 @@ describe("monitorMatrixProvider", () => {
       }),
     );
 
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
-      await waitForCallOrderEntry("start-client");
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await waitForCallOrderEntry("start-client");
 
-      const onRoomMessage = hoisted.registeredOnRoomMessage;
-      if (!onRoomMessage) {
-        throw new Error("expected room message handler to be registered");
-      }
-
-      await onRoomMessage("!room:example.org", { event_id: "$event" });
-      await Promise.resolve();
-
-      expect(unhandled).toHaveLength(0);
-      expect(mockCallArg(hoisted.logger.warn, 0, 0)).toBe("matrix background task failed");
-      const warningMetadata = mockCallArg(hoisted.logger.warn, 0, 1) as Record<string, unknown>;
-      expect(warningMetadata.task).toBe("test room message");
-      expect(warningMetadata.error).toBe("Error: room handler exploded");
-
-      abortController.abort();
-      await monitorPromise;
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
+    const ingressDispatch = hoisted.ingressDispatch;
+    if (!ingressDispatch) {
+      throw new Error("expected ingress dispatch to be registered");
     }
+
+    // A journaled dispatch must reject so the drain's retry / dead-letter
+    // policy owns the failure instead of the old detached task swallowing it.
+    await expect(ingressDispatch("!room:example.org", { event_id: "$event" }, {})).rejects.toThrow(
+      "room handler exploded",
+    );
+
+    abortController.abort();
+    await monitorPromise;
   });
 
   it("fails the channel task when Matrix sync emits an unexpected fatal error", async () => {
@@ -800,8 +831,11 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder).toEqual([
       "prepare-client",
       "create-manager",
+      "create-ingress",
+      "ingress-start",
       "register-events",
       "start-client",
+      "ingress-stop",
     ]);
     expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
   });
@@ -916,6 +950,9 @@ describe("monitorMatrixProvider", () => {
       hoisted.callOrder.indexOf("drain-decrypts"),
     );
     expect(hoisted.callOrder.indexOf("drain-decrypts")).toBeLessThan(
+      hoisted.callOrder.indexOf("ingress-stop"),
+    );
+    expect(hoisted.callOrder.indexOf("ingress-stop")).toBeLessThan(
       hoisted.callOrder.indexOf("handler-done"),
     );
     expect(hoisted.callOrder.indexOf("handler-done")).toBeLessThan(
