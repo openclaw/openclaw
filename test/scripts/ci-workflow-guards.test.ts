@@ -2637,7 +2637,9 @@ describe("ci workflow guards", () => {
       "Validate selected ref belongs to this repository",
       "Validate Tideclaw alpha target matches workflow branch",
     ]) {
-      const step = resolveTargetSteps.find((candidate: WorkflowStep) => candidate.name === stepName);
+      const step = resolveTargetSteps.find(
+        (candidate: WorkflowStep) => candidate.name === stepName,
+      );
 
       expect(step?.run, stepName).toContain("local -a git_args=(git)");
       expect(step?.run, stepName).toContain(
