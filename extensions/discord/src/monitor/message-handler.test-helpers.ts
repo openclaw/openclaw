@@ -1,7 +1,7 @@
 // Discord helper module supports message handler helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { vi } from "vitest";
-import type { createDiscordMessageDispatcher } from "./message-handler.js";
+import type { createDiscordMessageDispatcher } from "./message-dispatcher.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export const DEFAULT_DISCORD_BOT_USER_ID = "bot-123";
