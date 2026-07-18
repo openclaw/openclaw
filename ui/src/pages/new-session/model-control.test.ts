@@ -3,12 +3,13 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
-function contextWith(models: ModelCatalogEntry[], runtime = "openclaw"): ApplicationContext {
-  return {
+function contextWith(models: ModelCatalogEntry[], runtime = "openclaw") {
+  const request = vi.fn().mockResolvedValue({ models });
+  const context = {
     gateway: {
       snapshot: {
         connected: true,
-        client: { request: vi.fn().mockResolvedValue({ models }) },
+        client: { request },
       },
     },
     sessions: {
@@ -23,11 +24,12 @@ function contextWith(models: ModelCatalogEntry[], runtime = "openclaw"): Applica
       },
     },
   } as unknown as ApplicationContext;
+  return { context, request };
 }
 
 describe("new-session model runtime", () => {
   it("uses model catalog runtime metadata for an explicit cloud target", async () => {
-    const context = contextWith([
+    const { context, request } = contextWith([
       {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
@@ -38,7 +40,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
     await vi.waitFor(() =>
-      expect(context.gateway.snapshot.client?.request).toHaveBeenCalledWith("chat.metadata", {
+      expect(request).toHaveBeenCalledWith("chat.metadata", {
         agentId: "main",
       }),
     );
@@ -49,7 +51,7 @@ describe("new-session model runtime", () => {
   });
 
   it("falls back to the selected agent runtime for its default model", () => {
-    const context = contextWith([]);
+    const { context } = contextWith([]);
     const agent = {
       id: "main",
       agentRuntime: { id: "claude-cli", source: "agent" },
@@ -60,7 +62,7 @@ describe("new-session model runtime", () => {
   });
 
   it("does not apply default runtime metadata to an explicit model", async () => {
-    const context = contextWith(
+    const { context } = contextWith(
       [{ id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" }],
       "codex",
     );
