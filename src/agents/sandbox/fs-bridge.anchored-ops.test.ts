@@ -171,8 +171,8 @@ describe("sandbox fs bridge anchored ops", () => {
             const target = getDockerArg(args, 1);
             return dockerExecResult(`${target.replace("/workspace/alias", "/workspace/real")}\n`);
           }
-          if (script.includes("st.st_mtime_ns")) {
-            return dockerExecResult("81a4|1|2000000000");
+          if (script.includes("stat -c")) {
+            return dockerExecResult("81a4|1|2.000000000");
           }
           return dockerExecResult("");
         });
@@ -216,7 +216,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await bridge.stat({ filePath: "nested/file.txt" });
 
-      const statCall = findCallByScriptFragment("st.st_mtime_ns");
+      const statCall = findCallByScriptFragment("stat -c");
       const args = requireDockerCall(statCall, "stat")[0];
       expect(getDockerArg(args, 1)).toBe("/workspace/nested");
       expect(getDockerArg(args, 2)).toBe("file.txt");
@@ -234,7 +234,7 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes("st.st_mtime_ns")) {
+        if (script.includes("stat -c")) {
           return {
             stdout: Buffer.from(`${SANDBOX_STAT_MISSING_SENTINEL}\n`),
             stderr: Buffer.from(
@@ -255,15 +255,16 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
 
-      const statCall = requireDockerCall(findCallByScriptFragment("st.st_mtime_ns"), "stat");
+      const statCall = requireDockerCall(findCallByScriptFragment("stat -c"), "stat");
       const statScript = getDockerScript(statCall[0]);
       expect(statScript).toContain(SANDBOX_STAT_MISSING_SENTINEL);
-      expect(statScript).toContain("st.st_mtime_ns");
+      expect(statScript).toContain("stat -c");
+      expect(statScript).toContain("%f|%s|%.Y");
       expect(statScript.match(new RegExp(SANDBOX_STAT_MISSING_SENTINEL, "g"))).toHaveLength(3);
     });
   });
 
-  it("parses epoch-nanosecond mtimes as fractional milliseconds", async () => {
+  it("parses stat epoch seconds as fractional milliseconds", async () => {
     await withTempDir("openclaw-fs-bridge-stat-mtime-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -273,8 +274,8 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes("st.st_mtime_ns")) {
-          return dockerExecResult("41ed|12|1780056000123456789\n");
+        if (script.includes("stat -c")) {
+          return dockerExecResult("41ed|12|1780056000.123456789\n");
         }
         return dockerExecResult("");
       });
@@ -304,7 +305,7 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes("st.st_mtime_ns")) {
+        if (script.includes("stat -c")) {
           return {
             stdout: Buffer.alloc(0),
             stderr: Buffer.from("stat: cannot stat 'note.txt': Permission denied\n"),
@@ -323,7 +324,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
 
-      const statCall = requireDockerCall(findCallByScriptFragment("st.st_mtime_ns"), "stat");
+      const statCall = requireDockerCall(findCallByScriptFragment("stat -c"), "stat");
       const statScript = getDockerScript(statCall[0]);
       expect(statScript).toContain("else\n  stat_status=$?\nfi");
       expect(statScript).toContain('exit "$stat_status"');
@@ -332,7 +333,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
   it("saturates unsafe stat size and mtime output", async () => {
     await withTempDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
-      const unsafeMtimeNs = "8640000000000000000000000000000000000000000";
+      const unsafeMtimeEpochSeconds = "8640000000000000000000000000000000000";
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -341,8 +342,10 @@ describe("sandbox fs bridge anchored ops", () => {
         if (script.includes('readlink -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
-        if (script.includes("st.st_mtime_ns")) {
-          return dockerExecResult(`81a4|9007199254740992|${unsafeMtimeNs}\n`);
+        if (script.includes("stat -c")) {
+          return dockerExecResult(
+            `81a4|9007199254740992|${unsafeMtimeEpochSeconds}.000000001\n`,
+          );
         }
         return dockerExecResult("");
       });

@@ -22,7 +22,7 @@ import {
   type SandboxFsCommandPlan,
 } from "./fs-bridge-shell-command-plans.js";
 import {
-  parseSandboxStatEpochNanosMtimeMs,
+  parseSandboxStatMtimeMs,
   parseSandboxStatModeType,
   parseSandboxStatSize,
 } from "./fs-bridge-stat-parse.js";
@@ -226,7 +226,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     return {
       type: parseSandboxStatModeType(typeRaw),
       size: parseSandboxStatSize(sizeRaw),
-      mtimeMs: parseSandboxStatEpochNanosMtimeMs(mtimeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 

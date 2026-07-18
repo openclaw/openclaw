@@ -35,12 +35,12 @@ export function parseSandboxStatSize(value: string | undefined): number {
   return /^\d+$/.test(raw) ? Number.MAX_SAFE_INTEGER : 0;
 }
 
-/** Parses Python os.stat nanoseconds into the bridge's millisecond timestamp contract. */
-export function parseSandboxStatEpochNanosMtimeMs(value: string | undefined): number {
+/** Parses GNU stat's epoch seconds into the bridge's millisecond timestamp contract. */
+export function parseSandboxStatMtimeMs(value: string | undefined): number {
   const raw = value ?? "0";
-  if (!/^\d+$/.test(raw)) {
+  if (!/^\d+(?:\.\d+)?$/.test(raw)) {
     return 0;
   }
-  const mtimeMs = Number(raw) / 1_000_000;
+  const mtimeMs = Number(raw) * 1000;
   return asDateTimestampMs(mtimeMs) ?? 0;
 }

@@ -32,7 +32,7 @@ function createStatRuntime(
       if (command.script.includes('stat -c "%f|%h"')) {
         return shellResult(`${outputs.hardlinks(command.script)}\n`);
       }
-      if (command.script.includes("st.st_mtime_ns")) {
+      if (command.script.includes("%f|%s|%.Y")) {
         return shellResult(`${outputs.stat(command.script)}\n`);
       }
       throw new Error(`unexpected remote script: ${command.script}`);
@@ -221,12 +221,13 @@ describe("remote sandbox fs bridge", () => {
     // Remote stat output is untrusted shell text; raw mode bits avoid localized
     // file-type names, and unsafe numeric fields clamp deterministically.
     await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
-      const unsafeMtimeNs = "8640000000000000000000000000000000000000000";
+      const unsafeMtimeEpochSeconds = "8640000000000000000000000000000000000";
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
         hardlinks: () => "81a4|1",
-        stat: () => `81a4|9007199254740992|${unsafeMtimeNs}`,
+        stat: () =>
+          `81a4|9007199254740992|${unsafeMtimeEpochSeconds}.000000001`,
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
@@ -250,7 +251,7 @@ describe("remote sandbox fs bridge", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
         hardlinks: () => "81a4|2",
-        stat: () => "81a4|12|1780056000123456789",
+        stat: () => "81a4|12|1780056000.123456789",
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
@@ -270,7 +271,7 @@ describe("remote sandbox fs bridge", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       const runtime = createStatRuntime(workspaceDir, {
         hardlinks: () => "81a4|0x2",
-        stat: () => "81a4|12|1780056000123456789",
+        stat: () => "81a4|12|1780056000.123456789",
       });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({

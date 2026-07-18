@@ -16,8 +16,7 @@ export type SandboxFsCommandPlan = {
 };
 
 export const SANDBOX_STAT_MISSING_SENTINEL = "__OPENCLAW_STAT_MISSING__";
-export const SANDBOX_STAT_METADATA_PYTHON =
-  'import os, sys; st = os.lstat(sys.argv[1]); print(f"{st.st_mode:x}|{st.st_size}|{st.st_mtime_ns}")';
+export const SANDBOX_STAT_METADATA_FORMAT = "%f|%s|%.Y";
 
 /** Builds a stat command that anchors the path at its canonical parent before reading metadata. */
 export function buildStatPlan(
@@ -39,7 +38,7 @@ export function buildStatPlan(
       `  printf "${SANDBOX_STAT_MISSING_SENTINEL}\\n"`,
       "  exit 0",
       "fi",
-      `if stat_output=$(python3 -c '${SANDBOX_STAT_METADATA_PYTHON}' "$2" 2>&1); then`,
+      `if stat_output=$(stat -c '${SANDBOX_STAT_METADATA_FORMAT}' -- "$2" 2>&1); then`,
       '  printf "%s\\n" "$stat_output"',
       "  exit 0",
       "else",
