@@ -943,8 +943,10 @@ export async function runGatewayLoop(params: {
       rotateAgentEventLifecycleGeneration();
       advanceCronActiveJobGeneration();
       abortActiveCronTaskRuns("Gateway restarting.");
-      const drainAbort = new AbortController();
-      const cronTaskDrain = await waitForActiveCronTaskRuns(1_000, drainAbort.signal);
+      // Combine the wall-clock deadline with an AbortSignal so the drain
+      // poll exits promptly when the timeout fires — this makes the helper's
+      // new signal parameter functional at the production call site.
+      const cronTaskDrain = await waitForActiveCronTaskRuns(1_000, AbortSignal.timeout(1_000));
       const cronDrain = await waitForActiveCronJobs(1_000);
       if (!cronTaskDrain.drained || !cronDrain.drained) {
         gatewayLog.warn(
