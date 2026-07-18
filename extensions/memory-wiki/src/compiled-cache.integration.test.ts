@@ -105,6 +105,14 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
   };
 }
 
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 async function publishSnapshot(
   config: ReturnType<typeof resolveMemoryWikiConfig>,
   value: MemoryWikiCompiledCacheSnapshot,
@@ -492,8 +500,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     });
     const staleSnapshot = snapshot("stale candidate");
     const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
-    const callbackEntered = Promise.withResolvers<void>();
-    const releaseCallback = Promise.withResolvers<void>();
+    const callbackEntered = createDeferred();
+    const releaseCallback = createDeferred();
     const staleWrite = writeMemoryWikiCompiledCache(
       config,
       staleSnapshot,
