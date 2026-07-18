@@ -240,6 +240,7 @@ async function postFirecrawlJson<T>(
 
         const payload = await readJsonPayload();
         if (payload) {
+          await response.body?.cancel().catch(() => {});
           detail =
             typeof payload.error === "string"
               ? payload.error
