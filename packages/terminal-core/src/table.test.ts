@@ -271,6 +271,26 @@ describe("renderTable", () => {
     }
   });
 
+  it("ignores malformed colon-form SGR parameters instead of propagating NaN", () => {
+    // Malformed colon SGR like 38:abc:5:196 should be ignored, not crash.
+    // The non-numeric portion "abc" produces NaN from Number(), which the
+    // isInteger guard rejects.
+    const red = "\x1b[38:abc:5:196m";
+    const reset = "\x1b[0m";
+    const out = renderTable({
+      width: 24,
+      columns: [
+        { key: "K", header: "K", minWidth: 3 },
+        { key: "V", header: "V", flex: true, minWidth: 10 },
+      ],
+      rows: [{ K: "X", V: `${red}text${reset}` }],
+    });
+    // Should not contain "NaN" anywhere in the output
+    expect(out).not.toContain("NaN");
+    // The text content should still be rendered
+    expect(out).toContain("text");
+  });
+
   it("does not split BEL-terminated OSC-8 links when wrapping", () => {
     const open = "\x1b]8;;https://openclaw.ai\x07";
     const close = "\x1b]8;;\x07";

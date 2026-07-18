@@ -251,6 +251,9 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
     const field = fields[index] ?? "";
     if (field.includes(":")) {
       const param = Number(field.slice(0, field.indexOf(":")));
+      if (!Number.isInteger(param)) {
+        continue;
+      }
       const category = extendedSgrCategory(param) ?? simpleSgrCategory(param);
       if (category) {
         active.set(category, sgrSequence(sequence.introducer, field));
