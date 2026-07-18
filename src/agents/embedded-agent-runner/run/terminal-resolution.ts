@@ -27,7 +27,7 @@ import {
   resolveReasoningOnlyRetryInstruction,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
-  resolveToolUseTerminalContinuationInstruction,
+  resolveSettledToolTerminalContinuationInstruction,
   shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
   YIELD_DIAGNOSTIC_TEXT,
@@ -40,7 +40,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
-const MAX_TOOL_USE_TERMINAL_CONTINUATIONS = 1;
+const MAX_SETTLED_TOOL_TERMINAL_CONTINUATIONS = 1;
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
@@ -129,36 +129,42 @@ export async function resolveEmbeddedRunTerminal(input: {
         ? [silentToolResultReplyPayload]
         : input.payloadsWithToolMedia;
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
+  // A settled-tool continuation is the final recovery attempt. Do not let its
+  // terminal shape cascade into another retry family and execute more work.
+  const afterSettledToolContinuation = retryState.settledToolContinuationAttempts > 0;
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
+    onlyExplicitSilentReply: afterSettledToolContinuation,
     payloadCount,
     aborted: input.terminalAborted,
     timedOut: input.terminalTimedOut,
     attempt,
   });
-  const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
-    ? null
-    : resolveReasoningOnlyRetryInstruction({
-        provider: input.activeErrorContext.provider,
-        modelId: input.activeErrorContext.model,
-        modelApi: input.modelApi,
-        executionContract: input.executionContract,
-        aborted: input.terminalAborted,
-        timedOut: input.terminalTimedOut,
-        attempt,
-      });
-  const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
-    ? null
-    : resolveEmptyResponseRetryInstruction({
-        provider: input.activeErrorContext.provider,
-        modelId: input.activeErrorContext.model,
-        modelApi: input.modelApi,
-        executionContract: input.executionContract,
-        payloadCount,
-        aborted: input.terminalAborted,
-        timedOut: input.terminalTimedOut,
-        attempt,
-      });
+  const nextReasoningOnlyRetryInstruction =
+    emptyAssistantReplyIsSilent || afterSettledToolContinuation
+      ? null
+      : resolveReasoningOnlyRetryInstruction({
+          provider: input.activeErrorContext.provider,
+          modelId: input.activeErrorContext.model,
+          modelApi: input.modelApi,
+          executionContract: input.executionContract,
+          aborted: input.terminalAborted,
+          timedOut: input.terminalTimedOut,
+          attempt,
+        });
+  const nextEmptyResponseRetryInstruction =
+    emptyAssistantReplyIsSilent || afterSettledToolContinuation
+      ? null
+      : resolveEmptyResponseRetryInstruction({
+          provider: input.activeErrorContext.provider,
+          modelId: input.activeErrorContext.model,
+          modelApi: input.modelApi,
+          executionContract: input.executionContract,
+          payloadCount,
+          aborted: input.terminalAborted,
+          timedOut: input.terminalTimedOut,
+          attempt,
+        });
   if (
     nextReasoningOnlyRetryInstruction &&
     retryState.reasoningOnlyAttempts < input.maxReasoningOnlyRetryAttempts
@@ -177,6 +183,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.reasoningOnlyAttempts >= input.maxReasoningOnlyRetryAttempts;
   if (
     !emptyAssistantReplyIsSilent &&
+    !afterSettledToolContinuation &&
     shouldRetryMissingAssistantTurn({
       payloadCount,
       aborted: input.terminalAborted,
@@ -194,6 +201,40 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
+  const availableTerminalToolPresentation = input.readTerminalToolPresentation();
+  const nextSettledToolTerminalContinuationInstruction = emptyAssistantReplyIsSilent
+    ? null
+    : resolveSettledToolTerminalContinuationInstruction({
+        provider: input.activeErrorContext.provider,
+        modelId: input.activeErrorContext.model,
+        modelApi: input.modelApi,
+        executionContract: input.executionContract,
+        allowEmptyStopContinuation:
+          runParams.trigger == null ||
+          runParams.trigger === "user" ||
+          runParams.trigger === "manual",
+        payloadCount,
+        hasTerminalToolPresentation: Boolean(availableTerminalToolPresentation),
+        aborted: input.terminalAborted,
+        promptError: input.promptError,
+        timedOut: input.terminalTimedOut,
+        attempt,
+      });
+  if (
+    nextSettledToolTerminalContinuationInstruction &&
+    retryState.settledToolContinuationAttempts < MAX_SETTLED_TOOL_TERMINAL_CONTINUATIONS
+  ) {
+    retryState.settledToolContinuationAttempts += 1;
+    // This starts a new persisted native-thread turn after settled tool results; it does not
+    // replay the failed prompt or completed tools. Therefore replaySafe does not apply.
+    input.activateInternalPrompt(nextSettledToolTerminalContinuationInstruction, false);
+    log.warn(
+      `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — continuing ${retryState.settledToolContinuationAttempts}/${MAX_SETTLED_TOOL_TERMINAL_CONTINUATIONS} ` +
+        `from settled tool results`,
+    );
+    return { action: "retry" };
+  }
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
@@ -208,36 +249,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
-  const availableTerminalToolPresentation = input.readTerminalToolPresentation();
-  const nextToolUseTerminalContinuationInstruction = emptyAssistantReplyIsSilent
-    ? null
-    : resolveToolUseTerminalContinuationInstruction({
-        provider: input.activeErrorContext.provider,
-        modelId: input.activeErrorContext.model,
-        modelApi: input.modelApi,
-        executionContract: input.executionContract,
-        payloadCount,
-        hasTerminalToolPresentation: Boolean(availableTerminalToolPresentation),
-        aborted: input.terminalAborted,
-        promptError: input.promptError,
-        timedOut: input.terminalTimedOut,
-        attempt,
-      });
-  if (
-    nextToolUseTerminalContinuationInstruction &&
-    retryState.toolUseContinuationAttempts < MAX_TOOL_USE_TERMINAL_CONTINUATIONS
-  ) {
-    retryState.toolUseContinuationAttempts += 1;
-    // This starts a new persisted native-thread turn after settled tool results; it does not
-    // replay the failed prompt or completed tools. Therefore replaySafe does not apply.
-    input.activateInternalPrompt(nextToolUseTerminalContinuationInstruction, false);
-    log.warn(
-      `tool-use terminal turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — continuing ${retryState.toolUseContinuationAttempts}/${MAX_TOOL_USE_TERMINAL_CONTINUATIONS} ` +
-        `from settled tool results`,
-    );
-    return { action: "retry" };
-  }
   const incompleteTurnText = emptyAssistantReplyIsSilent
     ? null
     : resolveIncompleteTurnPayloadText({
@@ -245,6 +256,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         aborted: input.terminalAborted,
         externalAbort: input.externalAbort || input.signalOwnedInterruption,
         timedOut: input.terminalTimedOut,
+        hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         attempt,
       });
   const incompleteTurnFallbackSafe = Boolean(
@@ -319,7 +331,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         `compactions=${input.attemptCompactionCount} reasoningRetries=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
         `emptyRetries=${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `missingAssistantRetries=${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} ` +
-        `toolUseContinuations=${retryState.toolUseContinuationAttempts}/${MAX_TOOL_USE_TERMINAL_CONTINUATIONS} — ` +
+        `settledToolContinuations=${retryState.settledToolContinuationAttempts}/${MAX_SETTLED_TOOL_TERMINAL_CONTINUATIONS} — ` +
         (terminalToolPresentation
           ? "surfacing tool-authored terminal presentation"
           : "surfacing error to user"),

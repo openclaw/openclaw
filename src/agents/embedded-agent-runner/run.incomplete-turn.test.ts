@@ -33,7 +33,7 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
-  resolveToolUseTerminalContinuationInstruction,
+  resolveSettledToolTerminalContinuationInstruction,
   shouldRetryMissingAssistantTurn,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
@@ -44,7 +44,7 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
-const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
+const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -85,6 +85,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   function runAttemptCall(index: number): {
     prompt?: string;
+    disableTools?: boolean;
     suppressNextUserMessagePersistence?: boolean;
     skipPreparedUserTurnMessage?: boolean;
   } {
@@ -96,6 +97,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     }
     return call[0] as {
       prompt?: string;
+      disableTools?: boolean;
       suppressNextUserMessagePersistence?: boolean;
       skipPreparedUserTurnMessage?: boolean;
     };
@@ -1132,10 +1134,97 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.text).toBe("Write completed. Here is the final answer.");
     const secondCall = runAttemptCall(1);
-    expect(secondCall.prompt).toBe(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(secondCall.prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(secondCall.disableTools).toBe(true);
     expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
-    expectWarnMessageWith("tool-use terminal turn lacked a final answer");
+    expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("continues from settled side-effecting tools after an empty stop without replaying them", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["Write completed. Here is the final answer."] }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Write completed. Here is the final answer." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-empty-stop-settled-tool-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toBe("Write completed. Here is the final answer.");
+    expect(runAttemptCall(1).prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(runAttemptCall(1).disableTools).toBe(true);
+    expectNoWarnMessageWith("empty response detected");
+    expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("surfaces failure without cascading when the settled-tool continuation is also empty", async () => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-empty-stop-settled-tool-continuation-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]).toMatchObject({ isError: true });
+    expect(result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
+    expectNoWarnMessageWith("empty response detected");
+    expectWarnMessageWith("settledToolContinuations=1/1");
   });
 
   it("surfaces the existing incomplete-turn error after one tool-use continuation", async () => {
@@ -1173,7 +1262,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain(
       "some tool actions may have already been executed",
     );
-    expectWarnMessageWith("toolUseContinuations=1/1");
+    expectWarnMessageWith("settledToolContinuations=1/1");
   });
 
   it("does not claim completion for a toolUse terminal whose tools never started", async () => {
@@ -1203,9 +1292,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     for (let call = 0; call < mockedRunEmbeddedAttempt.mock.calls.length; call += 1) {
-      expect(runAttemptCall(call).prompt).not.toContain(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+      expect(runAttemptCall(call).prompt).not.toContain(
+        SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+      );
     }
-    expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
   it("ignores stale prior-turn tool results with colliding ids", async () => {
@@ -1241,9 +1332,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     for (let call = 0; call < mockedRunEmbeddedAttempt.mock.calls.length; call += 1) {
-      expect(runAttemptCall(call).prompt).not.toContain(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+      expect(runAttemptCall(call).prompt).not.toContain(
+        SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+      );
     }
-    expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
   it("does not claim completion when only part of a multi-tool request dispatched", async () => {
@@ -1280,9 +1373,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     for (let call = 0; call < mockedRunEmbeddedAttempt.mock.calls.length; call += 1) {
-      expect(runAttemptCall(call).prompt).not.toContain(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+      expect(runAttemptCall(call).prompt).not.toContain(
+        SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+      );
     }
-    expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
   it("returns NO_REPLY without retrying reasoning-only assistant turns when silence is allowed", async () => {
@@ -2193,7 +2288,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       model: "gpt-5.5",
       content: [{ type: "tool_use", id: "tool_1", name: "bash", input: {} }],
     } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
-    const instruction = resolveToolUseTerminalContinuationInstruction({
+    const instruction = resolveSettledToolTerminalContinuationInstruction({
       provider: "openai",
       modelId: "gpt-5.5",
       modelApi: "openai-chatgpt-responses",
@@ -2207,6 +2302,88 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         lastAssistant: toolUseAssistant,
         currentAttemptAssistant: toolUseAssistant,
+      }),
+    });
+
+    expect(instruction).toBeNull();
+  });
+
+  it.each([
+    { label: "background trigger", allowEmptyStopContinuation: false },
+    {
+      label: "active tool",
+      allowEmptyStopContinuation: true,
+      completedCount: 0,
+      activeCount: 1,
+    },
+    {
+      label: "partially completed tool batch",
+      allowEmptyStopContinuation: true,
+      startedCount: 2,
+      completedCount: 1,
+    },
+    { label: "async tool", allowEmptyStopContinuation: true, asyncStarted: true },
+    { label: "failed tool", allowEmptyStopContinuation: true, isError: true },
+  ])(
+    "does not continue an empty stop after $label activity",
+    ({
+      allowEmptyStopContinuation,
+      startedCount = 1,
+      completedCount = 1,
+      activeCount = 0,
+      asyncStarted,
+      isError,
+    }) => {
+      const emptyStopAssistant = {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [],
+      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      const instruction = resolveSettledToolTerminalContinuationInstruction({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-chatgpt-responses",
+        allowEmptyStopContinuation,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "write", asyncStarted, isError }],
+          itemLifecycle: { startedCount, completedCount, activeCount },
+          lastAssistant: emptyStopAssistant,
+          currentAttemptAssistant: emptyStopAssistant,
+        }),
+      });
+
+      expect(instruction).toBeNull();
+    },
+  );
+
+  it("does not use a stale prior-turn empty stop to prove a settled continuation", () => {
+    const staleEmptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const instruction = resolveSettledToolTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      allowEmptyStopContinuation: true,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: staleEmptyStopAssistant,
+        currentAttemptAssistant: undefined,
       }),
     });
 
@@ -4157,7 +4334,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
   });
 
-  it("retries post-tool openai-compatible empty stop turns even when empty silence is allowed", async () => {
+  it("continues post-tool openai-compatible empty stop turns even when silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedResolveModelAsync.mockResolvedValue({
       model: {
@@ -4176,6 +4353,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         lastAssistant: {
           role: "assistant",
           api: "openai-completions",
@@ -4184,6 +4362,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           model: "step-router-v1",
           content: [],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "stepfun",
+          model: "step-router-v1",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -4210,10 +4396,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const secondCall = runAttemptCall(1);
-    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(secondCall.prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(result.meta.terminalReplyKind).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBe("Visible StepFun answer.");
-    expectWarnMessageWith("empty response detected");
+    expectNoWarnMessageWith("empty response detected");
+    expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
   it("returns NO_REPLY without retrying post-tool exact silent assistant replies", async () => {

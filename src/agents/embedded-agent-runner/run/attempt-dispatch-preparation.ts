@@ -155,6 +155,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           workspaceDir,
         })
       : undefined;
+  // Settled-tool recovery is final-answer-only. Remove every tool surface on
+  // the fresh continuation so a model cannot repeat already-completed effects.
+  const attemptParams =
+    terminalRetryState.settledToolContinuationAttempts > 0 && params.disableTools !== true
+      ? { ...params, disableTools: true }
+      : params;
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -164,7 +170,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     startupStagesEmitted = true;
   }
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
-    params,
+    params: attemptParams,
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
