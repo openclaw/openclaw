@@ -528,48 +528,46 @@ fun ChatScreen(
       )
     }
 
+    ChatMessageList(
+      sessionKey = sessionKey,
+      messages = messages,
+      historyLoading = historyLoading,
+      pendingRunCount = pendingRunCount,
+      pendingToolCalls = pendingToolCalls,
+      questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
+      streamingAssistantText = streamingAssistantText,
+      healthOk = healthOk,
+      gatewayOffline = gatewayOffline,
+      outboxItems =
+        outboxItemsForSession(
+          items = outboxItems,
+          sessionKey = sessionKey,
+          mainSessionKey = mainSessionKey,
+          ownerAgentId = composerOwner.agentId,
+          messages = messages,
+        ),
+      recoveryOutboxItems =
+        outboxItemsForRecovery(
+          items = outboxItems,
+        ),
+      onRetryOutbox = viewModel::retryChatOutboxCommand,
+      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
+      onResolveQuestion = viewModel::resolveChatQuestion,
+      onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
+      onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
+      speechState = messageSpeechState,
+      onToggleListen = viewModel::toggleChatMessageSpeech,
+      resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
+      modifier = Modifier.weight(1f),
+    )
+
+    if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
+      PlanChecklistPill(steps = planSteps)
+    }
+
     if (realtimeTalkContent != null) {
-      Box(modifier = Modifier.weight(1f)) {
-        realtimeTalkContent()
-      }
+      realtimeTalkContent()
     } else {
-      ChatMessageList(
-        sessionKey = sessionKey,
-        messages = messages,
-        historyLoading = historyLoading,
-        pendingRunCount = pendingRunCount,
-        pendingToolCalls = pendingToolCalls,
-        questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
-        streamingAssistantText = streamingAssistantText,
-        healthOk = healthOk,
-        gatewayOffline = gatewayOffline,
-        outboxItems =
-          outboxItemsForSession(
-            items = outboxItems,
-            sessionKey = sessionKey,
-            mainSessionKey = mainSessionKey,
-            ownerAgentId = composerOwner.agentId,
-            messages = messages,
-          ),
-        recoveryOutboxItems =
-          outboxItemsForRecovery(
-            items = outboxItems,
-          ),
-        onRetryOutbox = viewModel::retryChatOutboxCommand,
-        onDeleteOutbox = viewModel::deleteChatOutboxCommand,
-        onResolveQuestion = viewModel::resolveChatQuestion,
-        onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
-        onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
-        speechState = messageSpeechState,
-        onToggleListen = viewModel::toggleChatMessageSpeech,
-        resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
-        modifier = Modifier.weight(1f),
-      )
-
-      if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
-        PlanChecklistPill(steps = planSteps)
-      }
-
       ChatComposer(
         value = input,
         onValueChange = {

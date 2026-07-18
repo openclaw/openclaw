@@ -13,18 +13,19 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -87,24 +88,29 @@ internal fun ChatRealtimeTalkSetupScreen(
 ) {
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
 
-  Column(
-    modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp),
-    verticalArrangement = Arrangement.Center,
-    horizontalAlignment = Alignment.CenterHorizontally,
+  Surface(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
+    color = ClawTheme.colors.surface,
+    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
   ) {
-    Text(text = nativeString("Realtime Talk"), style = ClawTheme.type.title, color = ClawTheme.colors.text)
-    Text(
-      text = gatewayTalkSetupDescription(talkSetupReadiness.realtimeTalk),
-      modifier = Modifier.padding(top = 8.dp),
-      style = ClawTheme.type.body,
-      color = ClawTheme.colors.textMuted,
-    )
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    Column(
+      modifier = Modifier.padding(12.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      ClawSecondaryButton(text = nativeString("Back"), onClick = onDismiss, modifier = Modifier.weight(1f))
-      ClawPrimaryButton(text = nativeString("Open Settings"), onClick = onOpenVoiceSettings, modifier = Modifier.weight(1f))
+      Text(text = nativeString("Realtime Talk"), style = ClawTheme.type.title, color = ClawTheme.colors.text)
+      Text(
+        text = gatewayTalkSetupDescription(talkSetupReadiness.realtimeTalk),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        ClawSecondaryButton(text = nativeString("Back"), onClick = onDismiss, modifier = Modifier.weight(1f))
+        ClawPrimaryButton(text = nativeString("Open Settings"), onClick = onOpenVoiceSettings, modifier = Modifier.weight(1f))
+      }
     }
   }
 }
@@ -125,21 +131,73 @@ internal fun ChatRealtimeTalkSessionScreen(
   val speechActive by viewModel.talkSpeechActive.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
 
-  TalkSessionScreen(
-    entries = entries,
-    listening = listening,
-    speaking = speaking,
-    statusText = statusText,
-    awaitingAgent = awaitingAgent,
-    inputLevel = inputLevel,
-    outputLevel = outputLevel,
-    speechActive = speechActive,
-    speakerEnabled = speakerEnabled,
-    onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
-    onEndTalk = { viewModel.setTalkModeEnabled(false) },
-    onOpenVoiceSettings = onOpenVoiceSettings,
-    embeddedInChat = embeddedInChat,
-  )
+  if (embeddedInChat) {
+    ChatRealtimeTalkDock(
+      listening = listening,
+      speaking = speaking,
+      statusText = statusText,
+      speakerEnabled = speakerEnabled,
+      onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+      onEndTalk = { viewModel.setTalkModeEnabled(false) },
+      onOpenVoiceSettings = onOpenVoiceSettings,
+    )
+  } else {
+    TalkSessionScreen(
+      entries = entries,
+      listening = listening,
+      speaking = speaking,
+      statusText = statusText,
+      awaitingAgent = awaitingAgent,
+      inputLevel = inputLevel,
+      outputLevel = outputLevel,
+      speechActive = speechActive,
+      speakerEnabled = speakerEnabled,
+      onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+      onEndTalk = { viewModel.setTalkModeEnabled(false) },
+      onOpenVoiceSettings = onOpenVoiceSettings,
+    )
+  }
+}
+
+@Composable
+private fun ChatRealtimeTalkDock(
+  listening: Boolean,
+  speaking: Boolean,
+  statusText: String,
+  speakerEnabled: Boolean,
+  onToggleSpeaker: () -> Unit,
+  onEndTalk: () -> Unit,
+  onOpenVoiceSettings: () -> Unit,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
+    color = ClawTheme.colors.surface,
+    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+  ) {
+    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text(text = nativeString("Realtime Talk"), style = ClawTheme.type.title, color = ClawTheme.colors.text)
+      Text(
+        text =
+          when {
+            speaking -> nativeString("OpenClaw speaking")
+            listening -> nativeString("Realtime voice")
+            else -> statusText.ifBlank { nativeString("Connected") }
+          },
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ClawSecondaryButton(
+          text = if (speakerEnabled) nativeString("Mute") else nativeString("Unmute"),
+          onClick = onToggleSpeaker,
+          modifier = Modifier.weight(1f),
+        )
+        ClawPrimaryButton(text = nativeString("End"), onClick = onEndTalk, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = nativeString("Voice"), onClick = onOpenVoiceSettings, modifier = Modifier.weight(1f))
+      }
+    }
+  }
 }
 
 private fun Context.hasRecordAudioPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
