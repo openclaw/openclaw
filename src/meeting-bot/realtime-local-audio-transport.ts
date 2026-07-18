@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
@@ -21,6 +22,7 @@ type BridgeProcess = {
   stderr?: {
     on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
     on(event: "error", listener: (error: Error) => void): unknown;
+    on(event: "end" | "close", listener: () => void): unknown;
   } | null;
   kill(signal?: NodeJS.Signals): boolean;
   on(
@@ -50,6 +52,43 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
     throw new Error("audio bridge command must not be empty");
   }
   return { command, args };
+}
+
+function attachStderrLineLogger(params: {
+  stderr: BridgeProcess["stderr"];
+  logLine: (line: string) => void;
+}): void {
+  if (!params.stderr) {
+    return;
+  }
+  const decoder = new StringDecoder("utf8");
+  let pendingLine = "";
+  let flushed = false;
+  const append = (text: string) => {
+    const lines = `${pendingLine}${text}`.split(/\r?\n/u);
+    pendingLine = lines.pop() ?? "";
+    for (const line of lines) {
+      params.logLine(line.trim());
+    }
+  };
+  const flush = () => {
+    if (flushed) {
+      return;
+    }
+    flushed = true;
+    append(decoder.end());
+    if (pendingLine.length > 0) {
+      params.logLine(pendingLine.trim());
+      pendingLine = "";
+    }
+  };
+  params.stderr.on("data", (chunk) => {
+    if (!flushed) {
+      append(decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    }
+  });
+  params.stderr.on("end", flush);
+  params.stderr.on("close", flush);
 }
 
 export function createLocalMeetingRealtimeAudioTransport(params: {
@@ -111,8 +150,9 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
         signalFatal();
       }
     });
-    proc.stderr?.on("data", (chunk) => {
-      params.logger.debug?.(`${params.logScope} audio output: ${String(chunk).trim()}`);
+    attachStderrLineLogger({
+      stderr: proc.stderr,
+      logLine: (line) => params.logger.debug?.(`${params.logScope} audio output: ${line}`),
     });
     proc.stderr?.on("error", (error: Error) => {
       if (proc === outputProcess) {
@@ -130,8 +170,9 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       signalFatal();
     }
   });
-  inputProcess.stderr?.on("data", (chunk) => {
-    params.logger.debug?.(`${params.logScope} audio input: ${String(chunk).trim()}`);
+  attachStderrLineLogger({
+    stderr: inputProcess.stderr,
+    logLine: (line) => params.logger.debug?.(`${params.logScope} audio input: ${line}`),
   });
   inputProcess.stdout?.on("error", fail("audio input command stdout"));
   inputProcess.stderr?.on("error", fail("audio input command stderr"));
@@ -245,8 +286,9 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
           `${params.logScope} human barge-in input stdout failed: ${formatErrorMessage(error)}`,
         );
       });
-      bargeInInputProcess.stderr?.on("data", (chunk) => {
-        params.logger.debug?.(`${params.logScope} barge-in input: ${String(chunk).trim()}`);
+      attachStderrLineLogger({
+        stderr: bargeInInputProcess.stderr,
+        logLine: (line) => params.logger.debug?.(`${params.logScope} barge-in input: ${line}`),
       });
       bargeInInputProcess.stderr?.on("error", (error: Error) => {
         params.logger.warn(
