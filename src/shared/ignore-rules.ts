@@ -17,7 +17,8 @@ export type IgnoreMatcher = ReturnType<typeof ignore>;
 const literalExcludedSubtrees = new WeakMap<IgnoreMatcher, Set<string>>();
 
 function isInLiteralSubtree(pathname: string, subtrees: Set<string>): boolean {
-  const normalized = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  const posixPath = toPosixPath(pathname);
+  const normalized = posixPath.endsWith("/") ? posixPath.slice(0, -1) : posixPath;
   for (const subtree of subtrees) {
     if (!subtree || normalized === subtree || normalized.startsWith(`${subtree}/`)) {
       return true;

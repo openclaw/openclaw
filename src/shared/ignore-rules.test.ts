@@ -64,7 +64,12 @@ describe("addIgnoreRules", () => {
 
   it("treats fail-closed subtree paths literally", () => {
     const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
-    const unusualNames = ["#private", "!private", "[private]", "private?docs", "private*docs"];
+    const unusualNames = [
+      "#private",
+      "!private",
+      "[private]",
+      ...(process.platform === "win32" ? [] : ["private?docs", "private*docs"]),
+    ];
     let ig = ignore();
 
     for (const name of unusualNames) {
@@ -74,9 +79,13 @@ describe("addIgnoreRules", () => {
       ig = addIgnoreRules(nestedDir, tempDir, ig);
 
       expect(ig.ignores(`${name}/secret.txt`)).toBe(true);
+      expect(ig.ignores([name, "nested", "secret.txt"].join(path.sep))).toBe(true);
     }
 
     expect(ig.ignores("public/secret.txt")).toBe(false);
+    if (process.platform !== "win32") {
+      expect(ig.ignores("#private\\secret.txt")).toBe(false);
+    }
   });
 
   it("follows a symlinked .gitignore to a regular file", () => {
