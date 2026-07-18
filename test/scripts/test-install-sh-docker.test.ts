@@ -1143,6 +1143,14 @@ printf 'status=%s\\n' "$status"
     );
   });
 
+  it("bounds the CLI installer pipeline and propagates curl failures", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(wrapper).toContain(
+      'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 \\"$CLI_INSTALL_URL\\" | bash -s -- --set-npm-prefix --no-onboard',
+    );
+  });
+
   it("uses public npm latest as the non-root installer expectation", () => {
     const wrapper = readFileSync(SCRIPT_PATH, "utf8");
 
