@@ -3,7 +3,7 @@ import { t } from "../../i18n/index.ts";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
+type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
 type TaskTimestamp = number | string;
 
 export type TaskSummary = {
@@ -26,9 +26,11 @@ export type TaskSummary = {
   progressSummary?: string;
   terminalSummary?: string;
   error?: string;
+  /** Bounded task input returned by tasks.get, not tasks.list. */
+  prompt?: string;
 };
 
-export type TaskEventPayload =
+type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
@@ -77,7 +79,7 @@ function normalizeTimestamp(value: unknown): TaskTimestamp | undefined {
   return undefined;
 }
 
-export function normalizeTaskSummary(value: unknown): TaskSummary | null {
+function normalizeTaskSummary(value: unknown): TaskSummary | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -103,6 +105,7 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
   const progressSummary = optionalString(value.progressSummary);
   const terminalSummary = optionalString(value.terminalSummary);
   const error = optionalString(value.error);
+  const prompt = optionalString(value.prompt);
   return {
     id,
     taskId,
@@ -123,6 +126,7 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(prompt ? { prompt } : {}),
   };
 }
 
@@ -228,6 +232,13 @@ export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
   return sortTasks(
     value.tasks.map(normalizeTaskSummary).filter((task): task is TaskSummary => task !== null),
   );
+}
+
+export function normalizeTasksGetResult(value: unknown): TaskSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return normalizeTaskSummary(value.task);
 }
 
 // The ledger pages newest-first, so one page can hide long-running tasks behind

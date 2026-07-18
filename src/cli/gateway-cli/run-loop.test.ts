@@ -19,19 +19,34 @@ const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
 const resetGatewayRestartStateForInProcessRestart = vi.fn();
+const resetGatewaySuspendCoordinatorForLifecycleRestart = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
 const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
-const writeGatewayRestartHandoffSync = vi.fn((_opts: unknown) => ({
-  kind: "gateway-supervisor-restart-handoff" as const,
-  version: 1 as const,
-  intentId: "test-intent",
-  pid: process.pid,
-  createdAt: Date.now(),
-  expiresAt: Date.now() + 60_000,
-  source: "unknown" as const,
-  restartKind: "full-process" as const,
-  supervisorMode: "external" as const,
-}));
+const writeGatewayRestartHandoffSync = vi.fn(
+  (
+    _opts: unknown,
+  ): {
+    kind: "gateway-supervisor-restart-handoff";
+    version: 1;
+    intentId: string;
+    pid: number;
+    createdAt: number;
+    expiresAt: number;
+    source: "unknown";
+    restartKind: "full-process";
+    supervisorMode: "external";
+  } | null => ({
+    kind: "gateway-supervisor-restart-handoff",
+    version: 1,
+    intentId: "test-intent",
+    pid: process.pid,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
+    source: "unknown",
+    restartKind: "full-process",
+    supervisorMode: "external",
+  }),
+);
 const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -128,10 +143,8 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../infra/restart.js", () => ({
-  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
   consumeGatewaySigusr1RestartIntent: () => consumeGatewaySigusr1RestartIntent(),
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
-  consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
@@ -149,6 +162,16 @@ vi.mock("../../infra/restart.js", () => ({
   },
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
+}));
+
+vi.mock("../../infra/restart-intent.js", () => ({
+  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
+  consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
+}));
+
+vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
+  resetGatewaySuspendCoordinatorForLifecycleRestart: () =>
+    resetGatewaySuspendCoordinatorForLifecycleRestart(),
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
@@ -183,7 +206,7 @@ vi.mock("../../cron/active-jobs.js", () => ({
   waitForActiveCronJobs: (timeoutMs: number) => waitForActiveCronJobs(timeoutMs),
 }));
 
-vi.mock("../../tasks/cron-task-cancel.js", () => ({
+vi.mock("../../cron/service/active-run-cancellation.js", () => ({
   abortActiveCronTaskRuns: (reason?: string) => abortActiveCronTaskRuns(reason),
   retireActiveCronTaskRunTracking: () => retireActiveCronTaskRunTracking(),
   waitForActiveCronTaskRuns: (timeoutMs: number) => waitForActiveCronTaskRuns(timeoutMs),
@@ -966,6 +989,10 @@ describe("runGatewayLoop", () => {
       expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
       expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
+      expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(1);
+      expect(
+        resetGatewaySuspendCoordinatorForLifecycleRestart.mock.invocationCallOrder[0],
+      ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? 0);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
       expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);
@@ -1005,6 +1032,7 @@ describe("runGatewayLoop", () => {
       expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(2);
       expect(resetCronActiveJobs).toHaveBeenCalledTimes(2);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
+      expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
       expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
@@ -1118,6 +1146,7 @@ describe("runGatewayLoop", () => {
         expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
         expect(markGatewayDraining).toHaveBeenCalledTimes(1);
         expect(resetAllLanes).toHaveBeenCalledTimes(1);
+        expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(1);
         expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
         expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);
       } finally {
@@ -1307,6 +1336,7 @@ describe("runGatewayLoop", () => {
         expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
         expect(markGatewayDraining).toHaveBeenCalledTimes(2);
         expect(resetAllLanes).toHaveBeenCalledTimes(2);
+        expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(2);
         expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
         expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
         expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
@@ -1379,6 +1409,7 @@ describe("runGatewayLoop", () => {
         expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
         expect(markGatewayDraining).toHaveBeenCalledTimes(2);
         expect(resetAllLanes).toHaveBeenCalledTimes(2);
+        expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(2);
         expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
         expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
         expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
@@ -1562,7 +1593,7 @@ describe("runGatewayLoop", () => {
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+        "SIGUSR1 restart ignored (not authorized; commands.restart=false).",
       );
       expect(gatewayLog.warn).toHaveBeenCalledTimes(2);
       expect(gatewayLog.warn).toHaveBeenNthCalledWith(
@@ -1792,6 +1823,70 @@ describe("runGatewayLoop", () => {
     }
   });
 
+  it("records external ownership even when native supervisor markers are inherited", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+      mode: "supervised",
+    });
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+
+        sigusr1();
+
+        await expect(exited).resolves.toBe(0);
+        expectRestartHandoffCall({
+          restartKind: "full-process",
+          reason: undefined,
+          supervisorMode: "external",
+        });
+      });
+    } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+      delete process.env.OPENCLAW_LAUNCHD_LABEL;
+    }
+  });
+
+  it("falls back in-process when an external restart handoff cannot be persisted", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+      mode: "supervised",
+    });
+    writeGatewayRestartHandoffSync.mockReturnValueOnce(null);
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { start, runtime, exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigint = captureSignal("SIGINT");
+
+        sigusr1();
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 2,
+          "external handoff failure did not restart in-process",
+        );
+
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
+        expect(gatewayLog.warn).toHaveBeenCalledWith(
+          "external supervisor restart handoff could not be persisted; falling back to in-process restart",
+        );
+
+        sigint();
+        await expect(exited).resolves.toBe(0);
+      });
+    } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+    }
+  });
+
   it("forwards lockPort to initial and restart lock acquisitions", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
@@ -1926,6 +2021,40 @@ describe("runGatewayLoop", () => {
       }
     },
   );
+
+  it("keeps running when an external update restart handoff cannot be persisted", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    respawnGatewayProcessForUpdate.mockReturnValueOnce({
+      mode: "supervised",
+    });
+    writeGatewayRestartHandoffSync.mockReturnValueOnce(null);
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { start, runtime, exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigint = captureSignal("SIGINT");
+
+        sigusr1();
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 2,
+          "external update handoff failure did not restart in-process",
+        );
+
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(markUpdateRestartSentinelFailure).toHaveBeenCalledWith(
+          "restart-handoff-unavailable",
+        );
+
+        sigint();
+        await expect(exited).resolves.toBe(0);
+      });
+    } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+    }
+  });
 
   it("upgrades an accepted restart when a managed update arrives during shutdown", async () => {
     vi.clearAllMocks();
@@ -2269,3 +2398,4 @@ describe("gateway discover routing helpers", () => {
     expect(pickGatewayPort(beacon)).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

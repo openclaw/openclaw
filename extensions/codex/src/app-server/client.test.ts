@@ -8,9 +8,9 @@ import {
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
-const MIN_CODEX_APP_SERVER_VERSION = "0.143.0";
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
@@ -47,6 +47,23 @@ describe("CodexAppServerClient", () => {
 
     await expect(request).resolves.toEqual({ models: [] });
     expect(outbound.method).toBe("model/list");
+  });
+
+  it("rejects unbounded guarded thread requests before acquiring the fence", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const guard = vi.fn(async () => () => undefined);
+    harness.client.setThreadSessionRequestGuard(guard);
+
+    await expect(harness.client.request("thread/start", {})).rejects.toThrow(
+      "thread/start requires a positive finite timeout or abort signal",
+    );
+    await expect(
+      harness.client.request("thread/resume", {}, { timeoutMs: Number.POSITIVE_INFINITY }),
+    ).rejects.toThrow("thread/resume requires a positive finite timeout or abort signal");
+
+    expect(guard).not.toHaveBeenCalled();
+    expect(harness.writes).toEqual([]);
   });
 
   it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
@@ -131,6 +148,33 @@ describe("CodexAppServerClient", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("recovers large app-server messages split by raw newlines inside JSON strings", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notifications: unknown[] = [];
+    harness.client.addNotificationHandler((notification) => {
+      notifications.push(notification);
+    });
+    const largePrefix = "x".repeat(1_100_000);
+
+    harness.process.stdout.write(
+      '{"method":"item/commandExecution/outputDelta","params":{"delta":"' +
+        largePrefix +
+        "\n" +
+        'second"}}\n',
+    );
+
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+    expect(notifications).toEqual([
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { delta: largePrefix + "\nsecond" },
+      },
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("preserves JSON-RPC error codes", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -142,6 +186,46 @@ describe("CodexAppServerClient", () => {
     await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
     await expect(request).rejects.toHaveProperty("code", -32601);
     await expect(request).rejects.toHaveProperty("message", "Method not found");
+  });
+
+  it("retries transient app-server overload errors", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("model/list", {});
+    const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: first.id,
+      error: { code: -32_001, message: "Server overloaded; retry later." },
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.writes).toHaveLength(2);
+    const second = JSON.parse(harness.writes[1] ?? "{}") as { id?: number };
+    harness.send({ id: second.id, result: { models: [] } });
+
+    await expect(request).resolves.toEqual({ models: [] });
+  });
+
+  it("aborts while waiting to retry an overloaded request", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const controller = new AbortController();
+
+    const request = harness.client.request("model/list", {}, { signal: controller.signal });
+    const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: first.id,
+      error: { code: -32_001, message: "Server overloaded; retry later." },
+    });
+    controller.abort();
+
+    await expect(request).rejects.toThrow("model/list aborted");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.writes).toHaveLength(1);
   });
 
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
@@ -245,7 +329,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.124.9`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.124.9`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -258,7 +342,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0-alpha.2`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.143.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -271,31 +355,48 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0+alpha.2`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.143.0+alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("accepts newer Codex app-server prereleases", async () => {
+  it("blocks Codex app-server prereleases outside generated stable schemas", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
       result: { userAgent: "openclaw/0.144.0-alpha.1 (macOS; test)" },
     });
 
-    await expect(initializing).resolves.toBeUndefined();
-    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+    await expect(initializing).rejects.toThrow(
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+    );
+    expect(harness.writes).toHaveLength(1);
   });
 
-  it("accepts newer Codex app-server builds", async () => {
+  it("blocks Codex app-server custom builds outside generated stable schemas", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
       result: { userAgent: "openclaw/0.144.0+custom (macOS; test)" },
     });
 
-    await expect(initializing).resolves.toBeUndefined();
-    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+    await expect(initializing).rejects.toThrow(
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+    );
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("blocks stable Codex app-server versions newer than generated schemas", async () => {
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: "openclaw/0.145.0 (macOS; test)" },
+    });
+
+    await expect(initializing).rejects.toThrow(
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+    );
+    expect(harness.writes).toHaveLength(1);
   });
 
   it("blocks app-server initialize responses without a version", async () => {
@@ -303,7 +404,7 @@ describe("CodexAppServerClient", () => {
     harness.send({ id: outbound.id, result: {} });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -383,6 +484,36 @@ describe("CodexAppServerClient", () => {
     );
     await expect(harness.client.request("another/method")).rejects.toThrow(
       "codex app-server exited: code=1 signal=null",
+    );
+  });
+
+  it("preserves split UTF-8 in app-server stderr exit errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const pending = harness.client.request("test/method");
+    const character = Buffer.from("猫", "utf8");
+
+    harness.process.stderr.write(Buffer.concat([Buffer.from("fatal "), character.subarray(0, 1)]));
+    harness.process.stderr.write(Buffer.concat([character.subarray(1), Buffer.from(" boot\n")]));
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      'codex app-server exited: code=1 signal=null stderr="fatal 猫 boot"',
+    );
+  });
+
+  it("keeps bounded stderr tails on UTF-16 boundaries", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const pending = harness.client.request("test/method");
+
+    harness.process.stderr.write(`🎉${"x".repeat(1_999)}`);
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      `codex app-server exited: code=1 signal=null stderr=${JSON.stringify(
+        `${"x".repeat(500)}...`,
+      )}`,
     );
   });
 

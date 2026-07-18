@@ -16,6 +16,8 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/hook-message.types.js";
+import { internalSessionConversationId } from "../utils/message-channel-constants.js";
+import { stripChannelPrefix } from "../utils/string-readers.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -23,7 +25,7 @@ import type {
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
 
-export type CanonicalInboundMessageHookContext = {
+type CanonicalInboundMessageHookContext = {
   from: string;
   to?: string;
   content: string;
@@ -78,7 +80,7 @@ export type CanonicalInboundMessageHookContext = {
   callDepth?: number;
 };
 
-export type CanonicalSentMessageHookContext = {
+type CanonicalSentMessageHookContext = {
   to: string;
   content: string;
   success: boolean;
@@ -136,7 +138,11 @@ export function deriveInboundMessageHookContext(
   const channelId = normalizeLowercaseStringOrEmpty(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   );
-  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const conversationId =
+    ctx.OriginatingTo ??
+    ctx.To ??
+    ctx.From ??
+    internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
   const mediaPaths = Array.isArray(ctx.MediaPaths)
     ? ctx.MediaPaths.filter(
@@ -303,20 +309,6 @@ export function toPluginMessageContext(
   return context;
 }
 
-function stripChannelPrefix(value: string | undefined, channelId: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const genericPrefixes = ["channel:", "chat:", "user:"];
-  for (const prefix of genericPrefixes) {
-    if (value.startsWith(prefix)) {
-      return value.slice(prefix.length);
-    }
-  }
-  const prefix = `${channelId}:`;
-  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
-}
-
 function resolveInboundConversation(canonical: CanonicalInboundMessageHookContext): {
   conversationId?: string;
   parentConversationId?: string;
@@ -331,7 +323,11 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
         threadParentId: canonical.threadParentId,
         isGroup: canonical.isGroup,
       })
-    : null;
+    : undefined;
+  if (pluginResolved === null) {
+    // A plugin-owned null is an explicit rejection, so generic parsing must not reclaim it.
+    return {};
+  }
   if (pluginResolved) {
     return {
       conversationId: normalizeOptionalString(pluginResolved.conversationId),

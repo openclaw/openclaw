@@ -43,6 +43,7 @@ import {
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -70,6 +71,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -77,13 +79,12 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import {
   buildEmptyInteractiveReplyPayload,
-  buildTerminalAgentRunFailureReplyPayload,
-  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
-  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-} from "./agent-runner-execution.js";
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -101,6 +102,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -115,6 +117,7 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   refreshQueuedFollowupSession,
+  resolveFollowupAbortSignal,
   type FollowupRun,
   resolveQueueSettings,
 } from "./queue.js";
@@ -160,15 +163,6 @@ function preserveNonVisibleFollowupResult(
     // Prefer any earlier result that carries a user-facing terminal presentation.
     preserveResultPriority: -1,
   };
-}
-
-function resolveFollowupAbortSignal(
-  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
-): AbortSignal | undefined {
-  const signals = [run.abortSignal, run.queueAbortSignal].filter(
-    (signal): signal is AbortSignal => signal !== undefined,
-  );
-  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
 }
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
@@ -302,7 +296,7 @@ async function forwardFollowupProgressEvent(params: {
       phase: readStringValue(evt.data.phase),
       title: readStringValue(evt.data.title),
       explanation: readStringValue(evt.data.explanation),
-      steps: filterStringArray(evt.data.steps),
+      steps: normalizeAgentPlanSteps(evt.data.steps),
       source: readStringValue(evt.data.source),
     });
   }
@@ -402,7 +396,7 @@ async function forwardFollowupProgressEvent(params: {
 
 /** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(params: {
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   typingMode: TypingMode;
   sessionEntry?: SessionEntry;
@@ -703,7 +697,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
-        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
+        onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -724,6 +718,9 @@ export function createFollowupRunner(params: {
       if (isFollowupRunAborted(effectiveQueued)) {
         return;
       }
+      // Channel delivery state belongs to one admitted run. Give the active
+      // dispatcher a boundary before callbacks from this followup can reuse it.
+      await opts?.onQueuedFollowupAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -1190,6 +1187,7 @@ export function createFollowupRunner(params: {
                       onReasoningText: createCliReasoningStreamBridge(
                         progressOpts?.onReasoningStream,
                       ),
+                      onPlanUpdate: progressOpts?.onPlanUpdate,
                       onReasoningProgress: async (payload) => {
                         await progressOpts?.onReasoningProgress?.(payload);
                       },
@@ -1235,7 +1233,7 @@ export function createFollowupRunner(params: {
                         ]);
                       },
                       onCommentaryText:
-                        progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
+                        progressOpts?.onItemEvent && shouldBridgeCliPreambleEvents(progressOpts)
                           ? async ({ text, itemId }) => {
                               await forwardFollowupProgressEvent({
                                 evt: {
@@ -2074,3 +2072,4 @@ export function createFollowupRunner(params: {
   };
   return runFollowupTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

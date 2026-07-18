@@ -3,7 +3,6 @@ import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearApprovalNativeRouteStateForTest } from "../../infra/approval-native-route-coordinator.js";
 import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
@@ -72,9 +71,9 @@ export const automaticDirectReplyConfig = {
 
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 
-export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.js").testing;
+export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.test-support.js").testing;
 
-export let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
+let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
 
@@ -82,17 +81,17 @@ export let createReplyOperation: typeof import("./reply-run-registry.js").create
 
 export let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 
-export let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
 export let admitReplyTurn: typeof import("./reply-turn-admission.js").admitReplyTurn;
 
 export let runWithReplyOperationLifecycleAdmission: typeof import("./reply-turn-admission.js").runWithReplyOperationLifecycleAdmission;
 
-export type DispatchReplyArgs = Parameters<
+type DispatchReplyArgs = Parameters<
   typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
 >[0];
 
-export function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
+function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
     sessionKey?: string;
     ctx?: {
@@ -116,7 +115,7 @@ export function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
-export type MockAcpRuntime = AcpRuntime & {
+type MockAcpRuntime = AcpRuntime & {
   ensureSession: Mock<(input: AcpRuntimeEnsureInput) => Promise<AcpRuntimeHandle>>;
   runTurn: Mock<(input: AcpRuntimeTurnInput) => AsyncIterable<AcpRuntimeEvent>>;
   cancel: Mock<(input: { handle: AcpRuntimeHandle; reason?: string }) => Promise<void>>;
@@ -149,7 +148,7 @@ export function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
   return runtime as MockAcpRuntime;
 }
 
-export function createMockAcpSessionManager() {
+function createMockAcpSessionManager() {
   return {
     resolveSession: (params: { cfg: OpenClawConfig; sessionKey: string }) => {
       const entry = acpMocks.readAcpSessionEntry({
@@ -350,19 +349,16 @@ export function messageAuditEvents(): Array<Record<string, unknown>> {
 }
 
 export const globalBeforeAll0 = async () => {
-  ({ dispatchReplyFromConfig, testing: dispatchFromConfigTesting } =
-    await import("./dispatch-from-config.js"));
+  ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+  ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   await import("./dispatch-acp-tts.runtime.js");
   await import("./dispatch-acp-session.runtime.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
-  ({
-    createReplyOperation,
-    replyRunRegistry,
-    __testing: replyRunTesting,
-  } = await import("./reply-run-registry.js"));
+  ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
+  ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
     await import("./reply-turn-admission.js"));
 };
@@ -459,7 +455,6 @@ export const describe0BeforeEach0 = () => {
       ...passiveThreadingTestPlugins,
     ]),
   );
-  clearApprovalNativeRouteStateForTest();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
   replyRunTesting.resetReplyRunRegistry();

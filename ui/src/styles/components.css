@@ -795,6 +795,65 @@
   line-height: 1;
 }
 
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(20px + var(--safe-area-bottom));
+  z-index: 2000;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-lg);
+}
+
+.app-toast__message {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--control-ui-text-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-toast__action,
+.app-toast__dismiss {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.app-toast__action {
+  color: var(--accent);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 700;
+}
+
+.app-toast__dismiss {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.app-toast__action:hover,
+.app-toast__action:focus-visible,
+.app-toast__dismiss:hover,
+.app-toast__dismiss:focus-visible {
+  color: var(--text-strong);
+}
+
 .btn--icon {
   padding: 8px;
   min-width: 36px;
@@ -817,52 +876,6 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.openclaw-tooltip {
-  position: fixed;
-  z-index: 2000;
-  max-width: min(260px, calc(100vw - 16px));
-  padding: 7px 9px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow: var(--shadow-md);
-  color: var(--text);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  line-height: 1.35;
-  text-align: center;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-3px);
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-  overflow-wrap: anywhere;
-  white-space: pre-line;
-}
-
-.openclaw-tooltip[data-side="bottom"] {
-  transform: translateY(3px);
-}
-
-.openclaw-tooltip[data-side="left"] {
-  transform: translateX(3px);
-}
-
-.openclaw-tooltip[data-side="right"] {
-  transform: translateX(-3px);
-}
-
-.openclaw-tooltip[data-open="true"] {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.openclaw-tooltip[data-open="true"][data-side="left"],
-.openclaw-tooltip[data-open="true"][data-side="right"] {
-  transform: translateX(0);
 }
 
 .github-link-hovercard {
@@ -3062,8 +3075,20 @@ td.data-table-key-col {
 }
 
 .agent-select {
-  position: relative;
+  display: block;
   width: 100%;
+}
+
+.agent-select::part(menu) {
+  width: min(320px, calc(100vw - 24px));
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
 }
 
 .agent-select__trigger {
@@ -3114,8 +3139,7 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.agent-select__chevron svg,
-.agent-select__check svg {
+.agent-select__chevron svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -3154,41 +3178,10 @@ td.data-table-key-col {
   text-transform: uppercase;
 }
 
-.agent-select__list {
-  position: absolute;
-  z-index: 121;
-  top: calc(100% + 4px);
-  right: 0;
-  left: 0;
-  max-height: 320px;
-  overflow-y: auto;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
-}
-
 .agent-select__option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 32px;
-  padding: 4px 8px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 13px;
-  text-align: left;
-}
-
-.agent-select__option:hover,
-.agent-select__option:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  outline: none;
 }
 
 .agent-select__option-label {
@@ -3202,12 +3195,6 @@ td.data-table-key-col {
 .agent-select__option .agent-select__avatar {
   width: 24px;
   height: 24px;
-}
-
-.agent-select__check {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: var(--accent);
 }
 
 .agents-toolbar-actions {
@@ -3556,30 +3543,12 @@ td.data-table-key-col {
   gap: 8px;
 }
 
-.md-preview-dialog {
-  border: none;
-  background: transparent;
-  color: inherit;
-  padding: 0;
-  width: 100vw;
-  max-width: none;
-  height: 100vh;
-  max-height: none;
-  overflow: hidden;
-}
-
-.md-preview-dialog::backdrop {
-  background:
-    radial-gradient(circle at top, rgba(255, 92, 92, 0.12), transparent 32%), rgba(5, 8, 15, 0.76);
-  backdrop-filter: blur(14px);
-}
-
 .md-preview-dialog__panel {
   position: relative;
-  width: min(1040px, calc(100vw - 32px));
+  width: 100%;
   min-height: min(76vh, 820px);
   max-height: calc(100vh - 32px);
-  margin: 16px auto;
+  margin: 0;
   display: flex;
   flex-direction: column;
   border: 1px solid color-mix(in srgb, var(--border-strong) 84%, white 8%);
@@ -3589,7 +3558,6 @@ td.data-table-key-col {
     0 32px 96px rgba(0, 0, 0, 0.48),
     0 1px 0 rgba(255, 255, 255, 0.04) inset;
   overflow: hidden;
-  animation: scale-in 0.22s var(--ease-out);
   transition:
     width var(--duration-normal) var(--ease-out),
     max-height var(--duration-normal) var(--ease-out),
@@ -3936,9 +3904,9 @@ td.data-table-key-col {
 }
 
 .md-preview-dialog__panel.fullscreen {
-  width: calc(100vw - 20px);
+  width: 100%;
   max-height: calc(100vh - 20px);
-  margin: 10px auto;
+  margin: 0;
 }
 
 .md-preview-dialog__panel.fullscreen .md-preview-dialog__header {
@@ -3978,16 +3946,11 @@ td.data-table-key-col {
 }
 
 @media (max-width: 720px) {
-  .md-preview-dialog {
-    width: 100vw;
-    height: 100vh;
-  }
-
   .md-preview-dialog__panel {
-    width: calc(100vw - 10px);
+    width: 100%;
     min-height: calc(100vh - 12px);
     max-height: calc(100vh - 12px);
-    margin: 6px auto;
+    margin: 0;
     border-radius: var(--radius-xl);
   }
 
@@ -4017,10 +3980,6 @@ td.data-table-key-col {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .md-preview-dialog::backdrop {
-    backdrop-filter: none;
-  }
-
   .md-preview-dialog__panel {
     animation: none;
     transition: none;
@@ -4546,35 +4505,8 @@ td.data-table-key-col {
   }
 }
 
-.cmd-palette-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  width: 100vw;
-  max-width: none;
-  height: 100dvh;
-  max-height: none;
-  margin: 0;
-  border: 0;
-  box-sizing: border-box;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: min(20vh, 160px);
-  padding-right: 0;
-  padding-bottom: 0;
-  padding-left: 0;
-  background: rgba(0, 0, 0, 0.5);
-  color: var(--text);
-  animation: fade-in 0.12s ease-out;
-}
-
-.cmd-palette-overlay::backdrop {
-  background: transparent;
-}
-
 .cmd-palette {
-  width: min(560px, 90vw);
+  width: 100%;
   overflow: hidden;
   background: var(--card);
   border: 1px solid var(--border);
@@ -4797,6 +4729,32 @@ td.data-table-key-col {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.5;
+}
+
+.device-pair-setup__header p.device-pair-setup__get-apps {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.device-pair-setup__get-apps button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.device-pair-setup__get-apps button:hover {
+  color: var(--text-strong);
+}
+
+.device-pair-setup__get-apps button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
 }
 
 .device-pair-setup__phone {
@@ -5144,9 +5102,10 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* Attribute badges (worktree fork, attached automation): muted metadata that
-   sits after the title inside the row link, outside the trail/action overlap
-   cell, so touch devices (which hide the trail) and hovered rows keep them. */
+/* Attribute badges (worktree fork, attached automation, cloud placement):
+   muted metadata that sits after the title inside the row link, outside the
+   trail/action overlap cell, so touch devices (which hide the trail) and
+   hovered rows keep them. */
 .session-row-badges {
   display: inline-flex;
   align-items: center;
@@ -5158,6 +5117,25 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   color: var(--muted);
+}
+
+.session-row-badge--cloud[data-placement-state="active"] {
+  color: var(--ok);
+}
+
+.session-row-badge--cloud[data-placement-state="failed"] {
+  color: var(--danger);
+}
+
+.session-row-badge--cloud:is(
+  [data-placement-state="requested"],
+  [data-placement-state="provisioning"],
+  [data-placement-state="syncing"],
+  [data-placement-state="starting"],
+  [data-placement-state="draining"],
+  [data-placement-state="reconciling"]
+) {
+  color: var(--accent);
 }
 
 .session-row-badge svg {

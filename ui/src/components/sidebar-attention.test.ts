@@ -1,139 +1,59 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
   addDismissal,
   dismissalStoreKey,
   pruneDismissals,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
-import { buildSidebarAttentionItems } from "./sidebar-attention.ts";
+import { buildSidebarAttentionItems } from "./sidebar-attention-items.ts";
 
-const NOW = 1_750_000_000_000;
-
-function cronJob(overrides: Partial<CronJob>): CronJob {
-  return { id: "job", enabled: true, ...overrides } as CronJob;
+function approval(id: string): ExecApprovalRequest {
+  return {
+    id,
+    kind: "exec",
+    request: { command: "echo ok" },
+    createdAtMs: 1,
+    expiresAtMs: 2,
+  };
 }
 
-function authStatus(providers: ReadonlyArray<Record<string, unknown>>): ModelAuthStatusResult {
-  return { ts: NOW, providers } as unknown as ModelAuthStatusResult;
+function approvalItems(queue: readonly ExecApprovalRequest[]) {
+  return buildSidebarAttentionItems({
+    cronJobs: [],
+    modelAuthStatus: null,
+    approvalQueue: queue,
+    now: 0,
+  }).filter((item) => item.kind === "pendingApproval");
 }
 
-describe("buildSidebarAttentionItems", () => {
-  it("returns nothing when everything is healthy", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [cronJob({ state: { lastRunStatus: "ok" } as CronJob["state"] })],
-      modelAuthStatus: authStatus([
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-        },
-      ]),
-      now: NOW,
-    });
-    expect(items).toEqual([]);
-  });
+describe("pending approval attention", () => {
+  it("builds a warning chip only while approvals are pending", () => {
+    expect(approvalItems([])).toEqual([]);
 
-  it("flags enabled failing cron jobs but not disabled ones", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [
-        cronJob({ id: "beta", state: { lastRunStatus: "error" } as CronJob["state"] }),
-        cronJob({ id: "alpha", state: { lastRunStatus: "error" } as CronJob["state"] }),
-        cronJob({
-          id: "off",
-          enabled: false,
-          state: { lastRunStatus: "error" } as CronJob["state"],
-        }),
-      ],
-      modelAuthStatus: null,
-      now: NOW,
-    });
-    expect(items).toEqual([
+    expect(approvalItems([approval("exec:b")])).toMatchObject([
       {
-        kind: "cronFailed",
-        severity: "error",
-        icon: "clock",
-        label: "2 cron job(s) failed",
-        routeId: "cron",
-        signature: "alpha\nbeta",
-      },
-    ]);
-  });
-
-  it("flags overdue jobs only past the grace window", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [
-        cronJob({ id: "late", state: { nextRunAtMs: NOW - 400_000 } as CronJob["state"] }),
-        cronJob({ id: "soon", state: { nextRunAtMs: NOW - 100_000 } as CronJob["state"] }),
-        cronJob({
-          id: "off",
-          enabled: false,
-          state: { nextRunAtMs: NOW - 400_000 } as CronJob["state"],
-        }),
-      ],
-      modelAuthStatus: null,
-      now: NOW,
-    });
-    expect(items).toEqual([
-      {
-        kind: "cronOverdue",
+        kind: "pendingApproval",
         severity: "warning",
-        icon: "clock",
-        label: "1 cron job(s) overdue",
-        routeId: "cron",
-        signature: `late@${NOW - 400_000}`,
+        icon: "shieldCheck",
+        action: { kind: "openApprovals" },
       },
     ]);
   });
 
-  it("splits monitored providers into expired and expiring chips", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [],
-      modelAuthStatus: authStatus([
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "expired",
-          profiles: [{ profileId: "codex", type: "oauth", status: "expired" }],
-        },
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          status: "expiring",
-          profiles: [{ profileId: "claude", type: "oauth", status: "ok" }],
-          expiry: { at: NOW + 6 * 86_400_000, label: "6d" },
-        },
-        {
-          // API-key-only providers are not monitored and must stay silent.
-          provider: "static",
-          displayName: "Static",
-          status: "expired",
-          profiles: [{ profileId: "static", type: "api-key", status: "ok" }],
-        },
-      ]),
-      now: NOW,
-    });
-    expect(items).toEqual([
-      {
-        kind: "modelAuthExpired",
-        severity: "error",
-        icon: "plug",
-        label: "Model auth expired: Codex",
-        routeId: "model-providers",
-        signature: "openai",
-      },
-      {
-        kind: "modelAuthExpiring",
-        severity: "warning",
-        icon: "plug",
-        label: "Model auth expiring: Claude (6d)",
-        routeId: "model-providers",
-        signature: "anthropic",
-      },
-    ]);
+  it("sorts queue ids into a signature that changes for a new approval", () => {
+    const first = approvalItems([approval("exec:b"), approval("exec:a")])[0];
+    const changed = approvalItems([approval("exec:b"), approval("exec:a"), approval("exec:c")])[0];
+
+    if (!first || !changed) {
+      throw new Error("expected pending approval attention items");
+    }
+
+    expect(first.signature).toBe("exec:a\nexec:b");
+    expect(changed.signature).toBe("exec:a\nexec:b\nexec:c");
+    expect(pruneDismissals({ pendingApproval: first.signature }, [changed])).toEqual({});
   });
 });
 

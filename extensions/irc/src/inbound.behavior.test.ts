@@ -1,10 +1,10 @@
 // Irc tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
 import type { RuntimeEnv } from "./runtime-api.js";
-import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
+import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const {
@@ -96,10 +96,6 @@ describe("irc inbound behavior", () => {
   beforeEach(() => {
     resetInboundMocks();
     installIrcRuntime();
-  });
-
-  afterEach(() => {
-    clearIrcRuntime();
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {
@@ -230,15 +226,13 @@ describe("irc inbound behavior", () => {
       sendReply: vi.fn(async () => {}),
     });
 
+    const dispatch = coreRuntime.channel.inbound.dispatch as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    expect(dispatch.mock.calls).toHaveLength(1);
     const ctx = (
-      coreRuntime.channel.reply.finalizeInboundContext as unknown as {
-        mock: { calls: unknown[][] };
-      }
-    ).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    expect(
-      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
-        .mock.calls.length,
-    ).toBe(1);
+      dispatch.mock.calls[0]?.[0] as { ctxPayload?: Record<string, unknown> } | undefined
+    )?.ctxPayload;
     expect(runtime.log).not.toHaveBeenCalled();
     expect(ctx?.From).toBe("channel:#ops");
     expect(ctx?.To).toBe("channel:#ops");

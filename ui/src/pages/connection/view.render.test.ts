@@ -3,7 +3,9 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import { renderConnection, type ConnectionProps } from "./view.ts";
+import { renderConnection } from "./view.ts";
+
+type ConnectionProps = Parameters<typeof renderConnection>[0];
 
 function createConnectionProps(overrides: Partial<ConnectionProps> = {}): ConnectionProps {
   return {

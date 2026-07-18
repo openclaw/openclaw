@@ -5,6 +5,9 @@ import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionsCreateParamsSchema } from "./sessions-create.js";
+
+export { SessionsCreateParamsSchema };
 
 /**
  * Session protocol schemas.
@@ -151,6 +154,19 @@ export const SessionsFilesSetResultSchema = closedObject({
   file: SessionFileEntrySchema,
 });
 
+/** Opens a session workspace on the Gateway host without accepting a client path. */
+export const SessionsFilesRevealParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+
+/** Result for revealing a session workspace on the Gateway host. */
+export const SessionsFilesRevealResultSchema = closedObject({
+  ok: Type.Boolean(),
+  path: Type.Optional(NonEmptyString),
+  error: Type.Optional(NonEmptyString),
+});
+
 /** Change status for one file in a session checkout diff. */
 export const SessionDiffFileStatusSchema = Type.Union([
   Type.Literal("added"),
@@ -197,19 +213,16 @@ export const SessionsDiffResultSchema = closedObject({
 
 /** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = closedObject({
-  /**
-   * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
-   * to keep large session stores from monopolizing the event loop.
-   */
+  /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
+  requireLastInteraction: Type.Optional(Type.Boolean()),
+  sortBy: Type.Optional(Type.Union([Type.Literal("updatedAt"), Type.Literal("lastInteractionAt")])),
   includeGlobal: Type.Optional(Type.Boolean()),
   includeUnknown: Type.Optional(Type.Boolean()),
-  /**
-   * Limit returned agent-scoped rows to agents currently present in config.
-   * Broad disk discovery remains the default for recovery/ACP consumers.
-   */
+  /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
    * Read first 8KB of each session transcript to derive title from first user message.
@@ -290,49 +303,6 @@ export const SessionsResolveParamsSchema = closedObject({
   includeUnknown: Type.Optional(Type.Boolean()),
   /** Return a successful `{ ok: false }` response when the selector does not match a session. */
   allowMissing: Type.Optional(Type.Boolean()),
-});
-
-/** Creates or adopts a session with optional model, label, and parent linkage. */
-export const SessionsCreateParamsSchema = closedObject({
-  key: Type.Optional(NonEmptyString),
-  agentId: Type.Optional(NonEmptyString),
-  label: Type.Optional(SessionLabelString),
-  model: Type.Optional(NonEmptyString),
-  catalogId: Type.Optional(NonEmptyString),
-  parentSessionKey: Type.Optional(NonEmptyString),
-  fork: Type.Optional(
-    Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
-  ),
-  emitCommandHooks: Type.Optional(Type.Boolean()),
-  task: Type.Optional(Type.String()),
-  message: Type.Optional(Type.String()),
-  worktree: Type.Optional(Type.Boolean()),
-  worktreeBaseRef: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description: "Base ref for the new managed worktree branch. Requires worktree=true.",
-    }),
-  ),
-  worktreeName: Type.Optional(
-    Type.String({
-      pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
-      description: "Managed worktree name; becomes branch openclaw/<name>. Requires worktree=true.",
-    }),
-  ),
-  execNode: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Bind session exec to host=node with this node id/name. Requires operator.admin.",
-    }),
-  ),
-  cwd: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
-    }),
-  ),
 });
 
 export const SessionWorktreeInfoSchema = closedObject({
@@ -550,6 +520,29 @@ export const SessionsCompactionRestoreParamsSchema = closedObject({
   checkpointId: NonEmptyString,
 });
 
+/** Repoints a session to the active-path state before one persisted user message. */
+export const SessionsRewindParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  entryId: NonEmptyString,
+});
+
+/** Creates a new session from the active-path state before one persisted user message. */
+export const SessionsForkParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  entryId: NonEmptyString,
+});
+
+export const SessionsRewindResultSchema = closedObject({
+  editorText: Type.Optional(Type.String()),
+});
+
+export const SessionsForkResultSchema = closedObject({
+  sessionKey: NonEmptyString,
+  editorText: Type.Optional(Type.String()),
+});
+
 /** List response for session compaction checkpoints. */
 export const SessionsCompactionListResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -655,6 +648,10 @@ export type SessionsCompactionListResult = Static<typeof SessionsCompactionListR
 export type SessionsCompactionGetResult = Static<typeof SessionsCompactionGetResultSchema>;
 export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
 export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
+export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;
+export type SessionsForkParams = Static<typeof SessionsForkParamsSchema>;
+export type SessionsRewindResult = Static<typeof SessionsRewindResultSchema>;
+export type SessionsForkResult = Static<typeof SessionsForkResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
@@ -688,6 +685,8 @@ export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
+export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;
+export type SessionsFilesRevealResult = Static<typeof SessionsFilesRevealResultSchema>;
 export type SessionDiffFileStatus = Static<typeof SessionDiffFileStatusSchema>;
 export type SessionDiffFile = Static<typeof SessionDiffFileSchema>;
 export type SessionsDiffParams = Static<typeof SessionsDiffParamsSchema>;

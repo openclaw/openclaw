@@ -1,4 +1,3 @@
-// Gateway registry wires RPC descriptors to handlers, scopes, and budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -12,7 +11,11 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
-import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
+import {
+  consumeControlPlaneWriteBudget,
+  CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
+  CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
+} from "./control-plane-rate-limit.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -29,43 +32,13 @@ import {
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
+import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { SKILLS_GATEWAY_METHOD_NAMES } from "./server-methods/skills-method-names.js";
 import type {
   GatewayRequestHandler,
-  GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-
-function lazyHandlerModule<T>(
-  loadModule: () => Promise<T>,
-  selectHandlers: (module: T) => GatewayRequestHandlers,
-): () => Promise<GatewayRequestHandlers> {
-  let handlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  // Gateway starts advertise the method table before most handler modules are needed; cache the
-  // first import promise so concurrent calls to the same method family share one load.
-  return () => (handlersPromise ??= loadModule().then(selectHandlers));
-}
-
-function createLazyCoreHandlers(params: {
-  methods: readonly string[];
-  loadHandlers: () => Promise<GatewayRequestHandlers>;
-}): GatewayRequestHandlers {
-  return Object.fromEntries(
-    params.methods.map((method) => [
-      method,
-      async (opts: GatewayRequestHandlerOptions) => {
-        const handlers = await params.loadHandlers();
-        const handler = handlers[method];
-        if (!handler) {
-          // Descriptor drift should fail loudly: advertised core methods must exist in the
-          // loaded family module once the lazy boundary resolves.
-          throw new Error(`lazy gateway handler not found: ${method}`);
-        }
-        await handler(opts);
-      },
-    ]),
-  );
-}
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
@@ -106,6 +79,10 @@ const loadCommandsHandlers = lazyHandlerModule(
 const loadConfigHandlers = lazyHandlerModule(
   () => import("./server-methods/config.js"),
   (module) => module.configHandlers,
+);
+const loadConversationHandlers = lazyHandlerModule(
+  () => import("./server-methods/conversations.js"),
+  (module) => module.conversationHandlers,
 );
 const loadConnectHandlers = lazyHandlerModule(
   () => import("./server-methods/connect.js"),
@@ -163,6 +140,10 @@ const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,
 );
+const loadUiCommandHandlers = lazyHandlerModule(
+  () => import("./server-methods/ui-command.js"),
+  (module) => module.uiCommandHandlers,
+);
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
   (module) => module.modelsAuthStatusHandlers,
@@ -170,6 +151,10 @@ const loadModelsAuthStatusHandlers = lazyHandlerModule(
 const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
+);
+const loadModelsProbeHandlers = lazyHandlerModule(
+  () => import("./server-methods/models-probe.js"),
+  (module) => module.modelsProbeHandlers,
 );
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
@@ -190,6 +175,10 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
 const loadPluginsHandlers = lazyHandlerModule(
   () => import("./server-methods/plugins.js"),
   (module) => module.pluginsHandlers,
+);
+const loadMigrationsHandlers = lazyHandlerModule(
+  () => import("./server-methods/migrations.js"),
+  (module) => module.migrationsHandlers,
 );
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
@@ -283,9 +272,9 @@ const loadWebHandlers = lazyHandlerModule(
   () => import("./server-methods/web.js"),
   (module) => module.webHandlers,
 );
-const loadCrestodianHandlers = lazyHandlerModule(
-  () => import("./server-methods/crestodian.js"),
-  (module) => module.crestodianHandlers,
+const loadSystemAgentHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-agent.js"),
+  (module) => module.systemAgentHandlers,
 );
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
@@ -363,8 +352,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "terminal.attach",
       "terminal.list",
       "terminal.text",
+      "terminal.upload",
     ],
     loadHandlers: loadTerminalHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["ui.command"],
+    loadHandlers: loadUiCommandHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
@@ -492,6 +486,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadModelsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["models.probe"],
+    loadHandlers: loadModelsProbeHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["models.authLogout", "models.authStatus"],
     loadHandlers: loadModelsAuthStatusHandlers,
   }),
@@ -510,6 +508,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "plugins.install",
       "plugins.setEnabled",
       "plugins.uninstall",
+      "plugins.refresh",
     ],
     loadHandlers: loadPluginsHandlers,
   }),
@@ -531,13 +530,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "crestodian.chat",
-      "crestodian.setup.detect",
-      "crestodian.setup.verify",
-      "crestodian.setup.activate",
-      "crestodian.setup.auth.start",
+      "openclaw.chat",
+      "openclaw.approval.list",
+      "openclaw.setup.detect",
+      "openclaw.setup.verify",
+      "openclaw.setup.activate",
+      "openclaw.setup.auth.start",
+      "openclaw.setup.prepare.start",
     ],
-    loadHandlers: loadCrestodianHandlers,
+    loadHandlers: loadSystemAgentHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -617,32 +618,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTtsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: [
-      "skills.upload.begin",
-      "skills.upload.chunk",
-      "skills.upload.commit",
-      "skills.status",
-      "skills.bins",
-      "skills.search",
-      "skills.detail",
-      "skills.securityVerdicts",
-      "skills.skillCard",
-      "skills.install",
-      "skills.update",
-      "skills.curator.status",
-      "skills.curator.pin",
-      "skills.curator.unpin",
-      "skills.curator.restore",
-      "skills.proposals.list",
-      "skills.proposals.inspect",
-      "skills.proposals.create",
-      "skills.proposals.update",
-      "skills.proposals.revise",
-      "skills.proposals.requestRevision",
-      "skills.proposals.apply",
-      "skills.proposals.reject",
-      "skills.proposals.quarantine",
-    ],
+    methods: SKILLS_GATEWAY_METHOD_NAMES,
     loadHandlers: loadSkillsHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -671,6 +647,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.create",
       "sessions.compaction.branch",
       "sessions.compaction.restore",
+      "sessions.rewind",
+      "sessions.fork",
       "sessions.send",
       "sessions.steer",
       "sessions.abort",
@@ -685,6 +663,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.rename",
       "sessions.groups.delete",
       "sessions.dispatch",
+      "sessions.reclaim",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -710,6 +689,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.rename",
       "node.list",
       "node.describe",
+      "plugin.surface.refresh",
       "node.pluginSurface.refresh",
       "node.pluginTools.update",
       "node.skills.update",
@@ -750,6 +730,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "conversations.list",
+      "conversations.send",
+      "conversations.turn",
+      "conversations.turn.cancel",
+    ],
+    loadHandlers: loadConversationHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "usage.status",
       "usage.cost",
       "sessions.usage",
@@ -783,12 +772,21 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get", "sessions.files.set"],
+    methods: [
+      "sessions.files.list",
+      "sessions.files.get",
+      "sessions.files.set",
+      "sessions.files.reveal",
+    ],
     loadHandlers: loadSessionsFilesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["sessions.diff"],
     loadHandlers: loadSessionsDiffHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["migrations.memory.plan", "migrations.memory.apply"],
+    loadHandlers: loadMigrationsHandlers,
   }),
 };
 
@@ -868,7 +866,7 @@ export async function handleGatewayRequest(
     if (!methodRegistry.isControlPlaneWrite(req.method)) {
       return false;
     }
-    const budget = consumeControlPlaneWriteBudget({ client });
+    const budget = consumeControlPlaneWriteBudget({ client, method: req.method });
     if (budget.allowed) {
       return false;
     }
@@ -887,7 +885,7 @@ export async function handleGatewayRequest(
           retryAfterMs: budget.retryAfterMs,
           details: {
             method: req.method,
-            limit: "3 per 60s",
+            limit: `${CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS} per ${CONTROL_PLANE_RATE_LIMIT_WINDOW_MS / 1000}s`,
           },
         },
       ),
@@ -980,3 +978,4 @@ export async function handleGatewayRequest(
     rootWorkAdmission.release();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

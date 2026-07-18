@@ -6,7 +6,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
@@ -274,7 +274,7 @@ describe("session transcript reader facade", () => {
     ]);
     await expect(
       readSessionMessagesAsync(scope, { mode: "recent", maxMessages: 1 }),
-    ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 4 } }]);
+    ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 3 } }]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
   });
 
@@ -287,28 +287,26 @@ describe("session transcript reader facade", () => {
       "sessions",
       "sessions.json",
     );
-    fs.mkdirSync(path.dirname(markerStorePath), { recursive: true });
+    const writeScope = {
+      agentId: "marker-agent",
+      sessionId,
+      sessionKey: "agent:marker-agent:main",
+      storePath: markerStorePath,
+    };
+    await persistSessionTranscriptTurn(writeScope, {
+      messages: [
+        {
+          eventId: "marker-message",
+          message: { role: "user", content: "marker scoped prompt" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
     const marker = formatSqliteSessionFileMarker({
       agentId: "marker-agent",
       sessionId,
       storePath: markerStorePath,
     });
-    await appendSqliteTranscriptEvents(
-      {
-        agentId: "marker-agent",
-        sessionId,
-        sessionKey: "agent:marker-agent:main",
-        storePath: markerStorePath,
-      },
-      [
-        {
-          type: "message",
-          id: "marker-message",
-          parentId: null,
-          message: { role: "user", content: "marker scoped prompt" },
-        },
-      ],
-    );
 
     await expect(
       readSessionMessagesAsync(
@@ -318,10 +316,7 @@ describe("session transcript reader facade", () => {
     ).resolves.toMatchObject([{ content: "marker scoped prompt" }]);
     await expect(
       readSessionMessageByIdAsync({ sessionFile: marker, sessionId }, "marker-message"),
-    ).resolves.toMatchObject({
-      found: true,
-      seq: 1,
-    });
+    ).resolves.toMatchObject({ found: true, seq: 1 });
   });
 
   test("projects SQLite transcript reads to the active branch", async () => {
@@ -332,27 +327,30 @@ describe("session transcript reader facade", () => {
       sessionKey: `agent:main:${sessionId}`,
       storePath,
     };
-    await appendSqliteTranscriptEvents(scope, [
-      { type: "session", version: 1, id: sessionId },
-      {
-        type: "message",
-        id: "root",
-        parentId: null,
-        message: { role: "user", content: "branch prompt" },
-      },
-      {
-        type: "message",
-        id: "inactive",
-        parentId: "root",
-        message: { role: "assistant", content: "stale branch" },
-      },
-      {
-        type: "message",
-        id: "active",
-        parentId: "root",
-        message: { role: "assistant", content: "active branch" },
-      },
-    ]);
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "root",
+          parentId: null,
+          message: { role: "user", content: "branch prompt" },
+        },
+        {
+          eventId: "inactive",
+          parentId: "root",
+          message: { role: "assistant", content: "stale branch" },
+        },
+        {
+          eventId: "active",
+          parentId: "root",
+          message: { role: "assistant", content: "active branch" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
 
     const messages = await readSessionMessagesAsync(scope, {
       mode: "full",
@@ -365,7 +363,7 @@ describe("session transcript reader facade", () => {
     ).toEqual(["root", "active"]);
     expect(
       messages.map((message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq),
-    ).toEqual([2, 4]);
+    ).toEqual([1, 2]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 
@@ -401,21 +399,22 @@ describe("session transcript reader facade", () => {
       page.messages.map(
         (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
       ),
-    ).toEqual([3, 4]);
+    ).toEqual([2, 3]);
   });
 
   test("honors agent ids when no store path or session file is provided", async () => {
     const sessionId = "reader-agent-scope";
-    await appendSqliteTranscriptEvents(
+    await persistSessionTranscriptTurn(
       { agentId: "agent-one", sessionId, sessionKey: "agent:agent-one:main" },
-      [
-        {
-          type: "message",
-          id: "agent-message",
-          parentId: null,
-          message: { role: "user", content: "agent scoped prompt" },
-        },
-      ],
+      {
+        messages: [
+          {
+            eventId: "agent-message",
+            message: { role: "user", content: "agent scoped prompt" },
+          },
+        ],
+        touchSessionEntry: false,
+      },
     );
     const scope = { agentId: "agent-one", sessionId };
 

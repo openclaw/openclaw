@@ -19,10 +19,10 @@ import {
   dismissExecApprovalPrompt,
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
-  parseExecApprovalRequested,
+  parseApprovalRequestedEvent,
   parseExecApprovalResolved,
-  parsePluginApprovalRequested,
   refreshPendingApprovalQueue,
+  resolveApprovalRequest,
   type ExecApprovalDecision,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
@@ -34,7 +34,7 @@ type ApplicationStatusBanner = {
   text: string;
 };
 
-export type ApplicationOverlaySnapshot = {
+type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
   updateReconciliationPending: boolean;
@@ -130,6 +130,8 @@ function resolveUpdateStatusBanner(params: {
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      "managed-service-handoff-already-running":
+        "Another managed update is already running. Wait for it to complete, then refresh update status.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
     }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
   return {
@@ -204,7 +206,14 @@ type UpdateVerificationWait = {
   resolve: (active: boolean) => void;
 };
 
-export function createApplicationOverlays(gateway: ApplicationGateway): ApplicationOverlays {
+export function createApplicationOverlays(
+  gateway: ApplicationGateway,
+  hooks: {
+    /** Barrier awaited after update-running is published and before update.run
+     * is issued, so in-flight config writes cannot overlap the install. */
+    drainConfigWrites?: () => Promise<void>;
+  } = {},
+): ApplicationOverlays {
   let snapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
     updateRunning: false,
@@ -501,23 +510,17 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       publish();
       return;
     }
-    if (event.event === "exec.approval.requested") {
-      const entry = parseExecApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
+    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
+    if (requestedApproval) {
+      enqueueExecApprovalPrompt(promptState, requestedApproval);
+      publish();
       return;
     }
-    if (event.event === "plugin.approval.requested") {
-      const entry = parsePluginApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
-      return;
-    }
-    if (event.event === "exec.approval.resolved" || event.event === "plugin.approval.resolved") {
+    if (
+      event.event === "exec.approval.resolved" ||
+      event.event === "plugin.approval.resolved" ||
+      event.event === "openclaw.approval.resolved"
+    ) {
       const resolved = parseExecApprovalResolved(event.payload);
       if (resolved) {
         clearResolvedExecApprovalPrompt(promptState, resolved.id);
@@ -544,6 +547,13 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
       publish();
       try {
+        // updateRunning above suspends NEW config writes (bootstrap syncs it
+        // into the runtime-config capability); this barrier drains writes
+        // already in flight so none can commit or restart mid-install.
+        await hooks.drainConfigWrites?.();
+        if (disposed || generation !== updateRunGeneration) {
+          return;
+        }
         const response = await client.request<UpdateRunResponse>("update.run", {});
         if (
           disposed ||
@@ -634,9 +644,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         isCurrentClient(operation.client);
       publish();
       try {
-        const method =
-          active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-        await client.request(method, { id: active.id, decision });
+        await resolveApprovalRequest(client, active, decision);
         if (!isCurrentOperation()) {
           return;
         }

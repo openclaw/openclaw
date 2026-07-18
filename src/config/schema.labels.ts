@@ -3,6 +3,9 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  "channels.discord.activities": "Discord Activities",
+  "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
+  "channels.discord.activities.applicationId": "Discord Activities Application ID",
   meta: "Metadata",
   "meta.lastTouchedVersion": "Config Last Touched Version",
   "meta.lastTouchedAt": "Config Last Touched At",
@@ -28,6 +31,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "wizard.lastRunCommit": "Wizard Last Run Commit",
   "wizard.lastRunCommand": "Wizard Last Run Command",
   "wizard.lastRunMode": "Wizard Last Run Mode",
+  "wizard.localModelLeanAutoModel": "Wizard Auto-Set Lean Model",
   "wizard.securityAcknowledgedAt": "Wizard Security Acknowledgement Timestamp",
   audit: "Audit Ledger",
   "audit.enabled": "Audit Ledger Enabled",
@@ -435,10 +439,6 @@ export const FIELD_LABELS: Record<string, string> = {
   media: "Media",
   "media.preserveFilenames": "Preserve Media Filenames",
   "media.ttlHours": "Media Retention TTL (hours)",
-  audio: "Audio",
-  "audio.transcription": "Audio Transcription",
-  "audio.transcription.command": "Audio Transcription Command",
-  "audio.transcription.timeoutSeconds": "Audio Transcription Timeout (sec)",
   bindings: "Bindings",
   "bindings[].type": "Binding Type",
   "bindings[].agentId": "Binding Agent ID",
@@ -493,6 +493,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.envelopeElapsed": "Envelope Elapsed",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
+  "agents.defaults.memorySearch.rememberAcrossConversations": "Remember Across Conversations",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
   "agents.defaults.memorySearch.extraPaths": "Extra Memory Paths",
   "agents.defaults.memorySearch.qmd": "Memory Search QMD Collections",
@@ -911,9 +912,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.webhook": "Cron Legacy Webhook (Deprecated)",
   "cron.webhookToken": "Cron Webhook Bearer Token",
   "cron.sessionRetention": "Cron Session Retention",
-  "cron.runLog": "Cron Run Log Pruning",
-  "cron.runLog.maxBytes": "Cron Run Log Max Bytes",
-  "cron.runLog.keepLines": "Cron Run Log Keep Lines",
   worktrees: "Worktrees",
   "worktrees.cleanup": "Worktree Cleanup Limits",
   "worktrees.cleanup.maxCount": "Max Worktrees",
@@ -1077,6 +1075,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",
   "channels.defaults.contextVisibility": "Default Context Visibility",
+  "channels.defaults.implicitMentions": "Default Implicit Mentions",
+  "channels.defaults.implicitMentions.replyToBot": "Default Reply-to-Bot Implicit Mentions",
+  "channels.defaults.implicitMentions.quotedBot": "Default Quoted-Bot Implicit Mentions",
+  "channels.defaults.implicitMentions.threadParticipation":
+    "Default Thread-Participation Implicit Mentions",
   "channels.defaults.heartbeat": "Default Heartbeat Visibility",
   "channels.defaults.heartbeat.showOk": "Heartbeat Show OK",
   "channels.defaults.heartbeat.showAlerts": "Heartbeat Show Alerts",
@@ -1134,3 +1137,4 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

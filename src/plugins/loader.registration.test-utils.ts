@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
+import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -60,8 +60,10 @@ import {
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  listMemoryPromptPreparations,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
+  registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
   resolveMemoryFlushPlan,
 } from "./memory-state.test-fixtures.js";
@@ -248,8 +250,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.securityAuditCollectors).toStrictEqual([]);
     expect(registry.interactiveHandlers).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
-    expect(getContextEngineFactory("failme-context")).toBeUndefined();
-    expect(listContextEngineIds()).not.toContain("failme-context");
+    expect(getContextEngineRegistration("failme-context")).toBeUndefined();
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
@@ -417,6 +418,78 @@ describe("loadOpenClawPlugins", () => {
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["scoped-provider"]);
   });
 
+  it("allows bundled plugins to supply system.notify without opening the command to external plugins", () => {
+    const bundledDir = makeTempDir();
+    const bundledPluginDir = path.join(bundledDir, "notify-host");
+    mkdirSafe(bundledPluginDir);
+    fs.writeFileSync(
+      path.join(bundledPluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/notify-host",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf-8",
+    );
+    const bundled = writePlugin({
+      id: "notify-host",
+      dir: bundledPluginDir,
+      filename: "index.cjs",
+      body: `module.exports = {
+          id: "notify-host",
+          register(api) {
+            api.registerNodeHostCommand({
+              command: "system.notify",
+              handle: async () => "{}",
+            });
+          },
+        };`,
+    });
+    updatePluginManifest(bundled, { enabledByDefault: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledRegistry = loadOpenClawPlugins({
+      cache: false,
+      config: { plugins: { allow: ["notify-host"] } },
+      onlyPluginIds: ["notify-host"],
+    });
+    expect(bundledRegistry.nodeHostCommands.map((entry) => entry.command.command)).toEqual([
+      "system.notify",
+    ]);
+
+    useNoBundledPlugins();
+    const external = writePlugin({
+      id: "external-notify-host",
+      filename: "external-notify-host.cjs",
+      body: `module.exports = {
+          id: "external-notify-host",
+          register(api) {
+            api.registerNodeHostCommand({
+              command: "system.notify",
+              handle: async () => "{}",
+            });
+          },
+        };`,
+    });
+    const externalRegistry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: external.dir,
+      config: {
+        plugins: {
+          allow: ["external-notify-host"],
+          load: { paths: [external.file] },
+        },
+      },
+      onlyPluginIds: ["external-notify-host"],
+    });
+    expect(externalRegistry.nodeHostCommands).toEqual([]);
+    expect(
+      externalRegistry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("node host command reserved by core: system.notify"),
+      ),
+    ).toBe(true);
+  });
+
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
     registerMemoryEmbeddingProvider({
@@ -428,6 +501,7 @@ describe("loadOpenClawPlugins", () => {
       get: async () => null,
     });
     registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
+    registerMemoryPromptPreparation("memory-wiki", async () => ["active prepared wiki"]);
     const activeRuntime = {
       async getMemorySearchManager() {
         return { manager: null, error: "active" };
@@ -503,6 +577,7 @@ describe("loadOpenClawPlugins", () => {
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
   it("does not replace active embedding providers during non-activating loads", () => {
@@ -654,6 +729,7 @@ describe("loadOpenClawPlugins", () => {
             });
             api.registerMemoryPromptSection(() => ["stale failure section"]);
             api.registerMemoryPromptSupplement(() => ["stale failure supplement"]);
+            api.registerMemoryPromptPreparation(async () => ["stale prepared supplement"]);
             api.registerMemoryCorpusSupplement({
               search: async () => [],
               get: async () => null,
@@ -695,6 +771,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
     expect(listMemoryCorpusSupplements()).toStrictEqual([]);
+    expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
@@ -1665,3 +1742,4 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

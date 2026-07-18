@@ -3,6 +3,7 @@ import {
   floatToPcm16,
   measureRealtimeTalkAudioFrame,
   RealtimeTalkMediaStreamMeter,
+  RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
   type RealtimeTalkAudioFrame,
 } from "./realtime-talk-audio.ts";
@@ -27,8 +28,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
-  private inputSource: MediaStreamAudioSourceNode | null = null;
-  private inputProcessor: ScriptProcessorNode | null = null;
+  private readonly inputPump = new RealtimeTalkPcmInputPump();
   private unsubscribe: (() => void) | null = null;
   private closed = false;
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
@@ -66,11 +66,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     });
     let media: MediaStream;
     try {
-      media = await openRealtimeTalkInput(this.ctx.inputDeviceId, {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-      });
+      media = await openRealtimeTalkInput(this.ctx.inputDeviceId);
     } catch (error) {
       if (this.closed) {
         return;
@@ -107,10 +103,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.closed = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
-    this.inputProcessor?.disconnect();
-    this.inputProcessor = null;
-    this.inputSource?.disconnect();
-    this.inputSource = null;
+    this.inputPump.stop();
     this.inputMeter?.stop();
     this.inputMeter = null;
     // Mark callbacks recurse until playback drains, so shutdown must cancel every owned timer.
@@ -131,13 +124,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (!this.media || !this.inputContext) {
       return;
     }
-    this.inputSource = this.inputContext.createMediaStreamSource(this.media);
-    this.inputProcessor = this.inputContext.createScriptProcessor(4096, 1, 1);
-    this.inputProcessor.onaudioprocess = (event) => {
+    this.inputPump.start(this.media, this.inputContext, (samples) => {
       if (this.closed) {
         return;
       }
-      const samples = event.inputBuffer.getChannelData(0);
       const pcm = floatToPcm16(samples);
       if (this.detectBargeInSpeech(samples)) {
         this.cancelOutputForBargeIn();
@@ -157,9 +147,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             this.stop();
           }
         });
-    };
-    this.inputSource.connect(this.inputProcessor);
-    this.inputProcessor.connect(this.inputContext.destination);
+    });
   }
 
   private handleRelayEvent(event: GatewayRelayEvent): void {

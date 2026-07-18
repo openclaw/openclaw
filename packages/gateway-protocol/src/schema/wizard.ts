@@ -16,6 +16,11 @@ const WizardRunStatusSchema = Type.Union([
 export const WizardStartParamsSchema = closedObject({
   mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
   workspace: Type.Optional(Type.String()),
+  // "setup" (default) runs full onboarding; "channels" runs the guided
+  // channel-setup flow (openclaw channels add) over the same step protocol.
+  flow: Type.Optional(Type.Union([Type.Literal("setup"), Type.Literal("channels")])),
+  // Preselected channel id for flow "channels" (e.g. "telegram").
+  channel: Type.Optional(NonEmptyString),
 });
 
 /** Client answer payload for the current wizard step. */
@@ -78,12 +83,24 @@ export const WizardStepSchema = closedObject({
   deviceCode: Type.Optional(WizardDeviceCodeSchema),
 });
 
+/** Channel/account pair the channels flow actually configured. */
+const WizardConfiguredAccountSchema = closedObject({
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+});
+
 /** Common response fields for start and next calls. */
 const WizardResultFields = {
   done: Type.Boolean(),
   step: Type.Optional(WizardStepSchema),
   status: Type.Optional(WizardRunStatusSchema),
   error: Type.Optional(Type.String()),
+  // What the flow actually configured; set on the terminal result of
+  // wizard.start flow "channels" sessions so clients run channel-specific
+  // completion (e.g. WhatsApp QR linking for the right account) from the
+  // real outcome rather than the preselection.
+  channels: Type.Optional(Type.Array(NonEmptyString)),
+  accounts: Type.Optional(Type.Array(WizardConfiguredAccountSchema)),
 };
 
 /** Result after advancing a wizard session. */

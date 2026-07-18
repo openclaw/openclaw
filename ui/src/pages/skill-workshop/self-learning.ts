@@ -14,6 +14,8 @@ export type SkillWorkshopSelfLearning = {
   error: string | null;
 };
 
+const CONFIG_CHANGED_SINCE_LOAD = "config changed since last load";
+
 // Mirrors the gateway default for skills.workshop.autonomous.enabled: absent
 // config means self-learning is off. Snapshot sourceConfig/resolved are both
 // $include-resolved (src/config/io.ts), so the editable read is display-safe.
@@ -36,10 +38,20 @@ export async function setSelfLearningEnabled(
   runtimeConfig: RuntimeConfigCapability,
   enabled: boolean,
 ): Promise<string | null> {
-  const patched = await runtimeConfig.patch({
+  const patch = {
     raw: { skills: { workshop: { autonomous: { enabled } } } },
     note: enabled ? "Enable Skill Workshop self-learning" : "Disable Skill Workshop self-learning",
-  });
+  };
+  let patched = await runtimeConfig.patch(patch);
+  if (!patched && runtimeConfig.state.lastError?.includes(CONFIG_CHANGED_SINCE_LOAD)) {
+    // This scalar toggle is safe to replay after refreshing the optimistic-lock hash.
+    // Keep arbitrary merge patches fail-closed: arrays and derived objects may need rebuilding.
+    await runtimeConfig.refresh();
+    if (runtimeConfig.state.lastError) {
+      return runtimeConfig.state.lastError;
+    }
+    patched = await runtimeConfig.patch(patch);
+  }
   if (!patched) {
     return runtimeConfig.state.lastError ?? t("skillWorkshop.selfLearning.updateError");
   }

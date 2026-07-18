@@ -87,7 +87,7 @@ type ChannelSetupWizardEnvShortcut = {
 };
 
 /** Declarative secret/input step for a channel account credential. */
-type ChannelSetupWizardCredential = {
+export type ChannelSetupWizardCredential = {
   inputKey: keyof ChannelSetupInput;
   providerHint: string;
   credentialLabel: string;
@@ -314,6 +314,12 @@ export type SetupChannelsOptions = {
   promptAccountIds?: boolean;
   forceAllowFromChannels?: ChannelId[];
   deferStatusUntilSelection?: boolean;
+  /**
+   * The controlling client finishes device linking itself after config is
+   * written (e.g. Control UI renders the WhatsApp QR via web.login.*), so
+   * setup surfaces must skip terminal-interactive login/link prompts.
+   */
+  deferDeviceLinkToClient?: boolean;
   skipStatusNote?: boolean;
   skipDmPolicyPrompt?: boolean;
   skipConfirm?: boolean;

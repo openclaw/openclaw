@@ -1,4 +1,5 @@
 import {
+  getHealthCheck,
   registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
 } from "openclaw/plugin-sdk/health";
@@ -11,32 +12,33 @@ import {
   workspaceRepairsEnabled,
 } from "./policy-runtime.js";
 
-let registered = false;
+let policyDoctorChecks: readonly HealthCheck[] | undefined;
+const registeredPolicyDoctorRegistrars = new WeakSet<(check: HealthCheck) => void>();
 
 type PolicyDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 
 export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost): void {
-  if (registered) {
+  if (host !== undefined && registeredPolicyDoctorRegistrars.has(host.registerHealthCheck)) {
     return;
   }
   const registerHealthCheck = host?.registerHealthCheck ?? registerPluginHealthCheck;
-  for (const check of createPolicyDoctorChecks({
+  policyDoctorChecks ??= createPolicyDoctorChecks({
     channelIdsFromFindings,
     disableChannels,
     evaluatePolicy,
     findingsForCheck,
     workspaceRepairsDisabledResult,
     workspaceRepairsEnabled,
-  })) {
+  });
+  for (const check of policyDoctorChecks) {
+    if (host === undefined && getHealthCheck(check.id) === check) {
+      continue;
+    }
     registerHealthCheck(check);
   }
-  registered = true;
-}
-
-export function resetPolicyDoctorChecksForTest(): void {
-  registered = false;
+  registeredPolicyDoctorRegistrars.add(registerHealthCheck);
 }
 
 export { evaluatePolicy };

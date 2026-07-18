@@ -9,17 +9,14 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   noteRuntimeAuthProfileStorePersistedMutation,
   setRuntimeAuthProfileStoreSnapshot,
-  testing as runtimeSnapshotsTesting,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runtime-snapshots.test-support.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  getRuntimeConfigSnapshotMetadata,
-  getRuntimeConfigSourceSnapshot,
-} from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -32,7 +29,6 @@ import {
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   restoreSecretsRuntimeSnapshotStateIfCurrent,
-  setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
 
@@ -102,10 +98,6 @@ describe("secrets runtime state", () => {
       refreshContext: null,
       refreshHandler: null,
     });
-    const metadata = getRuntimeConfigSnapshotMetadata();
-    if (!metadata) {
-      throw new Error("expected runtime config metadata");
-    }
     const rawSourceConfig = { gateway: { port: 19_030 } } satisfies OpenClawConfig;
     const secretsSourceConfig = {
       ...rawSourceConfig,
@@ -113,11 +105,12 @@ describe("secrets runtime state", () => {
     } satisfies OpenClawConfig;
 
     expect(
-      setSecretsRuntimeSourceSnapshotIfCurrent({
-        expectedSecretsRevision: getActiveSecretsRuntimeSnapshotRevision(),
-        expectedRuntimeConfigRevision: metadata.revision,
+      activateSecretsRuntimeSnapshotStateIfCurrent({
+        snapshot: { ...snapshot, sourceConfig: secretsSourceConfig },
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        refreshContext: null,
+        refreshHandler: null,
         runtimeSourceConfig: rawSourceConfig,
-        secretsSourceConfig,
       }),
     ).toBe(true);
 
@@ -2424,3 +2417,4 @@ describe("secrets runtime state", () => {
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,11 @@
 // operator connection and stream its bytes back over the existing WebSocket.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
+  MAX_TERMINAL_UPLOAD_BYTES,
+  MAX_TERMINAL_UPLOAD_NAME_LENGTH,
+} from "../terminal-upload-constants.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -15,6 +20,13 @@ export const TerminalOpenParamsSchema = closedObject({
   // Optional agent selector; defaults to the gateway's default agent. The
   // session starts in that agent's workspace and inherits its isolation.
   agentId: Type.Optional(NonEmptyString),
+  catalog: Type.Optional(
+    closedObject({
+      catalogId: NonEmptyString,
+      hostId: NonEmptyString,
+      threadId: NonEmptyString,
+    }),
+  ),
   cols: TerminalDimension,
   rows: TerminalDimension,
 });
@@ -29,6 +41,7 @@ export const TerminalOpenResultSchema = closedObject({
   // True when the shell runs inside the agent's sandbox and cannot escape the
   // workspace; false for a host shell that can navigate the whole filesystem.
   confined: Type.Boolean(),
+  title: Type.Optional(NonEmptyString),
 });
 export type TerminalOpenResult = Static<typeof TerminalOpenResultSchema>;
 
@@ -39,6 +52,21 @@ export const TerminalInputParamsSchema = closedObject({
   data: Type.String(),
 });
 export type TerminalInputParams = Static<typeof TerminalInputParamsSchema>;
+
+/** Stages one file on the host bound to an existing terminal session. */
+export const TerminalUploadParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  name: Type.String({ minLength: 1, maxLength: MAX_TERMINAL_UPLOAD_NAME_LENGTH }),
+  contentBase64: Type.String({ maxLength: MAX_TERMINAL_UPLOAD_BASE64_LENGTH }),
+});
+export type TerminalUploadParams = Static<typeof TerminalUploadParamsSchema>;
+
+/** Absolute temporary path pasted into the active terminal after upload. */
+export const TerminalUploadResultSchema = closedObject({
+  path: NonEmptyString,
+  size: Type.Integer({ minimum: 0, maximum: MAX_TERMINAL_UPLOAD_BYTES }),
+});
+export type TerminalUploadResult = Static<typeof TerminalUploadResultSchema>;
 
 /** Resizes the PTY grid after the client viewport changes. */
 export const TerminalResizeParamsSchema = closedObject({
@@ -53,9 +81,8 @@ export const TerminalCloseParamsSchema = closedObject({ sessionId: NonEmptyStrin
 export type TerminalCloseParams = Static<typeof TerminalCloseParamsSchema>;
 
 /**
- * Rebinds a live-or-detached session to the calling admin connection.
- * Attach is take-over (tmux-like): the previous owner, if still connected,
- * receives `terminal.exit` with reason "detached".
+ * Attaches the calling admin connection. Connection-owned sessions use
+ * take-over; agent-owned sessions retain ownership and add a shared viewer.
  */
 export const TerminalAttachParamsSchema = closedObject({ sessionId: NonEmptyString });
 export type TerminalAttachParams = Static<typeof TerminalAttachParamsSchema>;
@@ -72,6 +99,9 @@ export const TerminalAttachResultSchema = closedObject({
   // snapshot: after truncation it can start mid-escape-sequence; emulators
   // recover on the next full repaint (prompt, clear, resize redraw).
   buffer: Type.String(),
+  // Gateways include this cumulative UTF-16 snapshot offset when the client
+  // advertises terminal-offset-seq. Optional across protocol-4 version skew.
+  seq: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 export type TerminalAttachResult = Static<typeof TerminalAttachResultSchema>;
 
@@ -84,6 +114,8 @@ export const TerminalSessionInfoSchema = closedObject({
   confined: Type.Boolean(),
   /** False while the session is detached (no connection owns its stream). */
   attached: Type.Boolean(),
+  /** Connection-owned session, or the trusted agent session key that owns it. */
+  owner: Type.Optional(Type.Union([Type.Literal("conn"), Type.String({ pattern: "^agent:.+" })])),
   createdAtMs: Type.Integer({ minimum: 0 }),
 });
 export type TerminalSessionInfo = Static<typeof TerminalSessionInfoSchema>;
@@ -110,7 +142,7 @@ export type TerminalTextResult = Static<typeof TerminalTextResultSchema>;
 export const TerminalAckResultSchema = closedObject({ ok: Type.Boolean() });
 export type TerminalAckResult = Static<typeof TerminalAckResultSchema>;
 
-/** Streamed output chunk; seq lets the client detect gaps and preserve order. */
+/** Streamed output chunk; seq is its cumulative UTF-16 end offset within the session. */
 export const TerminalDataEventSchema = closedObject({
   sessionId: NonEmptyString,
   seq: Type.Integer({ minimum: 0 }),

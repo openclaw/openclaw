@@ -3,12 +3,12 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
-  PluginSearchResponse,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
@@ -72,6 +72,21 @@ const lobsterPlugin = {
   install: { source: "clawhub", packageName: "@openclaw/lobster" },
 } satisfies PluginCatalogItem;
 
+const remoteIconPlugin = {
+  id: "remote-icon",
+  name: "FireCrawl",
+  description: "Web extraction and crawling.",
+  kind: ["plugin"],
+  origin: "official",
+  installed: false,
+  enabled: false,
+  state: "not-installed",
+  featured: true,
+  order: 60,
+  hasIcon: true,
+  install: { source: "clawhub", packageName: "@openclaw/firecrawl" },
+} satisfies PluginCatalogItem;
+
 const calendarPlugin = {
   id: "calendar-plus",
   name: "Calendar Plus",
@@ -87,10 +102,20 @@ const calendarPlugin = {
   removable: true,
 } satisfies PluginCatalogItem;
 
-const initialInventory = inventory([workboardDisabled, lobsterPlugin]);
-const installedInventory = inventory([workboardDisabled, lobsterPlugin, calendarPlugin]);
-const finalInventory = inventory([workboardEnabled, lobsterPlugin, calendarPlugin]);
-const uninstalledInventory = inventory([workboardEnabled, lobsterPlugin]);
+const initialInventory = inventory([workboardDisabled, lobsterPlugin, remoteIconPlugin]);
+const installedInventory = inventory([
+  workboardDisabled,
+  lobsterPlugin,
+  remoteIconPlugin,
+  calendarPlugin,
+]);
+const finalInventory = inventory([
+  workboardEnabled,
+  lobsterPlugin,
+  remoteIconPlugin,
+  calendarPlugin,
+]);
+const uninstalledInventory = inventory([workboardEnabled, lobsterPlugin, remoteIconPlugin]);
 
 const calendarSearchResponse = {
   results: [
@@ -109,7 +134,7 @@ const calendarSearchResponse = {
       },
     },
   ],
-} satisfies PluginSearchResponse;
+} satisfies PluginsSearchResult;
 
 const uninstallResult = {
   ok: true,
@@ -206,7 +231,7 @@ async function waitForNextRequest(
       }
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for the next ${method} request`);
@@ -221,10 +246,8 @@ async function captureScreenshot(page: Page, name: string): Promise<void> {
     return;
   }
   await mkdir(artifactDir, { recursive: true });
-  // UI transitions top out at 180ms; capture only after Chromium has painted
-  // the settled catalog grid rather than a partially composited transition.
-  await page.waitForTimeout(250);
   await page.locator(".content").screenshot({
+    animations: "disabled",
     caret: "hide",
     path: path.join(artifactDir, name),
   });
@@ -305,9 +328,28 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   it("browses the catalog, installs from ClawHub, enables Workboard, and refreshes authoritative state", async () => {
     const context = await newContext();
     const page = await context.newPage();
+    await page.addInitScript(
+      ({ gatewayUrl }) => {
+        window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl };
+      },
+      { gatewayUrl: server.baseUrl.replace(/^http/u, "ws") },
+    );
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: pluginMethodResponses(),
+    });
+    let pluginIconAuth = "";
+    await page.route("**/__openclaw__/plugin-icon/remote-icon", async (route) => {
+      pluginIconAuth = route.request().headers().authorization ?? "";
+      await route.fulfill({
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="#f97316" d="M4 3h16v18H4z"/></svg>`,
+        contentType: "image/svg+xml",
+        headers: {
+          "content-disposition": 'attachment; filename="plugin-icon.svg"',
+          "content-security-policy": "default-src 'none'; sandbox",
+        },
+        status: 200,
+      });
     });
 
     try {
@@ -338,6 +380,19 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await lobsterCard.getByRole("button", { name: "Install Lobster" }).waitFor();
       // Bundled art renders instead of monogram fallbacks for curated plugins.
       await lobsterCard.locator(".plugins-tile img").waitFor({ state: "attached" });
+      const remoteIconCard = page.locator('[data-plugin-id="remote-icon"]');
+      const remoteIcon = remoteIconCard.locator(".plugins-tile img.plugins-icon");
+      await remoteIcon.waitFor({ state: "visible" });
+      expect(pluginIconAuth).toBe("Bearer e2e-device-token");
+      await expect
+        .poll(
+          async () =>
+            await remoteIcon.evaluate(async (image: HTMLImageElement) => {
+              const iconResponse = await fetch(image.src);
+              return (await iconResponse.blob()).type;
+            }),
+        )
+        .toBe("image/png");
       await page
         .locator('[data-connector-id="github"]')
         .getByRole("button", { name: "Add", exact: true })
@@ -516,8 +571,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await moreButton.click();
       }
       const workboardMenuItem = sidebar
-        .getByRole("menu", { exact: true, name: "More" })
-        .getByRole("menuitem", { exact: true, name: "Workboard" });
+        .locator("wa-dropdown.sidebar-more-menu")
+        .locator('wa-dropdown-item[value="workboard"] a');
       await workboardMenuItem.waitFor({ state: "visible" });
       expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
     } finally {

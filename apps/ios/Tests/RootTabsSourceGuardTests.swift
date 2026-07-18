@@ -173,7 +173,7 @@ struct RootTabsSourceGuardTests {
         #expect(!sidebarDetail.contains("initialRoute: .cron"))
         #expect(sidebarDetail.contains("headerTitle: \"Dreaming\""))
         #expect(sidebarDetail.contains("headerTitle: \"Usage\""))
-        #expect(sidebarDetail.contains("headerTitle: \"Cron Jobs\""))
+        #expect(sidebarDetail.contains("headerTitle: \"Automations\""))
         #expect(!sidebarDetail.contains("headerTitle: \"OpenClaw\""))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("title: .localized(self.headerTitle)"))
@@ -379,6 +379,14 @@ struct RootTabsSourceGuardTests {
         #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
+    }
+
+    @Test func `chat keeps layered canvas behind soft native scroll edges`() throws {
+        let source = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
+
+        #expect(source.contains("drawsBackground: true"))
+        #expect(source.contains("content.scrollEdgeEffectStyle(.soft, for: .vertical)"))
+        #expect(!source.contains(".background(Color(uiColor: .systemBackground))"))
     }
 
     @Test func `phone hub keeps docs as destination only`() throws {

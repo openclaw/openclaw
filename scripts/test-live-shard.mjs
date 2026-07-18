@@ -30,7 +30,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
   ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
-  ["src/crestodian/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL"]],
+  ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
   ["src/gateway/gateway-acp-bind.live.test.ts", ["OPENCLAW_LIVE_ACP_BIND"]],
   ["src/gateway/gateway-acp-spawn-defaults.live.test.ts", ["OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS"]],
@@ -44,6 +44,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
 const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
 const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
+const ZAI_LIVE_TEST_FILE = "src/agents/zai.live.test.ts";
 
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
@@ -259,20 +260,21 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
     case "native-live-src-agents":
       return files.filter(
         (file) =>
-          file.startsWith("src/agents/") ||
-          file.startsWith("src/llm/") ||
-          file.startsWith("src/skills/"),
+          file !== ZAI_LIVE_TEST_FILE &&
+          (file.startsWith("src/agents/") ||
+            file.startsWith("src/llm/") ||
+            file.startsWith("src/skills/")),
       );
     case "native-live-src-agents-zai-coding":
-      return files.filter((file) => file === "src/agents/zai.live.test.ts");
+      return files.filter((file) => file === ZAI_LIVE_TEST_FILE);
     case "native-live-src-gateway":
       return files.filter(
-        (file) => file.startsWith("src/gateway/") || file.startsWith("src/crestodian/"),
+        (file) => file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"),
       );
     case "native-live-src-gateway-core":
       return files.filter(
         (file) =>
-          (file.startsWith("src/gateway/") || file.startsWith("src/crestodian/")) &&
+          (file.startsWith("src/gateway/") || file.startsWith("src/system-agent/")) &&
           !isGatewayBackendLiveTest(file) &&
           !isGatewayProfilesLiveTest(file),
       );

@@ -169,6 +169,9 @@ struct OpenClawTypographyTests {
         let privacyAccess = try String(
             contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
             encoding: .utf8)
+        let appleHealthAccess = try String(
+            contentsOf: Self.sourceURL("Health/AppleHealthAccessSectionView.swift"),
+            encoding: .utf8)
         let skillWorkshop = try String(
             contentsOf: Self.sourceURL("Design/IPadSkillWorkshopScreen.swift"),
             encoding: .utf8)
@@ -184,6 +187,9 @@ struct OpenClawTypographyTests {
             encoding: .utf8)
         let skills = try String(
             contentsOf: Self.sourceURL("Design/SettingsSkillsDestination.swift"),
+            encoding: .utf8)
+        let automations = try String(
+            contentsOf: Self.sourceURL("Design/AgentAutomationDetailScreen.swift"),
             encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
         let chatTab = try String(contentsOf: Self.sourceURL("Design/ChatProTab.swift"), encoding: .utf8)
@@ -203,11 +209,21 @@ struct OpenClawTypographyTests {
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift"),
             encoding: .utf8)
 
+        #expect(automations.contains(".font(OpenClawType.body)"))
+        #expect(automations.contains(".font(OpenClawType.headline)"))
+        #expect(automations.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(automations.contains(".font(OpenClawType.caption)"))
+        #expect(!automations.contains(".font(.body"))
+        #expect(!automations.contains(".font(.headline"))
+        #expect(!automations.contains(".font(.caption"))
+
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(proComponents.contains("primaryActionTitle.text"))
         #expect(proComponents.contains("secondaryActionTitle.text"))
 
         #expect(chatTab.contains("Text(\"Export Transcript\")"))
+        #expect(chatTab.contains("Text(String(localized: \"Sessions…\"))"))
+        #expect(chatTab.contains("Text(String(localized: \"Show reasoning & tool activity\"))"))
         #expect(chatTab.contains(".font(OpenClawType.body)"))
         #expect(!chatTab.contains("Button(\"Export Transcript\")"))
 
@@ -315,6 +331,8 @@ struct OpenClawTypographyTests {
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
+        #expect(appleHealthAccess.contains("Text(healthError)"))
+        #expect(appleHealthAccess.contains(".font(OpenClawType.footnote)"))
         let permissionRow = try String(
             contentsOf: Self.sourceURL("Permissions/DevicePermissionRow.swift"),
             encoding: .utf8)

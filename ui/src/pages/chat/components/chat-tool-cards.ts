@@ -5,20 +5,27 @@ import { keyed } from "lit/directives/keyed.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
+import {
+  dispatchWidgetPrompt,
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "../../../components/mcp-app-security.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
-  formatDistinctCollapsedToolSummaryText,
+  formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import {
   formatToolDetail,
+  isInternalCanvasEntryUrl,
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   resolveToolDisplay,
@@ -85,7 +92,7 @@ ${text}
 \`\`\``;
 }
 
-export function buildToolCardSidebarContent(card: ToolCard): string {
+function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const isError = isToolCardError(card);
@@ -137,6 +144,10 @@ function handleRawDetailsToggle(event: Event) {
 // preview frames and the height is clamped, so widget code can only resize its
 // own frame within the same bounds the preview contract allows.
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
+const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
+const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+export { WIDGET_PROMPT_EVENT };
+export type { WidgetPromptEventDetail };
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -146,7 +157,9 @@ const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 // binding, so the template must read the reported height back or it resets.
 const widgetFrameHeightsBySrc = new Map<string, number>();
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
-let widgetSizeListenerInstalled = false;
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetSizeListenerWindows = new WeakSet<Window>();
 
 function rememberWidgetFrameHeight(src: string, height: number) {
   if (
@@ -168,11 +181,97 @@ function registerWidgetFrame(event: Event) {
   }
 }
 
-function installWidgetSizeListener() {
-  if (widgetSizeListenerInstalled || typeof window === "undefined") {
+function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
+  const payload = data as { type?: unknown; prompt?: unknown } | null;
+  if (!payload || payload.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
     return;
   }
-  widgetSizeListenerInstalled = true;
+  dispatchWidgetPrompt(frame, payload.prompt, frame.getAttribute("src") ?? "");
+}
+
+// Prompt authority is a MessagePort OFFERED by the trusted bridge script that
+// wraps every hosted widget document. The bridge posts its offer at document
+// parse time — before any widget code can run, steal the endpoint, or navigate
+// the frame — so buffering only the FIRST offer per content window and adopting
+// it once, at the frame's first load, binds the capability to the genuine
+// widget document. A document that navigates away closes its ports with it,
+// externally allowed embed URLs are never adopted, and later offers or loads
+// cannot re-arm a consumed frame.
+const pendingWidgetPromptPorts = new WeakMap<object, MessagePort>();
+const offeredWidgetPromptSources = new WeakSet<object>();
+const promptEligibleFrames = new WeakSet<HTMLIFrameElement>();
+const adoptedWidgetPromptFrames = new WeakSet<HTMLIFrameElement>();
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetPromptOfferListenerWindows = new WeakSet<Window>();
+
+function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
+  const source = frame.contentWindow as unknown as object | null;
+  if (adoptedWidgetPromptFrames.has(frame) || !promptEligibleFrames.has(frame) || !source) {
+    return;
+  }
+  const port = pendingWidgetPromptPorts.get(source);
+  if (!port) {
+    return;
+  }
+  adoptedWidgetPromptFrames.add(frame);
+  pendingWidgetPromptPorts.delete(source);
+  port.addEventListener("message", (message: MessageEvent) => {
+    handleWidgetPromptMessage(frame, message.data);
+  });
+  port.start();
+}
+
+function installWidgetPromptOfferListener() {
+  if (typeof window === "undefined" || widgetPromptOfferListenerWindows.has(window)) {
+    return;
+  }
+  widgetPromptOfferListenerWindows.add(window);
+  window.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data as { type?: unknown } | null;
+    if (!data || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
+      return;
+    }
+    const source = event.source;
+    const port = event.ports[0];
+    // Hosted widget documents run in an opaque origin; anything else is not a
+    // Canvas widget bridge.
+    if (!source || !port || event.origin !== "null") {
+      return;
+    }
+    if (offeredWidgetPromptSources.has(source as unknown as object)) {
+      // Only the first offer per content window can win; a replacement
+      // document's offer must never displace the genuine bridge's.
+      port.close();
+      return;
+    }
+    offeredWidgetPromptSources.add(source as unknown as object);
+    pendingWidgetPromptPorts.set(source as unknown as object, port);
+    // Posted-message and iframe-load tasks have no guaranteed cross-source
+    // ordering, so the offer may arrive after the eligible frame's load;
+    // adopt for it now instead of stranding the widget without a channel.
+    for (const frame of widgetFrameRegistry) {
+      if (frame.contentWindow === source) {
+        tryAdoptWidgetPromptPort(frame);
+        return;
+      }
+    }
+  });
+}
+
+function adoptWidgetPromptPort(frame: HTMLIFrameElement) {
+  // Eligibility is granted at the frame's first prompt-capable load and the
+  // adoption itself is one-shot; first-offer-wins buffering ensures the port
+  // adopted here always belongs to the frame's original bridge document.
+  promptEligibleFrames.add(frame);
+  tryAdoptWidgetPromptPort(frame);
+}
+
+function installWidgetSizeListener() {
+  if (typeof window === "undefined" || widgetSizeListenerWindows.has(window)) {
+    return;
+  }
+  widgetSizeListenerWindows.add(window);
   window.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: unknown; height?: unknown } | null;
     if (!data || data.type !== WIDGET_SIZE_MESSAGE_TYPE || typeof data.height !== "number") {
@@ -207,12 +306,22 @@ function renderPreviewFrame(params: {
   src?: string;
   height?: number;
   sandbox?: string;
+  promptCapable?: boolean;
 }) {
   installWidgetSizeListener();
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
   const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
   const height = reportedHeight ?? params.height;
+  if (params.promptCapable) {
+    installWidgetPromptOfferListener();
+  }
+  const handleLoad = (event: Event) => {
+    registerWidgetFrame(event);
+    if (params.promptCapable && event.currentTarget instanceof HTMLIFrameElement) {
+      adoptWidgetPromptPort(event.currentTarget);
+    }
+  };
   return keyed(
     `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
     html`
@@ -222,13 +331,13 @@ function renderPreviewFrame(params: {
         sandbox=${sandbox}
         src=${src || nothing}
         style=${height ? `height:${height}px;min-height:${height}px` : ""}
-        @load=${registerWidgetFrame}
+        @load=${handleLoad}
       ></iframe>
     `,
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view.ts");
+const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
 
 function renderMcpAppView(params: {
   sessionKey: string;
@@ -298,6 +407,9 @@ export function renderToolPreview(
               ),
               height: preview.preferredHeight,
               sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
+              // Only hosted Canvas documents may drive the chat; externally
+              // allowed embed URLs render but never get prompt authority.
+              promptCapable: isInternalCanvasEntryUrl(preview.url),
             })}
       </div>
     </div>
@@ -319,7 +431,7 @@ function buildSidebarContent(
   };
 }
 
-export function buildPreviewSidebarContent(
+function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
   options?: { fullMessageRequest?: FullMessageRequest },
@@ -467,7 +579,6 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     `;
   }
 
-  // Generic tools keep the resolver-driven label + detail.
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const summary = resolveCollapsedToolSummaryParts({
     card,
@@ -476,12 +587,13 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
     return html`
       <span class="chat-tool-row__title">${aiTitle}</span>
-      <span class="chat-tool-row__detail">${displayLabel}</span>
+      <span class="chat-tool-row__detail">${argumentPreview ?? displayLabel}</span>
     `;
   }
   return html`
@@ -561,7 +673,7 @@ function tokenizeCommand(command: string): CommandToken[] {
   return tokens;
 }
 
-export function renderHighlightedCommand(command: string) {
+function renderHighlightedCommand(command: string) {
   if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
     return html`${command}`;
   }
@@ -731,7 +843,6 @@ export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined
   return resolveToolCardOutcome(card, runActive) === "running";
 }
 
-/** Plain-text row label, e.g. for the group header while a tool is running. */
 export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   if (view.kind === "command" && view.command) {
@@ -742,7 +853,7 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
     return `${verb} ${view.target}`;
   }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  return display.label;
+  return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
 }
 
 export function renderToolCard(
@@ -976,3 +1087,4 @@ export function renderExpandedToolCardContent(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

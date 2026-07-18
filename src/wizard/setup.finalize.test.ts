@@ -118,6 +118,15 @@ const inspectWindowsGatewayFirewall = vi.hoisted(() =>
 );
 
 vi.mock("../commands/onboard-helpers.js", () => ({
+  buildOnboardingControlUiUrl: (params: {
+    httpUrl: string;
+    authMode?: "token" | "password";
+    token?: string;
+    suppressTokenOutput?: boolean;
+  }) =>
+    params.authMode === "token" && params.token && !params.suppressTokenOutput
+      ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+      : params.httpUrl,
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   openUrl: vi.fn(async () => false),
@@ -1732,3 +1741,4 @@ describe("finalizeSetupWizard", () => {
     expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

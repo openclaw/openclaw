@@ -8,11 +8,16 @@ import (
 )
 
 var (
-	inlineCodeRe  = regexp.MustCompile("`[^`]+`")
-	angleLinkRe   = regexp.MustCompile(`<https?://[^>]+>`)
-	linkURLRe     = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
-	placeholderRe = regexp.MustCompile(`__OC_I18N_\d+__`)
-	listMarkerRe  = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
+	inlineCodeRe          = regexp.MustCompile("`[^`]+`")
+	angleLinkRe           = regexp.MustCompile(`<https?://[^>]+>`)
+	linkURLRe             = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
+	linkLabelRe           = regexp.MustCompile(`!?\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`)
+	placeholderRe         = regexp.MustCompile(`__OC_I18N_\d+__`)
+	listMarkerRe          = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
+	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:>[ \t]*)*$`)
+	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
+	// model-visible so target-language plurals and ordinals can change grammar without false failures.
+	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
 )
 
 func maskMarkdown(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
@@ -80,12 +85,17 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 			inlineRanges = append(inlineRanges, span)
 		}
 	}
+	inlineRanges = append(inlineRanges, protectedMarkdownLinkRanges(text)...)
 	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
 
+	return maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
+}
+
+func markdownListMarkerRanges(text string) [][2]int {
 	listRanges := make([][2]int, 0)
 	fenceState := markdownLiteralFenceState{}
 	offset := 0
-	for _, line := range strings.SplitAfter(masked, "\n") {
+	for _, line := range strings.SplitAfter(text, "\n") {
 		insideFence := false
 		if fenceState.delimiter != "" {
 			if continuesMarkdownLiteralFenceContainer(line, fenceState) {
@@ -110,7 +120,128 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 		offset += len(line)
 	}
-	return maskByteRanges(masked, listRanges, nextPlaceholder, placeholders, mapping)
+	return listRanges
+}
+
+func extractMarkdownListMarkerPrefixes(text string) []string {
+	ranges := markdownListMarkerRanges(text)
+	prefixes := make([]string, 0, len(ranges))
+	for _, span := range ranges {
+		prefixes = append(prefixes, text[span[0]:span[1]])
+	}
+	return prefixes
+}
+
+func normalizeMaskedListMarkerPlaceholders(text string, mapping map[string]string) string {
+	lines := strings.SplitAfter(text, "\n")
+	for index, line := range lines {
+		span := placeholderRe.FindStringIndex(line)
+		if span == nil || !listContainerPrefixRe.MatchString(line[:span[0]]) {
+			continue
+		}
+		placeholder := line[span[0]:span[1]]
+		original := mapping[placeholder]
+		markerSpan := listMarkerRe.FindStringIndex(original)
+		if markerSpan == nil || markerSpan[0] != 0 || markerSpan[1] != len(original) {
+			continue
+		}
+		lines[index] = line[span[0]:]
+	}
+	return strings.Join(lines, "")
+}
+
+func protectedMarkdownLinkRanges(text string) [][2]int {
+	ranges := make([][2]int, 0)
+	for _, match := range linkLabelRe.FindAllStringSubmatchIndex(text, -1) {
+		if len(match) < 6 {
+			continue
+		}
+		label := text[match[2]:match[3]]
+		destination := markdownInlineLinkDestination(text[match[4]:match[5]])
+		if isProtectedProductLinkLabel(label, destination) {
+			// Keep the protected label attached to its original destination even when
+			// recursive chunk retries isolate or recombine the surrounding prose.
+			ranges = append(ranges, [2]int{match[0], match[1]})
+		}
+	}
+	return ranges
+}
+
+func markdownInlineLinkDestination(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "<") {
+		if end := strings.IndexByte(value, '>'); end > 0 {
+			return value[1:end]
+		}
+	}
+	if fields := strings.Fields(value); len(fields) > 0 {
+		return fields[0]
+	}
+	return value
+}
+
+func extractNumericValues(text string) []string {
+	protocolRanges := make([][2]int, 0)
+	for _, span := range placeholderRe.FindAllStringIndex(text, -1) {
+		protocolRanges = append(protocolRanges, [2]int{span[0], span[1]})
+	}
+	values := make([]string, 0)
+	for _, span := range numericValueRe.FindAllStringIndex(text, -1) {
+		candidate := [2]int{span[0], span[1]}
+		if hasCompositeNumericLeadingContinuation(text, candidate[0]) ||
+			(hasCompositeNumericContinuation(text, candidate[1]) && !hasClockMeridiemSuffix(text, candidate)) ||
+			rangeOverlapsAny(candidate, protocolRanges) {
+			continue
+		}
+		values = append(values, text[span[0]:span[1]])
+	}
+	return values
+}
+
+func hasClockMeridiemSuffix(text string, span [2]int) bool {
+	if !strings.Contains(text[span[0]:span[1]], ":") || span[1]+2 > len(text) {
+		return false
+	}
+	suffix := strings.ToLower(text[span[1] : span[1]+2])
+	if suffix != "am" && suffix != "pm" {
+		return false
+	}
+	return span[1]+2 == len(text) || !isCompositeNumericWordByte(text[span[1]+2])
+}
+
+func hasCompositeNumericLeadingContinuation(text string, position int) bool {
+	if position == 0 {
+		return false
+	}
+	value := text[position-1]
+	if value == '_' {
+		for position > 0 && text[position-1] == '_' {
+			position--
+		}
+		return position > 0 && isCompositeNumericWordByte(text[position-1])
+	}
+	return value == '.' || value == '-' || isCompositeNumericWordByte(value)
+}
+
+func hasCompositeNumericContinuation(text string, position int) bool {
+	if position >= len(text) {
+		return false
+	}
+	value := text[position]
+	if value == '_' {
+		for position < len(text) && text[position] == '_' {
+			position++
+		}
+		return position < len(text) && isCompositeNumericWordByte(text[position])
+	}
+	if isCompositeNumericWordByte(value) {
+		return true
+	}
+	return value == '.' && position+1 < len(text) && isCompositeNumericWordByte(text[position+1])
+}
+
+func isCompositeNumericWordByte(value byte) bool {
+	return value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
 }
 
 func markdownLiteralFenceByteRanges(text string) [][2]int {

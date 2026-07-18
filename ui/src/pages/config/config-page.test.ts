@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { render, type ReactiveController } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactiveController } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -9,7 +9,9 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
+import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
 function deferred<T>() {
@@ -20,9 +22,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+let localStorageMock: Storage;
+
+beforeEach(() => {
+  localStorageMock = createStorageMock();
+  vi.stubGlobal("localStorage", localStorageMock);
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("configSelectionFromSearch", () => {
@@ -36,6 +46,28 @@ describe("configSelectionFromSearch", () => {
   it("falls back when a linked section does not belong to the page", () => {
     expect(configSelectionFromSearch("communications", "?section=gateway")).toEqual({
       activeSection: "messages",
+      activeSubsection: null,
+    });
+  });
+
+  it("keeps MCP separate from Infrastructure", () => {
+    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
+    expect(configSectionKeysForPage("infrastructure")).toEqual([
+      "gateway",
+      "web",
+      "browser",
+      "nodeHost",
+      "canvasHost",
+      "discovery",
+      "media",
+      "acp",
+    ]);
+    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
+      activeSection: "mcp",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
+      activeSection: "gateway",
       activeSubsection: null,
     });
   });
@@ -56,33 +88,20 @@ describe("supportsSystemInfo", () => {
   });
 });
 
-describe("ConfigPage settings mode tabs", () => {
-  it("moves and activates tabs with arrow keys", () => {
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      pageId: string;
-      settingsMode: "quick" | "advanced";
-      renderSettingsModeToggle: () => unknown;
-    };
-    state.pageId = "config";
-    state.settingsMode = "quick";
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(state.renderSettingsModeToggle(), container);
-    const [quick, advanced] = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-    );
-
-    expect(quick?.tabIndex).toBe(0);
-    expect(advanced?.tabIndex).toBe(-1);
-    expect(advanced?.getAttribute("aria-controls")).toBe("config-settings-panel");
-    quick?.focus();
-    quick?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
-    );
-
-    expect(document.activeElement).toBe(advanced);
-    expect(state.settingsMode).toBe("advanced");
+describe("ConfigPage advanced selection guard", () => {
+  it("keeps curated sections off the Advanced page", () => {
+    expect(configSelectionFromSearch("advanced", "?section=messages")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=env")).toEqual({
+      activeSection: "env",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
   });
 });
 

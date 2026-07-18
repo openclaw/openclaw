@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -20,6 +21,11 @@ type MockProcessor = {
 
 const listeners = new Set<GatewayListener>();
 const processors: MockProcessor[] = [];
+const inputSinks: Array<{
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+  gain: { value: number };
+}> = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
 let audioCurrentTime = 0;
 
@@ -45,6 +51,16 @@ class MockAudioContext {
     };
     processors.push(processor);
     return processor;
+  }
+
+  createGain() {
+    const sink = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      gain: { value: 1 },
+    };
+    inputSinks.push(sink);
+    return sink;
   }
 
   createAnalyser() {
@@ -132,6 +148,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   beforeEach(() => {
     listeners.clear();
     processors.length = 0;
+    inputSinks.length = 0;
     audioCurrentTime = 0;
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
@@ -150,6 +167,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     vi.unstubAllGlobals();
     listeners.clear();
     processors.length = 0;
+    inputSinks.length = 0;
   });
 
   it("preserves audio processing while selecting the exact microphone", async () => {
@@ -171,6 +189,28 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
     transport.stop();
+  });
+
+  it("keeps the microphone processor inaudible locally", async () => {
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+    });
+
+    await transport.start();
+
+    const processor = processors.at(-1);
+    const sink = inputSinks.at(-1);
+    if (!processor || !sink) {
+      throw new Error("missing microphone capture graph");
+    }
+    expect(sink.gain.value).toBe(0);
+    expect(processor.connect).toHaveBeenCalledWith(sink);
+    expect(sink.connect).toHaveBeenCalledOnce();
+
+    transport.stop();
+    expect(sink.disconnect).toHaveBeenCalledOnce();
   });
 
   it("releases microphone access that resolves after stop", async () => {
@@ -385,7 +425,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     await transport.start();
     pumpMicrophone(new Float32Array(4096));
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(onStatus).toHaveBeenCalledWith("error", "Unknown realtime relay session"),
     );
     pumpMicrophone(new Float32Array(4096));
@@ -531,7 +571,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const toolCall = vi
         .mocked(client["request"])
         .mock.calls.find((call) => call[0] === "talk.client.toolCall");
@@ -548,7 +588,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
 
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
     expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
       sessionId: "relay-1",
       callId: "call-1",
@@ -593,7 +633,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
     emitGatewayFrame({
       event: "chat",
       payload: {
@@ -602,7 +644,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         message: { text: "All systems green." },
       },
     });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1),
     );
     emitGatewayFrame({
@@ -617,7 +659,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(onStatus).not.toHaveBeenCalledWith("listening");
     expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
     resolveSubmission();
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
     transport.stop();
   });
 
@@ -650,7 +692,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
     emitGatewayFrame({
       event: "chat",
       payload: {
@@ -660,7 +704,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(onStatus).toHaveBeenCalledWith("error", "Provider rejected the tool result"),
     );
     expect(onStatus).toHaveBeenLastCalledWith("error", "Provider rejected the tool result");
@@ -696,7 +740,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
         sessionId: "relay-1",
         callId: "call-1",
@@ -746,7 +790,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
     emitGatewayFrame({
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "ready" } },
@@ -758,7 +804,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       payload: { relaySessionId: "relay-1", type: "clear" },
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
         sessionId: "relay-1",
         callId: "call-1",
@@ -802,7 +848,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
     emitGatewayFrame({
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "ready" } },
@@ -862,7 +910,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1),
     );
     expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(0);
@@ -911,7 +959,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
 
     pumpMicrophone(speech);
     pumpMicrophone(speech);
@@ -1015,7 +1065,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
     emitGatewayFrame({
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "ready" } },
@@ -1059,7 +1111,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
 
     emitGatewayFrame({
       event: "talk.event",
@@ -1099,7 +1153,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
         sessionKey: "main",
         runId: "run-1",
@@ -1134,7 +1188,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1),
+    );
 
     emitGatewayFrame({
       event: "chat",
@@ -1144,7 +1200,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
         sessionId: "relay-1",
         callId: "call-1",
@@ -1186,7 +1242,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const toolCall = requestCallsFor(client, "talk.client.toolCall")[0];
       const params = toolCall?.[1] as
         | {
@@ -1205,7 +1261,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     transport.stop();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
         sessionKey: "main",
         runId: "run-1",
@@ -1225,3 +1281,4 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

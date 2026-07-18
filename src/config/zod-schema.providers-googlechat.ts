@@ -15,7 +15,7 @@ import {
 import { sensitive } from "./zod-schema.sensitive.js";
 
 /** DM policy schema for Google Chat accounts. */
-export const GoogleChatDmSchema = z
+const GoogleChatDmSchema = z
   .object({
     enabled: z.boolean().optional(),
     policy: DmPolicySchema.optional().default("pairing"),
@@ -41,7 +41,7 @@ export const GoogleChatDmSchema = z
     });
   });
 
-export const GoogleChatGroupSchema = z
+const GoogleChatGroupSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -51,7 +51,7 @@ export const GoogleChatGroupSchema = z
   })
   .strict();
 
-export const GoogleChatAccountSchema = z
+const GoogleChatAccountSchema = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
