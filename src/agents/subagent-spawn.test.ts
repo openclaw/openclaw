@@ -333,6 +333,45 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
+  it("persists a host-reserved collector launch identity", async () => {
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "collect replay-safe evidence",
+        collect: true,
+        groupId: "swarm:replay",
+        swarmLaunchReplayKey: "cm-restart:bridge:1",
+        swarmLaunchRequestFingerprint: "sha256:request",
+      },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    const otherRequesterResult = await spawnSubagentDirect(
+      {
+        task: "collect replay-safe evidence",
+        collect: true,
+        groupId: "swarm:replay",
+        swarmLaunchReplayKey: "cm-restart:bridge:1",
+        swarmLaunchRequestFingerprint: "sha256:request",
+      },
+      { agentSessionKey: "agent:main:other", requesterRunId: "parent-run" },
+    );
+
+    expect(result).toMatchObject({ status: "accepted" });
+    expect(result.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
+    expect(otherRequesterResult).toMatchObject({ status: "accepted" });
+    expect(otherRequesterResult.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
+    expect(otherRequesterResult.runId).not.toBe(result.runId);
+    expect(firstRegisteredSubagentRun()).toMatchObject({
+      runId: result.runId,
+      swarmLaunchIdempotencyKey: result.runId,
+      swarmLaunchReplayKey: "cm-restart:bridge:1",
+      swarmLaunchRequestFingerprint: "sha256:request",
+    });
+    await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
+    expect(requireRecord(gatewayRequest("agent").params).idempotencyKey).toBe(result.runId);
+  });
+
   it("aborts a collector cancelled while its gateway launch is in flight", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
     hoisted.startQueuedSubagentRunMock.mockReturnValue(false);
