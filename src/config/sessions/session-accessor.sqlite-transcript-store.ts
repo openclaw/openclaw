@@ -388,6 +388,39 @@ function readTranscriptIdentityByMessageIdempotencyKey(
   return row ? { eventId: row.event_id, seq: row.seq } : undefined;
 }
 
+/** Returns raw events only when the indexed transcript watermark is not current. */
+function loadTranscriptEventsForIdentityFallback(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): TranscriptEvent[] | undefined {
+  const db = getSessionKysely(database.db);
+  const latest = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "desc")
+      .limit(1),
+  );
+  if (!latest) {
+    return [];
+  }
+  const state = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_index_state")
+      .select(["indexed_seq", "needs_rebuild"])
+      .where("session_id", "=", sessionId),
+  );
+  if (state && state.needs_rebuild === 0 && state.indexed_seq === latest.seq) {
+    return undefined;
+  }
+  // Dirty projection states are uncommon, but raw events remain authoritative
+  // for dedupe until maintenance restores every transcript index.
+  return loadSqliteTranscriptEventsFromDatabase(database, sessionId);
+}
+
 /** Reads only supplied idempotency keys that identify persisted messages. */
 export function readExistingTranscriptMessageIdempotencyKeys(
   database: OpenClawAgentDatabase,
@@ -397,6 +430,18 @@ export function readExistingTranscriptMessageIdempotencyKeys(
   const candidates = [...new Set(idempotencyKeys)];
   if (candidates.length === 0) {
     return new Set();
+  }
+  const fallbackEvents = loadTranscriptEventsForIdentityFallback(database, sessionId);
+  if (fallbackEvents !== undefined) {
+    const candidateSet = new Set(candidates);
+    const existingIdempotencyKeys = new Set<string>();
+    for (const event of fallbackEvents) {
+      const idempotencyKey = readMessageIdempotencyKey(readTranscriptEventMessage(event));
+      if (idempotencyKey && candidateSet.has(idempotencyKey)) {
+        existingIdempotencyKeys.add(idempotencyKey);
+      }
+    }
+    return existingIdempotencyKeys;
   }
   const db = getSessionKysely(database.db);
   const existingIdempotencyKeys = new Set<string>();
@@ -433,6 +478,27 @@ export function readTranscriptUserMessagesByIdempotencyKey(
   if (candidates.length === 0) {
     return new Map();
   }
+  const fallbackEvents = loadTranscriptEventsForIdentityFallback(database, sessionId);
+  if (fallbackEvents !== undefined) {
+    const candidateSet = new Set(candidates);
+    const userMessagesByIdempotencyKey = new Map<string, unknown>();
+    for (const event of fallbackEvents) {
+      const message = readTranscriptEventMessage(event);
+      const idempotencyKey = readMessageIdempotencyKey(message);
+      if (!idempotencyKey || !candidateSet.has(idempotencyKey)) {
+        continue;
+      }
+      if (
+        message &&
+        typeof message === "object" &&
+        !Array.isArray(message) &&
+        (message as { role?: unknown }).role === "user"
+      ) {
+        userMessagesByIdempotencyKey.set(idempotencyKey, message);
+      }
+    }
+    return userMessagesByIdempotencyKey;
+  }
   const db = getSessionKysely(database.db);
   const userMessagesByIdempotencyKey = new Map<string, unknown>();
   for (
@@ -452,7 +518,8 @@ export function readTranscriptUserMessagesByIdempotencyKey(
         )
         .select(["identity.message_idempotency_key", "event.event_json"])
         .where("identity.session_id", "=", sessionId)
-        .where("identity.message_idempotency_key", "in", batch),
+        .where("identity.message_idempotency_key", "in", batch)
+        .orderBy("identity.seq", "asc"),
     ).rows;
     for (const row of rows) {
       const idempotencyKey = row.message_idempotency_key;
@@ -478,6 +545,16 @@ export function readTranscriptMessageEventCount(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): number {
+  const fallbackEvents = loadTranscriptEventsForIdentityFallback(database, sessionId);
+  if (fallbackEvents !== undefined) {
+    return fallbackEvents.filter(
+      (event) =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        !Array.isArray(event) &&
+        (event as { type?: unknown }).type === "message",
+    ).length;
+  }
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,

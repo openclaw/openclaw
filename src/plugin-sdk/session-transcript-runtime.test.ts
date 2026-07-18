@@ -716,6 +716,22 @@ describe("session transcript runtime SDK", () => {
         },
       });
     });
+    await withSessionTranscriptWriteLock(scope, async (locked) => {
+      await locked.appendMessage({
+        idempotencyLookup: "caller-checked",
+        message: {
+          content: [{ type: "text", text: "earlier assistant" }],
+          idempotencyKey: "duplicate-key",
+          role: "assistant",
+        },
+      });
+      for (const content of ["earlier user", "latest user"]) {
+        await locked.appendMessage({
+          idempotencyLookup: "caller-checked",
+          message: { content, idempotencyKey: "duplicate-key", role: "user" },
+        });
+      }
+    });
 
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: scope.agentId,
@@ -725,16 +741,20 @@ describe("session transcript runtime SDK", () => {
       agentId: scope.agentId,
       path: databasePath,
     });
-    // Identity rows are maintained atomically with raw events. A dirty active
-    // projection must not force mirror fact lookups back to full event scans.
+    // Simulate an imported or interrupted dirty index. The mirror fact helpers
+    // must fall back to the authoritative raw events until maintenance runs.
     database.db
       .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(scope.sessionId);
+    database.db
+      .prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
       .run(scope.sessionId);
 
     await withSessionTranscriptWriteLock(scope, async (locked) => {
       const existingIdempotencyKeys = await locked.readExistingMessageIdempotencyKeys([
         "user-key",
         "assistant-key",
+        "duplicate-key",
         "missing-key",
         "user-key",
         ...Array.from({ length: 1_000 }, (_, index) => `missing-key-${index}`),
@@ -742,16 +762,23 @@ describe("session transcript runtime SDK", () => {
       const userMessagesByIdempotencyKey = await locked.readUserMessagesByIdempotencyKey([
         "user-key",
         "assistant-key",
+        "duplicate-key",
         ...Array.from({ length: 1_000 }, (_, index) => `missing-user-key-${index}`),
       ]);
-      expect(existingIdempotencyKeys).toEqual(new Set(["user-key", "assistant-key"]));
+      expect(existingIdempotencyKeys).toEqual(
+        new Set(["user-key", "assistant-key", "duplicate-key"]),
+      );
       expect(userMessagesByIdempotencyKey.get("user-key")).toMatchObject({
         content: "persisted user",
         idempotencyKey: "user-key",
         role: "user",
       });
       expect(userMessagesByIdempotencyKey.has("assistant-key")).toBe(false);
-      expect(await locked.readMessageEventCount()).toBe(2);
+      expect(userMessagesByIdempotencyKey.get("duplicate-key")).toMatchObject({
+        content: "latest user",
+        role: "user",
+      });
+      expect(await locked.readMessageEventCount()).toBe(5);
     });
     expect(
       database.db
@@ -787,6 +814,15 @@ describe("session transcript runtime SDK", () => {
         role: "user",
       });
       expect(await locked.readMessageEventCount()).toBe(1);
+    });
+
+    await replaceTranscriptEvents(scope, []);
+    await withSessionTranscriptWriteLock(scope, async (locked) => {
+      expect(await locked.readExistingMessageIdempotencyKeys(["replacement-key"])).toEqual(
+        new Set(),
+      );
+      expect(await locked.readUserMessagesByIdempotencyKey(["replacement-key"])).toEqual(new Map());
+      expect(await locked.readMessageEventCount()).toBe(0);
     });
   });
 
