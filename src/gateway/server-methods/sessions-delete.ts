@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { boardStore } from "../../boards/board-store.js";
 import {
   deleteSessionEntryLifecycle,
   resolveMainSessionKey,
@@ -395,6 +396,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         target.canonicalKey ?? key,
         requestedAgentId ?? resolveSessionStoreAgentId(cfg, target.canonicalKey ?? key),
       );
+      boardStore.deleteSession(target.canonicalKey ?? key);
       let worktree: ReturnType<typeof managedWorktrees.findLiveByOwner> = undefined;
       try {
         worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);

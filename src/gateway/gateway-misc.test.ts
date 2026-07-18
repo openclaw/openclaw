@@ -713,6 +713,23 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, writeVisibleEvents);
   });
 
+  it("guards board events with operator.read scope", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("board.changed", { sessionKey: "agent:main:main", revision: 1 });
+    broadcast("board.command", {
+      sessionKey: "agent:main:main",
+      command: { kind: "focus_tab", tabId: "main" },
+    });
+
+    expectSentEvents(pairingSocket, []);
+    expectSentEvents(nodeSocket, []);
+    expectSentEvents(readSocket, ["board.changed", "board.command"]);
+    expectSentEvents(writeSocket, ["board.changed", "board.command"]);
+    expectSentEvents(adminSocket, ["board.changed", "board.command"]);
+  });
+
   it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {
     const pairingSocket = makeRecordingSocket();
     const readSocket = makeRecordingSocket();

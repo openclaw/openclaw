@@ -1,0 +1,222 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
+import { boardStore, InMemoryBoardStore } from "../../boards/board-store.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
+import { createBoardHandlers } from "./board.js";
+import { sessionMutationHandlers } from "./sessions-mutations.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
+
+vi.mock("./sessions.runtime.js", () => ({
+  performGatewaySessionReset: vi.fn(async ({ key, reason }: { key: string; reason: string }) => ({
+    ok: true,
+    key,
+    agentId: "main",
+    entry: { sessionId: `reset-${reason}` },
+    resolved: {},
+  })),
+}));
+
+function createHarness() {
+  const store = new InMemoryBoardStore();
+  const broadcast = vi.fn();
+  const handlers = createBoardHandlers(store);
+  const invoke = async (method: string, params: Record<string, unknown>) => {
+    const respond = vi.fn<RespondFn>();
+    await handlers[method]!({
+      req: { type: "req", id: "test", method, params },
+      params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: { broadcast } as unknown as GatewayRequestContext,
+    });
+    return respond;
+  };
+  return { store, broadcast, invoke };
+}
+
+describe("board gateway methods", () => {
+  beforeEach(() => {
+    resetBoardEventNoticeStateForTest();
+    resetSystemEventsForTest();
+  });
+
+  it("registers every contract method with its required scope", () => {
+    expect(
+      Object.fromEntries(
+        ["board.get", "board.update", "board.widget.put", "board.widget.grant", "board.event"].map(
+          (method) => [method, resolveCoreOperatorGatewayMethodScope(method)],
+        ),
+      ),
+    ).toEqual({
+      "board.get": "operator.read",
+      "board.update": "operator.write",
+      "board.widget.put": "operator.write",
+      "board.widget.grant": "operator.approvals",
+      "board.event": "operator.write",
+    });
+  });
+
+  it("rejects malformed params before touching the store", async () => {
+    const { invoke, store } = createHarness();
+    const response = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "Invalid Name",
+      content: { kind: "html", html: "ok" },
+    });
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(store.listSessionsWithBoards()).toEqual([]);
+  });
+
+  it("applies updates and broadcasts board.changed", async () => {
+    const { invoke, broadcast } = createHarness();
+    const response = await invoke("board.update", {
+      sessionKey: "session",
+      ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
+    });
+    expect(response).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: "session", revision: 1 }),
+    );
+    expect(broadcast).toHaveBeenCalledWith("board.changed", {
+      sessionKey: "session",
+      revision: 1,
+    });
+  });
+
+  it("puts widgets, emits iframe-specific changes, and grants declared capabilities", async () => {
+    const { invoke, broadcast } = createHarness();
+    const put = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "weather",
+      content: { kind: "html", html: "<p>weather</p>" },
+      declared: { tools: ["weather.refresh"] },
+    });
+    expect(put).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        widgets: [expect.objectContaining({ name: "weather", grantState: "pending" })],
+      }),
+    );
+    expect(broadcast).toHaveBeenCalledWith("board.changed", {
+      sessionKey: "session",
+      revision: 1,
+      widget: "weather",
+    });
+
+    const grant = await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "weather",
+      decision: "granted",
+    });
+    expect(grant).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        revision: 2,
+        widgets: [expect.objectContaining({ grantState: "granted" })],
+      }),
+    );
+    expect(broadcast).toHaveBeenLastCalledWith("board.changed", {
+      sessionKey: "session",
+      revision: 2,
+    });
+  });
+
+  it("supports rejected grants and rejects grants from non-pending state", async () => {
+    const { invoke } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "widget",
+      content: { kind: "html", html: "ok" },
+      declared: { netOrigins: ["https://example.com"] },
+    });
+    const rejected = await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "widget",
+      decision: "rejected",
+    });
+    expect(rejected.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        widgets: [expect.objectContaining({ grantState: "rejected" })],
+      }),
+    );
+    const repeated = await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "widget",
+      decision: "granted",
+    });
+    expect(repeated.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("appends bounded dashboard notices and coalesces duplicate bursts", async () => {
+    const { invoke } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "counter",
+      content: { kind: "html", html: "ok" },
+    });
+    const first = await invoke("board.event", {
+      sessionKey: "session",
+      widget: "counter",
+      payload: { count: 1 },
+    });
+    const duplicate = await invoke("board.event", {
+      sessionKey: "session",
+      widget: "counter",
+      payload: { count: 1 },
+    });
+    expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
+    expect(duplicate.mock.calls[0]?.[1]).toEqual({ ok: true, appended: false });
+    expect(peekSystemEvents("session")).toEqual(['[dashboard] {"count":1} on widget counter']);
+  });
+
+  it("caps board.event payloads at 8KB and notices at 500 characters", async () => {
+    const { invoke } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "counter",
+      content: { kind: "html", html: "ok" },
+    });
+    await invoke("board.event", {
+      sessionKey: "session",
+      widget: "counter",
+      payload: "x".repeat(1_000),
+    });
+    expect(peekSystemEvents("session")[0]).toHaveLength(500);
+    const oversized = await invoke("board.event", {
+      sessionKey: "session",
+      widget: "counter",
+      payload: "x".repeat(8_193),
+    });
+    expect(oversized.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("keeps board state across the real sessions.reset handler", async () => {
+    const sessionKey = "agent:main:board-reset-proof";
+    boardStore.putWidget({
+      sessionKey,
+      name: "status",
+      content: { kind: "html", html: "ok" },
+    });
+    const respond = vi.fn<RespondFn>();
+    await sessionMutationHandlers["sessions.reset"]!({
+      req: { type: "req", id: "reset", method: "sessions.reset", params: {} },
+      params: { key: sessionKey, reason: "reset" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
+      } as unknown as GatewayRequestContext,
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(boardStore.getSnapshot(sessionKey).widgets).toHaveLength(1);
+    boardStore.deleteSession(sessionKey);
+  });
+});

@@ -55,6 +55,7 @@ import {
   createConversationsTurnTool,
 } from "./tools/conversation-tools.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
+import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -472,6 +473,9 @@ export function createOpenClawTools(
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
+    createDashboardTool({
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    }),
     ...(embedded
       ? []
       : [

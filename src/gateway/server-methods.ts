@@ -61,6 +61,10 @@ const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadBoardHandlers = lazyHandlerModule(
+  () => import("./server-methods/board.js"),
+  (module) => module.boardHandlers,
+);
 const loadAuditHandlers = lazyHandlerModule(
   () => import("./server-methods/audit.js"),
   (module) => module.auditHandlers,
@@ -371,6 +375,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["ui.command"],
     loadHandlers: loadUiCommandHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["board.get", "board.update", "board.widget.put", "board.widget.grant", "board.event"],
+    loadHandlers: loadBoardHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],

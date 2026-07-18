@@ -152,6 +152,22 @@ import {
 } from "./audit-activity.js";
 import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
+  BoardChangedEventSchema,
+  BoardCommandEventSchema,
+  BoardCommandSchema,
+  BoardEventParamsSchema,
+  BoardGetParamsSchema,
+  BoardMcpAppDescriptorSchema,
+  BoardOpSchema,
+  BoardSnapshotSchema,
+  BoardTabSchema,
+  BoardUpdateParamsSchema,
+  BoardWidgetContentSchema,
+  BoardWidgetGrantParamsSchema,
+  BoardWidgetPutParamsSchema,
+  BoardWidgetSchema,
+} from "./board.js";
+import {
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -540,6 +556,20 @@ import {
 
 /** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
+  BoardTab: BoardTabSchema,
+  BoardWidget: BoardWidgetSchema,
+  BoardSnapshot: BoardSnapshotSchema,
+  BoardOp: BoardOpSchema,
+  BoardMcpAppDescriptor: BoardMcpAppDescriptorSchema,
+  BoardWidgetContent: BoardWidgetContentSchema,
+  BoardGetParams: BoardGetParamsSchema,
+  BoardUpdateParams: BoardUpdateParamsSchema,
+  BoardWidgetPutParams: BoardWidgetPutParamsSchema,
+  BoardWidgetGrantParams: BoardWidgetGrantParamsSchema,
+  BoardEventParams: BoardEventParamsSchema,
+  BoardChangedEvent: BoardChangedEventSchema,
+  BoardCommand: BoardCommandSchema,
+  BoardCommandEvent: BoardCommandEventSchema,
   AuthProbeStatus: AuthProbeStatusSchema,
   // Handshake, transport frames, state snapshots, and shared error envelopes.
   ConnectParams: ConnectParamsSchema,
