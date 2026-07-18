@@ -172,9 +172,9 @@ function pruneCooldowns(nowMs: number) {
   }
   while (cooldownExpiryByKey.size > MAX_COOLDOWN_ENTRIES) {
     const oldest = cooldownExpiryByKey.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
+    if (oldest === undefined) break;
+    const expiry = cooldownExpiryByKey.get(oldest) ?? 0;
+    if (expiry > nowMs) break; // don't evict unexpired entries
     cooldownExpiryByKey.delete(oldest);
   }
 }
