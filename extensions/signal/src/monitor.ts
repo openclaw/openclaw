@@ -13,6 +13,7 @@ import {
   estimateBase64DecodedBytes,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -59,6 +60,7 @@ import type {
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
+import { registerSignalQuestionReactionTargetForDeliveredPayload } from "./question-reactions.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
@@ -369,7 +371,11 @@ export async function deliverReplies(params: {
       messageId: string;
       meta: { signalVisibleText: string };
     }> = [];
-    const presentationPayload = materializeSignalPresentationFallback(payload);
+    const presentationPayload =
+      questionGatewayRuntime.prepareReactionPayloadForDelivery({
+        payload,
+        presentation: payload.presentation,
+      }) ?? materializeSignalPresentationFallback(payload);
     const deliveredPayload =
       addSignalApprovalReactionHintToStructuredPayload({
         cfg: params.cfg,
@@ -435,6 +441,14 @@ export async function deliverReplies(params: {
       },
     });
     if (delivered !== "empty") {
+      registerSignalQuestionReactionTargetForDeliveredPayload({
+        cfg: params.cfg,
+        target: { channel: "signal", to: target, accountId },
+        payload: deliveredPayload,
+        results: deliveryResults,
+        targetAuthor: account,
+        targetAuthorUuid: accountUuid,
+      });
       registerSignalApprovalReactionTargetForDeliveredPayload({
         cfg: params.cfg,
         target: {

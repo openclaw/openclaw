@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -22,6 +23,7 @@ import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
   buildDiscordPresentationPayload,
   DISCORD_PRESENTATION_CAPABILITIES,
+  resolveDiscordComponentSpec,
 } from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
@@ -50,6 +52,9 @@ function stripDiscordInternalRuntimeScaffolding(text: string): string {
 
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
+);
+const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
+  () => import("./send.components.js"),
 );
 
 function resolveDiscordWebhookIdentity(params: {
@@ -291,12 +296,40 @@ export const discordOutbound: ChannelOutboundAdapter = {
         cfg,
       }),
   }),
-  afterDeliverPayload: async ({ target, payload }) => {
+  afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
       to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
       accountId: target.accountId,
     });
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+    const result = results.find(
+      (candidate) => candidate.channel === "discord" && candidate.messageId,
+    );
+    const componentSpec = questionId ? await resolveDiscordComponentSpec(payload) : undefined;
+    if (questionId && result && componentSpec) {
+      const to = resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId });
+      questionGatewayRuntime.registerChannelDelivery({
+        questionId,
+        deliveryId: `discord:${target.accountId ?? "default"}:${result.channelId ?? to}:${result.messageId}`,
+        finalize: async (statusLine) => {
+          const { editDiscordComponentMessage } = await loadDiscordComponentSendRuntime();
+          await editDiscordComponentMessage(
+            to,
+            result.messageId,
+            {
+              ...componentSpec,
+              blocks: [
+                ...(componentSpec.blocks ?? []).filter((block) => block.type !== "actions"),
+                { type: "text", text: `-# ${statusLine}` },
+              ],
+              modal: undefined,
+            },
+            { cfg, accountId: target.accountId ?? undefined },
+          );
+        },
+      });
+    }
     const threadId = normalizeOptionalStringifiedId(target.threadId);
     if (!threadId) {
       return;
