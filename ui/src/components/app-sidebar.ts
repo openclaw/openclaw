@@ -22,19 +22,32 @@ import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
 import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
-  LOBSTER_PET_BUILD_MULS,
-  LOBSTER_PET_CLAW_MULS,
   lobsterPetSeed,
-  renderLobsterSvg,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
   type LobsterLogoVisitDetail,
-} from "./lobster-pet.ts";
+} from "./lobster-pet-contract.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
+
+let lobsterPetModuleLoad: Promise<unknown> | null = null;
+
+function scheduleLobsterPetLoad() {
+  if (lobsterPetModuleLoad || customElements.get("openclaw-lobster-pet")) {
+    return;
+  }
+  const start = () => {
+    lobsterPetModuleLoad ??= import("./lobster-pet.ts");
+  };
+  if ("requestIdleCallback" in window) {
+    requestIdleCallback(() => start(), { timeout: 3000 });
+  } else {
+    setTimeout(start, 1500);
+  }
+}
 
 class AppSidebar extends AppSidebarSessionListElement {
   @state() private logoVisit: LobsterLogoVisitDetail | null = null;
@@ -51,6 +64,9 @@ class AppSidebar extends AppSidebarSessionListElement {
   override connectedCallback() {
     super.connectedCallback();
     this.syncOfflineIndicator();
+    // The decorative pet's large module stays out of startup and upgrades in place.
+    // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
+    scheduleLobsterPetLoad();
   }
 
   override disconnectedCallback() {
@@ -86,34 +102,6 @@ class AppSidebar extends AppSidebarSessionListElement {
     // the --vacated class) but no stand-in crab renders in its place.
     this.logoVisit = detail.phase === "out" ? null : detail;
   };
-
-  private renderLogoStandIn() {
-    const visit = this.logoVisit;
-    if (!visit?.look) {
-      return nothing;
-    }
-    const look = visit.look;
-    const classes = [
-      "sidebar-brand__pet",
-      `lobster-pet--palette-${look.palette.id}`,
-      visit.phase === "leaving" ? "sidebar-brand__pet--leaving" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const style = [
-      `--lob-shell:${look.palette.shell}`,
-      `--lob-claw:${look.palette.claw}`,
-      `--lob-blink-delay:${look.blinkDelayS}s`,
-      `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
-      `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
-      `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
-    ].join(";");
-    return html`
-      <span class=${classes} style=${style} title=${`${visit.name} · filling in for the logo`}
-        >${renderLobsterSvg(look)}</span
-      >
-    `;
-  }
 
   private renderBrand() {
     const collapseLabel = t("nav.collapse");
@@ -238,7 +226,9 @@ class AppSidebar extends AppSidebarSessionListElement {
             alt=""
             aria-hidden="true"
           />
-          ${this.renderLogoStandIn()}
+          <openclaw-lobster-logo-standin
+            .visit=${this.logoVisit}
+          ></openclaw-lobster-logo-standin>
         </span>
         <openclaw-sidebar-build-chip
           .basePath=${this.basePath}
