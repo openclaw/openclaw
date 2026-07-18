@@ -10,8 +10,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/store.js";
-import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./auth-profiles/types.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   createRuntimeProviderAuthLookup,
@@ -135,7 +136,7 @@ vi.mock("./model-auth-env-vars.js", () => {
     huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
     "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
-    openai: ["OPENAI_API_KEY"],
+    openai: ["CODEX_API_KEY", "OPENAI_API_KEY"],
     qianfan: ["QIANFAN_API_KEY"],
     qwen: ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
     synthetic: ["SYNTHETIC_API_KEY"],
@@ -257,6 +258,7 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  vi.stubEnv(["CODEX", "API", "KEY"].join("_"), "");
   cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
@@ -264,9 +266,17 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  vi.unstubAllEnvs();
 });
 
 const envVar = (...parts: string[]) => parts.join("_");
+
+function openAiEnv(values: { codex?: string; openai?: string }): NodeJS.ProcessEnv {
+  return {
+    [envVar("CODEX", "API", "KEY")]: values.codex,
+    [envVar("OPENAI", "API", "KEY")]: values.openai,
+  };
+}
 
 function createUsableOAuthExpiry(): number {
   return Date.now() + 30 * 60 * 1000;
@@ -537,6 +547,126 @@ describe("getApiKeyForModel", () => {
     ).rejects.toThrow(/requires a ChatGPT subscription \(OAuth or token\) profile/);
   });
 
+  it("accepts an explicit OpenAI OAuth profile for audio transcriptions", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    await withEnvAsync(
+      openAiEnv({ codex: oauthFixture.accountId, openai: oauthFixture.refresh }),
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "openai",
+          modelApi: "openai-audio-transcriptions",
+          profileId: "openai:chatgpt",
+          lockedProfile: true,
+          store,
+        });
+
+        expect(resolved.apiKey).toBe(oauthFixture.access);
+        expect(resolved).toMatchObject({ mode: "oauth", profileId: "openai:chatgpt" });
+      },
+    );
+  });
+
+  it("treats OpenAI OAuth profiles as available for audio transcriptions", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    await expect(
+      hasAvailableAuthForProvider({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        store,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it.each([
+    ["CODEX_API_KEY", openAiEnv({ codex: oauthFixture.accountId })],
+    ["OPENAI_API_KEY", openAiEnv({ openai: oauthFixture.refresh })],
+  ] as const)(
+    "keeps %s ahead of default OpenAI OAuth profiles for audio transcriptions",
+    async (sourceEnvVar, env) => {
+      const store = {
+        version: 1 as const,
+        profiles: {
+          "openai:chatgpt": {
+            type: "oauth" as const,
+            provider: "openai",
+            ...oauthFixture,
+          },
+        },
+      };
+
+      await withEnvAsync(env, async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "openai",
+          modelApi: "openai-audio-transcriptions",
+          store,
+        });
+
+        expect(resolved.apiKey).toBe(
+          sourceEnvVar === "CODEX_API_KEY" ? oauthFixture.accountId : oauthFixture.refresh,
+        );
+        expect(resolved.mode).toBe("api-key");
+        expect(resolved.profileId).toBeUndefined();
+        expect(resolved.source).toContain(sourceEnvVar);
+      });
+    },
+  );
+
+  it("keeps a configured OpenAI audio API key ahead of default OAuth profiles", async () => {
+    const configuredValue = ["configured", "openai", "credential"].join("-");
+    const resolved = await withEnvAsync(openAiEnv({}), () =>
+      resolveApiKeyForProvider({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses" as const,
+                baseUrl: "https://api.openai.com/v1",
+                [["api", "Key"].join("")]: configuredValue,
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "openai:chatgpt": {
+              type: "oauth" as const,
+              provider: "openai",
+              ...oauthFixture,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(resolved.apiKey).toBe(configuredValue);
+    expect(resolved).toMatchObject({ mode: "api-key", source: "models.json" });
+    expect(resolved.profileId).toBeUndefined();
+  });
+
   it("uses the config default agent dir when resolving provider profiles", async () => {
     await withOpenClawTestState(
       {
@@ -632,7 +762,8 @@ describe("getApiKeyForModel", () => {
         prefix: "openclaw-auth-",
         agentEnv: "main",
         env: {
-          OPENAI_API_KEY: undefined,
+          [envVar("CODEX", "API", "KEY")]: undefined,
+          [envVar("OPENAI", "API", "KEY")]: undefined,
         },
       },
       async (state) => {
@@ -673,7 +804,8 @@ describe("getApiKeyForModel", () => {
         prefix: "openclaw-auth-scope-",
         agentEnv: "main",
         env: {
-          OPENAI_API_KEY: undefined,
+          [envVar("CODEX", "API", "KEY")]: undefined,
+          [envVar("OPENAI", "API", "KEY")]: undefined,
         },
       },
       async () => {
@@ -1877,6 +2009,106 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
         },
       }),
     ).rejects.toThrow(/requires an OpenAI API key profile/);
+  });
+
+  it("does not advertise a token profile reference for a custom OpenAI audio endpoint", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses" as const,
+            baseUrl: "https://openai-compatible.example.test/v1",
+            [["api", "Key"].join("")]: "openai:token",
+            models: [],
+          },
+        },
+      },
+    };
+    const tokenProfile = {
+      type: "token" as const,
+      provider: "openai",
+      [["to", "ken"].join("")]: oauthFixture.access,
+    } as AuthProfileCredential;
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:token": tokenProfile,
+      },
+    };
+    const modelAuth = {
+      provider: "openai",
+      cfg,
+      store,
+      modelApi: "openai-audio-transcriptions",
+      openAIAudioEndpointTrust: "custom-openai-compatible" as const,
+    };
+    const runtimeAuth = {
+      provider: modelAuth.provider,
+      cfg: modelAuth.cfg,
+      env: openAiEnv({ openai: oauthFixture.refresh }),
+      modelApi: modelAuth.modelApi,
+      openAIAudioEndpointTrust: modelAuth.openAIAudioEndpointTrust,
+    };
+
+    expect(hasRuntimeAvailableProviderAuth(runtimeAuth)).toBe(false);
+    replaceRuntimeAuthProfileStoreSnapshots([{ store }]);
+    await withEnvAsync(openAiEnv({ openai: oauthFixture.refresh }), async () => {
+      await expect(hasAvailableAuthForProvider(modelAuth)).resolves.toBe(false);
+      expect(hasRuntimeAvailableProviderAuth(runtimeAuth)).toBe(false);
+      await expect(resolveApiKeyForProvider(modelAuth)).rejects.toThrow(
+        /requires an OpenAI API key profile/,
+      );
+    });
+  });
+
+  it("accepts an API-key profile reference for a custom OpenAI audio endpoint", async () => {
+    const profileValue = ["custom", "audio", "credential"].join("-");
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses" as const,
+            baseUrl: "https://openai-compatible.example.test/v1",
+            [["api", "Key"].join("")]: "openai:api-key",
+            models: [],
+          },
+        },
+      },
+    };
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:api-key": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: profileValue,
+        },
+      },
+    };
+    const modelAuth = {
+      provider: "openai",
+      cfg,
+      store,
+      modelApi: "openai-audio-transcriptions",
+      openAIAudioEndpointTrust: "custom-openai-compatible" as const,
+    };
+    const runtimeAuth = {
+      provider: modelAuth.provider,
+      cfg: modelAuth.cfg,
+      env: openAiEnv({ openai: oauthFixture.refresh }),
+      modelApi: modelAuth.modelApi,
+      openAIAudioEndpointTrust: modelAuth.openAIAudioEndpointTrust,
+    };
+
+    expect(hasRuntimeAvailableProviderAuth(runtimeAuth)).toBe(false);
+    replaceRuntimeAuthProfileStoreSnapshots([{ store }]);
+    await withEnvAsync(openAiEnv({ openai: oauthFixture.refresh }), async () => {
+      await expect(hasAvailableAuthForProvider(modelAuth)).resolves.toBe(true);
+      expect(hasRuntimeAvailableProviderAuth(runtimeAuth)).toBe(true);
+      const resolved = await resolveApiKeyForProvider(modelAuth);
+      expect(resolved.apiKey).toBe(profileValue);
+      expect(resolved).toMatchObject({ mode: "api-key", profileId: "openai:api-key" });
+    });
   });
 
   it("throws when matched profile is an OAuth credential routed to an api-key provider (clawsweeper P1)", async () => {

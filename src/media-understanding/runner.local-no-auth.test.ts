@@ -56,7 +56,9 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
 }));
 
 const AUTH_ENV = {
+  CODEX_API_KEY: undefined,
   LOCAL_AUDIO_API_KEY: undefined,
+  OPENAI_API_KEY: undefined,
   REMOTE_AUDIO_API_KEY: undefined,
   OPENCLAW_AGENT_DIR: undefined,
 } satisfies Record<string, string | undefined>;
@@ -311,6 +313,218 @@ describe("runCapability local no-auth audio providers", () => {
             expect(result.outputs[0]?.text).toBe("auth:env-openai-audio-key");
             expect(transcribeAudio).toHaveBeenCalledTimes(1);
             expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("env-openai-audio-key");
+          },
+        );
+      });
+    });
+  });
+
+  it("uses an explicit OpenAI OAuth profile for audio transcriptions", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: undefined }, async () => {
+        modelAuthTestControl.store = {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "oauth",
+              provider: "openai",
+              access: "oauth-chat-token",
+              refresh: "oauth-refresh-token",
+              expires: Date.now() + 3_600_000,
+            },
+          },
+        };
+        await withAudioFixture(
+          "openclaw-openai-audio-oauth-profile",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `auth:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              entry: { profile: "openai:default" },
+            });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("success");
+            expect(result.outputs[0]?.text).toBe("auth:oauth-chat-token");
+            expect(transcribeAudio).toHaveBeenCalledTimes(1);
+            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("oauth-chat-token");
+          },
+        );
+      });
+    });
+  });
+
+  it("resolves normalized provider config profile ids before audio execution", async () => {
+    modelAuthTestControl.store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "resolved-openai-key",
+        },
+      },
+    };
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture(
+          "openclaw-openai-audio-normalized-profile",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `auth:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+            });
+            cfg.models = {
+              providers: {
+                OpenAI: {
+                  baseUrl: "https://api.openai.com/v1",
+                  [["api", "Key"].join("")]: "openai:default",
+                  models: [],
+                },
+              },
+            };
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("success");
+            expect(transcribeAudio).toHaveBeenCalledTimes(1);
+            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("resolved-openai-key");
+          },
+        );
+      });
+    });
+  });
+
+  it("does not send OpenAI OAuth profile auth to custom audio base URLs", async () => {
+    modelAuthTestControl.store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-chat-token",
+          refresh: "oauth-refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture(
+          "openclaw-openai-audio-oauth-custom-base-url",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `auth:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              entry: {
+                profile: "openai:default",
+                baseUrl: "https://openai-compatible.example.test/v1",
+              },
+            });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("failed");
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(
+              "requires an OpenAI API key profile",
+            );
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).not.toContain(
+              "oauth-chat-token",
+            );
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).not.toContain(
+              "oauth-refresh-token",
+            );
+            expect(transcribeAudio).not.toHaveBeenCalled();
+          },
+        );
+      });
+    });
+  });
+
+  it("does not send literal OpenAI OAuth config auth to custom audio base URLs", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture(
+          "openclaw-openai-audio-oauth-config-custom-base-url",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `auth:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              providerConfig: {
+                auth: "oauth",
+                [["api", "Key"].join("")]: "oauth-config-token",
+                baseUrl: "https://openai-compatible.example.test/v1",
+                models: [],
+              },
+            });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("failed");
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(
+              'No API key found for provider "openai"',
+            );
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).not.toContain(
+              "oauth-config-token",
+            );
+            expect(transcribeAudio).not.toHaveBeenCalled();
           },
         );
       });

@@ -33,6 +33,8 @@ const modelAuthMocks = vi.hoisted(() => ({
       (params: {
         provider: string;
         cfg?: OpenClawConfig;
+        store?: AuthProfileStore;
+        agentDir?: string;
         workspaceDir?: string;
         runtimeLookup?: unknown;
       }) => boolean
@@ -464,6 +466,37 @@ describe("prepared provider auth state", () => {
       expect.anything(),
       "nvidia",
     );
+  });
+
+  it("scopes fast provider auth checks to the explicit agent store", async () => {
+    const cfg = {} as OpenClawConfig;
+    const agentDir = "/state/agents/worker/agent";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:worker": {
+          provider: "openai",
+          type: "api_key",
+          key: "worker-key",
+        },
+      },
+    };
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockImplementation(
+      (params) => params.agentDir === agentDir && params.store === store,
+    );
+
+    await expect(
+      hasAuthForModelProvider({
+        provider: "openai",
+        cfg,
+        agentDir,
+        store,
+      }),
+    ).resolves.toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", cfg, agentDir, store }),
+    );
+    expect(authProfilesMocks.ensureAuthProfileStore).not.toHaveBeenCalled();
   });
 
   it("hasAuthForModelProvider uses the prepared answer for equivalent runtime config clones", async () => {

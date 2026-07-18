@@ -109,13 +109,13 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
-  it("skips OpenAI audio auto-selection when only ChatGPT OAuth is available", async () => {
+  it("uses OpenAI audio auto-selection when ChatGPT OAuth is available", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);
     const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
     hasAvailableAuthForProvider.mockImplementation(async (params) => {
       if (params.provider === "openai") {
-        return params.modelApi === undefined;
+        return params.modelApi === "openai-audio-transcriptions";
       }
       return params.provider === "mistral";
     });
@@ -126,9 +126,9 @@ describe("runCapability auto audio entries", () => {
     }));
 
     try {
-      await withAudioFixture("openclaw-auto-audio-oauth-skip", async ({ ctx, media, cache }) => {
+      await withAudioFixture("openclaw-auto-audio-oauth-openai", async ({ ctx, media, cache }) => {
         const openAiTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
-          text: "openai",
+          text: `openai:${req.apiKey}`,
           model: req.model ?? "unknown",
         }));
         const mistralTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
@@ -173,18 +173,128 @@ describe("runCapability auto audio entries", () => {
         expect(requireCapabilityOutput(result, 0)).toEqual({
           kind: "audio.transcription",
           attachmentIndex: 0,
-          provider: "mistral",
-          model: "voxtral-mini-latest",
-          text: "mistral:mistral-key",
+          provider: "openai",
+          model: "gpt-4o-transcribe",
+          text: "openai:openai-key",
         });
-        expect(openAiTranscribe).not.toHaveBeenCalled();
-        expect(mistralTranscribe).toHaveBeenCalledTimes(1);
+        expect(openAiTranscribe).toHaveBeenCalledTimes(1);
+        expect(mistralTranscribe).not.toHaveBeenCalled();
       });
 
       expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(
         expect.objectContaining({
           provider: "openai",
           modelApi: "openai-audio-transcriptions",
+        }),
+      );
+    } finally {
+      hasAvailableAuthForProvider.mockReset();
+      hasAvailableAuthForProvider.mockResolvedValue(true);
+      resolveApiKeyForProvider.mockReset();
+      resolveApiKeyForProvider.mockResolvedValue({
+        [["api", "Key"].join("")]: "test-key",
+        source: "test",
+        mode: "api-key",
+      });
+    }
+  });
+
+  it("falls back when capability audio baseUrl makes OpenAI OAuth unavailable", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);
+    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
+    hasAvailableAuthForProvider.mockImplementation(async (params) => {
+      if (params.provider === "openai") {
+        return (
+          params.modelApi === "openai-audio-transcriptions" &&
+          params.openAIAudioEndpointTrust !== "custom-openai-compatible"
+        );
+      }
+      return params.provider === "mistral";
+    });
+    resolveApiKeyForProvider.mockImplementation(
+      async (params) =>
+        ({
+          [["api", "Key"].join("")]: `${params.provider}-key`,
+          source: "test",
+          mode: "api-key",
+        }) as Awaited<ReturnType<typeof resolveApiKeyForProvider>>,
+    );
+
+    try {
+      await withAudioFixture(
+        "openclaw-auto-audio-oauth-custom-base-url-fallback",
+        async ({ ctx, media, cache }) => {
+          const openAiTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
+            text: `openai:${req.apiKey}`,
+            model: req.model ?? "unknown",
+          }));
+          const mistralTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
+            text: `mistral:${req.apiKey}`,
+            model: req.model ?? "unknown",
+          }));
+
+          const result = await runCapability({
+            capability: "audio",
+            cfg: {
+              models: {
+                providers: {
+                  openai: {
+                    auth: "oauth",
+                    [["api", "Key"].join("")]: "oauth-config-token",
+                    models: [],
+                  },
+                  mistral: {
+                    models: [],
+                  },
+                },
+              },
+              tools: {
+                media: {
+                  audio: {
+                    enabled: true,
+                    baseUrl: "https://openai-compatible.example.test/v1",
+                  },
+                },
+              },
+            } as unknown as OpenClawConfig,
+            ctx,
+            attachments: cache,
+            media,
+            providerRegistry: createProviderRegistry({
+              openai: {
+                id: "openai",
+                capabilities: ["audio"],
+                defaultModels: { audio: "gpt-4o-transcribe" },
+                transcribeAudio: openAiTranscribe,
+              },
+              mistral: {
+                id: "mistral",
+                capabilities: ["audio"],
+                defaultModels: { audio: "voxtral-mini-latest" },
+                transcribeAudio: mistralTranscribe,
+              },
+            }),
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(requireCapabilityOutput(result, 0)).toEqual({
+            kind: "audio.transcription",
+            attachmentIndex: 0,
+            provider: "mistral",
+            model: "voxtral-mini-latest",
+            text: "mistral:mistral-key",
+          });
+          expect(openAiTranscribe).not.toHaveBeenCalled();
+          expect(mistralTranscribe).toHaveBeenCalledTimes(1);
+        },
+      );
+
+      expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelApi: "openai-audio-transcriptions",
+          openAIAudioEndpointTrust: "custom-openai-compatible",
         }),
       );
     } finally {

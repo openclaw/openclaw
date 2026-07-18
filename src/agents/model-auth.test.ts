@@ -432,6 +432,52 @@ describe("resolveModelAuthMode", () => {
       readCodexCliCredentialsCached.mockRestore();
     }
   });
+
+  it("applies configured OAuth mode consistently to OpenAI env credentials", async () => {
+    const codexApiKeyEnv = ["CODEX", "API", "KEY"].join("_");
+    const openAiApiKeyEnv = ["OPENAI", "API", "KEY"].join("_");
+    const openAiOAuthTokenEnv = ["OPENAI", "OAUTH", "TOKEN"].join("_");
+    const snapshot = captureEnv([codexApiKeyEnv, openAiApiKeyEnv, openAiOAuthTokenEnv]);
+    deleteTestEnvValue(codexApiKeyEnv);
+    deleteTestEnvValue(openAiOAuthTokenEnv);
+    setTestEnvValue(openAiApiKeyEnv, "env-openai-credential");
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            auth: "oauth" as const,
+            baseUrl: "https://openai-compatible.example.test/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    try {
+      expect(resolveModelAuthMode("openai", cfg, { version: 1, profiles: {} })).toBe("oauth");
+      await expect(
+        hasAvailableAuthForProvider({
+          provider: "openai",
+          cfg,
+          store: { version: 1, profiles: {} },
+          modelApi: "openai-audio-transcriptions",
+          openAIAudioEndpointTrust: "custom-openai-compatible",
+        }),
+      ).resolves.toBe(false);
+      expect(
+        hasRuntimeAvailableProviderAuth({
+          provider: "openai",
+          cfg,
+          env: { [openAiApiKeyEnv]: "env-openai-credential" },
+          allowPluginSyntheticAuth: false,
+          modelApi: "openai-audio-transcriptions",
+          openAIAudioEndpointTrust: "custom-openai-compatible",
+        }),
+      ).toBe(false);
+    } finally {
+      snapshot.restore();
+    }
+  });
 });
 
 describe("requireApiKey", () => {
@@ -1727,6 +1773,48 @@ describe("resolveApiKeyForProvider", () => {
       source: "models.providers.custom-oauth-ref",
       mode: "oauth",
     });
+  });
+
+  it("rejects managed OpenAI OAuth SecretRefs for custom audio endpoints", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            auth: "oauth" as const,
+            apiKey: { source: "file", provider: "vault", id: "/openai/oauth" } as const,
+            baseUrl: "https://openai-compatible.example.test/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              ...sourceConfig.models.providers.openai,
+              [["api", "Key"].join("")]: "resolved-oauth-credential",
+            },
+          },
+        },
+      },
+      sourceConfig,
+    );
+
+    await withoutEnv("CODEX_API_KEY", () =>
+      withoutEnv("OPENAI_API_KEY", async () => {
+        await expect(
+          resolveApiKeyForProvider({
+            provider: "openai",
+            cfg: sourceConfig,
+            modelApi: "openai-audio-transcriptions",
+            openAIAudioEndpointTrust: "custom-openai-compatible",
+            store: { version: 1, profiles: {} },
+          }),
+        ).rejects.toThrow(/No API key found for provider "openai"/);
+      }),
+    );
   });
 
   it("prefers non-secret local env markers over ambient profiles", async () => {

@@ -2,6 +2,7 @@
 // rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -61,7 +62,10 @@ import {
   recordLocalAudioBackendObservation,
   resolveRequestedLocalAudioBackend,
 } from "./local-audio.js";
-import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
+import {
+  resolveOpenAiAudioAuthEndpointTrust,
+  resolveOpenAiAudioAuthModelApi,
+} from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
@@ -80,7 +84,16 @@ function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | null {
+  // Keep this fast path exact-key-only. Normalized entries may store profile ids,
+  // which must flow through the canonical resolver before becoming bearer auth.
   return normalizeNullableString(params.cfg.models?.providers?.[params.providerId]?.apiKey);
+}
+
+function resolveProviderConfig(
+  cfg: OpenClawConfig,
+  providerId: string,
+): ModelProviderConfig | undefined {
+  return findNormalizedProviderValue(cfg.models?.providers, providerId);
 }
 
 function sanitizeProviderHeaders(
@@ -521,10 +534,13 @@ async function resolveProviderExecutionAuth(params: {
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
+  providerConfig?: ModelProviderConfig;
+  baseUrl?: string;
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<ProviderExecutionAuth> {
-  const providerConfig = params.cfg.models?.providers?.[params.providerId];
+  const providerConfig =
+    params.providerConfig ?? resolveProviderConfig(params.cfg, params.providerId);
   const modelApi = resolveProviderExecutionAuthModelApi({
     capability: params.capability,
     providerId: params.providerId,
@@ -533,7 +549,9 @@ async function resolveProviderExecutionAuth(params: {
     cfg: params.cfg,
     providerId: params.providerId,
   });
-  if (literalApiKey) {
+  // OpenAI audio must use the canonical resolver even for exact literal config:
+  // configured auth mode and endpoint trust decide whether bearer use is safe.
+  if (literalApiKey && !modelApi) {
     return {
       kind: "api-key",
       apiKeys: collectProviderApiKeysForExecution({
@@ -598,6 +616,11 @@ async function resolveProviderExecutionAuth(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       modelApi,
+      openAIAudioEndpointTrust: resolveOpenAiAudioAuthEndpointTrust({
+        capability: params.capability,
+        providerId: params.providerId,
+        baseUrl: params.baseUrl,
+      }),
     });
     const apiKey = requireApiKey(auth, params.providerId);
     return {
@@ -624,6 +647,14 @@ async function resolveProviderExecutionAuth(params: {
   }
 }
 
+function resolveProviderExecutionBaseUrl(params: {
+  entry: MediaUnderstandingModelConfig;
+  config?: MediaUnderstandingConfig;
+  providerConfig?: ModelProviderConfig;
+}): string | undefined {
+  return params.entry.baseUrl ?? params.config?.baseUrl ?? params.providerConfig?.baseUrl;
+}
+
 async function resolveProviderExecutionContext(params: {
   capability: MediaUnderstandingCapability;
   providerId: string;
@@ -634,25 +665,34 @@ async function resolveProviderExecutionContext(params: {
   agentDir?: string;
   workspaceDir?: string;
 }) {
+  const providerConfig = resolveProviderConfig(params.cfg, params.providerId);
+  const baseUrl = resolveProviderExecutionBaseUrl({
+    entry: params.entry,
+    config: params.config,
+    providerConfig,
+  });
   const auth = await resolveProviderExecutionAuth({
     capability: params.capability,
     providerId: params.providerId,
     provider: params.provider,
     cfg: params.cfg,
     entry: params.entry,
+    providerConfig,
+    baseUrl,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
-  const providerConfig = auth.providerConfig;
-  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
+  const resolvedProviderConfig = auth.providerConfig ?? providerConfig;
   const mergedHeaders = {
-    ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
+    ...sanitizeProviderHeaders(
+      resolvedProviderConfig?.headers as Record<string, unknown> | undefined,
+    ),
     ...sanitizeProviderHeaders(params.config?.headers as Record<string, unknown> | undefined),
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
   const request = mergeModelProviderRequestOverrides(
-    sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+    sanitizeConfiguredModelProviderRequest(resolvedProviderConfig?.request),
     sanitizeConfiguredProviderRequest(params.config?.request),
     sanitizeConfiguredProviderRequest(params.entry.request),
   );
