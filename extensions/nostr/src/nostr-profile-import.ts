@@ -7,7 +7,7 @@
 
 import { SimplePool, type Event } from "nostr-tools";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import type { NostrProfile } from "./config-schema.js";
+import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
@@ -189,10 +189,19 @@ export async function importProfileFromRelays(
 
     // Sanitize URLs from imported profile to prevent SSRF when auto-merging
     const sanitizedProfile = sanitizeProfileUrls(profile);
+    const validatedProfile = NostrProfileSchema.safeParse(sanitizedProfile);
+    if (!validatedProfile.success) {
+      return {
+        ok: false,
+        error: "Profile event content has invalid fields",
+        relaysQueried,
+        sourceRelay: bestEvent.relay,
+      };
+    }
 
     return {
       ok: true,
-      profile: sanitizedProfile,
+      profile: validatedProfile.data,
       event: {
         id: bestEvent.event.id,
         pubkey: bestEvent.event.pubkey,
