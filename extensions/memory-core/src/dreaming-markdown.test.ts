@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MEMORY_DREAMING_MARKDOWN_MAX_BYTES } from "./dreaming-dreams-file.js";
 import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -138,6 +139,32 @@ describe("dreaming markdown storage", () => {
     await expect(fs.readFile(lowercasePath, "utf-8")).resolves.toBe("# Scratch\n\n");
   });
 
+  it("rejects oversized daily memory files before writing inline phase output", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(inlinePath, Buffer.alloc(MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1));
+
+    await expect(
+      writeDailyDreamingPhaseBlock({
+        workspaceDir,
+        phase: "light",
+        bodyLines: ["- Candidate: should not be appended"],
+        nowMs,
+        timezone,
+        storage: {
+          mode: "inline",
+          separateReports: false,
+        },
+      }),
+    ).rejects.toThrow(`File exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes`);
+
+    await expectPathMissing(path.join(workspaceDir, "memory-events.jsonl"));
+    await expect(fs.stat(inlinePath)).resolves.toMatchObject({
+      size: MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1,
+    });
+  });
+
   it("still writes deep reports to the per-phase report directory", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
 
@@ -185,6 +212,30 @@ describe("dreaming markdown storage", () => {
     const dreamsContent = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreamsContent).toContain("## Deep Sleep");
     expect(dreamsContent).toContain("- Ranked 3 candidate(s) for durable promotion.");
+  });
+
+  it("rejects oversized DREAMS.md before writing deep summaries", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, Buffer.alloc(MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1));
+
+    await expect(
+      writeDeepDreamingReport({
+        workspaceDir,
+        bodyLines: ["- Should not be appended"],
+        storage: {
+          mode: "inline",
+          separateReports: false,
+        },
+        nowMs,
+        timezone,
+      }),
+    ).rejects.toThrow(`File exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes`);
+
+    await expectPathMissing(path.join(workspaceDir, "memory-events.jsonl"));
+    await expect(fs.stat(dreamsPath)).resolves.toMatchObject({
+      size: MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1,
+    });
   });
 
   it("replaces the managed deep summary while preserving the diary block", async () => {
