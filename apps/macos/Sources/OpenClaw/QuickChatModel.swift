@@ -160,6 +160,9 @@ final class QuickChatModel {
     @ObservationIgnored private let permissionStatusProvider: PermissionStatusProvider
     @ObservationIgnored private let permissionGrantProvider: PermissionGrantProvider
     @ObservationIgnored private let connectionGateProvider: ConnectionGateProvider
+    /// Invoked with the snapshotted route just before a send is dispatched, for every
+    /// send path (text and capture); wires the reply consumer's pre-bind.
+    @ObservationIgnored var onSendDispatched: ((QuickChatRoutingTarget) -> Void)?
     @ObservationIgnored private var presentationID = UUID()
     @ObservationIgnored private var agentsScope: String?
     @ObservationIgnored private var agentsMainKey: String?
@@ -597,6 +600,9 @@ final class QuickChatModel {
 
         let sessionKey = self.sessionKey
         let agentID = self.sendAgentID
+        // Pre-bind the reply consumer for every send path (text and screenshots): a
+        // fast turn must not emit frames before the reply view model starts listening.
+        self.onSendDispatched?(QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID))
         let idempotencyKey: String
         if let retryIdentity = self.retryIdentity,
            retryIdentity.draft == draft,

@@ -241,11 +241,6 @@ struct QuickChatView: View {
 
     private func submit(openChat: Bool) {
         guard self.model.canSend, let presentationID = self.model.activePresentationID else { return }
-        // Bind the reply consumer before dispatch: a fast turn must not emit frames
-        // into the gap between the chat.send ack and the view model's first listen.
-        if !openChat, let route = self.model.routingTarget {
-            self.replyBinding.prepare(route: route)
-        }
         Task {
             guard await self.model.send() else { return }
             if openChat {

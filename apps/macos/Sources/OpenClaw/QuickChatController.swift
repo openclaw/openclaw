@@ -140,6 +140,9 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         self.recentSessionsProvider = recentSessionsProvider
         self.allowsHotkeyRegistrationInTests = allowsHotkeyRegistrationInTests
         super.init()
+        self.model.onSendDispatched = { [weak self] route in
+            self?.replyBinding.prepare(route: route)
+        }
     }
 
     func start() {

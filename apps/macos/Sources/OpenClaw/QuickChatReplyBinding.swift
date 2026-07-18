@@ -30,7 +30,9 @@ final class QuickChatReplyBinding {
     }
 
     func rebindIfActive(route: QuickChatRoutingTarget) {
-        guard self.viewModel != nil else { return }
+        // Only a VISIBLE reply rebinds; hidden prepared state from a failed send must
+        // not be promoted into an expanded transcript by a later target change.
+        guard self.route != nil else { return }
         self.show(route: route)
     }
 
