@@ -558,6 +558,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       promotedRows.length > 0
         ? scopedRootRows.toSorted(this.compareSidebarSessionRows)
         : scopedRootRows;
+    // `adopted` holds only catalog-bound keys (adoptedCatalogSessionKeys), not
+    // fetched child rows: a catalog-adopted promoted child intentionally
+    // renders as its live row inside the Coding catalog, never as a thread.
     return this.projectSessionTree(
       orderedRootRows.filter((row) => !adopted.has(row.key)),
       rows,
