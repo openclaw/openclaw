@@ -229,6 +229,20 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.compaction.enabled", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
     const res = validateConfigObject({
       agents: {

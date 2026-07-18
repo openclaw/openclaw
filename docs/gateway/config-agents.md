@@ -615,6 +615,7 @@ Periodic heartbeat runs.
   agents: {
     defaults: {
       compaction: {
+        enabled: false, // disable automatic compaction entirely (default: true)
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
         timeoutSeconds: 180,
@@ -646,6 +647,7 @@ Periodic heartbeat runs.
 }
 ```
 
+- `enabled`: master switch for automatic compaction. Set `false` to disable auto-compaction while keeping the rest of the compaction config for later reuse. Default: `true`.
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
