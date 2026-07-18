@@ -9,6 +9,7 @@ import {
   fetchWithTimeout,
   pollProviderOperationJson,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
@@ -127,6 +128,9 @@ export async function resolveVydraRequestContext(params: {
       },
       provider: "vydra",
       capability: params.capability,
+      request: sanitizeConfiguredModelProviderRequest(
+        params.cfg?.models?.providers?.vydra?.request,
+      ),
       transport: "http",
     });
   return {
