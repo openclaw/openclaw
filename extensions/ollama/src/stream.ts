@@ -1200,8 +1200,8 @@ function createRawOllamaStreamFn(
           }
         }
 
- reader = response.body.getReader();
- {
+        const reader = response.body.getReader();
+        try {
 
           let accumulatedRawContent = "";
           let accumulatedVisibleContent = "";
