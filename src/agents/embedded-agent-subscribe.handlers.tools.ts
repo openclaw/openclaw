@@ -1493,6 +1493,12 @@ export async function handleToolExecutionEnd(
       isError: isToolError,
     });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
+  const messageToolOnlyFinal =
+    isMessagingSend && ctx.params.sourceReplyDeliveryMode === "message_tool_only"
+      ? typeof startArgs.final === "boolean"
+        ? startArgs.final
+        : true
+      : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
   const messageTarget = hasMessagingTargetEvidence
@@ -1528,6 +1534,7 @@ export async function handleToolExecutionEnd(
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
+      ...(messageToolOnlyFinal !== undefined ? { messageToolOnlyFinal } : {}),
     });
     ctx.trimMessagingToolSent();
   }

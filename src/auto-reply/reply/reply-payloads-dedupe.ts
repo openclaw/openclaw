@@ -342,6 +342,7 @@ export type MessagingToolPayloadDedupeDecision = {
   shouldDedupePayloads: boolean;
   matchingRoute: boolean;
   routeSentTexts: string[];
+  routeHasTerminalDelivery: boolean;
   routeSentMediaUrls: string[];
   useGlobalSentTextEvidenceFallback: boolean;
   useGlobalSentMediaUrlEvidenceFallback: boolean;
@@ -375,6 +376,14 @@ export function resolveMessagingToolPayloadDedupe(params: {
   const routeSentTexts = matchingTargets.flatMap((target) =>
     typeof target.text === "string" && target.text.trim() ? [target.text] : [],
   );
+  const routeHasTerminalDelivery = matchingTargets.some(
+    (target) =>
+      (target.sourceReplyFinal === true || target.messageToolOnlyFinal === true) &&
+      ((typeof target.text === "string" && Boolean(target.text.trim())) ||
+        (Array.isArray(target.mediaUrls) &&
+          target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim()))) ||
+        target.hasRichContent === true),
+  );
   const routeSentMediaUrls = matchingTargets.flatMap((target) =>
     Array.isArray(target.mediaUrls)
       ? target.mediaUrls.filter(
@@ -396,6 +405,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
     shouldDedupePayloads: matchingRoute || sentTargets.length === 0,
     matchingRoute,
     routeSentTexts,
+    routeHasTerminalDelivery,
     routeSentMediaUrls,
     useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && !hasTargetTextEvidence,
     useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && !hasTargetMediaUrlEvidence,

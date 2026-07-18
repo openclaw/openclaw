@@ -491,6 +491,310 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 
+  it("marks heartbeat same-route final text when message tool already delivered", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "fallback narration" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["message tool body"],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          text: "message tool body",
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("fallback narration");
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBe(true);
+  });
+
+  it("keeps heartbeat exact-text dedupe before marking a distinct fallback", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "message tool body" }, { text: "fallback narration" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["message tool body"],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          text: "message tool body",
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("fallback narration");
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBe(true);
+  });
+
+  it("does not transfer heartbeat delivery evidence between reply routes", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      isHeartbeat: true,
+      payloads: [
+        { text: "message tool body", replyToId: "111.000", replyToTag: true },
+        { text: "fallback narration", replyToId: "999.000", replyToTag: true },
+      ],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      messageProvider: "heartbeat",
+      originatingChannel: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["message tool body"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "message tool body",
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("fallback narration");
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBeUndefined();
+  });
+
+  it("does not use unscoped legacy text as heartbeat route-delivery evidence", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      isHeartbeat: true,
+      payloads: [{ text: "fallback narration", replyToId: "999.000", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      messageProvider: "heartbeat",
+      originatingChannel: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["text sent without route-scoped target metadata"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "999.000",
+          mediaUrls: ["https://example.com/delivered.jpg"],
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBeUndefined();
+  });
+
+  it("does not treat same-route message-tool progress as final heartbeat delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "Backup completed." }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["Starting backup."],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          text: "Starting backup.",
+          messageToolOnlyFinal: false,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Backup completed.");
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBeUndefined();
+  });
+
+  it("marks fallback after a terminal same-route media-only delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "Private media narration." }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentMediaUrls: ["https://example.com/delivered.jpg"],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          mediaUrls: ["https://example.com/delivered.jpg"],
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBe(true);
+  });
+
+  it("preserves terminal route evidence when media dedupe replaces the fallback payload", async () => {
+    const mediaUrl = "https://example.com/delivered.jpg";
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "Private media narration.", mediaUrl }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["Visible media delivery."],
+      messagingToolSentMediaUrls: [mediaUrl],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          text: "Visible media delivery.",
+          mediaUrls: [mediaUrl],
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({ text: "Private media narration." });
+    expect(replyPayloads[0]?.mediaUrl).toBeUndefined();
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBe(true);
+  });
+
+  it("ignores reasoning payloads when marking heartbeat message-tool delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "reasoning notes", isReasoning: true }, { text: "fallback narration" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["message tool body"],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          text: "message tool body",
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads[0]?.isReasoning).toBe(true);
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBeUndefined();
+    expect(replyPayloads[1]?.text).toBe("fallback narration");
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[1], "replyPayloads[1] test invariant"))
+        ?.messageToolDeliveredForReplyRoute,
+    ).toBe(true);
+  });
+
+  it("does not mark multi-visible heartbeat fallbacks as message-tool delivered", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "first fallback" }, { text: "second fallback" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["message tool body"],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          text: "message tool body",
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads.map((payload) => payload.text)).toEqual([
+      "first fallback",
+      "second fallback",
+    ]);
+    expect(
+      replyPayloads.map(
+        (payload) => getReplyPayloadMetadata(payload)?.messageToolDeliveredForReplyRoute,
+      ),
+    ).toEqual([undefined, undefined]);
+  });
+
+  it("does not mark plain heartbeat text when a visible media payload remains", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [
+        { text: "fallback narration" },
+        { text: "photo caption", mediaUrl: "https://example.com/photo.jpg" },
+      ],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["message tool body"],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          text: "message tool body",
+          messageToolOnlyFinal: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(
+      replyPayloads.map(
+        (payload) => getReplyPayloadMetadata(payload)?.messageToolDeliveredForReplyRoute,
+      ),
+    ).toEqual([undefined, undefined]);
+  });
+
   it("delivers distinct same-target replies when message tool target provider is generic", async () => {
     await expectSameTargetRepliesDelivered({ provider: "message", to: "ou_abc123" });
   });

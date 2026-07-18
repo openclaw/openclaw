@@ -231,6 +231,13 @@ export type ReplyPayloadMetadata = {
     accountId?: string;
   };
   /**
+   * A generic message tool delivery already reached the same provider/target
+   * route as this reply. Heartbeat uses this route-scoped evidence to avoid
+   * sending fallback narration after the message tool has delivered the
+   * visible response.
+   */
+  messageToolDeliveredForReplyRoute?: boolean;
+  /**
    * Internal OpenClaw notices generated after a runtime/provider failure are
    * not assistant source replies. Dispatch may deliver them even when normal
    * assistant source replies are message-tool-only; sendPolicy deny still wins.
@@ -290,6 +297,15 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
+  });
+}
+
+/** Marks a payload whose visible reply was already delivered by a message tool on this route. */
+export function markReplyPayloadForMessageToolDeliveryForReplyRoute<T extends object>(
+  payload: T,
+): T {
+  return setReplyPayloadMetadata(payload, {
+    messageToolDeliveredForReplyRoute: true,
   });
 }
 

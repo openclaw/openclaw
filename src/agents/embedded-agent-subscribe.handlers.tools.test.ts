@@ -1972,6 +1972,46 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     ]);
   });
 
+  it("records message-tool-only terminal and progress intent on successful sends", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+
+    for (const [toolCallId, final] of [
+      ["tool-message-terminal", undefined],
+      ["tool-message-progress", false],
+    ] as const) {
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "message",
+          toolCallId,
+          args: {
+            action: "send",
+            provider: "telegram",
+            to: "chat-current",
+            text: toolCallId,
+            ...(final !== undefined ? { final } : {}),
+          },
+        } as never,
+      );
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: "message",
+          toolCallId,
+          isError: false,
+          result: { details: { messageId: `${toolCallId}-result` } },
+        } as never,
+      );
+    }
+
+    expect(ctx.state.messagingToolSentTargets.map((target) => target.messageToolOnlyFinal)).toEqual(
+      [true, false],
+    );
+  });
+
   it("records reply target evidence without treating it as terminal send evidence", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-reply-target";

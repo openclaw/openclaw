@@ -16,6 +16,8 @@ export type MessagingToolSend = {
   hasRichContent?: true;
   /** Present only when Codex classified this current-source delivery intent. */
   sourceReplyFinal?: boolean;
+  /** Terminal/progress intent for a successful message_tool_only send. */
+  messageToolOnlyFinal?: boolean;
 };
 
 export type MessagingToolSourceReplyPayload = Pick<

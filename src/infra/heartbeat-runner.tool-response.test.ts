@@ -8,6 +8,7 @@ import {
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import {
+  markReplyPayloadForMessageToolDeliveryForReplyRoute,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
@@ -64,6 +65,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     isolatedSession?: boolean;
     target?: "telegram" | "last" | "none";
     showOk?: boolean;
+    includeReasoning?: boolean;
   }): OpenClawConfig {
     return {
       agents: {
@@ -73,6 +75,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
             every: "5m",
             target: params.target ?? "telegram",
             ...(params.isolatedSession ? { isolatedSession: true } : {}),
+            ...(params.includeReasoning ? { includeReasoning: true } : {}),
           },
           ...(params.model ? { model: params.model } : {}),
           ...(params.model && params.modelRuntimeId
@@ -682,6 +685,150 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     const result = await runPromptScenario();
 
     expectHeartbeatToolPrompt(result);
+  });
+
+  it("suppresses fallback text after route-scoped message-tool delivery evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const fallback = "Fallback narration that should not duplicate the message tool.";
+      replySpy.mockImplementation(async () => {
+        await patchSessionEntry(
+          { storePath, sessionKey },
+          () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: fallback,
+            pendingFinalDeliveryCreatedAt: 0,
+          }),
+          { preserveActivity: true },
+        );
+        return markReplyPayloadForMessageToolDeliveryForReplyRoute({ text: fallback });
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(readSessionStoreForTest(storePath)[sessionKey]?.pendingFinalDelivery).toBeUndefined();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "sent",
+        preview: fallback,
+        channel: "telegram",
+      });
+    });
+  });
+
+  it("clears a satisfied pending final when only reasoning remains visible", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({
+        tmpDir,
+        storePath,
+        visibleReplies: "message_tool",
+        includeReasoning: true,
+      });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const fallback = "Fallback narration that should not duplicate the message tool.";
+      replySpy.mockImplementation(async () => {
+        await patchSessionEntry(
+          { storePath, sessionKey },
+          () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: fallback,
+            pendingFinalDeliveryCreatedAt: 0,
+          }),
+          { preserveActivity: true },
+        );
+        return [
+          { text: "Because it helps", isReasoning: true },
+          markReplyPayloadForMessageToolDeliveryForReplyRoute({ text: fallback }),
+        ];
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, { text: "Thinking\n\n_Because it helps_", cfg });
+      expect(readSessionStoreForTest(storePath)[sessionKey]?.pendingFinalDelivery).toBeUndefined();
+    });
+  });
+
+  it("relays exec-completion text despite route-scoped delivery evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      enqueueSystemEvent("Exec completed (backup, code 0) :: backup finished", { sessionKey });
+      const fallback = "The backup finished successfully.";
+      replySpy.mockResolvedValue(
+        markReplyPayloadForMessageToolDeliveryForReplyRoute({ text: fallback }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, { text: fallback, cfg });
+    });
+  });
+
+  it("keeps terminal tool failures visible despite route-scoped delivery evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const warning = "Message delivery failed.";
+      replySpy.mockResolvedValue(
+        markReplyPayloadForMessageToolDeliveryForReplyRoute(
+          setReplyPayloadMetadata(
+            { text: warning, isError: true },
+            { heartbeatTerminalToolFailure: { toolName: "message" } },
+          ),
+        ),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
+      expectTelegramSend(sendTelegram, { text: warning, cfg });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-tool-failure",
+        preview: warning,
+      });
+    });
   });
 
   it("uses the isolated Codex runtime instead of the base OpenClaw runtime", async () => {
