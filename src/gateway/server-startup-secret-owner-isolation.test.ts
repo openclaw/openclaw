@@ -47,7 +47,9 @@ async function startVaultAclFixture() {
     response.statusCode = 403;
     response.end(JSON.stringify({ errors: ["permission denied"] }));
   });
-  await new Promise<void>((resolve) => vault.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    vault.listen(0, "127.0.0.1", resolve);
+  });
   const address = vault.address();
   if (!address || typeof address === "string") {
     throw new Error("Vault ACL fixture did not bind to a TCP port");
@@ -55,7 +57,10 @@ async function startVaultAclFixture() {
   return {
     requests,
     vaultAddr: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve) => vault.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        vault.close(() => resolve());
+      }),
   };
 }
 
@@ -246,11 +251,12 @@ describe("Gateway startup SecretRef owner isolation", () => {
           expect(ready.status).toBe(200);
           await expect(ready.json()).resolves.toMatchObject({ ready: true });
           const snapshot = getActiveSecretsRuntimeSnapshot();
-          expect(snapshot?.degradedOwners).toMatchObject([
+          const degradedOwners = snapshot?.degradedOwners ?? [];
+          expect(degradedOwners).toMatchObject([
             { ownerKind: "provider", ownerId: "openai", state: "unavailable" },
             { ownerKind: "capability", ownerId: "tts", state: "unavailable" },
           ]);
-          expect(snapshot?.degradedOwners.every((owner) => !owner.providerFailures)).toBe(true);
+          expect(degradedOwners.every((owner) => !owner.providerFailures)).toBe(true);
           expect(snapshot?.warnings).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
