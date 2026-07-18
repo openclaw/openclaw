@@ -1497,26 +1497,33 @@ async function readStdinText(): Promise<string> {
 }
 
 function readConfigPatchFileText(file: string): string {
-  const fd = fs.openSync(file, "r");
   try {
-    const chunks: Buffer[] = [];
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let bytes = 0;
-    for (;;) {
-      const read = fs.readSync(fd, buffer, 0, buffer.length, null);
-      if (read === 0) {
-        return Buffer.concat(chunks, bytes).toString("utf8");
+    const fd = fs.openSync(file, "r");
+    try {
+      const chunks: Buffer[] = [];
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let bytes = 0;
+      for (;;) {
+        const read = fs.readSync(fd, buffer, 0, buffer.length, null);
+        if (read === 0) {
+          return Buffer.concat(chunks, bytes).toString("utf8");
+        }
+        bytes += read;
+        if (bytes > CONFIG_PATCH_FILE_MAX_BYTES) {
+          throw configPatchModeError(
+            `--file input exceeds ${CONFIG_PATCH_FILE_MAX_BYTES} bytes; split the patch into smaller changes.`,
+          );
+        }
+        chunks.push(Buffer.from(buffer.subarray(0, read)));
       }
-      bytes += read;
-      if (bytes > CONFIG_PATCH_FILE_MAX_BYTES) {
-        throw configPatchModeError(
-          `--file input exceeds ${CONFIG_PATCH_FILE_MAX_BYTES} bytes; split the patch into smaller changes.`,
-        );
-      }
-      chunks.push(Buffer.from(buffer.subarray(0, read)));
+    } finally {
+      fs.closeSync(fd);
     }
-  } finally {
-    fs.closeSync(fd);
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      throw new Error(`--file not found: ${file}`, { cause: err });
+    }
+    throw err;
   }
 }
 

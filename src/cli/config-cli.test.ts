@@ -2400,7 +2400,7 @@ describe("config cli", () => {
       try {
         await expect(
           runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow("config patch mode error: --file input exceeds 1048576 bytes");
       } finally {
         fs.rmSync(pathname, { force: true });
       }
