@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { formatApprovalCountdown } from "./exec-approval.ts";
+import { APPROVAL_SHORTCUT_ARM_DELAY_MS, formatApprovalCountdown } from "./exec-approval.ts";
 import "./exec-approval.ts";
 
 let container: HTMLDivElement;
@@ -58,6 +58,12 @@ async function renderApproval(
   }
   await approval.updateComplete;
   return { approval, onDecision };
+}
+
+/** Jump past the shortcut arming window without touching other timers. */
+function armShortcuts() {
+  const realNow = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(realNow + APPROVAL_SHORTCUT_ARM_DELAY_MS + 1);
 }
 
 describe("openclaw-exec-approval", () => {
@@ -154,6 +160,7 @@ describe("openclaw-exec-approval", () => {
   it("handles modal approval keyboard shortcuts", async () => {
     const { onDecision } = await renderApproval(createExecRequest());
     const { modal } = await getRenderedModalDialog(container);
+    armShortcuts();
 
     modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     modal.dispatchEvent(new KeyboardEvent("keydown", { key: "A", shiftKey: true, bubbles: true }));
@@ -169,6 +176,7 @@ describe("openclaw-exec-approval", () => {
   it("ignores auto-repeated shortcut keydown events", async () => {
     const { onDecision } = await renderApproval(createExecRequest());
     const { modal } = await getRenderedModalDialog(container);
+    armShortcuts();
 
     modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, repeat: true }));
     modal.dispatchEvent(
@@ -178,6 +186,18 @@ describe("openclaw-exec-approval", () => {
     expect(onDecision).not.toHaveBeenCalled();
   });
 
+  it("disarms shortcuts until the arming window elapses", async () => {
+    const { onDecision } = await renderApproval(createExecRequest());
+    const { modal } = await getRenderedModalDialog(container);
+
+    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(onDecision).not.toHaveBeenCalled();
+
+    armShortcuts();
+    modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(onDecision.mock.calls).toEqual([["approval-1", "allow-once"]]);
+  });
+
   it("guards shortcuts while busy, disallowed, or focused in text input", async () => {
     const restricted = createExecRequest({
       request: { command: "echo hello", allowedDecisions: ["allow-once", "deny"] },
@@ -185,6 +205,7 @@ describe("openclaw-exec-approval", () => {
     const onDecision = vi.fn();
     await renderApproval(restricted, { busy: true, onDecision });
     let rendered = await getRenderedModalDialog(container);
+    armShortcuts();
     rendered.modal.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
 
     await renderApproval(restricted, { onDecision });

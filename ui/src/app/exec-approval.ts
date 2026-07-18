@@ -526,15 +526,9 @@ export async function refreshPendingApprovalQueue(
   }
 }
 
-export function dismissExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
-  removeExecApprovalFromState(state, id);
-  for (const refresh of state.execApprovalRefreshes ?? []) {
-    refresh.removedIds.add(id);
-  }
-  state.execApprovalError = null;
-  state.execApprovalErrorId = null;
-}
-
+// Errors are cleared per-id inside removeExecApprovalFromState; clearing them
+// unconditionally here would erase another pending request's diagnostic when
+// an unrelated approval settles.
 export function clearResolvedExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
   removeExecApprovalFromState(state, id);
   for (const refresh of state.execApprovalRefreshes ?? []) {

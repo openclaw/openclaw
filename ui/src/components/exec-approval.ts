@@ -305,11 +305,20 @@ function shortcutDecision(event: KeyboardEvent): ExecApprovalDecision | null {
   return !event.shiftKey && event.key.toLowerCase() === "d" ? "deny" : null;
 }
 
+/**
+ * Shortcuts stay disarmed briefly after the active approval changes: the modal
+ * steals focus when it opens, so a keystroke meant for the composer (or the
+ * previous request) could otherwise authorize a command the user never read.
+ */
+export const APPROVAL_SHORTCUT_ARM_DELAY_MS = 600;
+
 class ExecApproval extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
   @query("openclaw-modal-dialog") private dialog?: OpenClawModalDialog;
   @state() private selectedApprovalId: string | null = null;
   @state() private forceShowAll = false;
+  private shortcutsArmedAtMs = 0;
+  private armedApprovalId: string | null = null;
 
   show(): void {
     this.forceShowAll = true;
@@ -330,10 +339,20 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     return queue.find((entry) => entry.id === this.selectedApprovalId) ?? queue.at(0) ?? null;
   }
 
+  private armShortcuts(activeId: string): void {
+    if (this.armedApprovalId !== activeId) {
+      this.armedApprovalId = activeId;
+      this.shortcutsArmedAtMs = Date.now() + APPROVAL_SHORTCUT_ARM_DELAY_MS;
+    }
+  }
+
   private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
     // A held key auto-repeats: once a decision settles and the queue advances,
     // the repeat would apply the same decision to the next request unseen.
     if (event.defaultPrevented || event.repeat || this.props?.busy) {
+      return;
+    }
+    if (Date.now() < this.shortcutsArmedAtMs) {
       return;
     }
     const decision = shortcutDecision(event);
@@ -357,8 +376,10 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     const queue = this.displayedQueue();
     const active = this.activeApproval(queue);
     if (!props || !active) {
+      this.armedApprovalId = null;
       return nothing;
     }
+    this.armShortcuts(active.id);
     const decisions = resolveApprovalDecisions(active);
     const handleCancel = () => {
       if (!props.busy && decisions.includes("deny")) {

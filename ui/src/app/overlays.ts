@@ -17,7 +17,6 @@ import {
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
-  dismissExecApprovalPrompt,
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
   parseApprovalRequestedEvent,
@@ -658,13 +657,13 @@ export function createApplicationOverlays(
         if (!isCurrentOperation()) {
           return;
         }
-        dismissExecApprovalPrompt(promptState, active.id);
+        clearResolvedExecApprovalPrompt(promptState, active.id);
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
           if (!isCurrentOperation()) {
             return;
           }
-          dismissExecApprovalPrompt(promptState, active.id);
+          clearResolvedExecApprovalPrompt(promptState, active.id);
           const currentClient = activeClient;
           const epoch = connectedEpoch;
           if (currentClient && isCurrentOperation()) {
