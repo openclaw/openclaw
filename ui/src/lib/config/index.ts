@@ -603,18 +603,19 @@ async function submitConfigChange(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
-  if (state.configRawOriginalParsePending) {
-    // JSON5 originals parse asynchronously on first load; sanitize needs them.
-    // Await only when pending: teardown flushes rely on a synchronous prefix.
-    await state.configRawOriginalParsePending;
-    if (!isCurrent()) {
-      return false;
-    }
-  }
+  // Claim busy before any await so a second click cannot slip past the busy
+  // state while a JSON5 original parse settles; finally releases it.
   state[busyKey] = true;
   state.lastError = null;
   state.chatError = null;
   try {
+    if (state.configRawOriginalParsePending) {
+      // JSON5 originals parse asynchronously on first load; sanitize needs them.
+      await state.configRawOriginalParsePending;
+      if (!isCurrent()) {
+        return false;
+      }
+    }
     const raw = serializeFormForSubmit(state);
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
@@ -916,17 +917,25 @@ function setConfigRawOriginal(state: ConfigState, raw: string) {
   } catch {
     state.configRawOriginalParsed = null;
   }
-  const pending = warmJson5().then((json5) => {
-    if (state.configRawOriginal !== raw || state.configRawOriginalParsePending !== pending) {
-      return;
-    }
-    state.configRawOriginalParsePending = null;
-    try {
-      state.configRawOriginalParsed = asConfigRecord(json5.parse(raw));
-    } catch {
-      state.configRawOriginalParsed = null;
-    }
-  });
+  const pending = warmJson5()
+    .then((json5) => {
+      if (state.configRawOriginal !== raw || state.configRawOriginalParsePending !== pending) {
+        return;
+      }
+      try {
+        state.configRawOriginalParsed = asConfigRecord(json5.parse(raw));
+      } catch {
+        state.configRawOriginalParsed = null;
+      }
+    })
+    // Never-rejecting and self-clearing: submit gates await this promise, and
+    // a failed chunk load must not wedge every later save of this state.
+    .catch(() => undefined)
+    .finally(() => {
+      if (state.configRawOriginalParsePending === pending) {
+        state.configRawOriginalParsePending = null;
+      }
+    });
   state.configRawOriginalParsePending = pending;
 }
 
@@ -1040,7 +1049,7 @@ function updateConfigFormValue(state: ConfigState, path: Array<string | number>,
 function updateConfigRawValue(state: ConfigState, value: string) {
   // Raw drafts may carry JSON5 comments; warm the parser before any
   // mutateConfigForm/diff path needs it synchronously.
-  void warmJson5();
+  void warmJson5().catch(() => undefined);
   state.configRaw = value;
   // A raw-text edit becomes the authoritative draft; without this,
   // serializeFormForSubmit would submit the stale form and drop raw edits.

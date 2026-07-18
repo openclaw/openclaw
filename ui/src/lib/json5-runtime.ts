@@ -10,10 +10,18 @@ export function isJson5Warm(): boolean {
 }
 
 export function warmJson5(): Promise<Json5Module> {
-  json5Loading ??= import("json5").then((mod) => {
-    json5 = mod.default;
-    return json5;
-  });
+  json5Loading ??= import("json5").then(
+    (mod) => {
+      json5 = mod.default;
+      return json5;
+    },
+    (error: unknown) => {
+      // Transient chunk-load failures must not pin a rejected loader forever;
+      // the next warm retries the import.
+      json5Loading = null;
+      throw error;
+    },
+  );
   return json5Loading;
 }
 
@@ -30,7 +38,7 @@ export function parseJson5Text(raw: string): unknown {
     if (json5) {
       return json5.parse(raw);
     }
-    void warmJson5();
+    void warmJson5().catch(() => undefined);
     throw jsonError;
   }
 }

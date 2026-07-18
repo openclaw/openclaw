@@ -56,7 +56,7 @@ import {
 
 // The config editor is where JSON5 text first appears; warm the parser with
 // the page instead of racing the first raw-draft keystroke.
-void warmJson5();
+void warmJson5().catch(() => undefined);
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
