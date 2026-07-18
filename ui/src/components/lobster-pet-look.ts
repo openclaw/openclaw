@@ -175,7 +175,7 @@ export function lobsterPetName(look: LobsterPetLook, seed: number): string {
 }
 
 // A stranger wears a different palette than the resident pet.
-export function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
+function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
   for (let offset = 1; offset <= 24; offset++) {
     const look = createLobsterPetLook((seed + offset * 7919) >>> 0);
     if (look.palette.id !== own) {
@@ -425,7 +425,7 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
 // and the Lobsterdex refuses to acknowledge it.
-export function renderCrabSvg() {
+function renderCrabSvg() {
   return svg`
     <svg
       class="lobster-pet__svg"
@@ -559,7 +559,7 @@ export function renderLobsterSvg(
 
 export const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
-export function lobsterPetSpriteStyle(
+function lobsterPetSpriteStyle(
   look: LobsterPetLook,
   scale: number,
   spotPct: number,

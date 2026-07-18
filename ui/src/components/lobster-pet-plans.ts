@@ -157,7 +157,7 @@ export function isLobsterLogoLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x1063) >>> 0)() < 0.12;
 }
 
-export type LobsterPasserKind = "stranger" | "crab";
+type LobsterPasserKind = "stranger" | "crab";
 
 export type LobsterPasserPlan = {
   kind: LobsterPasserKind;
