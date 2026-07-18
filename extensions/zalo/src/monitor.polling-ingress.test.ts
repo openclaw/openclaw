@@ -101,7 +101,7 @@ describe("Zalo polling durable ingress", () => {
       accountId: "default",
       stateDir,
     });
-    core.state.openChannelIngressQueue = (<_T>(_options: { accountId?: string }) =>
+    core.state.openChannelIngressQueue = ((_options: { accountId?: string }) =>
       queue) as unknown as PluginRuntime["state"]["openChannelIngressQueue"];
     getZaloRuntimeMock.mockReturnValue(core);
     setActivePluginRegistry(createEmptyPluginRegistry());
