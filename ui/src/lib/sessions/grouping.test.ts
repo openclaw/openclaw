@@ -139,7 +139,15 @@ describe("normalizeSidebarSessionsGrouping", () => {
   });
 });
 
-function row(overrides: Partial<GatewaySessionRow> & { key: string }): GatewaySessionRow {
+type ZoneRowExtras = {
+  workSession?: boolean;
+  acpSession?: boolean;
+  channelSession?: boolean;
+};
+
+function row(
+  overrides: Partial<GatewaySessionRow> & ZoneRowExtras & { key: string },
+): GatewaySessionRow & ZoneRowExtras {
   return {
     kind: "direct",
     updatedAt: null,

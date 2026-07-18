@@ -244,19 +244,19 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     );
     const visibleRows = limitSidebarSessionRows(expandedRows, this.visibleSessionLimit);
     const keep = new Set(visibleRows.map((row) => row.key));
-    return {
-      // totalRowCount is the pre-pagination size: headers and empty-zone
-      // checks must not mistake a page-filtered section for an empty one.
-      sections: sections.map((section) => ({
-        ...section,
-        totalRowCount: section.rows.length,
-        rows: this.isSessionSectionCollapsed(section.id)
-          ? section.rows
-          : section.rows.filter((row) => keep.has(row.key)),
-      })),
-      expandedRows,
-      visibleRows,
-    };
+    // totalRowCount is the pre-pagination size: headers and empty-zone
+    // checks must not mistake a page-filtered section for an empty one.
+    const limitedSections: (SidebarSessionSection<SidebarRecentSession> & {
+      totalRowCount: number;
+    })[] = [];
+    for (const section of sections) {
+      const totalRowCount = section.rows.length;
+      if (!this.isSessionSectionCollapsed(section.id)) {
+        section.rows = section.rows.filter((row) => keep.has(row.key));
+      }
+      limitedSections.push(Object.assign(section, { totalRowCount }));
+    }
+    return { sections: limitedSections, expandedRows, visibleRows };
   }
 
   /** Rows in on-screen order; shift ranges and batch actions share this ordering. */
