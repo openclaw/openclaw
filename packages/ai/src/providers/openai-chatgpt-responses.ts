@@ -449,7 +449,9 @@ export const streamOpenAICodexResponses: StreamFunction<
           }
           lastError = error instanceof Error ? error : new Error(String(error));
           // Network errors are retryable
-          if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
+          const lastErrorMessage =
+            typeof lastError.message === "string" ? lastError.message : String(lastError);
+          if (attempt < maxRetries && !lastErrorMessage.includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
             await sleepWithAbort(delayMs, activeSignal);
             continue;
