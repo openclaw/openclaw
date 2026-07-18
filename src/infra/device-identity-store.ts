@@ -190,7 +190,7 @@ function salvageStoredIdentityRow(
     const canonicalPublicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
     const canonicalPrivateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     const derivedPublicKeyPem = crypto
-      .createPublicKey(privateKey)
+      .createPublicKey(canonicalPrivateKeyPem)
       .export({ type: "spki", format: "pem" })
       .toString();
     if (derivedPublicKeyPem !== canonicalPublicKeyPem) {
