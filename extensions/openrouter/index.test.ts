@@ -1294,7 +1294,10 @@ describe("tool schema compatibility", () => {
       tools: [tool],
     } as never);
 
-    expect(normalized?.[0]?.parameters?.properties?.value).toHaveProperty("anyOf");
+    const params = normalized?.[0]?.parameters as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(params?.properties?.value).toHaveProperty("anyOf");
   });
 
   it("strips unsupported schema keywords for Google models on OpenRouter", async () => {
@@ -1321,7 +1324,10 @@ describe("tool schema compatibility", () => {
       tools: [tool],
     } as never);
 
-    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
+    const params = normalized?.[0]?.parameters as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(params?.properties?.date).not.toHaveProperty("anyOf");
   });
 
   it("applies DeepSeek tool compat for deepseek/ models on OpenRouter", async () => {
@@ -1348,8 +1354,11 @@ describe("tool schema compatibility", () => {
       tools: [tool],
     } as never);
 
-    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
-    expect(normalized?.[0]?.parameters?.properties?.date).toEqual({ type: "string" });
+    const params = normalized?.[0]?.parameters as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(params?.properties?.date).not.toHaveProperty("anyOf");
+    expect(params?.properties?.date).toEqual({ type: "string" });
   });
 
   it("strips anyOf/oneOf for canonical openrouter/moonshotai/ model IDs", async () => {
@@ -1376,8 +1385,11 @@ describe("tool schema compatibility", () => {
       tools: [tool],
     } as never);
 
-    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
-    expect(normalized?.[0]?.parameters?.properties?.date).toEqual({ type: "string" });
+    const params = normalized?.[0]?.parameters as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(params?.properties?.date).not.toHaveProperty("anyOf");
+    expect(params?.properties?.date).toEqual({ type: "string" });
   });
 
   it("strips unsupported schema keywords for canonical openrouter/google/ model IDs", async () => {
@@ -1404,7 +1416,10 @@ describe("tool schema compatibility", () => {
       tools: [tool],
     } as never);
 
-    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
+    const params = normalized?.[0]?.parameters as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(params?.properties?.date).not.toHaveProperty("anyOf");
   });
 
   it("applies DeepSeek tool compat for canonical openrouter/deepseek/ model IDs", async () => {
@@ -1431,8 +1446,11 @@ describe("tool schema compatibility", () => {
       tools: [tool],
     } as never);
 
-    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
-    expect(normalized?.[0]?.parameters?.properties?.date).toEqual({ type: "string" });
+    const params = normalized?.[0]?.parameters as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(params?.properties?.date).not.toHaveProperty("anyOf");
+    expect(params?.properties?.date).toEqual({ type: "string" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

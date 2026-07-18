@@ -51,10 +51,15 @@ const geminiTools = buildProviderToolCompatFamilyHooks("gemini");
 
 function resolveOpenRouterToolFamily(modelId: string) {
   const normalized = (normalizeOpenRouterApiModelId(modelId) ?? modelId).toLowerCase();
-  if (normalized.startsWith("deepseek/")) return deepSeekTools;
-  if (normalized.startsWith("google/")) return geminiTools;
-  if (normalized.startsWith("moonshot/") || normalized.startsWith("moonshotai/"))
+  if (normalized.startsWith("deepseek/")) {
     return deepSeekTools;
+  }
+  if (normalized.startsWith("google/")) {
+    return geminiTools;
+  }
+  if (normalized.startsWith("moonshot/") || normalized.startsWith("moonshotai/")) {
+    return deepSeekTools;
+  }
   return openAiTools;
 }
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
