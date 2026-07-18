@@ -4087,7 +4087,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
-  it("runs gateway watch after parallel built artifact checks", () => {
+  it("parallelizes gateway watch only on the large self-hosted build runner", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const builtArtifactChecks = buildArtifactSteps.find(
@@ -4095,15 +4095,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const run = builtArtifactChecks.run;
 
+    expect(builtArtifactChecks.env.PARALLEL_GATEWAY_WATCH).toBe(
+      "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
+    );
     expect(run).toContain('start_check "channels"');
     expect(run).toContain('start_check "core-support-boundary"');
-    expect(run).not.toContain('start_check "gateway-watch"');
-    expect(run.indexOf('for index in "${!pids[@]}"')).toBeLessThan(
-      run.indexOf('if [ "$RUN_GATEWAY_WATCH" = "true" ]; then'),
+    expect(run).toContain('start_check "gateway-watch"');
+    expect(run).toContain(
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then',
     );
     expect(run).toContain(
-      'node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1',
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
+    expect(run).toContain("wait_checks()");
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(2);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {

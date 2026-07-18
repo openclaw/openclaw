@@ -3,7 +3,6 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import {
@@ -99,6 +98,10 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
 }
 
 const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
+// Skill file audit reads are bounded like other audit reads; matches the
+// workspace loader's DEFAULT_MAX_SKILL_FILE_BYTES so oversized SKILL.md files
+// cannot force an unbounded read during the code-safety scan.
+const MAX_SKILL_AUDIT_FILE_BYTES = 256_000;
 
 async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {
   const manifestPath = path.join(pluginPath, "package.json");
@@ -194,7 +197,10 @@ async function getSkillCodeSafetySummary(params: {
       dirPath: params.dirPath,
       summaryCache: params.summaryCache,
     }),
-    fs.readFile(params.skillFilePath, "utf-8"),
+    readRegularFile({
+      filePath: params.skillFilePath,
+      maxBytes: MAX_SKILL_AUDIT_FILE_BYTES,
+    }).then(({ buffer }) => buffer.toString("utf-8")),
     loadSkillScannerModule(),
   ]);
   const skillFindings = [

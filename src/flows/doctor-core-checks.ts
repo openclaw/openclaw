@@ -37,6 +37,7 @@ import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
+import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
@@ -54,11 +55,9 @@ const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
-
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
 };
-
 type CoreHealthRepairContext = HealthRepairContext & {
   readonly deep?: boolean;
 };
@@ -1133,6 +1132,7 @@ function createConvertedWorkflowChecks(
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
+    removedWorkspacesStateCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     codexSessionRoutesCheck,

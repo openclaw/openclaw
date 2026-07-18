@@ -2339,7 +2339,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   object-fit: cover;
 }
 
-/* Presence fuses connection state into the identity: no separate online dot. */
 .sidebar-agent-card__presence {
   position: absolute;
   right: -1px;
@@ -2348,13 +2347,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 10px;
   border-radius: var(--radius-full);
   border: 2px solid var(--sidebar-bg);
-}
-
-.sidebar-agent-card__presence.sidebar-connection-status--online {
-  background: var(--ok);
-}
-
-.sidebar-agent-card__presence.sidebar-connection-status--offline {
   background: var(--danger);
 }
 
@@ -2485,17 +2477,23 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .sidebar-footer-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
-  width: 8px;
-  height: 8px;
+  padding: 3px 7px;
   border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-.sidebar-footer-bar__status.sidebar-connection-status--online {
-  background: var(--ok);
-}
-
-.sidebar-footer-bar__status.sidebar-connection-status--offline {
+.sidebar-footer-bar__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
   background: var(--danger);
 }
 
