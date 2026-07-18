@@ -12,7 +12,7 @@ const KIB = 1024;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 28,
   startupCssRequests: 1,
-  startupJsGzipBytes: 372 * KIB,
+  startupJsGzipBytes: 370 * KIB,
   startupCssGzipBytes: 42 * KIB,
   largestJsGzipBytes: 215 * KIB,
   largestCssGzipBytes: 42 * KIB,
