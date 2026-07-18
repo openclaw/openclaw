@@ -43,7 +43,7 @@ also prompts for:
         config: {
           webSearch: {
             apiKey: "sk-...", // optional if KIMI_API_KEY or MOONSHOT_API_KEY is set
-            baseUrl: "https://api.moonshot.ai/v1",
+            baseUrl: "https://api.moonshot.ai/v1", // set to https://api.moonshot.cn/v1 for CN keys
             model: "kimi-k2.6",
           },
         },
@@ -62,6 +62,20 @@ also prompts for:
 
 `tools.web.search.provider` is auto-detected from available API keys when omitted;
 set it to `kimi` explicitly if multiple search credentials are configured.
+
+<Note>
+  Kimi API keys are region-specific: keys from
+  <a href="https://platform.moonshot.cn">platform.moonshot.cn</a> (China) must use
+  `https://api.moonshot.cn/v1` as the base URL, while international keys default to
+  `https://api.moonshot.ai/v1`. Using a CN key without setting the base URL to `.cn`
+  returns HTTP 401.
+</Note>
+
+If you use a native Moonshot endpoint for chat (`models.providers.moonshot.baseUrl`
+set to `api.moonshot.ai` or `api.moonshot.cn`), OpenClaw automatically reuses that
+same host for Kimi web search when no explicit search base URL is configured.
+
+You can also set the base URL via `plugins.entries.moonshot.config.webSearch.baseUrl`.
 
 Equivalent scoped form under `tools.web.search.kimi` (`apiKey`, `baseUrl`, `model`)
 also works; both shapes merge into the same resolved config.
@@ -92,6 +106,16 @@ result. Retry the query, switch to a structured provider such as Brave, or use
 | `query`                                                         | Yes                                                                                                                      |
 | `count`                                                         | Accepted for cross-provider compatibility, but ignored: Kimi always returns one synthesized answer, not an N-result list |
 | `country`, `language`, `freshness`, `date_after`, `date_before` | No                                                                                                                       |
+
+## Base URL overrides
+
+Set `plugins.entries.moonshot.config.webSearch.baseUrl` when Kimi web search
+must route through a custom Moonshot-compatible proxy or private deployment.
+
+Kimi web search only inherits `models.providers.moonshot.baseUrl` when it points
+to a native Moonshot endpoint (`api.moonshot.ai` or `api.moonshot.cn`). Custom
+proxy addresses are not inherited and must be configured explicitly for web
+search.
 
 ## Related
 

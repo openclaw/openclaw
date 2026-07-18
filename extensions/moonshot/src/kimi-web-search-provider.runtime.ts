@@ -245,7 +245,14 @@ async function runKimiSearch(params: {
         res,
       ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
         if (!res.ok) {
-          throw await createProviderHttpError(res, "Kimi API error");
+          const err = await createProviderHttpError(res, "Kimi API error");
+          if (res.status === 401) {
+            err.message +=
+              " Verify that the base URL region matches your API key " +
+              "(api.moonshot.ai for international keys, api.moonshot.cn for China keys). " +
+              "Set plugins.entries.moonshot.config.webSearch.baseUrl explicitly for custom proxies.";
+          }
+          throw err;
         }
 
         const data = (await readProviderJsonObjectResponse(

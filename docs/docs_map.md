@@ -9964,6 +9964,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Config
   - H2: Grounding requirement
   - H2: Tool parameters
+  - H2: Base URL overrides
   - H2: Related
 
 ## tools/llm-task.md
