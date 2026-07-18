@@ -19,6 +19,10 @@ export function hashJson(value: unknown): string {
   return hashString(JSON.stringify(value));
 }
 
+// Plugin install records can reference binaries, model files, or bundled assets.
+// Most are under 10 MiB; cap at 50 MiB to prevent OOM on accidentally large files.
+const MAX_PLUGIN_INDEX_HASH_BYTES = 50 * 1024 * 1024;
+
 /** Safely hashes a file, optionally recording required-file diagnostics. */
 export function safeHashFile(params: {
   filePath: string;
@@ -27,6 +31,18 @@ export function safeHashFile(params: {
   required: boolean;
 }): string | undefined {
   try {
+    const stat = fs.statSync(params.filePath, { throwIfNoEntry: false });
+    if (!stat) {
+      throw new Error(`file not found: ${params.filePath}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${params.filePath}`);
+    }
+    if (stat.size > MAX_PLUGIN_INDEX_HASH_BYTES) {
+      throw new Error(
+        `file too large: ${params.filePath} is ${stat.size} bytes (max ${MAX_PLUGIN_INDEX_HASH_BYTES})`,
+      );
+    }
     return crypto.createHash("sha256").update(fs.readFileSync(params.filePath)).digest("hex");
   } catch (err) {
     if (params.required) {
