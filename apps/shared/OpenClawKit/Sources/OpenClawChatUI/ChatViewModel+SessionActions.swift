@@ -74,6 +74,9 @@ extension OpenClawChatViewModel {
     {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
+        // Read-modify-write matches web's sessions.groups.put contract; the gateway
+        // offers no atomic add/CAS, so a concurrent edit between fetch and put can be
+        // lost. Accepted tradeoff until the gateway grows a revisioned groups API.
         let current = try await self.fetchSessionGroups(using: routeLease)
         let response = try await routeLease.putGroups(names: current.map(\.name) + [name])
         return response.groups

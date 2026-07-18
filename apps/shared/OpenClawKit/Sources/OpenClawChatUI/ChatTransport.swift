@@ -595,12 +595,23 @@ extension OpenClawChatTransport {
     public func createSession(
         key: String,
         label: String?,
-        agentID _: String?,
+        agentID: String?,
         parentSessionKey: String?,
         worktree: Bool?,
-        worktreeBaseRef _: String?) async throws -> OpenClawChatCreateSessionResponse
+        worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
     {
-        try await self.createSession(
+        // Fail closed: a transport on this default cannot honor agent/base-ref
+        // selection; delegating would report success while creating the wrong session.
+        guard agentID == nil, worktreeBaseRef == nil else {
+            throw NSError(
+                domain: "OpenClawChatTransport",
+                code: 0,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "sessions.create agent/base-ref options not supported by this transport",
+                ])
+        }
+        return try await self.createSession(
             key: key,
             label: label,
             parentSessionKey: parentSessionKey,
