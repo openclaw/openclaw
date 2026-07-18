@@ -186,6 +186,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
             resolvedby: self.record.resolvedby)
     }
 
+    // periphery:ignore - Public completion API for package consumers reconciling external answers.
     public func markAnsweredElsewhere() {
         self.isSubmitting = false
         self.isSkipping = false
@@ -311,15 +312,6 @@ struct OpenClawQuestionCard: View {
     #if os(macOS)
     @FocusState private var focusedQuestionID: String?
     #endif
-
-    init(
-        model: OpenClawQuestionCardModel,
-        onSubmit: @escaping @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)
-    {
-        self.model = model
-        self.onSubmit = onSubmit
-        self.onSkip = nil
-    }
 
     init(
         model: OpenClawQuestionCardModel,
