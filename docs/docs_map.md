@@ -3202,6 +3202,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Using it as a fallback
   - H2: Configuration
   - H2: How it works
+  - H2: Timeouts and long-running work
   - H3: Claude CLI specifics
   - H2: Sessions
   - H2: Fallback prelude from claude-cli sessions
@@ -8641,6 +8642,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Core contributors
   - H2: License
   - H2: Related
+
+## reference/database-schemas.md
+
+- Route: /reference/database-schemas
+- Headings:
+  - H2: Database layout
+  - H2: Versioning contract
+  - H2: Agent schema history
+  - H2: State schema history
+  - H2: Integrity checks
+  - H2: Downgrades are unsupported
+  - H3: Example: agent schema 11 to 9
 
 ## reference/device-models.md
 

@@ -2157,6 +2157,61 @@ describe("grouped chat rendering", () => {
     ).toBe(expectedMetaUrl.replace("&meta=1", "&mediaTicket=ticket-local"));
   });
 
+  it("stops checking when local assistant attachment metadata fetch stalls", async () => {
+    vi.useFakeTimers();
+    const source = `/tmp/openclaw/${crypto.randomUUID()}-stalled.txt`;
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new DOMException("aborted", "AbortError"),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-media-stalled-metadata",
+          role: "assistant",
+          content: `Local document\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+
+    rerender();
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Checking...",
+    );
+
+    const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&meta=1`;
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, expectedMetaUrl);
+    await vi.advanceTimersByTimeAsync(30_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Unavailable",
+    );
+  });
+
   it("refreshes local assistant media tickets before expiry without another render", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));

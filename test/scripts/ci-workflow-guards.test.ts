@@ -869,6 +869,13 @@ describe("ci workflow guards", () => {
         "github.event_name == 'workflow_dispatch'",
       );
     }
+
+    for (const jobName of ["macos-node", "macos-swift", "ios-build"]) {
+      expect(
+        workflow.jobs[jobName]["runs-on"],
+        `${jobName} retries must escape stalled Blacksmith macOS capacity`,
+      ).toContain("github.run_attempt > 1");
+    }
   });
 
   it("keeps Testbox pull request validation off leased runner capacity", () => {
@@ -2939,6 +2946,28 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds release ref validation fetches across checkout auth modes", () => {
+    const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
+
+    for (const stepName of [
+      "Validate selected ref belongs to this repository",
+      "Validate Tideclaw alpha target matches workflow branch",
+    ]) {
+      const step = resolveTargetSteps.find(
+        (candidate: WorkflowStep) => candidate.name === stepName,
+      );
+
+      expect(step?.run, stepName).toContain("local -a git_args=(git)");
+      expect(step?.run, stepName).toContain(
+        'git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")',
+      );
+      expect(step?.run, stepName).toContain(
+        'timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"',
+      );
+      expect(step?.run, stepName).not.toContain('git -c "http.https://github.com/.extraheader');
+    }
+  });
+
   it("bounds shared base commit fetches", () => {
     const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
     const exactFetch = action.indexOf('fetch_base_ref --no-tags --depth=1 origin "$BASE_SHA"');
@@ -3354,7 +3383,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(workflow).toContain("check-guards");
     expect(workflow).toContain("check-shrinkwrap");
+    expect(preflightGuards).toContain('has_package_script "check:script-declarations"');
     expect(preflightGuards).toContain("pnpm check:script-declarations");
+    expect(preflightGuards).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(preflightGuards).toContain(
+      "Current CI targets must provide the check:script-declarations package script.",
+    );
     expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
@@ -3370,12 +3404,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).run;
     expect(securityDiffBase).toContain("git rev-list --parents -n 1 HEAD");
     expect(securityDiffBase).not.toContain("node scripts/lib/merge-head-diff-base.mjs");
-    expect(
-      parsedWorkflow.jobs["check-shard"].steps.find(
-        (step: WorkflowStep) => step.name === "Run check shard",
-      ).env.PR_BASE_SHA,
-    ).toBe(
+    const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    );
+    expect(checkShardStep.env.PR_BASE_SHA).toBe(
       "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
+    );
+    expect(checkShardStep.run).toContain(
+      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
   });
 
@@ -3497,24 +3533,36 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "release-gate pull request must be open and match the target head",
     );
     expect(releaseGateMerge.run).toContain("for attempt in {1..6}");
-    expect(releaseGateMerge.run).toContain('if [[ "$mergeable" == "false" ]]');
-    expect(releaseGateMerge.run).toContain("release-gate pull request is not mergeable");
-    expect(releaseGateMerge.run).toContain("sleep 5");
     expect(releaseGateMerge.run).toContain(
       '"+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"',
     );
-    expect(releaseGateMerge.run).toContain("git fetch --no-tags --depth=2 origin \\");
+    expect(releaseGateMerge.run).toContain('"$merge_head" == "$TARGET_SHA"');
+    expect(releaseGateMerge.run).toContain('git show -s --format=%P "$merge_sha"');
     expect(releaseGateMerge.run).toContain(
-      "release-gate merge tree did not refresh to the current pull request base and head",
+      "timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \\",
     );
+    expect(releaseGateMerge.run).toContain(
+      "Freeze GitHub's canonical merge snapshot once it contains the exact head",
+    );
+    expect(releaseGateMerge.run).toContain(
+      "Base freshness belongs to the landing gate; chasing moving main here can never converge",
+    );
+    expect(releaseGateMerge.run).toContain(
+      "release-gate merge tree did not refresh to the target head",
+    );
+    expect(releaseGateMerge.run).not.toContain(".base.sha");
     expect(releaseGateMerge.run).toContain('git checkout --detach "$merge_sha"');
     expect(releaseGateMerge.run).toContain(
-      'echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"',
+      'echo "RATCHET_RELEASE_BASE_SHA=${frozen_base_sha}" >> "$GITHUB_ENV"',
     );
     expect(releaseGateMerge.run).toContain(
       'echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"',
     );
-    expect(checksFastRun.run).toContain("git fetch --no-tags --depth=1 origin \\");
+    expect(
+      checksFastRun.run.match(
+        /timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \\/gu,
+      ),
+    ).toHaveLength(4);
     expect(checksFastRun.run).toContain('git ls-remote origin "refs/heads/${default_branch}"');
     expect(checksFastRun.run).toContain(
       '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}"',
@@ -4111,7 +4159,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'if [[ ! -f "$runner" ]]',
       "job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<\"$JOB_CONTEXT_JSON\")",
       "job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<\"$JOB_CONTEXT_JSON\")",
-      'git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
+      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
       'git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"',
       'node "$runner"',
     ]) {
@@ -4268,6 +4316,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
     },
   );
+
+  it("bounds QA profile selected-ref fetches", () => {
+    const validateSelectedRef = expectDefined(
+      readQaProfileEvidenceWorkflow().jobs.validate_selected_ref.steps.find(
+        (step: WorkflowStep) => step.name === "Validate selected ref",
+      ),
+      "QA profile selected-ref validation step",
+    );
+    const gitFetchLines = validateSelectedRef.run
+      .split("\n")
+      .filter((line: string) => line.includes("git fetch"));
+
+    expect(gitFetchLines).toHaveLength(2);
+    expect(
+      gitFetchLines.every((line: string) =>
+        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+      ),
+    ).toBe(true);
+  });
 
   it("keeps maturity scorecard generated QA evidence handoff strict", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();

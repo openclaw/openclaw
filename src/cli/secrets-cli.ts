@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -46,13 +46,25 @@ const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
   () => import("../secrets/apply.js"),
 );
 
+class SecretsPlanFileNotFoundError extends Error {}
+
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
   const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
     fsModuleLoader.load(),
     import("../secrets/plan.js"),
   ]);
-  const raw = readFileSync(pathname, "utf8");
+  let raw: string;
+  try {
+    raw = readFileSync(pathname, "utf8");
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      throw new SecretsPlanFileNotFoundError(`Secrets plan file not found: ${pathname}`, {
+        cause: err,
+      });
+    }
+    throw err;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -333,9 +345,13 @@ export function registerSecretsCli(program: Command): void {
             : "Secrets apply: no changes.",
         );
       } catch (err) {
+        // The missing-plan wrapper already carries a user-facing message. Keep its
+        // ENOENT cause available to diagnostics without rendering the raw filesystem error.
+        const message =
+          err instanceof SecretsPlanFileNotFoundError ? err.message : formatErrorMessage(err);
         defaultRuntime.error(
           danger(
-            `Secrets apply failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+            `Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
           ),
         );
         defaultRuntime.exit(1);

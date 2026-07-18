@@ -522,6 +522,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
   [
+    ".github/workflows/macos-periphery.yml",
+    ["test/scripts/ios-periphery-comment-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/shared-openclawkit-periphery.yml",
     ["test/scripts/periphery-intersection.test.ts"],
   ],
@@ -1440,8 +1444,17 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
   ],
   [
+    "scripts/lib/generated-text-asset.mjs",
+    [
+      "extensions/browser/scripts/build-copilot-runtime.test.ts",
+      "test/scripts/build-diffs-viewer-runtime.test.ts",
+      "test/scripts/bundled-plugin-assets.test.ts",
+    ],
+  ],
+  [
     "scripts/lib/static-extension-assets.mjs",
     [
+      "test/scripts/bundled-plugin-assets.test.ts",
       "test/scripts/runtime-postbuild.test.ts",
       "src/infra/run-node.test.ts",
       "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -2130,6 +2143,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
   ["scripts/run-node-watch-paths.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  [
+    "extensions/browser/scripts/build-copilot-runtime.mjs",
+    ["extensions/browser/scripts/build-copilot-runtime.test.ts"],
+  ],
   ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);

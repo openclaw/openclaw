@@ -5,6 +5,7 @@ import { approveDevicePairing, requestDevicePairing } from "./device-pairing.js"
 import {
   approveNodePairing,
   beginNodePairingConnect,
+  claimPairedNodeConnection,
   finalizeNodePairingCleanupClaim,
   listNodePairing,
   releaseNodePairingCleanupClaim,
@@ -582,6 +583,35 @@ describe("node surface approvals", () => {
       const pairedNode = await findPairedNode("node-1", baseDir);
       expect(pairedNode?.lastConnectedAtMs).toBe(1234);
       expect(pairedNode?.bins).toEqual(["ffmpeg"]);
+    });
+  });
+
+  test("atomically grants one first-connection claim across concurrent handshakes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+
+      const claims = await Promise.all([
+        claimPairedNodeConnection("node-1", 1_000, baseDir),
+        claimPairedNodeConnection("node-1", 2_000, baseDir),
+      ]);
+
+      expect(claims.filter((claim) => claim.firstConnection)).toHaveLength(1);
+      expect(claims.every((claim) => claim.recorded)).toBe(true);
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(2_000);
+      await expect(claimPairedNodeConnection("node-1", 1_500, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: false,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(2_000);
+      await expect(claimPairedNodeConnection("node-1", 3_000, baseDir)).resolves.toEqual({
+        recorded: true,
+        firstConnection: false,
+      });
+      await expect(claimPairedNodeConnection("missing", 4_000, baseDir)).resolves.toEqual({
+        recorded: false,
+        firstConnection: false,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastConnectedAtMs).toBe(3_000);
     });
   });
 

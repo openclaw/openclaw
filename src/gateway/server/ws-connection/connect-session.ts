@@ -8,7 +8,6 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -324,23 +323,6 @@ export async function attachAuthenticatedGatewayConnect(
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
     });
-    const instanceIdRaw = connectParams.client.instanceId;
-    const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
-    const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-    if (instanceIdLocal) {
-      nodeIdsForPairing.add(instanceIdLocal);
-    }
-    for (const nodeId of nodeIdsForPairing) {
-      runDetachedConnectWork(
-        async () => {
-          await updatePairedNodeMetadata(nodeId, {
-            lastConnectedAtMs: nodeSession.connectedAtMs,
-          });
-        },
-        (err) =>
-          logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
-      );
-    }
     recordRemoteNodeInfo({
       nodeId: nodeSession.nodeId,
       connId: nodeSession.connId,
