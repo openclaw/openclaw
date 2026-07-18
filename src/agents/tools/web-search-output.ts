@@ -178,7 +178,12 @@ export function normalizeWebSearchOutput(params: {
     // controlled may pass unwrapped: the structured code is a core literal,
     // the raw provider code and message travel inside the envelope, and docs
     // must canonicalize as http(s).
-    const rawError = typeof result.error === "string" ? result.error : "provider_error";
+    // Non-string error payloads (numbers, objects) keep their diagnostics by
+    // serializing into the wrapped message instead of collapsing to a bare code.
+    const rawError =
+      typeof result.error === "string"
+        ? result.error
+        : (JSON.stringify(result.error)?.slice(0, 2_000) ?? "provider_error");
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
     return {

@@ -706,6 +706,21 @@ describe("web_search normalized output contract", () => {
     expect(normalized.citations).toEqual([{ url: "https://example.com/ok" }]);
   });
 
+  it("serializes structured provider errors into the wrapped message", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-demo",
+      query: "structured error",
+      result: { error: { code: 429, message: "quota exceeded" } },
+    });
+
+    if (normalized.kind !== "error") {
+      throw new Error("expected error branch");
+    }
+    expect(normalized.error).toBe("provider_error");
+    expect(normalized.message).toContain("429");
+    expect(normalized.message).toContain("quota exceeded");
+  });
+
   it("keeps ordinary Source attribution lines in answer content", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-answer",
