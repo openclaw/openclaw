@@ -122,13 +122,13 @@ the same plan the conversational `openclaw setup` chat would apply on "yes" —
 then offers plugin and skill recommendations from installed apps; app names
 are matched through your configured model and ClawHub search, and the step can
 be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
-On a macOS console, it then opens the authenticated Control UI dashboard and
-waits up to 60 seconds for the browser client to connect. Over SSH, it prints a
-prominent copy-pasteable dashboard URL, including an SSH port-forward command
-for a loopback Gateway, and waits up to five minutes. A successful connection
-continues in the browser; an unreachable Gateway or a timeout falls back to the
-same terminal hatch as before. Pass `--tui` to skip the browser handoff and
-force that terminal hatch. Other platforms currently keep the terminal hatch.
+In a macOS, Linux, or Windows desktop session, it then opens the authenticated
+Control UI dashboard and waits up to 60 seconds for the browser client to
+connect. On headless Linux or over SSH, it prints a prominent copy-pasteable
+dashboard URL, including an SSH port-forward command for a loopback Gateway,
+and waits up to five minutes. A successful connection continues in the browser;
+an unreachable Gateway or a timeout falls back to the same terminal hatch as
+before. Pass `--tui` to skip the browser handoff and force that terminal hatch.
 If applying setup fails, onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
