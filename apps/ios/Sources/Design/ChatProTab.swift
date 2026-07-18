@@ -3,6 +3,15 @@ import OpenClawProtocol
 import SwiftUI
 
 struct ChatProTab: View {
+    private enum AssistantMode: String, CaseIterable, Identifiable {
+        case chat
+        case talk
+
+        var id: String {
+            rawValue
+        }
+    }
+
     enum GatewayStatusTone: Equatable {
         case success
         case warning
@@ -30,10 +39,12 @@ struct ChatProTab: View {
     @State private var viewModelHasVerifiedOfflineRoutingIdentity = false
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
+    @State private var assistantMode: AssistantMode = Self.initialAssistantMode
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
     let ownsNavigationStack: Bool
+    let usesAssistantPresentation: Bool
     let openSettings: (() -> Void)?
 
     init(
@@ -41,12 +52,14 @@ struct ChatProTab: View {
         headerTitle: String? = nil,
         showsAgentBadge: Bool = true,
         ownsNavigationStack: Bool = true,
+        usesAssistantPresentation: Bool = false,
         openSettings: (() -> Void)? = nil)
     {
         self.headerLeadingAction = headerLeadingAction
         self.headerTitle = headerTitle
         self.showsAgentBadge = showsAgentBadge
         self.ownsNavigationStack = ownsNavigationStack
+        self.usesAssistantPresentation = usesAssistantPresentation
         self.openSettings = openSettings
     }
 
@@ -111,11 +124,19 @@ struct ChatProTab: View {
     }
 
     private var content: some View {
-        self.chatSurface
-            .background(Color(uiColor: .systemBackground))
-            .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+        Group {
+            if self.usesAssistantPresentation {
+                self.assistantSurface
+            } else {
+                self.chatSurface
+            }
+        }
+        .background(Color(uiColor: .systemBackground))
+        .navigationTitle(self
+            .usesAssistantPresentation ? "Assistant" : (self.showsAgentBadge ? "" : self.headerDisplayTitle))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !self.usesAssistantPresentation {
                 if let headerLeadingAction {
                     ToolbarItem(placement: .topBarLeading) {
                         OpenClawSidebarRevealButton(action: headerLeadingAction)
@@ -141,24 +162,82 @@ struct ChatProTab: View {
                     self.chatActionsMenu
                 }
             }
-            .sheet(item: self.$transcriptShareItem) { item in
-                ChatTranscriptShareSheet(fileURL: item.fileURL)
-            }
-            .sheet(isPresented: self.$showsBackgroundTasks) {
-                BackgroundTasksScreen(agentID: self.currentAgentID)
-            }
-            .alert(
-                String(localized: "Unable to Export Transcript"),
-                isPresented: self.$showsTranscriptExportError)
-            {
-                Button(role: .cancel) {} label: {
-                    Text("OK")
-                        .font(OpenClawType.body)
-                }
-            } message: {
-                Text("OpenClaw could not prepare the Markdown file.")
+        }
+        .sheet(item: self.$transcriptShareItem) { item in
+            ChatTranscriptShareSheet(fileURL: item.fileURL)
+        }
+        .sheet(isPresented: self.$showsBackgroundTasks) {
+            BackgroundTasksScreen(agentID: self.currentAgentID)
+        }
+        .alert(
+            String(localized: "Unable to Export Transcript"),
+            isPresented: self.$showsTranscriptExportError)
+        {
+            Button(role: .cancel) {} label: {
+                Text("OK")
                     .font(OpenClawType.body)
             }
+        } message: {
+            Text("OpenClaw could not prepare the Markdown file.")
+                .font(OpenClawType.body)
+        }
+    }
+
+    private static var initialAssistantMode: AssistantMode {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-assistant-mode") else { return .chat }
+        let valueIndex = arguments.index(after: index)
+        guard arguments.indices.contains(valueIndex) else { return .chat }
+        return AssistantMode(rawValue: arguments[valueIndex].lowercased()) ?? .chat
+    }
+
+    private var assistantSurface: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                ReferenceAppIcon(size: 42)
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(self.gatewayStatusColor)
+                            .frame(width: 10, height: 10)
+                            .overlay { Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2) }
+                    }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(self.agentDisplayName) (Main)")
+                        .font(OpenClawType.headline)
+                        .lineLimit(1)
+                    Text(self.gatewayConnected ? "Online" : "Offline")
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Picker("Assistant mode", selection: self.$assistantMode) {
+                    Text("Chat").font(OpenClawType.subhead).tag(AssistantMode.chat)
+                    Text("Talk").font(OpenClawType.subhead).tag(AssistantMode.talk)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 118)
+                .accessibilityIdentifier("assistant-mode-picker")
+                self.chatActionsMenu
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color(uiColor: .systemBackground))
+            .zIndex(1)
+
+            if self.assistantMode == .chat {
+                self.chatSurface
+            } else {
+                ReferenceTalkSurface(
+                    isEnabled: self.appModel.talkMode.isEnabled,
+                    isListening: self.appModel.talkMode.isListening,
+                    isSpeaking: self.appModel.talkMode.isSpeaking,
+                    statusText: self.appModel.talkMode.statusText,
+                    inputLevel: self.appModel.talkMode.micLevel,
+                    outputLevel: self.appModel.talkMode.playbackLevel,
+                    toggle: { self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled) })
+            }
+        }
+        .accessibilityIdentifier("reference-assistant-screen")
     }
 
     @ViewBuilder

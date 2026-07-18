@@ -56,6 +56,14 @@ struct RootTabs: View {
     @State private var gatewaySetupRequest: GatewaySetupRequest?
     @State private var suppressedExecApprovalForNotificationSettings: NodeAppModel.ExecApprovalInboxKey?
 
+    private static var screenshotPresentation: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-screenshot-presentation") else { return nil }
+        let valueIndex = arguments.index(after: index)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        return arguments[valueIndex].lowercased()
+    }
+
     private static var initialTab: AppTab {
         Self.initialTab(arguments: ProcessInfo.processInfo.arguments)
     }
@@ -142,19 +150,30 @@ struct RootTabs: View {
     }
 
     var body: some View {
-        self.rootPresentation(
-            self.rootLifecycle(
-                self.rootOverlays(
-                    self.tabContent
-                        .tint(OpenClawBrand.accent))))
+        if Self.screenshotPresentation != nil {
+            self.tabContent
+                .tint(OpenClawBrand.accent)
+        } else {
+            self.rootPresentation(
+                self.rootLifecycle(
+                    self.rootOverlays(
+                        self.tabContent
+                            .tint(OpenClawBrand.accent))))
+        }
     }
 
     @ViewBuilder
     private var tabContent: some View {
-        if self.usesSidebarTabs {
+        if Self.screenshotPresentation == "splash" {
+            ReferenceSplashView()
+        } else if Self.screenshotPresentation == "pairing" {
+            ReferencePairingView(
+                scan: { self.selectSidebarDestination(.gateway) },
+                manual: { self.selectSidebarDestination(.gateway) })
+        } else if self.usesSidebarTabs {
             self.sidebarSplitContent
         } else {
-            self.phoneTabContent
+            phoneTabContent
         }
     }
 
@@ -911,66 +930,74 @@ struct RootTabs: View {
 }
 
 extension RootTabs {
-    private var phoneTabContent: some View {
-        TabView(selection: self.phoneTabSelection) {
-            PhoneTabSettingsHost(resetRequestID: self.phoneChatSettingsResetRequestID) { openSettingsRoute in
-                ChatProTab(
-                    headerLeadingAction: self.phoneChatReturnAction,
-                    ownsNavigationStack: false,
-                    openSettings: { openSettingsRoute(.gateway) })
-            }
-            .tabItem {
-                Label {
-                    Text("Chat")
-                        .font(OpenClawType.caption)
-                } icon: {
-                    UnifiedChatVoiceTabIcon.image(
-                        state: self.phoneChatVoiceIconState,
-                        colorScheme: self.colorScheme)
-                }
-                .accessibilityLabel(
-                    self.appModel.talkMode.isEnabled ? "Chat, voice active" : "Chat")
-            }
-            .tag(AppTab.chat)
-
-            RootTabsPhoneControlHub(
-                groups: Self.phoneControlGroups,
-                initialDestination: self.selectedSidebarDestination,
-                navigationRequest: self.phoneControlNavigationRequest,
-                openRootDestination: { self.selectSidebarDestination($0) },
-                openChatFromControlDetail: { self.openChatFromControlDetail($0) })
-                .tabItem { Label("Control", systemImage: "square.grid.2x2") }
-                .badge(self.appModel.pendingExecApprovalCount)
-                .tag(AppTab.control)
-
+    @ViewBuilder
+    private var phoneActivityContent: some View {
+        if self.selectedTab == .agent {
             PhoneTabSettingsHost { openSettingsRoute in
                 AgentProTab(
                     directRoute: .agents,
                     openSettings: { openSettingsRoute(.gateway) })
             }
-            .tabItem { Label("Agent", systemImage: "person.2.fill") }
-            .tag(AppTab.agent)
+        } else {
+            switch self.selectedSidebarDestination {
+            case .overview, .activity:
+                ReferenceActivityTab(
+                    pendingApprovalCount: self.appModel.pendingExecApprovalCount,
+                    openDestination: { self.selectSidebarDestination($0) })
+            case .chat, .agents, .settings, .gateway:
+                ReferenceActivityTab(
+                    pendingApprovalCount: self.appModel.pendingExecApprovalCount,
+                    openDestination: { self.selectSidebarDestination($0) })
+            case .workboard, .skillWorkshop, .instances, .sessions, .files, .dreaming, .usage, .cron,
+                 .terminal, .docs:
+                RootTabsPhoneControlHub(
+                    groups: Self.phoneControlGroups,
+                    initialDestination: self.selectedSidebarDestination,
+                    navigationRequest: self.phoneControlNavigationRequest,
+                    openRootDestination: { self.selectSidebarDestination($0) },
+                    openChatFromControlDetail: { self.openChatFromControlDetail($0) })
+            }
+        }
+    }
 
+    private var phoneTabContent: some View {
+        ReferencePhoneShell(
+            selection: self.phoneTabSelection,
+            pendingApprovalCount: self.appModel.pendingExecApprovalCount)
+        {
+            self.phoneActivityContent
+        } assistant: {
+            PhoneTabSettingsHost(resetRequestID: self.phoneChatSettingsResetRequestID) { openSettingsRoute in
+                ChatProTab(
+                    headerLeadingAction: self.phoneChatReturnAction,
+                    ownsNavigationStack: false,
+                    usesAssistantPresentation: true,
+                    openSettings: { openSettingsRoute(.gateway) })
+            }
+        } settings: {
             SettingsProTab(
                 initialRoute: self.selectedSettingsRoute,
                 acceptsGatewaySetupRequests: !self.showOnboarding &&
                     self.selectedTab == .settings &&
                     self.selectedSettingsRoute == .gateway,
+                usesReferenceHome: true,
+                openRootDestination: { self.selectSidebarDestination($0) },
                 onRouteChange: self.handleSettingsRouteChange,
                 onApprovalNotificationsRoute: self.suppressExecApprovalPromptForNotificationSettings,
                 gatewaySetupRequest: self.gatewaySetupRequest,
                 onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
                 .id(self.settingsTabViewID)
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
-                .tag(AppTab.settings)
         }
-        .openClawTabBarBehavior()
     }
 
     private var phoneChatVoiceIconState: UnifiedChatVoiceTabIcon.State {
         guard self.appModel.talkMode.isEnabled else { return .inactive }
-        if self.appModel.talkMode.isSpeaking { return .speaking }
-        if self.appModel.talkMode.isListening { return .listening }
+        if self.appModel.talkMode.isSpeaking {
+            return .speaking
+        }
+        if self.appModel.talkMode.isListening {
+            return .listening
+        }
         return .active
     }
 }
@@ -1190,7 +1217,7 @@ extension RootTabs {
 
     private func suppressExecApprovalPromptForNotificationSettings(_ approvalID: String) {
         guard let approvalID = ExecApprovalIdentifier.key(approvalID),
-              let prompt = self.appModel.pendingExecApprovalPrompt,
+              let prompt = appModel.pendingExecApprovalPrompt,
               ExecApprovalIdentifier.key(prompt.id) == approvalID
         else { return }
         self.suppressedExecApprovalForNotificationSettings = NodeAppModel.execApprovalInboxKey(prompt)
@@ -1330,11 +1357,17 @@ extension RootTabs {
     }
 
     private func hasExistingGatewayConfig() -> Bool {
-        if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
+        if self.appModel.activeGatewayConnectConfig != nil {
+            return true
+        }
+        if GatewaySettingsStore.activeGatewayEntry() != nil {
+            return true
+        }
 
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !preferredStableID.isEmpty { return true }
+        if !preferredStableID.isEmpty {
+            return true
+        }
 
         let manualHost = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         return self.manualGatewayEnabled && !manualHost.isEmpty

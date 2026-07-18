@@ -92,6 +92,8 @@ struct SettingsProTab: View {
     let acceptsGatewaySetupRequests: Bool
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
+    let usesReferenceHome: Bool
+    let openRootDestination: ((RootTabs.SidebarDestination) -> Void)?
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
     let onApprovalNotificationsRoute: ((String) -> Void)?
@@ -104,6 +106,8 @@ struct SettingsProTab: View {
         acceptsGatewaySetupRequests: Bool = false,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
+        usesReferenceHome: Bool = false,
+        openRootDestination: ((RootTabs.SidebarDestination) -> Void)? = nil,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
         onApprovalNotificationsRoute: ((String) -> Void)? = nil,
@@ -115,6 +119,8 @@ struct SettingsProTab: View {
         self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
         self.headerLeadingAction = headerLeadingAction
         self.ownsNavigationStack = ownsNavigationStack
+        self.usesReferenceHome = usesReferenceHome
+        self.openRootDestination = openRootDestination
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
         self.onApprovalNotificationsRoute = onApprovalNotificationsRoute
@@ -131,7 +137,7 @@ struct SettingsProTab: View {
     @ViewBuilder
     private var settingsContent: some View {
         if let directRoute {
-            self.destination(for: directRoute)
+            destination(for: directRoute)
         } else {
             if self.ownsNavigationStack {
                 self.settingsNavigationStack
@@ -148,12 +154,22 @@ struct SettingsProTab: View {
     }
 
     private var settingsNavigationContent: some View {
-        List {
-            self.gatewaySection
-            self.settingsListSection
+        Group {
+            if self.usesReferenceHome, let openRootDestination {
+                ReferenceSettingsHome(
+                    path: self.$navigationPath,
+                    openDestination: openRootDestination,
+                    reconnect: { Task { await self.reconnectGateway() } },
+                    diagnose: { Task { await self.runDiagnostics() } })
+            } else {
+                List {
+                    self.gatewaySection
+                    self.settingsListSection
+                }
+                .font(OpenClawType.body)
+                .navigationTitle("Settings")
+            }
         }
-        .font(OpenClawType.body)
-        .navigationTitle("Settings")
         .navigationDestination(for: SettingsRoute.self) { route in
             self.destination(for: route)
         }
@@ -377,13 +393,13 @@ struct SettingsProTab: View {
     private func applyGatewaySetupRequestIfNeeded() {
         guard self.acceptsGatewaySetupRequests else { return }
         guard let gatewaySetupRequest else { return }
-        self.applyGatewaySetupLink(gatewaySetupRequest.link)
+        applyGatewaySetupLink(gatewaySetupRequest.link)
         self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
     func openNotificationsRouteFromApprovals() {
         guard self.directRoute == nil else { return }
-        if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
+        if let approvalID = ExecApprovalIdentifier.exact(appModel.pendingExecApprovalPrompt?.id) {
             self.onApprovalNotificationsRoute?(approvalID)
         }
         if !self.ownsNavigationStack, let navigateToRoute {

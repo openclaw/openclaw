@@ -15,7 +15,7 @@ struct SettingsIcon: View {
     }
 }
 
-private struct AppearanceSettingsRow: View {
+struct AppearanceSettingsRow: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
 
     private var preference: AppAppearancePreference {
@@ -52,7 +52,7 @@ private struct AppearanceSettingsRow: View {
     }
 }
 
-private struct AppearanceSettingsScreen: View {
+struct AppearanceSettingsScreen: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(\.dismiss) private var dismiss
 

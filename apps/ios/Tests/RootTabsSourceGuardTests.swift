@@ -93,36 +93,50 @@ struct RootTabsSourceGuardTests {
         #expect(!drawerContent.contains("NavigationSplitView"))
     }
 
-    @Test func `phone tab bar keeps chat control agent and settings in product order`() throws {
+    @Test func `phone shell exposes activity assistant and settings in product order`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let shellSource = try String(contentsOf: Self.referencePhoneShellSourceURL(), encoding: .utf8)
         let phoneTabContent = try Self.extract(
             source,
             from: "private var phoneTabContent: some View",
             to: "extension RootTabs {\n    private func updateCanvasState")
 
+        let shellRange = try #require(phoneTabContent.range(of: "ReferencePhoneShell("))
+        let activityRange = try #require(phoneTabContent.range(of: "self.phoneActivityContent"))
         let chatRange = try #require(phoneTabContent.range(of: "ChatProTab("))
-        let controlRange = try #require(phoneTabContent.range(of: "RootTabsPhoneControlHub("))
-        let agentRange = try #require(phoneTabContent.range(of: "AgentProTab("))
         let settingsRange = try #require(phoneTabContent.range(of: "SettingsProTab("))
 
-        #expect(chatRange.lowerBound < controlRange.lowerBound)
-        #expect(controlRange.lowerBound < agentRange.lowerBound)
-        #expect(agentRange.lowerBound < settingsRange.lowerBound)
+        #expect(shellRange.lowerBound < activityRange.lowerBound)
+        #expect(activityRange.lowerBound < chatRange.lowerBound)
+        #expect(chatRange.lowerBound < settingsRange.lowerBound)
         #expect(!phoneTabContent.contains("TalkProTab("))
         #expect(!phoneTabContent.contains(".tag(AppTab.talk)"))
-        #expect(phoneTabContent.contains("UnifiedChatVoiceTabIcon.image("))
-        #expect(phoneTabContent.contains("state: self.phoneChatVoiceIconState"))
-        #expect(!phoneTabContent.contains("micLevel"))
-        #expect(!phoneTabContent.contains("playbackLevel"))
-        #expect(phoneTabContent.contains("self.appModel.talkMode.isEnabled ? \"Chat, voice active\" : \"Chat\""))
-        #expect(!phoneTabContent.contains("Label(\"Chat\", systemImage: \"bubble.left.fill\")"))
-        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 2)
+        #expect(phoneTabContent.contains("usesAssistantPresentation: true"))
+        #expect(phoneTabContent.contains("usesReferenceHome: true"))
+        #expect(phoneTabContent.contains("openRootDestination: { self.selectSidebarDestination($0) }"))
+        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 1)
+        #expect(source.contains("ReferenceActivityTab("))
+        #expect(source.contains("RootTabsPhoneControlHub("))
+        #expect(source.contains("if Self.screenshotPresentation != nil"))
+        #expect(source.contains("ReferenceSplashView()"))
+        #expect(source.contains("ReferencePairingView("))
+        #expect(!phoneTabContent.contains("directRoute: .agents"))
+        #expect(shellSource.contains(".padding(.bottom, 58)"))
+        #expect(!shellSource.contains(".safeAreaInset(edge: .bottom)"))
+        #expect(phoneTabContent.contains("pendingApprovalCount: self.appModel.pendingExecApprovalCount"))
+        #expect(shellSource.contains("let pendingApprovalCount: Int"))
+        #expect(shellSource.contains(".accessibilityValue(\"\\(badgeCount) pending approvals\")"))
+        #expect(shellSource.contains("agents.first(where: { $0.id == defaultID })"))
     }
 
     @Test func `phone chat keeps one composer voice control without a tab bar accessory`() throws {
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let chromeSource = try String(contentsOf: Self.rootTabsPhoneChromeSourceURL(), encoding: .utf8)
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
+        let assistantSurface = try Self.extract(
+            chatSource,
+            from: "private var assistantSurface: some View",
+            to: "@ViewBuilder\n    private var chatSurface")
 
         #expect(!rootSource.contains("tabViewBottomAccessory"))
         #expect(!rootSource.contains("PhoneVoiceTabAccessory"))
@@ -130,6 +144,16 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.contains("talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl"))
         #expect(chatSource.contains("private var talkControl: OpenClawChatTalkControl"))
         #expect(chatSource.contains("self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)"))
+        #expect(assistantSurface.contains("self.chatActionsMenu"))
+    }
+
+    @Test func `reference settings routes workboard and sessions through the root shell`() throws {
+        let source = try String(contentsOf: Self.referenceSettingsHomeSourceURL(), encoding: .utf8)
+
+        #expect(source.contains("self.openDestination(.workboard)"))
+        #expect(source.contains("self.openDestination(.sessions)"))
+        #expect(!source.contains("CommandSessionsScreen(openChat: {})"))
+        #expect(!source.contains("directRoute: .files, headerTitle: \"Workboard\""))
     }
 
     @Test func `composer mic keeps voice notes behind its long press menu`() throws {
@@ -261,7 +285,8 @@ struct RootTabsSourceGuardTests {
             from: "private struct ProPanelSurfaceModifier: ViewModifier",
             to: "struct ProIconBadge: View")
 
-        #expect(rootSource.contains(".openClawTabBarBehavior()"))
+        #expect(rootSource.contains("ReferencePhoneShell("))
+        #expect(rootSource.contains("selection: self.phoneTabSelection"))
         #expect(appSource.contains(".preferredColorScheme(self.appearanceModel.preference.colorScheme)"))
         #expect(!appSource.contains("overrideUserInterfaceStyle"))
         #expect(componentsSource.contains("content.tabBarMinimizeBehavior(.onScrollDown)"))
@@ -306,7 +331,7 @@ struct RootTabsSourceGuardTests {
             to: "func destination(for route:")
         let appearanceScreen = try Self.extract(
             settingsSource,
-            from: "private struct AppearanceSettingsScreen: View",
+            from: "struct AppearanceSettingsScreen: View",
             to: "extension SettingsProTab")
         #expect(gatewayStatus.contains("OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
@@ -418,7 +443,8 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains("if !self.usesNativeNavigationChrome"))
         #expect(overviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(overviewSource.matches(of: /if !self\.usesNativeNavigationChrome/).count == 2)
-        #expect(chatSource.contains(".navigationTitle(self.showsAgentBadge ? \"\" : self.headerDisplayTitle)"))
+        #expect(chatSource.contains(
+            ".navigationTitle(self\n            .usesAssistantPresentation ? \"Assistant\""))
         #expect(chatSource.contains("self.headerAgentIdentity"))
         #expect(!chatSource.contains("headerAgentModelPicker"))
         #expect(chatSource.contains(".sharedBackgroundVisibility(.hidden)"))
@@ -1267,7 +1293,7 @@ extension RootTabsSourceGuardTests {
         let onboardingContent = try #require(onboardingScannerSheet.range(of: "content: {"))
 
         #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
-        #expect(appSource.contains("func application(\n        _ app: UIApplication,\n        open url: URL,"))
+        #expect(appSource.contains("func application(\n        _: UIApplication,\n        open url: URL,"))
         #expect(appSource.contains("self.pendingOpenURLs.append(url)"))
         #expect(appSource.contains("model.stageGatewaySetupLink(link)"))
         #expect(appSource.contains(".onOpenURL"))
@@ -1517,7 +1543,7 @@ extension RootTabsSourceGuardTests {
         let dialogSource = try String(contentsOf: Self.execApprovalPromptDialogSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
 
-        #expect(rootSource.contains(".badge(self.appModel.pendingExecApprovalCount)"))
+        #expect(rootSource.contains("pendingApprovalCount: self.appModel.pendingExecApprovalCount"))
         #expect(modelSource.contains("var pendingExecApprovalInboxItems: [ExecApprovalInboxItem]"))
         #expect(modelSource.contains("self.dismissedExecApprovalPresentationKeys.insert(inboxKey)"))
         #expect(modelSource.contains("func presentPendingExecApprovalFromInbox("))
@@ -1713,6 +1739,20 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsProTab.swift")
+    }
+
+    private static func referenceSettingsHomeSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/ReferenceSettingsHome.swift")
+    }
+
+    private static func referencePhoneShellSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/ReferencePhoneShell.swift")
     }
 
     private static func onboardingWizardSourceURL() -> URL {

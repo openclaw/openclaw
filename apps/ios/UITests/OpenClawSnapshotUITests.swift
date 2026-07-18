@@ -7,13 +7,40 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let initialTab: String
         let initialDestination: String
         let name: String
+        let additionalArguments: [String]
+
+        init(
+            initialTab: String,
+            initialDestination: String,
+            name: String,
+            additionalArguments: [String] = [])
+        {
+            self.initialTab = initialTab
+            self.initialDestination = initialDestination
+            self.name = name
+            self.additionalArguments = additionalArguments
+        }
     }
 
     private static let screenshotTargets = [
-        ScreenshotTarget(initialTab: "control", initialDestination: "overview", name: "01-control-connected"),
-        ScreenshotTarget(initialTab: "chat", initialDestination: "chat", name: "02-chat-connected"),
-        ScreenshotTarget(initialTab: "agent", initialDestination: "agents", name: "03-agent-connected"),
-        ScreenshotTarget(initialTab: "settings", initialDestination: "settings", name: "04-settings-connected"),
+        ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "01-splash",
+            additionalArguments: ["--openclaw-screenshot-presentation", "splash"]),
+        ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "02-pairing",
+            additionalArguments: ["--openclaw-screenshot-presentation", "pairing"]),
+        ScreenshotTarget(initialTab: "control", initialDestination: "overview", name: "03-activity"),
+        ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "04-assistant-talk",
+            additionalArguments: ["--openclaw-assistant-mode", "talk"]),
+        ScreenshotTarget(initialTab: "chat", initialDestination: "chat", name: "05-assistant-chat"),
+        ScreenshotTarget(initialTab: "settings", initialDestination: "settings", name: "06-settings"),
     ]
 
     private var app: XCUIApplication?
@@ -31,7 +58,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testConnectedGatewayTabs() {
         for target in Self.screenshotTargets {
-            self.launchApp(for: target)
+            self.launchApp(for: target, appearance: "light")
             snapshot(target.name, timeWaitingForIdle: 5)
             self.attachScreenshot(named: target.name)
         }
@@ -205,24 +232,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.buttons["While Using"].isSelected == true)
     }
 
-    func testSettingsBackReturnsToOriginatingPhoneTab() throws {
+    func testSettingsBackReturnsToReferenceHome() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone settings navigation only")
 
         self.launchApp(for: ScreenshotTarget(
-            initialTab: "chat",
-            initialDestination: "chat",
-            name: "chat-settings-back"))
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "settings-back"))
 
-        try self.openChatGatewaySettings()
-        let gatewayNavigationBar = try XCTUnwrap(self.app?.navigationBars["Gateway"])
-        XCTAssertTrue(gatewayNavigationBar.waitForExistence(timeout: 5))
-        XCTAssertTrue(self.app?.tabBars.buttons["Chat"].isSelected == true)
-        self.attachScreenshot(named: "chat-gateway-origin-stack")
+        let channels = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Channels / Integrations").firstMatch)
+        XCTAssertTrue(channels.waitForExistence(timeout: 5))
+        channels.tap()
+        let channelsNavigationBar = try XCTUnwrap(self.app?.navigationBars["Channels"])
+        XCTAssertTrue(channelsNavigationBar.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "settings-channels-stack")
 
-        gatewayNavigationBar.buttons["BackButton"].tap()
-        XCTAssertTrue(self.app?.otherElements["chat-agent-identity"].waitForExistence(timeout: 5) == true)
-        XCTAssertTrue(self.app?.tabBars.buttons["Chat"].isSelected == true)
-        self.attachScreenshot(named: "chat-after-settings-back")
+        channelsNavigationBar.buttons.firstMatch.tap()
+        XCTAssertTrue(self.app?.otherElements["reference-settings-screen"].waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(self.app?.buttons["Settings"].isSelected == true)
+        self.attachScreenshot(named: "settings-after-back")
     }
 
     func testVoiceWakeResumesAfterTalkModeToggle() throws {
@@ -462,8 +491,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "onboarding-connected-go-to-chat")
 
         app.buttons["Go to Chat"].tap()
-        XCTAssertTrue(app.tabBars.buttons["Chat"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.tabBars.buttons["Chat"].isSelected)
+        XCTAssertTrue(app.buttons["Assistant"].waitForExistence(timeout: 5))
     }
 
     func testAppearanceUsesSettingsRow() throws {
@@ -515,65 +543,35 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "appearance-system-restored")
     }
 
-    func testChatReturnsToOriginatingControlDetail() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Control proof only")
+    func testPhoneShellSwitchesBetweenThreePrimaryDestinations() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone shell proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "control",
-            initialDestination: "activity",
-            name: "control-chat-return"))
+            initialDestination: "overview",
+            name: "phone-shell-navigation"))
 
-        let chatTab = try XCTUnwrap(self.app?.tabBars.buttons["Chat"])
-        let controlTab = try XCTUnwrap(self.app?.tabBars.buttons["Control"])
-
-        // Retain an embedded Chat Settings route, then prove contextual routing pops it.
-        chatTab.tap()
-        try self.openChatGatewaySettings()
-        XCTAssertTrue(self.app?.navigationBars["Gateway"].waitForExistence(timeout: 5) == true)
-
-        controlTab.tap()
-        XCTAssertTrue(self.app?.navigationBars["Control"].waitForExistence(timeout: 8) == true)
         let activity = try XCTUnwrap(self.app?.buttons["Activity"])
-        XCTAssertTrue(activity.waitForExistence(timeout: 5))
+        let assistant = try XCTUnwrap(self.app?.buttons["Assistant"])
+        let settings = try XCTUnwrap(self.app?.buttons["Settings"])
+        XCTAssertTrue(activity.waitForExistence(timeout: 8))
+        XCTAssertTrue(assistant.exists)
+        XCTAssertTrue(settings.exists)
+        XCTAssertFalse(self.app?.buttons["Control"].exists == true)
+        XCTAssertFalse(self.app?.buttons["Agent"].exists == true)
+
+        assistant.tap()
+        XCTAssertTrue(self.app?.navigationBars["Assistant"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.segmentedControls["Assistant mode"].exists == true)
+        self.attachScreenshot(named: "phone-shell-assistant")
+
+        settings.tap()
+        XCTAssertTrue(self.app?.navigationBars["Settings"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Agent control"].exists == true)
+        self.attachScreenshot(named: "phone-shell-settings")
+
         activity.tap()
-
-        let recentActivity = try XCTUnwrap(self.app?.staticTexts["Recent activity"])
-        XCTAssertTrue(recentActivity.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "control-activity-before-chat")
-
-        let activityChat = try self.controlDetailChatButton(above: chatTab)
-        activityChat.tap()
-        XCTAssertTrue(chatTab.isSelected)
-
-        let returnButton = try XCTUnwrap(self.app?.buttons["OpenClawChatBackToControlDetailButton"])
-        XCTAssertTrue(returnButton.waitForExistence(timeout: 5))
-        XCTAssertEqual(returnButton.label, "Back to Activity")
-        self.attachScreenshot(named: "chat-return-to-activity")
-
-        returnButton.tap()
-        XCTAssertTrue(recentActivity.waitForExistence(timeout: 8))
-        XCTAssertTrue(controlTab.isSelected)
-        self.attachScreenshot(named: "control-activity-after-chat")
-
-        try self.controlDetailChatButton(above: chatTab).tap()
-        XCTAssertTrue(chatTab.isSelected)
-        controlTab.tap()
-        XCTAssertTrue(self.app?.navigationBars["Control"].waitForExistence(timeout: 8) == true)
-        let overview = try XCTUnwrap(self.app?.buttons["Overview"])
-        XCTAssertTrue(overview.exists)
-        self.attachScreenshot(named: "control-tab-returns-to-root")
-
-        overview.tap()
-        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
-        let agentSession = try XCTUnwrap(
-            self.app?.buttons.containing(.staticText, identifier: "Molty").firstMatch)
-        XCTAssertTrue(agentSession.waitForExistence(timeout: 8))
-        agentSession.tap()
-
-        XCTAssertTrue(returnButton.waitForExistence(timeout: 8))
-        XCTAssertEqual(returnButton.label, "Back to Overview")
-        self.attachScreenshot(named: "chat-session-return-to-overview")
-        returnButton.tap()
-        XCTAssertTrue(self.app?.navigationBars["Overview"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.navigationBars["Activity"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Recent tasks"].exists == true)
     }
 
     func testAgentUsesToolbarFilter() throws {
@@ -793,7 +791,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         if screenshotMode {
             app.launchArguments.append("--openclaw-screenshot-mode")
         }
+        app.launchArguments += target.additionalArguments
         app.launchArguments += additionalArguments
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         if let appearance {
             app.launchArguments += ["--openclaw-appearance", appearance]
         }
@@ -808,11 +808,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", value),
             object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed)
-    }
-
-    private func controlDetailChatButton(above chatTab: XCUIElement) throws -> XCUIElement {
-        let buttons = try XCTUnwrap(self.app?.buttons.matching(NSPredicate(format: "label == 'Chat'")))
-        return try XCTUnwrap(buttons.allElementsBoundByIndex.first { $0.frame.maxY < chatTab.frame.minY })
     }
 
     private func launchPairedLiveGatewayApp(
