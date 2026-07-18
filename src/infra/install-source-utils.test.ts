@@ -6,6 +6,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
+  resolveNpmSpecMetadata,
   withTempDir,
 } from "./install-source-utils.js";
 
@@ -181,6 +182,44 @@ describe("resolveArchiveSourcePath", () => {
       expect(result).toEqual({ ok: true, path: filePath });
     },
   );
+});
+
+describe("resolveNpmSpecMetadata", () => {
+  const npmViewMetadata = {
+    name: "@openclaw/codex",
+    version: "2026.7.1-1",
+    "dist.integrity": "sha512-test-integrity",
+    "dist.shasum": "abc123",
+  };
+
+  it.each([
+    { shape: "object", stdout: JSON.stringify(npmViewMetadata) },
+    { shape: "singleton array", stdout: JSON.stringify([npmViewMetadata]) },
+  ])("normalizes npm view $shape output", async ({ stdout }) => {
+    mockPackCommandResult({ stdout });
+
+    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex" })).resolves.toEqual({
+      ok: true,
+      metadata: {
+        name: "@openclaw/codex",
+        version: "2026.7.1-1",
+        resolvedSpec: "@openclaw/codex@2026.7.1-1",
+        integrity: "sha512-test-integrity",
+        shasum: "abc123",
+      },
+    });
+  });
+
+  it("rejects multi-version arrays instead of guessing an integrity", async () => {
+    mockPackCommandResult({
+      stdout: JSON.stringify([npmViewMetadata, { ...npmViewMetadata, version: "2026.7.1-2" }]),
+    });
+
+    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex" })).resolves.toEqual({
+      ok: false,
+      error: "npm view produced incomplete package metadata",
+    });
+  });
 });
 
 describe("packNpmSpecToArchive", () => {

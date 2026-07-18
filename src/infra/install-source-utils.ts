@@ -58,10 +58,13 @@ export function createNpmMetadataEnv(
 }
 
 function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
-  if (!value || typeof value !== "object") {
+  // Newer npm clients wrap a single `npm view --json` result in an array.
+  // Multiple matches stay ambiguous for integrity checks and fail closed.
+  const entry = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  if (!isRecord(entry) || Array.isArray(entry)) {
     return null;
   }
-  const rec = value as Record<string, unknown>;
+  const rec = entry;
   const name = normalizeOptionalString(rec.name);
   const version = normalizeOptionalString(rec.version);
   const resolvedSpec = name && version ? `${name}@${version}` : undefined;
