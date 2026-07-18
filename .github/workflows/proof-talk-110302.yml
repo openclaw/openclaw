@@ -1,0 +1,71 @@
+name: Proof 110302 real Gateway relay
+
+on:
+  push:
+    branches:
+      - codex/proof-110302-real-gateway
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PR_HEAD_SHA: 18ba59e3248be12e5d0e96afd632c5e425078869
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact proof branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Verify product tree is the PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PR_HEAD_SHA"
+          git diff --exit-code "$PR_HEAD_SHA" HEAD -- . \
+            ':(exclude).github/proof/talk-real-gateway.ts' \
+            ':(exclude).github/workflows/proof-talk-110302.yml'
+          echo "verified_pr_head=${PR_HEAD_SHA:0:12} proof_only_commit=true"
+
+      - name: Set up Node and dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          use-actions-cache: "true"
+
+      - name: Install Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
+      - name: Run real Control UI and Gateway relay proof
+        env:
+          OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/proof-110302
+          node --import tsx .github/proof/talk-real-gateway.ts 2>&1 \
+            | tee .artifacts/proof-110302/runtime.log
+          grep -F "[trace] close(stale):rpc=1 ack=ok provider=closed" \
+            .artifacts/proof-110302/runtime.log
+          grep -F "[trace] append(current):rpc=1 ack=ok provider_input=1" \
+            .artifacts/proof-110302/runtime.log
+          grep -F "[trace] audio(current):gateway_event=1 browser_playback=1 socket=open" \
+            .artifacts/proof-110302/runtime.log
+          grep -F "[trace] close(current):rpc=1 ack=ok provider=closed" \
+            .artifacts/proof-110302/runtime.log
+
+      - name: Upload redacted runtime log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: proof-110302-real-gateway-${{ github.run_id }}
+          path: .artifacts/proof-110302
+          if-no-files-found: warn
+          retention-days: 14
