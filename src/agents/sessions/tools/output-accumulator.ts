@@ -260,3 +260,9 @@ export class OutputAccumulator {
     this.spillChunks = [];
   }
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.outputAccumulatorTestApi")] = {
+    OutputAccumulator,
+  };
+}

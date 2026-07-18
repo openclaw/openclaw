@@ -68,4 +68,26 @@ describe("OutputAccumulator", () => {
     await accumulator.closeTempFile();
     await rm(snapshot.fullOutputPath!, { force: true });
   });
+
+  it("propagates write error when spill stream fails", () => {
+    const writeError = new Error("disk full");
+    const accumulator = new OutputAccumulator({
+      maxBytes: 4,
+      maxLines: 10,
+      tempFilePrefix: "openclaw-output-test",
+    });
+
+    // Trigger spill by writing more than maxBytes
+    accumulator.append(Buffer.from("more than four bytes to force spill"));
+
+    // Replace the live stream with one that throws on write
+    (accumulator as Record<string, unknown>).tempFileStream = {
+      write() {
+        throw writeError;
+      },
+    };
+
+    // Append after the stream is broken — must throw the write error
+    expect(() => accumulator.append(Buffer.from("x"))).toThrow(writeError);
+  });
 });
