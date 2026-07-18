@@ -84,6 +84,12 @@ export type SessionListOptions = {
   append?: boolean;
 };
 
+/** Gateway rosters omit recency so Chat and Settings agree.
+ * The explicit cap keeps list work bounded. */
+export const DEFAULT_SESSION_LIST_QUERY = {
+  limit: 50,
+} as const satisfies SessionListOptions;
+
 type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
   // Sidebar startup hydration must not block session creation or drop the open session.
@@ -319,7 +325,7 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
     ...SESSION_LIST_PARAMS,
   };
   if (options.limit === undefined) {
-    params.limit = 50;
+    params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
   } else if (options.limit > 0) {
     params.limit = Math.floor(options.limit);
   }
