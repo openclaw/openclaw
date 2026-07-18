@@ -7354,14 +7354,14 @@
       "translated": "Salta"
     },
     {
-      "id": "native.android.fa81739f52e7697f",
-      "source": "Submit",
-      "translated": "Invia"
-    },
-    {
       "id": "native.android.92dfa7979d04989c",
       "source": "Submitting…",
       "translated": "Invio in corso…"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "Invia"
     },
     {
       "id": "native.android.7da074848cacfe4b",

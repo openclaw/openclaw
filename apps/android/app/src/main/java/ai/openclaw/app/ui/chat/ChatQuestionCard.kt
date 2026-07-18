@@ -206,7 +206,13 @@ private fun QuestionFooter(
         onClick = { answers?.let { onSubmit(prompt.record.id, it) } },
         enabled = answers != null && status == ChatQuestionStatus.Pending,
       ) {
-        Text(if (status == ChatQuestionStatus.Submitting) nativeString("Submitting…") else nativeString("Submit"))
+        Text(
+          if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
+            nativeString("Submitting…")
+          } else {
+            nativeString("Submit")
+          },
+        )
       }
     }
     prompt.errorText?.let { error ->

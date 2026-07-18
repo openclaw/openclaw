@@ -2120,7 +2120,7 @@ class ChatController internal constructor(
       prompts.map { prompt ->
         if (prompt.record.id == id && prompt.status() == ChatQuestionStatus.Pending) {
           claimed = true
-          prompt.copy(submitting = true, errorText = null)
+          prompt.copy(submitting = true, skipping = cancel, errorText = null)
         } else {
           prompt
         }
@@ -2166,6 +2166,7 @@ class ChatController internal constructor(
                       },
                   ),
                 submitting = false,
+                skipping = false,
                 answeredLocally = !cancel,
                 recoveryUnavailable = false,
                 terminalObservedAtMs = prompt.terminalObservedAtMs ?: System.currentTimeMillis(),
@@ -2178,7 +2179,11 @@ class ChatController internal constructor(
       } catch (error: Throwable) {
         updateQuestions { prompts ->
           prompts.map { prompt ->
-            if (prompt.record.id == id) prompt.copy(submitting = false, errorText = error.message ?: "Question failed") else prompt
+            if (prompt.record.id == id) {
+              prompt.copy(submitting = false, skipping = false, errorText = error.message ?: "Question failed")
+            } else {
+              prompt
+            }
           }
         }
       }
@@ -2288,6 +2293,7 @@ class ChatController internal constructor(
           if (prompt.record.id in unavailableIds) {
             prompt.copy(
               submitting = false,
+              skipping = false,
               terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
               recoveryUnavailable = true,
             )
@@ -2365,6 +2371,7 @@ class ChatController internal constructor(
     return prompt.copy(
       record = record.copy(answers = record.answers ?: prompt.record.answers),
       submitting = prompt.submitting && record.status == "pending",
+      skipping = prompt.skipping && record.status == "pending",
       answeredLocally = prompt.answeredLocally && record.status == "answered",
       recoveryUnavailable = false,
       terminalObservedAtMs =
@@ -2388,6 +2395,7 @@ class ChatController internal constructor(
           prompt.copy(
             record = prompt.record.copy(status = status, answers = answers ?: prompt.record.answers),
             submitting = false,
+            skipping = false,
             recoveryUnavailable = false,
             terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
           )

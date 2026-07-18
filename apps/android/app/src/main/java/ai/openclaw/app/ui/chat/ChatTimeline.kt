@@ -254,6 +254,8 @@ private fun latestContentVersion(
       append(prompt.record.status)
       append(',')
       append(prompt.submitting)
+      append(',')
+      append(prompt.skipping)
       append(';')
     }
   }

@@ -16,6 +16,7 @@ enum class ChatQuestionStatus {
 data class ChatQuestionPrompt(
   val record: QuestionRecord,
   val submitting: Boolean = false,
+  val skipping: Boolean = false,
   val answeredLocally: Boolean = false,
   val errorText: String? = null,
   val terminalObservedAtMs: Long? = null,

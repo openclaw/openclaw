@@ -7354,14 +7354,14 @@
       "translated": "건너뛰기"
     },
     {
-      "id": "native.android.fa81739f52e7697f",
-      "source": "Submit",
-      "translated": "제출"
-    },
-    {
       "id": "native.android.92dfa7979d04989c",
       "source": "Submitting…",
       "translated": "제출 중…"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "제출"
     },
     {
       "id": "native.android.7da074848cacfe4b",

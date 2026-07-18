@@ -810,6 +810,49 @@ class ChatQuestionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun skipClaimExposesSkippingProgress() =
+    runTest {
+      val json = Json { ignoreUnknownKeys = true }
+      val pending = record(expiresAtMs = Long.MAX_VALUE)
+      val resolveStarted = CompletableDeferred<Unit>()
+      val releaseResolve = CompletableDeferred<Unit>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "question.resolve" -> {
+                resolveStarted.complete(Unit)
+                releaseResolve.await()
+                "{}"
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      controller.skipQuestion(pending.id)
+      runCurrent()
+      resolveStarted.await()
+
+      val submitting = controller.questions.value.single()
+      assertEquals(ChatQuestionStatus.Submitting, submitting.status())
+      assertTrue(submitting.submitting)
+      assertTrue(submitting.skipping)
+
+      releaseResolve.complete(Unit)
+      advanceUntilIdle()
+
+      val completed = controller.questions.value.single()
+      assertEquals(ChatQuestionStatus.Cancelled, completed.status())
+      assertFalse(completed.submitting)
+      assertFalse(completed.skipping)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun answerClaimBlocksCompetingSkip() =
     runTest {
       val json = Json { ignoreUnknownKeys = true }
