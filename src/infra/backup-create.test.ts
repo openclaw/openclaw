@@ -29,6 +29,7 @@ import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -697,6 +698,88 @@ describe("createBackupArchive", () => {
           expect(JSON.parse(archivedRaw.trim())).toMatchObject({
             argv: ["openclaw", "config", "set", "token", "***"],
           });
+          const sqlite = requireNodeSqlite();
+          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, databaseEntry), {
+            readOnly: true,
+          });
+          try {
+            expect(
+              archivedDb
+                .prepare(
+                  "SELECT COUNT(*) AS count FROM diagnostic_events WHERE scope = 'migration.legacy-audit-raw'",
+                )
+                .get(),
+            ).toEqual({ count: 0 });
+          } finally {
+            archivedDb.close();
+          }
+        } finally {
+          closeOpenClawStateDatabase();
+        }
+      },
+    );
+  });
+
+  it("omits completed blank audit append pads when dropping their checkpoints", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-completed-audit-pad-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const sourcePath = state.statePath("logs/config-audit.jsonl");
+        const rawRelativePath = "logs/config-audit.jsonl.migrated.raw";
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+        await fs.writeFile(
+          sourcePath,
+          `${JSON.stringify({
+            ts: "2026-07-01T00:00:00.000Z",
+            source: "config-io",
+            event: "config.write",
+            argv: ["openclaw", "config", "set", "safe", "value"],
+            execArgv: [],
+          })}\n`,
+        );
+        await migrateLegacyAuditLogs({
+          detected: detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }),
+          stateDir: state.stateDir,
+        });
+        expect(
+          detectLegacyAuditLogs({
+            stateDir: state.stateDir,
+            doctorOnlyStateMigrations: true,
+          }).hasLegacy,
+        ).toBe(false);
+        const { db } = openOpenClawStateDatabase({ env: state.env });
+        expect(
+          db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM diagnostic_events WHERE scope = 'migration.legacy-audit-raw'",
+            )
+            .get(),
+        ).toEqual({ count: 1 });
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 20, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          expect(entries.some((entry) => entry.endsWith(`/state/${rawRelativePath}`))).toBe(false);
+          const databaseEntry = expectDefined(
+            entries.find((entry) => entry.endsWith("/state/state/openclaw.sqlite")),
+            "global state database entry",
+          );
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
           const sqlite = requireNodeSqlite();
           const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, databaseEntry), {
             readOnly: true,
