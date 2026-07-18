@@ -114,15 +114,12 @@ openclaw-chat-page {
   user-select: text;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--muted-strong) transparent;
-  /* The tall top inset is a titlebar band: it keeps the floating rail
-     openers (.chat-floating-toggles, 28px at top 10px) clear of the first
-     message and gives the native macOS app an empty strip that starts a
-     window drag (see the thread mousedown handler in chat-thread.ts).
-     No horizontal padding: macOS overlay scrollbars render inside the
+  /* The pane header owns the titlebar and native drag surface. No horizontal
+     padding: macOS overlay scrollbars render inside the
      scroll container's padding, which floats the thumb away from the pane
      edge (visible next to the sidebar divider). The side inset lives on
      .chat-thread-inner instead so the scrollbar hugs the edge. */
-  padding: clamp(44px, 5vh, 52px) 0 6px;
+  padding: clamp(20px, 3vh, 28px) 0 6px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -136,14 +133,6 @@ openclaw-chat-page {
 
 :root .chat-thread::-webkit-scrollbar-thumb:hover {
   background: var(--text);
-}
-
-/* Split panes spend their top row on the pane header (which is both the
-   toggle host and the drag surface), so their threads keep a compact inset.
-   The single-pane view is also an openclaw-chat-pane but renders no header,
-   hence the :has() guard. */
-openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
-  padding-top: clamp(20px, 3vh, 28px);
 }
 
 .chat-thread-inner > :first-child {
@@ -2278,6 +2267,25 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   box-shadow: none;
 }
 
+.agent-chat__video-preview {
+  align-self: flex-end;
+  width: min(240px, 45vw);
+  margin: 4px 8px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  background: #000;
+  box-shadow: var(--shadow-md);
+}
+
+.agent-chat__video-preview video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
 /* Live voice input: the level meter itself is the control. Keeping it accent
    (vs the danger stop square) is what disambiguates the two controls when a
    run is abortable while recording; the stop glyph only crossfades in on
@@ -3933,54 +3941,14 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   object-fit: cover;
 }
 
-/* The hero Clawd: the lobster-pet sprite, big and borderless. Idle loop
-   (breathe/blink keyframes) lives in lobster-pet.css; only the periodic
-   wave is welcome-specific. */
+/* The 120x120 Clawd canvas stays centered in the existing hero slot. */
 .agent-chat__welcome-clawd {
   width: 128px;
   height: 112px;
   margin-bottom: 2px;
-}
-
-.agent-chat__welcome-clawd .lobster-pet__svg {
-  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
-}
-
-.agent-chat__welcome-clawd .lob-eye-open {
-  animation: lobster-pet-blink-open 5.2s linear infinite;
-}
-
-.agent-chat__welcome-clawd .lob-eye-closed {
-  opacity: 0;
-  animation: lobster-pet-blink-closed 5.2s linear infinite;
-}
-
-.agent-chat__welcome-clawd .lob-claw--r {
-  animation: agent-chat-welcome-wave 9s ease-in-out infinite;
-}
-
-@keyframes agent-chat-welcome-wave {
-  0%,
-  82%,
-  100% {
-    transform: translateY(0) rotate(0deg);
-  }
-  86%,
-  94% {
-    transform: translateY(-6px) rotate(-30deg);
-  }
-  90% {
-    transform: translateY(-6px) rotate(-6deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-chat__welcome-clawd .lobster-pet__svg,
-  .agent-chat__welcome-clawd .lob-eye-open,
-  .agent-chat__welcome-clawd .lob-eye-closed,
-  .agent-chat__welcome-clawd .lob-claw--r {
-    animation: none;
-  }
+  display: grid;
+  place-items: center;
+  overflow: visible;
 }
 
 /* Phones (and short landscape): scale the welcome hero down so the composer
@@ -4003,6 +3971,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   .agent-chat__welcome-clawd {
     width: 88px;
     height: 77px;
+  }
+
+  .agent-chat__welcome-clawd openclaw-mascot {
+    transform: scale(0.6875);
   }
 
   .agent-chat__welcome .agent-chat__avatar--text {

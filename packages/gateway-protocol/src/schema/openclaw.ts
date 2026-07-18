@@ -57,6 +57,16 @@ export const SystemAgentChatResultSchema = closedObject({
  */
 export const SystemAgentSetupDetectParamsSchema = closedObject({});
 
+const ProviderAutoSetupInferenceKind = Type.TemplateLiteral("provider-auto:${string}", {
+  pattern: "^provider-auto:.+$",
+});
+
+const SetupInferenceHttpsUrl = Type.String({
+  minLength: 1,
+  maxLength: 2048,
+  pattern: "^https://",
+});
+
 const SetupInferenceKind = Type.Union([
   Type.Literal("existing-model"),
   Type.Literal("openai-api-key"),
@@ -64,6 +74,7 @@ const SetupInferenceKind = Type.Union([
   Type.Literal("claude-cli"),
   Type.Literal("codex-cli"),
   Type.Literal("gemini-cli"),
+  ProviderAutoSetupInferenceKind,
 ]);
 
 const SetupInferenceStatus = Type.Union([
@@ -97,7 +108,19 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       recommended: Type.Boolean(),
       /** true: verified; false: definitively logged out; absent: unknown. */
       credentials: Type.Optional(Type.Boolean()),
+      icon: Type.Optional(SetupInferenceHttpsUrl),
+      website: Type.Optional(SetupInferenceHttpsUrl),
     }),
+  ),
+  unavailableCandidates: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        label: NonEmptyString,
+        detail: Type.String(),
+        reason: NonEmptyString,
+      }),
+    ),
   ),
   /** Text-inference key/token methods exposed by the Gateway provider registry. */
   manualProviders: Type.Array(
@@ -106,6 +129,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       id: NonEmptyString,
       label: NonEmptyString,
       hint: Type.Optional(Type.String()),
+      icon: Type.Optional(SetupInferenceHttpsUrl),
+      website: Type.Optional(SetupInferenceHttpsUrl),
     }),
   ),
   /** Provider-owned browser and device-code login methods. */
@@ -116,8 +141,21 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         label: NonEmptyString,
         hint: Type.Optional(Type.String()),
         groupLabel: Type.Optional(Type.String()),
+        icon: Type.Optional(SetupInferenceHttpsUrl),
+        website: Type.Optional(SetupInferenceHttpsUrl),
         kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
         featured: Type.Boolean(),
+      }),
+    ),
+  ),
+  recommendedInstalls: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        label: NonEmptyString,
+        hint: NonEmptyString,
+        website: SetupInferenceHttpsUrl,
+        icon: SetupInferenceHttpsUrl,
       }),
     ),
   ),
@@ -151,6 +189,7 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
     Type.Literal("claude-cli"),
     Type.Literal("codex-cli"),
     Type.Literal("gemini-cli"),
+    ProviderAutoSetupInferenceKind,
     Type.Literal("api-key"),
   ]),
   /** Exact detected model for this route; prevents detect/activate drift. */

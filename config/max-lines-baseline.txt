@@ -134,10 +134,6 @@ extensions/google-meet/index.ts
 extensions/google-meet/src/cli.test.ts
 extensions/google-meet/src/cli.ts
 extensions/google-meet/src/meet.ts
-extensions/google-meet/src/realtime-node.ts
-extensions/google-meet/src/realtime.ts
-extensions/google-meet/src/runtime.ts
-extensions/google-meet/src/transports/chrome.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -186,7 +182,6 @@ extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
-extensions/memory-core/src/memory/manager-sync-ops.ts
 extensions/memory-core/src/memory/manager.ts
 extensions/memory-core/src/memory/qmd-manager.test.ts
 extensions/memory-core/src/memory/qmd-manager.ts
@@ -283,7 +278,6 @@ extensions/slack/src/approval-native.test.ts
 extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
-extensions/slack/src/monitor/context.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts
@@ -323,7 +317,6 @@ extensions/telegram/src/send.test.ts
 extensions/telegram/src/send.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
-extensions/telegram/src/webhook.ts
 extensions/tlon/src/monitor/index.ts
 extensions/voice-call/index.test.ts
 extensions/voice-call/index.ts
@@ -391,7 +384,6 @@ src/agents/acp-spawn.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
-src/agents/agent-command.ts
 src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-scope.test.ts
@@ -498,7 +490,6 @@ src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/native-hook-relay.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
-src/agents/live-cache-regression-runner.ts
 src/agents/main-session-restart-recovery.test.ts
 src/agents/main-session-restart-recovery.ts
 src/agents/model-auth-availability.ts
@@ -514,13 +505,13 @@ src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openai-completions-transport.ts
 src/agents/openai-responses-transport.ts
-src/agents/openai-transport-stream.base.test-utils.ts
-src/agents/openai-transport-stream.deepseek-and-shaping.test-utils.ts
-src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test-utils.ts
-src/agents/openai-transport-stream.reasoning-and-cache.test-utils.ts
-src/agents/openai-transport-stream.replay-and-tools.test-utils.ts
-src/agents/openai-transport-stream.streaming.test-utils.ts
-src/agents/openai-transport-stream.usage-and-calls.test-utils.ts
+src/agents/openai-transport-stream.base.test.ts
+src/agents/openai-transport-stream.deepseek-and-shaping.test.ts
+src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts
+src/agents/openai-transport-stream.reasoning-and-cache.test.ts
+src/agents/openai-transport-stream.replay-and-tools.test.ts
+src/agents/openai-transport-stream.streaming.test.ts
+src/agents/openai-transport-stream.usage-and-calls.test.ts
 src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
@@ -554,7 +545,6 @@ src/agents/subagent-control.ts
 src/agents/subagent-registry-lifecycle.test.ts
 src/agents/subagent-registry-lifecycle.ts
 src/agents/subagent-registry-run-manager.ts
-src/agents/subagent-registry.persistence.test.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
 src/agents/subagent-registry.ts
@@ -652,7 +642,6 @@ src/channels/streaming.ts
 src/channels/turn/kernel.test.ts
 src/channels/turn/kernel.ts
 src/cli/capability-cli.test.ts
-src/cli/capability-cli.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
 src/cli/command-secret-targets.test.ts
@@ -795,7 +784,6 @@ src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
-src/docker-setup.e2e.test.ts
 src/fleet/backup.runtime.ts
 src/fleet/containers.runtime.ts
 src/fleet/service.runtime.ts
@@ -879,7 +867,6 @@ src/gateway/server-methods/usage.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
-src/gateway/server-plugins.ts
 src/gateway/server-reload-handlers.test.ts
 src/gateway/server-reload-handlers.ts
 src/gateway/server-restart-sentinel.test.ts
@@ -900,7 +887,6 @@ src/gateway/session-compaction-checkpoints.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts
-src/gateway/session-transcript-readers.ts
 src/gateway/session-utils.fs.test.ts
 src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts
@@ -955,7 +941,6 @@ src/infra/outbound/message-action-runner.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/package-update-steps.ts
-src/infra/push-apns.ts
 src/infra/restart-stale-pids.test.ts
 src/infra/restart.ts
 src/infra/run-node.test.ts
@@ -1036,7 +1021,6 @@ src/plugins/loader.discovery-and-security.test-utils.ts
 src/plugins/loader.hooks-and-runtime.test-utils.ts
 src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
-src/plugins/loader.ts
 src/plugins/management-service.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/manifest-registry.ts
@@ -1061,7 +1045,6 @@ src/plugins/tools.optional.test.ts
 src/plugins/tools.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
-src/plugins/update.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/resolve-route.test.ts
 src/routing/resolve-route.ts
@@ -1131,7 +1114,6 @@ ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
 ui/src/components/app-sidebar.test.ts
-ui/src/components/app-sidebar.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
 ui/src/components/lobster-pet.ts

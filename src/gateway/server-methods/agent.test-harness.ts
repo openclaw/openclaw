@@ -21,7 +21,7 @@ import { agentHandlers } from "./agent.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 export const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -130,6 +130,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
 
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
+  agentCommandFromGatewayIngress: mocks.agentCommand,
   agentCommandFromIngress: mocks.agentCommand,
 }));
 
@@ -327,7 +328,7 @@ export const makeContext = (): GatewayRequestContext =>
     getRuntimeConfig: () => mocks.loadConfigReturn,
   }) as unknown as GatewayRequestContext;
 
-export type AgentHandler = NonNullable<typeof agentHandlers.agent>;
+type AgentHandler = NonNullable<typeof agentHandlers.agent>;
 
 export type AgentHandlerArgs = Parameters<AgentHandler>[0];
 
@@ -335,21 +336,21 @@ export type AgentParams = AgentHandlerArgs["params"];
 
 export type AgentCommandCall = Record<string, unknown>;
 
-export type AgentIdentityGetHandler = NonNullable<(typeof agentHandlers)["agent.identity.get"]>;
+type AgentIdentityGetHandler = NonNullable<(typeof agentHandlers)["agent.identity.get"]>;
 
-export type AgentIdentityGetHandlerArgs = Parameters<AgentIdentityGetHandler>[0];
+type AgentIdentityGetHandlerArgs = Parameters<AgentIdentityGetHandler>[0];
 
-export type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
+type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
 
-export const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 
-export let dateOnlyFakeClockActive = false;
+let dateOnlyFakeClockActive = false;
 
 export function setDateOnlyFakeClockActive(active: boolean): void {
   dateOnlyFakeClockActive = active;
 }
 
-export function waitForRealTimer(ms: number) {
+function waitForRealTimer(ms: number) {
   return new Promise<void>((resolve) => {
     realSetTimeout(resolve, ms);
   });
@@ -439,7 +440,7 @@ export async function flushScheduledDispatchStep() {
   await Promise.resolve();
 }
 
-export async function waitForAcceptedRunDispatch(params: {
+async function waitForAcceptedRunDispatch(params: {
   respond: ReturnType<typeof vi.fn>;
   commandCallCount: number;
 }) {
@@ -486,20 +487,20 @@ export function buildExistingMainStoreEntry(overrides: Record<string, unknown> =
   };
 }
 
-export type SessionStoreFixture = Record<string, Record<string, unknown>>;
+type SessionStoreFixture = Record<string, Record<string, unknown>>;
 
-export type SessionEntryTargetFixture = {
+type SessionEntryTargetFixture = {
   canonicalKey: string;
   storeKeys: string[];
 };
 
-export function cloneSessionStoreFixtureEntry(
+function cloneSessionStoreFixtureEntry(
   entry: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   return entry ? structuredClone(entry) : undefined;
 }
 
-export function selectFreshestTargetFixtureEntry(
+function selectFreshestTargetFixtureEntry(
   store: SessionStoreFixture,
   target: SessionEntryTargetFixture,
 ): { entry: Record<string, unknown>; key: string } | undefined {
@@ -520,7 +521,7 @@ export function selectFreshestTargetFixtureEntry(
   return freshest;
 }
 
-export function resetSessionAccessorMocks() {
+function resetSessionAccessorMocks() {
   mocks.readTranscriptStatsSync.mockReset().mockReturnValue({
     eventCount: 0,
     maxSeq: 0,
@@ -677,7 +678,7 @@ export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
       [canonicalKey]: existingEntry,
     };
     const result = await updater(store);
-    capturedEntry = result as Record<string, unknown>;
+    capturedEntry = structuredClone(store[canonicalKey]) as Record<string, unknown>;
     return result;
   });
   mocks.agentCommand.mockResolvedValue({
@@ -688,7 +689,7 @@ export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
   return requireValue(capturedEntry, "updated session entry missing");
 }
 
-export function readLastAgentCommandCall(): AgentCommandCall | undefined {
+function readLastAgentCommandCall(): AgentCommandCall | undefined {
   const calls = mocks.agentCommand.mock.calls;
   const call = calls[calls.length - 1];
   return call?.[0] as AgentCommandCall | undefined;
@@ -924,7 +925,7 @@ export async function invokeAgentIdentityGet(
   return respond;
 }
 
-export function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
   }
@@ -938,13 +939,34 @@ export function toLintErrorObject(value: unknown, fallbackMessage: string): Erro
   return error;
 }
 
+/**
+ * Pins subagent-registry deps for gateway handler tests, always keeping
+ * `ensureRuntimePluginsLoaded` a no-op. Real ended-run hooks reload the
+ * standalone plugin runtime in the background, and `loadOpenClawPlugins`
+ * starts by wiping process-wide plugin registrations — including the detached
+ * task lifecycle runtime a later test just installed via
+ * `setDetachedTaskLifecycleRuntime`. Without this pin, a prior test's async
+ * subagent completion can silently uninstall a later test's runtime seam
+ * between install and finalize, so the finalize spy is never called.
+ */
+export function applyGatewaySubagentRegistryTestDeps(
+  overrides?: Parameters<typeof subagentRegistryTesting.setDepsForTest>[0],
+) {
+  subagentRegistryTesting.setDepsForTest({
+    ensureRuntimePluginsLoaded: () => {},
+    ...overrides,
+  });
+}
+
+applyGatewaySubagentRegistryTestDeps();
+
 export const describe0AfterEach0 = () => {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
   resetTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
-  subagentRegistryTesting.setDepsForTest();
+  applyGatewaySubagentRegistryTestDeps();
   mocks.loadConfigReturn = {};
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();
@@ -969,7 +991,7 @@ export const describe0AfterEach0 = () => {
   vi.useRealTimers();
 };
 
-export function resetIntegrationState() {
+function resetIntegrationState() {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetTaskRegistryForTests();

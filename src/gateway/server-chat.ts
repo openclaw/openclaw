@@ -10,6 +10,7 @@ import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-commo
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   type AgentEventPayload,
@@ -357,6 +358,10 @@ export type AgentEventHandlerOptions = {
   }) => { active: boolean; runIds: string[] };
 };
 
+type AgentEventHandler = ((event: AgentEventPayload) => void) & {
+  dispose: () => void;
+};
+
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
@@ -381,7 +386,7 @@ export function createAgentEventHandler({
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
-}: AgentEventHandlerOptions): (event: AgentEventPayload) => void {
+}: AgentEventHandlerOptions): AgentEventHandler {
   const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
     const claimId = evt.contextClaimId;
     if (!claimId) {
@@ -1280,7 +1285,7 @@ export function createAgentEventHandler({
     }
   };
 
-  return (event: AgentEventPayload) => {
+  const handleEvent = (event: AgentEventPayload) => {
     const evt = event as AgentEventRuntimePayload;
     if (!shouldProcessOwnedEvent(evt)) {
       return;
@@ -1388,6 +1393,15 @@ export function createAgentEventHandler({
     agentRunSeq.set(evt.runId, evt.seq);
     if (evt.stream === "assistant") {
       updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    }
+    if (evt.stream === "plan" && evt.data?.phase === "update") {
+      const steps = normalizeAgentPlanSteps(evt.data.steps) ?? [];
+      const explanation =
+        typeof evt.data.explanation === "string" ? evt.data.explanation.trim() : "";
+      chatRunState.planSnapshots.set(clientRunId, {
+        steps,
+        ...(explanation ? { explanation } : {}),
+      });
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
@@ -1625,5 +1639,16 @@ export function createAgentEventHandler({
       }
     }
   };
+
+  return Object.assign(handleEvent, {
+    dispose: () => {
+      // Deferred provider errors belong to this gateway subscription. Letting
+      // them outlive shutdown can project stale terminal state into a successor.
+      for (const pending of pendingTerminalLifecycleErrors.values()) {
+        clearTimeout(pending.timer);
+      }
+      pendingTerminalLifecycleErrors.clear();
+    },
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

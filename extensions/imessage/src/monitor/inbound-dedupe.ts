@@ -1,17 +1,18 @@
-// iMessage inbound replay protection: brings the channel in line with the
-// other channels (whatsapp/discord/signal/...) by deduping inbound messages on
-// a stable identity, plus an age fence that suppresses stale backlog Apple
-// delivers in a burst after a bridge/Push recovery.
+// iMessage inbound replay protection: GUID dedupe on a stable identity, plus
+// an age fence that suppresses stale backlog Apple delivers in a burst after a
+// bridge/Push recovery.
 //
-// Why both:
+// Why both, and what survives ingress-drain adoption:
 // - The GUID dedupe stops a message that was already dispatched from being
-//   dispatched again when imsg re-emits a recent row on reconnect.
-// - Dedupe cannot catch a message that was *never seen* (the gateway was down
-//   when it was sent). Apple writes that backlog into chat.db with a fresh
-//   ROWID but the original (old) send date, so it arrives on the live watch as
-//   a "new" row. The age fence is what recognizes it as stale.
+//   dispatched again when imsg re-emits a recent row on reconnect. It is the
+//   transitional layer: if this channel adopts the durable ingress drain with
+//   event_id = GUID, the queue tombstone owns this job and the dedupe goes.
+// - The age fence is NOT a dedupe and stays regardless. It catches messages
+//   the gateway *never saw* (sent while down): Apple writes that backlog into
+//   chat.db with a fresh ROWID/GUID but the original old send date, so no
+//   dedupe or tombstone can recognize it — only the send-date fence does.
 import { createHash } from "node:crypto";
-import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { IMessagePayload } from "./types.js";
 
 const IMESSAGE_INBOUND_DEDUPE_PLUGIN_ID = "imessage";
@@ -47,57 +48,25 @@ export const IMESSAGE_RECOVERY_MAX_ROWS = 500;
  * post-restart re-emit; release on dispatch failure lets a transient failure
  * retry instead of being permanently suppressed.
  */
-export function createIMessageInboundReplayGuard(): ClaimableDedupe {
-  return createClaimableDedupe({
-    pluginId: IMESSAGE_INBOUND_DEDUPE_PLUGIN_ID,
-    namespacePrefix: IMESSAGE_INBOUND_DEDUPE_NAMESPACE_PREFIX,
-    ttlMs: IMESSAGE_INBOUND_DEDUPE_TTL_MS,
-    memoryMaxSize: IMESSAGE_INBOUND_DEDUPE_MEMORY_MAX,
-    stateMaxEntries: IMESSAGE_INBOUND_DEDUPE_STATE_MAX_ENTRIES,
+type IMessageInboundReplayEvent =
+  | { accountId: string; message: IMessagePayload }
+  | { accountId: string; keys: readonly string[] };
+
+export function createIMessageInboundReplayGuard() {
+  return createChannelReplayGuard<IMessageInboundReplayEvent>({
+    dedupe: {
+      pluginId: IMESSAGE_INBOUND_DEDUPE_PLUGIN_ID,
+      namespacePrefix: IMESSAGE_INBOUND_DEDUPE_NAMESPACE_PREFIX,
+      ttlMs: IMESSAGE_INBOUND_DEDUPE_TTL_MS,
+      memoryMaxSize: IMESSAGE_INBOUND_DEDUPE_MEMORY_MAX,
+      stateMaxEntries: IMESSAGE_INBOUND_DEDUPE_STATE_MAX_ENTRIES,
+    },
+    buildReplayKey: (event) =>
+      "message" in event
+        ? buildIMessageInboundReplayKey({ accountId: event.accountId, message: event.message })
+        : event.keys,
+    namespace: (event) => event.accountId,
   });
-}
-
-/**
- * Claim a message before handling. Returns the key to commit/release later, and
- * `claimed=false` when a recent copy already owns the key (duplicate/inflight)
- * so the caller drops it. A message with no derivable key fails open (claimed,
- * key=null) so it is always handled and nothing to commit.
- */
-export async function claimIMessageInboundReplay(params: {
-  guard: ClaimableDedupe;
-  accountId: string;
-  message: IMessagePayload;
-}): Promise<{ claimed: boolean; key: string | null }> {
-  const key = buildIMessageInboundReplayKey({
-    accountId: params.accountId,
-    message: params.message,
-  });
-  if (!key) {
-    return { claimed: true, key: null };
-  }
-  const claim = await params.guard.claim(key, { namespace: params.accountId });
-  return { claimed: claim.kind === "claimed", key };
-}
-
-export async function commitIMessageInboundReplay(params: {
-  guard: ClaimableDedupe;
-  accountId: string;
-  keys: readonly string[];
-}): Promise<void> {
-  for (const key of new Set(params.keys)) {
-    await params.guard.commit(key, { namespace: params.accountId });
-  }
-}
-
-export function releaseIMessageInboundReplay(params: {
-  guard: ClaimableDedupe;
-  accountId: string;
-  keys: readonly string[];
-  error?: unknown;
-}): void {
-  for (const key of new Set(params.keys)) {
-    params.guard.release(key, { namespace: params.accountId, error: params.error });
-  }
 }
 
 /**

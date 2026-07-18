@@ -74,9 +74,7 @@ export abstract class AgentSessionBase {
   protected pendingNextTurnMessages: CustomMessage[] = [];
 
   // Compaction state
-  // Manual requests register before the session write-lock wait so timeout cancellation also
-  // reaches queued compactions instead of allowing them to mutate state after wrapper rejection.
-  protected compactionAbortControllers = new Set<AbortController>();
+  protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempted = false;
 
@@ -113,7 +111,6 @@ export abstract class AgentSessionBase {
   protected extensionShutdownHandler?: ShutdownHandler;
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
-  private disposed = false;
 
   // Model registry for API key resolution
   protected sessionModelRegistry: ModelRegistry;
@@ -128,6 +125,7 @@ export abstract class AgentSessionBase {
   protected baseSystemPrompt = "";
   protected baseSystemPromptOptions!: BuildSystemPromptOptions;
   protected exactBaseSystemPrompt: string | undefined;
+  protected systemPromptOverride: string | undefined;
 
   constructor(config: AgentSessionConfig) {
     this.agent = config.agent;
@@ -288,9 +286,18 @@ export abstract class AgentSessionBase {
 
   // Track last assistant message for auto-compaction check
   protected lastAssistantMessage: AssistantMessage | undefined = undefined;
+  protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
-  protected handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+  protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+    if (event.type === "agent_end") {
+      const reason: unknown = signal?.reason;
+      this.lastRunEndedForTurnHandoff =
+        signal?.aborted === true &&
+        typeof reason === "object" &&
+        reason !== null &&
+        (reason as { turnHandoff?: unknown }).turnHandoff === true;
+    }
     if (this.eventMayWriteSession(event)) {
       await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
       return;
@@ -363,7 +370,9 @@ export abstract class AgentSessionBase {
         this.lastAssistantMessage = event.message;
 
         const assistantMsg = event.message;
-        if (assistantMsg.stopReason !== "error") {
+        // A length response may still need overflow recovery in checkCompaction();
+        // retryCount is independent and resets for every non-error response below.
+        if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
           this.overflowRecoveryAttempted = false;
         }
 
@@ -532,7 +541,7 @@ export abstract class AgentSessionBase {
    * Preserves all existing listeners.
    */
   protected reconnectToAgent(): void {
-    if (this.disposed || this.unsubscribeAgent) {
+    if (this.unsubscribeAgent) {
       return;
     } // Already connected
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
@@ -543,10 +552,21 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
-    if (this.disposed) {
-      return;
+    const abortOperations = [
+      () => this.abortRetry(),
+      () => this.abortCompaction(),
+      () => this.abortBranchSummary(),
+      () => this.abortBash(),
+      () => this.agent.abort(),
+    ];
+    for (const abortOperation of abortOperations) {
+      try {
+        abortOperation();
+      } catch {
+        // One broken abort hook must not prevent the remaining work from being cancelled.
+      }
     }
-    this.disposed = true;
+
     this.currentExtensionRunner.invalidate(
       "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
     );
@@ -633,7 +653,7 @@ export abstract class AgentSessionBase {
 
     // Rebuild base system prompt with new tool set
     this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);
-    this.agent.state.systemPrompt = this.baseSystemPrompt;
+    this.agent.state.systemPrompt = this.systemPromptOverride ?? this.baseSystemPrompt;
   }
 
   /** Set an exact base prompt owned by the current runtime. */
@@ -657,7 +677,7 @@ export abstract class AgentSessionBase {
   get isCompacting(): boolean {
     return (
       this.autoCompactionAbortController !== undefined ||
-      this.compactionAbortControllers.size > 0 ||
+      this.compactionAbortController !== undefined ||
       this.branchSummaryAbortController !== undefined
     );
   }
@@ -795,5 +815,8 @@ export abstract class AgentSessionBase {
     skipAbortedCheck?: boolean,
   ): Promise<boolean>;
   abstract abortRetry(): void;
+  abstract abortCompaction(): void;
+  abstract abortBranchSummary(): void;
+  abstract abortBash(): void;
   protected abstract flushPendingBashMessages(): void;
 }

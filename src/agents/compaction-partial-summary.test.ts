@@ -1,6 +1,5 @@
 // Covers partial-summary recovery when compaction chunk summarization fails.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CompactionSafetyTimeoutError } from "./compaction-timeout.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 
@@ -60,11 +59,9 @@ vi.mock("../infra/retry.js", async () => {
 });
 
 let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
-let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ summarizeInStages } = await import("./compaction.js"));
   ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
 });
 
@@ -146,38 +143,6 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     expect(compactionMocks.logWarn).not.toHaveBeenCalledWith(
       "chunk summarization failed after retries; partial summary available",
       expect.anything(),
-    );
-  });
-
-  it("preserves completed chunks for the embedded safety-timeout reason", async () => {
-    const controller = new AbortController();
-    const timeoutErr = new CompactionSafetyTimeoutError();
-    const onPartialSummary = vi.fn();
-
-    compactionMocks.generateSummary
-      .mockResolvedValueOnce("Summary of chunk 1")
-      .mockImplementationOnce(async () => {
-        controller.abort(timeoutErr);
-        throw timeoutErr;
-      });
-
-    await expect(
-      summarizeWithFallback({
-        messages: twoChunkMessages,
-        model: testModel,
-        apiKey: "test-key", // pragma: allowlist secret
-        signal: controller.signal,
-        reserveTokens: 1000,
-        maxChunkTokens: 150,
-        contextWindow: 200_000,
-        onPartialSummary,
-      }),
-    ).resolves.toMatch(/Summary of chunk 1[\s\S]*chunks 1-1 of 2 were summarized/);
-    expect(onPartialSummary).toHaveBeenCalledWith(
-      expect.objectContaining({
-        completedMessages: 1,
-        totalMessages: 2,
-      }),
     );
   });
 
@@ -328,128 +293,5 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       "chunk summarization failed after retries; partial summary available",
       expect.objectContaining({ completedChunks: 2, totalChunks: 3 }),
     );
-  });
-
-  it("preserves completed stages when the next stage times out before its first chunk", async () => {
-    const controller = new AbortController();
-    const timeoutError = new CompactionSafetyTimeoutError();
-    const onPartialSummary = vi.fn();
-    const stagedMessages: AgentMessage[] = Array.from({ length: 4 }, (_, index) => ({
-      role: "user",
-      content: `${index + 1}-${"x".repeat(1200)}`,
-      timestamp: index + 1,
-    }));
-
-    compactionMocks.generateSummary
-      .mockResolvedValueOnce("Completed stage 1")
-      .mockImplementationOnce(async () => {
-        controller.abort(timeoutError);
-        throw timeoutError;
-      });
-
-    await expect(
-      summarizeInStages({
-        messages: stagedMessages,
-        model: testModel,
-        apiKey: "test-key", // pragma: allowlist secret
-        signal: controller.signal,
-        reserveTokens: 1000,
-        maxChunkTokens: 1000,
-        contextWindow: 200_000,
-        parts: 2,
-        minMessagesForSplit: 4,
-        onPartialSummary,
-      }),
-    ).resolves.toMatch(/Completed stage 1[\s\S]*Partial staged summary: 1 of 2/);
-    expect(onPartialSummary).toHaveBeenCalledWith({
-      kind: "safety-timeout",
-      completedChunks: 1,
-      totalChunks: 2,
-      completedMessages: 2,
-      totalMessages: 4,
-    });
-  });
-
-  it("keeps every completed stage when the final merge times out", async () => {
-    const controller = new AbortController();
-    const timeoutError = new CompactionSafetyTimeoutError();
-    const onPartialSummary = vi.fn();
-    const stagedMessages: AgentMessage[] = Array.from({ length: 4 }, (_, index) => ({
-      role: "user",
-      content: `${index + 1}-${"x".repeat(1200)}`,
-      timestamp: index + 1,
-    }));
-
-    compactionMocks.generateSummary
-      .mockResolvedValueOnce(`stage-1-complete ${"a".repeat(4000)}`)
-      .mockResolvedValueOnce(`stage-2-complete ${"b".repeat(4000)}`)
-      .mockResolvedValueOnce("merged stage 1 only")
-      .mockImplementationOnce(async () => {
-        controller.abort(timeoutError);
-        throw timeoutError;
-      });
-
-    const result = await summarizeInStages({
-      messages: stagedMessages,
-      model: testModel,
-      apiKey: "test-key", // pragma: allowlist secret
-      signal: controller.signal,
-      reserveTokens: 1000,
-      maxChunkTokens: 1000,
-      contextWindow: 200_000,
-      parts: 2,
-      minMessagesForSplit: 4,
-      onPartialSummary,
-    });
-
-    expect(result).toContain("stage-1-complete");
-    expect(result).toContain("stage-2-complete");
-    expect(result).toContain("Partial staged summary: 2 of 2");
-    expect(onPartialSummary).toHaveBeenCalledWith(
-      expect.objectContaining({ completedMessages: 4, totalMessages: 4 }),
-    );
-  });
-
-  it("keeps every completed stage when the final merge first request times out", async () => {
-    const controller = new AbortController();
-    const timeoutError = new CompactionSafetyTimeoutError();
-    const onPartialSummary = vi.fn();
-    const stagedMessages: AgentMessage[] = Array.from({ length: 4 }, (_, index) => ({
-      role: "user",
-      content: `${index + 1}-${"x".repeat(1200)}`,
-      timestamp: index + 1,
-    }));
-
-    compactionMocks.generateSummary
-      .mockResolvedValueOnce(`stage-1-complete ${"a".repeat(4000)}`)
-      .mockResolvedValueOnce(`stage-2-complete ${"b".repeat(4000)}`)
-      .mockImplementationOnce(async () => {
-        controller.abort(timeoutError);
-        throw timeoutError;
-      });
-
-    const result = await summarizeInStages({
-      messages: stagedMessages,
-      model: testModel,
-      apiKey: "test-key", // pragma: allowlist secret
-      signal: controller.signal,
-      reserveTokens: 1000,
-      maxChunkTokens: 1000,
-      contextWindow: 200_000,
-      parts: 2,
-      minMessagesForSplit: 4,
-      onPartialSummary,
-    });
-
-    expect(result).toContain("stage-1-complete");
-    expect(result).toContain("stage-2-complete");
-    expect(result).toContain("Partial staged summary: 2 of 2");
-    expect(onPartialSummary).toHaveBeenCalledWith({
-      kind: "safety-timeout",
-      completedChunks: 2,
-      totalChunks: 2,
-      completedMessages: 4,
-      totalMessages: 4,
-    });
   });
 });

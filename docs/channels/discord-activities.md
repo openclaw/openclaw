@@ -7,7 +7,7 @@ title: "Discord Activities"
 
 Discord Activities let an agent post an interactive, self-contained HTML widget to the current Discord channel. The message includes an **Open widget** button; clicking it launches the widget inside Discord.
 
-The feature is off by default. OpenClaw registers the Activity HTTP routes, `discord_widget` agent tool, and launch-button handler only when `channels.discord.activities` is present and a client secret resolves.
+The feature is off by default. OpenClaw registers the Activity HTTP routes, the `show_widget` agent tool, and the launch-button handler only when `channels.discord.activities` is present and a client secret resolves. The deprecated `discord_widget` alias remains available for one release.
 
 ## Prerequisites
 
@@ -82,7 +82,7 @@ Keep normal gateway authentication enabled. Only the Activity prefix is public, 
   </Step>
 
   <Step title="Restart and test">
-    Restart the gateway. In a Discord conversation, ask the agent to show an interactive widget. The agent can call `discord_widget`; click **Open widget** on the posted message.
+    Restart the gateway. In a Discord conversation, ask the agent to show an interactive widget. The agent calls `show_widget`; click **Open widget** on the posted message.
   </Step>
 </Steps>
 
@@ -121,4 +121,8 @@ Add the user's stable Discord ID to `allowFrom` or `dm.allowFrom` on the same Di
 
 ### “Widget unavailable”
 
-Launch the button from the channel where the agent posted it. If Discord does not carry the button's custom ID into the Activity, OpenClaw falls back only when that channel has exactly one live widget; multiple widgets fail closed as unavailable.
+Launch the button from the channel where the agent posted it. OpenClaw tracks launches server-side when clicked, so a fresh launch record can resolve the exact widget even when Discord omits or mangles the button's custom ID. When neither the custom ID nor a launch record resolves, OpenClaw opens the most recently posted live widget in that channel. Older widgets remain addressable through buttons that preserve their custom ID.
+
+### “You cannot launch Activities in this channel”
+
+Discord does not launch Activities from forum-post threads. OpenClaw can post the widget message and button there, but launch the Activity from a regular text channel instead. This restriction comes from Discord, not OpenClaw.

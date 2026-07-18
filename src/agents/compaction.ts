@@ -20,7 +20,6 @@ import {
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
-import { isCompactionSafetyTimeoutError } from "./compaction-timeout.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -41,15 +40,14 @@ const log = createSubsystemLogger("compaction");
 
 type PartialSummaryError = Error & { partialSummary?: string };
 
-type CompactionPartialSummaryProgress = {
-  kind: "safety-timeout";
-  completedChunks: number;
-  totalChunks: number;
-  completedMessages: number;
-  totalMessages: number;
-};
+type CompactionSummaryResult =
+  | { kind: "summary"; text: string }
+  | { kind: "generic-fallback"; text: string };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
+const MAX_CONSECUTIVE_GENERIC_FALLBACKS = 2;
+const CIRCUIT_OPEN_ERROR =
+  "Compaction staged summarization stopped after repeated generic fallbacks";
 const MERGE_SUMMARIES_INSTRUCTIONS = [
   "Merge these partial summaries into a single cohesive summary.",
   "",
@@ -142,7 +140,6 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
-  onPartialSummary?: (progress: CompactionPartialSummaryProgress) => void;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -159,8 +156,6 @@ async function summarizeChunks(params: {
     params.summarizationInstructions,
   );
   let hasGeneratedChunk = false;
-  let completedMessages = 0;
-  const totalMessages = chunks.reduce((count, chunk) => count + chunk.length, 0);
   for (const chunk of chunks) {
     try {
       summary = await retryAsync(
@@ -198,28 +193,10 @@ async function summarizeChunks(params: {
         },
       );
       hasGeneratedChunk = true;
-      completedMessages += chunk.length;
     } catch (err) {
-      const timeout = isTimeoutError(err);
+      // Caller cancellation is terminal. Provider-side failures, including
+      // timeouts, can still preserve chunks that already completed.
       if (params.signal.aborted) {
-        if (hasGeneratedChunk && isCompactionSafetyTimeoutError(params.signal.reason)) {
-          const completedChunks = chunks.indexOf(chunk);
-          log.warn("safety timeout interrupted chunk summarization; partial summary available", {
-            err,
-            completedChunks,
-            totalChunks: chunks.length,
-            completedMessages,
-            totalMessages,
-          });
-          params.onPartialSummary?.({
-            kind: "safety-timeout",
-            completedChunks,
-            totalChunks: chunks.length,
-            completedMessages,
-            totalMessages,
-          });
-          return `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
-        }
         throw err;
       }
       // No chunk has succeeded yet — rethrow so summarizeWithFallback
@@ -237,9 +214,7 @@ async function summarizeChunks(params: {
         completedChunks,
         totalChunks: chunks.length,
       });
-      const partial = new Error(
-        timeout ? "partial summarization timeout" : "partial summarization failure",
-      );
+      const partial = new Error("partial summarization failure");
       (partial as PartialSummaryError).partialSummary =
         `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
       throw partial;
@@ -286,7 +261,7 @@ function generateSummary(
  * Summarize with progressive fallback for handling oversized messages.
  * If full summarization fails, tries partial summarization excluding oversized messages.
  */
-async function summarizeWithFallback(params: {
+async function summarizeWithFallbackResult(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
@@ -298,18 +273,20 @@ async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
-  onPartialSummary?: (progress: CompactionPartialSummaryProgress) => void;
-}): Promise<string> {
+}): Promise<CompactionSummaryResult> {
   const { messages, contextWindow } = params;
 
   if (messages.length === 0) {
-    return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
+    return {
+      kind: "summary",
+      text: params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK,
+    };
   }
 
   // Try full summarization first
   let partialSummaryFallback: string | undefined;
   try {
-    return await summarizeChunks(params);
+    return { kind: "summary", text: await summarizeChunks(params) };
   } catch (fullError) {
     if (params.signal.aborted) {
       throw fullError;
@@ -334,7 +311,7 @@ async function summarizeWithFallback(params: {
         messages: smallMessages,
       });
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
-      return partialSummary + notes;
+      return { kind: "summary", text: partialSummary + notes };
     } catch (partialError) {
       if (params.signal.aborted) {
         throw partialError;
@@ -353,12 +330,20 @@ async function summarizeWithFallback(params: {
 
   // Final fallback: use best available partial summary, otherwise generic note
   if (partialSummaryFallback) {
-    return partialSummaryFallback;
+    return { kind: "summary", text: partialSummaryFallback };
   }
-  return (
-    `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-    `Summary unavailable due to size limits.`
-  );
+  return {
+    kind: "generic-fallback",
+    text:
+      `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
+      `Summary unavailable due to size limits.`,
+  };
+}
+
+async function summarizeWithFallback(
+  params: Parameters<typeof summarizeWithFallbackResult>[0],
+): Promise<string> {
+  return (await summarizeWithFallbackResult(params)).text;
 }
 
 /** Extracts a compact timestamp range from a chunk of messages for merge metadata. */
@@ -386,10 +371,6 @@ function extractChunkTimeRange(chunk: AgentMessage[]): string {
   return ` [${range} UTC]`;
 }
 
-function formatPartialStagedSummary(partialSummaries: string[], totalStages: number): string {
-  return `${partialSummaries.join("\n\n---\n\n")}\n\n[Partial staged summary: ${partialSummaries.length} of ${totalStages} stages produced output before timeout.]`;
-}
-
 /** Summarizes history in multiple stages when a single pass would be too large. */
 export async function summarizeInStages(params: {
   messages: AgentMessage[];
@@ -405,11 +386,13 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
-  onPartialSummary?: (progress: CompactionPartialSummaryProgress) => void;
-}): Promise<string> {
+}): Promise<CompactionSummaryResult> {
   const { messages } = params;
   if (messages.length === 0) {
-    return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
+    return {
+      kind: "summary",
+      text: params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK,
+    };
   }
 
   const plan = await buildStageSplitPlanWithWorker({
@@ -421,59 +404,39 @@ export async function summarizeInStages(params: {
   });
 
   if (plan.mode === "single") {
-    return summarizeWithFallback(params);
+    return summarizeWithFallbackResult(params);
   }
 
   const partialSummaries: string[] = [];
-  let completedMessages = 0;
-  for (const chunk of plan.chunks) {
-    let timedOutWithPartialProgress = false;
-    let chunkSummary: string;
-    try {
-      chunkSummary = await summarizeWithFallback({
-        ...params,
-        messages: chunk,
-        previousSummary: undefined,
-        onPartialSummary: (progress) => {
-          timedOutWithPartialProgress = true;
-          params.onPartialSummary?.({
-            ...progress,
-            completedMessages: completedMessages + progress.completedMessages,
-            totalMessages: messages.length,
-          });
-        },
+  let consecutiveGenericFallbacks = 0;
+  // Caller-owned leading context lives in the oldest split. Only losing that
+  // split requires restoration; later fallback placeholders remain in the merge.
+  let oldestChunkDegraded = false;
+  for (const [index, chunk] of plan.chunks.entries()) {
+    const result = await summarizeWithFallbackResult({
+      ...params,
+      messages: chunk,
+      previousSummary: undefined,
+    });
+    consecutiveGenericFallbacks =
+      result.kind === "generic-fallback" ? consecutiveGenericFallbacks + 1 : 0;
+    if (index === 0) {
+      oldestChunkDegraded = result.kind === "generic-fallback";
+    }
+
+    // Keep one placeholder to mark the missing split, but stop before repeated
+    // placeholders trigger more split requests or a doomed merge request.
+    if (consecutiveGenericFallbacks >= MAX_CONSECUTIVE_GENERIC_FALLBACKS) {
+      log.warn("compaction staged summarization stopped after repeated generic fallbacks", {
+        attemptedSplits: index + 1,
+        consecutiveGenericFallbacks,
+        totalSplits: plan.chunks.length,
       });
-    } catch (err) {
-      if (
-        partialSummaries.length > 0 &&
-        params.signal.aborted &&
-        isCompactionSafetyTimeoutError(params.signal.reason)
-      ) {
-        const progress = {
-          kind: "safety-timeout" as const,
-          completedChunks: partialSummaries.length,
-          totalChunks: plan.chunks.length,
-          completedMessages,
-          totalMessages: messages.length,
-        };
-        log.warn("safety timeout interrupted staged summarization; partial summary available", {
-          err,
-          completedStages: progress.completedChunks,
-          totalStages: progress.totalChunks,
-        });
-        params.onPartialSummary?.(progress);
-        return formatPartialStagedSummary(partialSummaries, plan.chunks.length);
-      }
-      throw err;
+      // The remaining chunks were never attempted. Abort the whole compaction
+      // so the caller keeps the source transcript instead of committing a gap.
+      throw new Error(CIRCUIT_OPEN_ERROR);
     }
-    partialSummaries.push(chunkSummary);
-    completedMessages += chunk.length;
-    if (timedOutWithPartialProgress) {
-      if (partialSummaries.length === 1) {
-        return chunkSummary;
-      }
-      return formatPartialStagedSummary(partialSummaries, plan.chunks.length);
-    }
+    partialSummaries.push(result.text);
   }
 
   if (partialSummaries.length === 1) {
@@ -481,7 +444,10 @@ export async function summarizeInStages(params: {
     if (summary === undefined) {
       throw new Error("Compaction summary plan produced no summary");
     }
-    return summary;
+    return {
+      kind: oldestChunkDegraded ? "generic-fallback" : "summary",
+      text: summary,
+    };
   }
 
   // Capture once so timestamps are strictly monotonic across
@@ -515,44 +481,14 @@ export async function summarizeInStages(params: {
     ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${custom}`
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
-  let mergeTimedOutWithPartialProgress = false;
-  let mergedSummary: string;
-  try {
-    mergedSummary = await summarizeWithFallback({
-      ...params,
-      messages: summaryMessages,
-      customInstructions: mergeInstructions,
-      onPartialSummary: (progress) => {
-        mergeTimedOutWithPartialProgress = true;
-        params.onPartialSummary?.({
-          ...progress,
-          completedMessages: messages.length,
-          totalMessages: messages.length,
-        });
-      },
-    });
-  } catch (err) {
-    if (params.signal.aborted && isCompactionSafetyTimeoutError(params.signal.reason)) {
-      const progress = {
-        kind: "safety-timeout" as const,
-        completedChunks: partialSummaries.length,
-        totalChunks: plan.chunks.length,
-        completedMessages: messages.length,
-        totalMessages: messages.length,
-      };
-      log.warn("safety timeout interrupted final staged-summary merge", {
-        err,
-        completedStages: progress.completedChunks,
-        totalStages: progress.totalChunks,
-      });
-      params.onPartialSummary?.(progress);
-      return formatPartialStagedSummary(partialSummaries, plan.chunks.length);
-    }
-    throw err;
-  }
-  return mergeTimedOutWithPartialProgress
-    ? formatPartialStagedSummary(partialSummaries, plan.chunks.length)
-    : mergedSummary;
+  const mergedResult = await summarizeWithFallbackResult({
+    ...params,
+    messages: summaryMessages,
+    customInstructions: mergeInstructions,
+  });
+  return oldestChunkDegraded && mergedResult.kind === "summary"
+    ? { kind: "generic-fallback", text: mergedResult.text }
+    : mergedResult;
 }
 
 /** Resolves a positive context-window token count from model metadata. */

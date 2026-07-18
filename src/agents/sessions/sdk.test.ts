@@ -151,7 +151,7 @@ function appendPersistedAssistantMessage(params: {
   content: unknown;
   stopReason?: "stop" | "aborted";
 }) {
-  return params.sessionManager.appendMessage({
+  params.sessionManager.appendMessage({
     role: "assistant",
     content: params.content,
     api: "messages",

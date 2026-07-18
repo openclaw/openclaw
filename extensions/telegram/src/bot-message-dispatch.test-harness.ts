@@ -121,36 +121,36 @@ export const deliverInboundReplyWithMessageSendContext =
   deliverInboundReplyWithMessageSendContextHoisted;
 export const emitInternalMessageSentHook = emitInternalMessageSentHookHoisted;
 export const recordOutboundMessageForPromptContext = recordOutboundMessageForPromptContextHoisted;
-export const createForumTopicTelegram = createForumTopicTelegramHoisted;
-export const deleteMessageTelegram = deleteMessageTelegramHoisted;
-export const editForumTopicTelegram = editForumTopicTelegramHoisted;
+const createForumTopicTelegram = createForumTopicTelegramHoisted;
+const deleteMessageTelegram = deleteMessageTelegramHoisted;
+const editForumTopicTelegram = editForumTopicTelegramHoisted;
 export const editMessageTelegram = editMessageTelegramHoisted;
-export const reactMessageTelegram = reactMessageTelegramHoisted;
+const reactMessageTelegram = reactMessageTelegramHoisted;
 export const sendMessageTelegram = sendMessageTelegramHoisted;
-export const sendPollTelegram = sendPollTelegramHoisted;
-export const sendStickerTelegram = sendStickerTelegramHoisted;
-export const loadConfig = loadConfigHoisted;
-export const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
-export const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
-export const enqueueSystemEvent = enqueueSystemEventHoisted;
-export const buildModelsProviderData = buildModelsProviderDataHoisted;
-export const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
+const sendPollTelegram = sendPollTelegramHoisted;
+const sendStickerTelegram = sendStickerTelegramHoisted;
+const loadConfig = loadConfigHoisted;
+const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
+const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
+const enqueueSystemEvent = enqueueSystemEventHoisted;
+const buildModelsProviderData = buildModelsProviderDataHoisted;
+const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
 export const createChannelMessageReplyPipeline = createChannelMessageReplyPipelineHoisted;
-export const wasSentByBot = wasSentByBotHoisted;
+const wasSentByBot = wasSentByBotHoisted;
 export const appendAssistantMirrorMessageByIdentity = appendAssistantMirrorMessageByIdentityHoisted;
-export const getSessionEntry = getSessionEntryHoisted;
+const getSessionEntry = getSessionEntryHoisted;
 export const loadSessionStore = loadSessionStoreHoisted;
 export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdentityHoisted;
-export const resolveStorePath = resolveStorePathHoisted;
+const resolveStorePath = resolveStorePathHoisted;
 export const generateTopicLabel = generateTopicLabelHoisted;
 export const describeStickerImage = describeStickerImageHoisted;
-export const loadModelCatalog = loadModelCatalogHoisted;
-export const findModelInCatalog = findModelInCatalogHoisted;
-export const modelSupportsVision = modelSupportsVisionHoisted;
-export const resolveAgentDir = resolveAgentDirHoisted;
-export const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
-export const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
-export const resolveChunkMode = resolveChunkModeHoisted;
+const loadModelCatalog = loadModelCatalogHoisted;
+const findModelInCatalog = findModelInCatalogHoisted;
+const modelSupportsVision = modelSupportsVisionHoisted;
+const resolveAgentDir = resolveAgentDirHoisted;
+const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
+const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
+const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
 
 vi.mock("./draft-stream.js", () => ({
@@ -162,6 +162,43 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextHoisted,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  type TestTurn = {
+    storePath: string;
+    recordInboundSession: Parameters<
+      typeof actual.runPreparedInboundReply
+    >[0]["recordInboundSession"];
+  };
+  return {
+    ...actual,
+    runChannelInboundEvent: (params: RunParams) => {
+      const resolveTurn = params.adapter.resolveTurn;
+      return actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (input, eventClass, preflight) => {
+            const resolved = await resolveTurn(input, eventClass, preflight);
+            if (!("route" in resolved) || !("runDispatch" in resolved)) {
+              return resolved;
+            }
+            const { route, ...turn } = resolved;
+            const testTurn = (params.raw as { turn: TestTurn }).turn;
+            return {
+              ...turn,
+              routeSessionKey: route.sessionKey,
+              storePath: testTurn.storePath,
+              recordInboundSession: testTurn.recordInboundSession,
+            };
+          },
+        },
+      });
+    },
   };
 });
 
@@ -558,17 +595,6 @@ export function createDirectSessionPayload(): TelegramMessageContext["ctxPayload
   } as TelegramMessageContext["ctxPayload"];
 }
 
-export function observeDeliveredReply(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    deliverReplies.mockImplementation(async (params: { replies?: Array<{ text?: string }> }) => {
-      if (params.replies?.some((reply) => reply.text === text)) {
-        resolve();
-      }
-      return { delivered: true };
-    });
-  });
-}
-
 export function createBot(): Bot {
   return {
     api: {
@@ -603,10 +629,7 @@ export async function dispatchWithContext(params: {
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   textLimit?: number;
-  onTurnAdopted?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAdopted"];
-  onTurnDeferred?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnDeferred"];
-  onTurnAbandoned?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAbandoned"];
-  turnAbortSignal?: Parameters<typeof dispatchTelegramMessage>[0]["turnAbortSignal"];
+  turnAdoptionLifecycle?: Parameters<typeof dispatchTelegramMessage>[0]["turnAdoptionLifecycle"];
   runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
 }) {
   const bot = params.bot ?? createBot();
@@ -623,10 +646,7 @@ export async function dispatchWithContext(params: {
     opts: { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
-    onTurnAdopted: params.onTurnAdopted,
-    onTurnDeferred: params.onTurnDeferred,
-    onTurnAbandoned: params.onTurnAbandoned,
-    turnAbortSignal: params.turnAbortSignal,
+    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
   });
 }
 
@@ -675,4 +695,4 @@ export function describeTelegramDispatch(name: string, registerTests: () => void
   });
 }
 
-export type { Bot, TelegramBotDeps };
+export type { TelegramBotDeps };

@@ -48,6 +48,9 @@ export const hookRunner = {
 };
 
 export const ensureRuntimePluginsLoaded: Mock<(params?: unknown) => void> = vi.fn();
+export const acquireSessionWriteLockMock = vi.fn(async (_params?: unknown) => ({
+  release: vi.fn(async () => {}),
+}));
 export const resolveContextEngineMock = vi.fn(async () => ({
   info: { ownsCompaction: true as boolean },
   compact: contextEngineCompactMock,
@@ -70,26 +73,17 @@ export const resolveModelAsyncMock = vi.fn(
   async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
     resolveModelMock(provider, modelId, agentDir, cfg),
 );
-export const sessionCompactImpl = vi.fn(
-  async (_customInstructions?: string, _abortSignal?: AbortSignal) => ({
-    summary: "summary",
-    firstKeptEntryId: "entry-1",
-    tokensBefore: 120,
-    details: { ok: true },
-  }),
-);
-export const sessionCompactionCompletionMock = vi.fn<() => Promise<void>>(async () => {});
-export const settleCompactionLifecycleWithinGraceMock = vi.fn(async (completion: Promise<void>) => {
-  await completion;
-  return true;
-});
+export const sessionCompactImpl = vi.fn(async () => ({
+  summary: "summary",
+  firstKeptEntryId: "entry-1",
+  tokensBefore: 120,
+  details: { ok: true },
+}));
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
-export const sanitizeSessionHistoryMock = vi.fn(
+const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
-export const validateReplayTurnsMock = vi.fn(
-  async ({ messages }: { messages: unknown[] }) => messages,
-);
+const validateReplayTurnsMock = vi.fn(async ({ messages }: { messages: unknown[] }) => messages);
 export const getMemorySearchManagerMock: Mock<
   (params?: unknown) => Promise<MockMemorySearchManager>
 > = vi.fn(async () => ({
@@ -165,20 +159,10 @@ function createMockCompactionSession() {
         systemPrompt: undefined as string | undefined,
       },
     },
-    startCompaction: vi.fn((customInstructions?: string, abortSignal?: AbortSignal) => {
-      const result = (async () => {
-        session.messages.splice(1);
-        return await sessionCompactImpl(customInstructions, abortSignal);
-      })();
-      return {
-        result,
-        completion: sessionCompactionCompletionMock(),
-      };
+    compact: vi.fn(async () => {
+      session.messages.splice(1);
+      return await sessionCompactImpl();
     }),
-    compact: vi.fn(
-      (customInstructions?: string, abortSignal?: AbortSignal) =>
-        session.startCompaction(customInstructions, abortSignal).result,
-    ),
     setActiveToolsByName: vi.fn(),
     setBaseSystemPrompt: vi.fn((systemPrompt: string) => {
       session.agent.state.systemPrompt = systemPrompt;
@@ -205,7 +189,7 @@ function createMockToolDefinitions(tools: unknown[] = []) {
   });
 }
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
-export const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const guardSessionManagerMock = vi.fn(() => ({
   flushPendingToolResults: vi.fn(),
 }));
@@ -260,8 +244,9 @@ function createDefaultCompactionAuthStore(): AuthProfileStore {
 export const ensureAuthProfileStoreMock: Mock<() => AuthProfileStore> = vi.fn(
   createDefaultCompactionAuthStore,
 );
-export const ensureAuthProfileStoreWithoutExternalProfilesMock: Mock<() => AuthProfileStore> =
-  vi.fn(createDefaultCompactionAuthStore);
+const ensureAuthProfileStoreWithoutExternalProfilesMock: Mock<() => AuthProfileStore> = vi.fn(
+  createDefaultCompactionAuthStore,
+);
 const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> = vi.fn(
   () => undefined,
 );
@@ -272,24 +257,20 @@ export const maybeCompactAgentHarnessSessionMock: Mock<
 async function runCompactWithSafetyTimeoutMock(
   compact: () => Promise<unknown>,
   _timeoutMs?: number,
-  opts?: {
-    abortSignal?: AbortSignal;
-    onCancel?: (reason?: unknown) => void;
-    acceptResultAfterTimeout?: (result: unknown) => boolean;
-    timeoutResultGraceMs?: number;
-  },
+  opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
 ): Promise<unknown> {
   const abortSignal = opts?.abortSignal;
   if (!abortSignal) {
     return await compact();
   }
   const cancelAndCreateError = () => {
+    opts?.onCancel?.();
     const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
-    const err = reason instanceof Error ? reason : new Error("aborted");
-    if (!(reason instanceof Error)) {
-      err.name = "AbortError";
+    if (reason instanceof Error) {
+      return reason;
     }
-    opts?.onCancel?.(err);
+    const err = new Error("aborted");
+    err.name = "AbortError";
     return err;
   };
   if (abortSignal.aborted) {
@@ -543,6 +524,7 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   ensureRuntimePluginsLoaded.mockReset();
+  acquireSessionWriteLockMock.mockClear();
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -589,13 +571,6 @@ export function resetCompactHooksHarnessMocks(): void {
     tokensBefore: 120,
     details: { ok: true },
   });
-  sessionCompactionCompletionMock.mockReset();
-  sessionCompactionCompletionMock.mockResolvedValue(undefined);
-  settleCompactionLifecycleWithinGraceMock.mockReset();
-  settleCompactionLifecycleWithinGraceMock.mockImplementation(async (completion) => {
-    await completion;
-    return true;
-  });
 
   triggerInternalHook.mockReset();
   resetCompactSessionStateMocks();
@@ -616,6 +591,7 @@ export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
   compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
   testing: typeof import("./compact.js").testing;
+  withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
@@ -773,7 +749,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    acquireSessionWriteLock: acquireSessionWriteLockMock,
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
     resolveSessionWriteLockOptions: vi.fn(() => ({
@@ -905,7 +881,6 @@ export async function loadCompactHooksHarness(): Promise<{
     return {
       compactWithSafetyTimeout: compactWithSafetyTimeoutMock,
       resolveCompactionTimeoutMs: vi.fn(() => 30_000),
-      settleCompactionLifecycleWithinGrace: settleCompactionLifecycleWithinGraceMock,
       // Mirror the real wrapper: bound the engine's compact() with the
       // (mocked) safety timeout and thread the abort signal into its params.
       compactContextEngineWithSafetyTimeout: vi.fn(
@@ -1079,17 +1054,20 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
-    import("./compact.js"),
-    import("./compact.queued.js"),
-    import("../../sessions/transcript-events.js"),
-  ]);
+  const [compactModule, compactQueuedModule, transcriptEvents, transcriptWriteContext] =
+    await Promise.all([
+      import("./compact.js"),
+      import("./compact.queued.js"),
+      import("../../sessions/transcript-events.js"),
+      import("../../config/sessions/transcript-write-context.js"),
+    ]);
 
   return {
     ...compactModule,
     compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
+    withOwnedSessionTranscriptWrites: transcriptWriteContext.withOwnedSessionTranscriptWrites,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

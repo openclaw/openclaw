@@ -159,7 +159,8 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
     if (
       assistantMsg.stopReason !== "aborted" &&
       assistantMsg.stopReason !== "error" &&
-      assistantMsg.usage
+      assistantMsg.usage &&
+      calculateContextTokens(assistantMsg.usage) > 0
     ) {
       return assistantMsg.usage;
     }
@@ -167,7 +168,7 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   return undefined;
 }
 
-/** Return usage from the last successful assistant message in session entries. */
+/** Return usage from the last valid assistant message in session entries. */
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
   for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
@@ -319,6 +320,43 @@ export function estimateTokens(message: AgentMessage): number {
 
   return 0;
 }
+function isCutPointMessage(message: AgentMessage): boolean {
+  switch (message.role) {
+    case "user":
+    case "assistant":
+    case "bashExecution":
+    case "custom":
+    case "branchSummary":
+    case "compactionSummary":
+      return true;
+    case "toolResult":
+      return false;
+  }
+
+  return false;
+}
+
+function isTurnStartMessage(message: AgentMessage): boolean {
+  switch (message.role) {
+    case "user":
+    case "bashExecution":
+    case "custom":
+    case "branchSummary":
+    case "compactionSummary":
+      return true;
+    case "assistant":
+    case "toolResult":
+      return false;
+  }
+
+  return false;
+}
+
+function isTurnStartEntry(entry: SessionTreeEntry): boolean {
+  const message = getMessageFromEntryForCompaction(entry);
+  return message ? isTurnStartMessage(message) : false;
+}
+
 function findValidCutPoints(
   entries: SessionTreeEntry[],
   startIndex: number,
@@ -330,35 +368,8 @@ function findValidCutPoints(
     if (!entry) {
       continue;
     }
-    switch (entry.type) {
-      case "message": {
-        const role = (entry.message as HarnessMessage).role;
-        switch (role) {
-          case "bashExecution":
-          case "custom":
-          case "branchSummary":
-          case "compactionSummary":
-          case "user":
-          case "assistant":
-            cutPoints.push(i);
-            break;
-          case "toolResult":
-            break;
-        }
-        break;
-      }
-      case "thinking_level_change":
-      case "model_change":
-      case "compaction":
-      case "branch_summary":
-      case "custom":
-      case "custom_message":
-      case "label":
-      case "session_info":
-      case "leaf":
-        break;
-    }
-    if (entry.type === "branch_summary" || entry.type === "custom_message") {
+    const message = getMessageFromEntryForCompaction(entry);
+    if (message && isCutPointMessage(message)) {
       cutPoints.push(i);
     }
   }
@@ -376,14 +387,8 @@ export function findTurnStartIndex(
     if (!entry) {
       continue;
     }
-    if (entry.type === "branch_summary" || entry.type === "custom_message") {
+    if (isTurnStartEntry(entry)) {
       return i;
-    }
-    if (entry.type === "message") {
-      const role = (entry.message as HarnessMessage).role;
-      if (role === "user" || role === "bashExecution") {
-        return i;
-      }
     }
   }
   return -1;
@@ -420,10 +425,14 @@ export function findCutPoint(
 
   for (let i = endIndex - 1; i >= startIndex; i--) {
     const entry = entries[i];
-    if (!entry || entry.type !== "message") {
+    if (!entry) {
       continue;
     }
-    const messageTokens = estimateTokens(entry.message);
+    const message = getMessageFromEntryForCompaction(entry);
+    if (!message) {
+      continue;
+    }
+    const messageTokens = estimateTokens(message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
       const lastCutIndex = cutPoints.at(-1);
@@ -448,7 +457,7 @@ export function findCutPoint(
     if (prevEntry.type === "compaction") {
       break;
     }
-    if (prevEntry.type === "message") {
+    if (getMessageFromEntryForCompaction(prevEntry)) {
       break;
     }
     cutIndex--;
@@ -457,13 +466,13 @@ export function findCutPoint(
   if (!cutEntry) {
     throw new Error("compaction cut point does not reference a session entry");
   }
-  const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
-  const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
+  const startsTurn = isTurnStartEntry(cutEntry);
+  const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
 
   return {
     firstKeptEntryIndex: cutIndex,
     turnStartIndex,
-    isSplitTurn: !isUserMessage && turnStartIndex !== -1,
+    isSplitTurn: !startsTurn && turnStartIndex !== -1,
   };
 }
 
@@ -681,12 +690,8 @@ export interface CompactionPreparation {
   firstKeptEntryId: string;
   /** Messages summarized into the history summary. */
   messagesToSummarize: AgentMessage[];
-  /** Source entry ids aligned with messagesToSummarize. */
-  messageEntryIdsToSummarize?: string[];
   /** Prefix messages summarized separately when compaction splits a turn. */
   turnPrefixMessages: AgentMessage[];
-  /** Source entry ids aligned with turnPrefixMessages. */
-  turnPrefixEntryIds?: string[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
   /** Estimated context tokens before compaction. */
@@ -744,26 +749,25 @@ export function prepareCompaction(
 
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [];
-  const messageEntryIdsToSummarize: string[] = [];
   for (let i = boundaryStart; i < historyEnd; i++) {
     const entry = pathEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-    if (entry && msg) {
+    if (msg) {
       messagesToSummarize.push(msg);
-      messageEntryIdsToSummarize.push(entry.id);
     }
   }
   const turnPrefixMessages: AgentMessage[] = [];
-  const turnPrefixEntryIds: string[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
       const entry = pathEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (entry && msg) {
+      if (msg) {
         turnPrefixMessages.push(msg);
-        turnPrefixEntryIds.push(entry.id);
       }
     }
+  }
+  if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
+    return ok(undefined);
   }
   const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
   if (cutPoint.isSplitTurn) {
@@ -775,9 +779,7 @@ export function prepareCompaction(
   return ok({
     firstKeptEntryId,
     messagesToSummarize,
-    messageEntryIdsToSummarize,
     turnPrefixMessages,
-    turnPrefixEntryIds,
     isSplitTurn: cutPoint.isSplitTurn,
     tokensBefore,
     previousSummary,

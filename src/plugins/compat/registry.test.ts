@@ -17,7 +17,6 @@ const deprecatedTargetParserCallPattern =
 const deprecatedTargetParserCompatFiles = new Set([
   "src/auto-reply/reply/group-id.ts",
   "src/channels/plugins/target-parsing-loaded.ts",
-  "src/channels/plugins/target-parsing.test.ts",
   "src/infra/outbound/outbound-session.ts",
   "src/infra/outbound/outbound-session.test-helpers.ts",
   "src/plugins/compat/registry.test.ts",
@@ -33,7 +32,7 @@ const publicSdkContractNarrowingTiers = [
   {
     name: "bundled-only public export",
     codeSuffix: "-public-demotion",
-    count: 158,
+    count: 157,
     replacement:
       "subpath becomes internal (private-local-only); no external successor — no known external consumers",
     releaseNote: /public export.*module stays available for bundled plugins.*private-local-only/u,
@@ -106,21 +105,6 @@ describe("plugin compatibility registry", () => {
     },
   );
 
-  it("keeps loaded target compatibility surfaces exported during their removal windows", () => {
-    const source = fs.readFileSync("src/channels/plugins/target-parsing-loaded.ts", "utf8");
-    expect(source).toMatch(/export type \{ ChannelRouteParsedTarget \}/u);
-    for (const symbol of [
-      "ParsedChannelExplicitTarget",
-      "ComparableChannelTarget",
-      "parseExplicitTargetForLoadedChannel",
-      "resolveRouteTargetForLoadedChannel",
-      "resolveComparableTargetForLoadedChannel",
-      "comparableChannelTargetsMatch",
-      "comparableChannelTargetsShareRoute",
-    ]) {
-      expect(source).toMatch(new RegExp(`export (?:type|function) ${symbol}\\b`, "u"));
-    }
-  });
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
     expect(deprecatedTargetParserOffenders).toEqual([]);
   });

@@ -53,6 +53,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -435,7 +436,7 @@ async function initSessionStateAttemptLocked(
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
 
   let sessionEntry: SessionEntry;
 

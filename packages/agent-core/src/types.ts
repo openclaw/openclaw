@@ -462,6 +462,8 @@ export interface AgentTool<
 > extends Tool<TParameters> {
   /** Human-readable label for UI display. */
   label: string;
+  /** Optional schema for the structured `AgentToolResult.details` value. */
+  outputSchema?: TSchema;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
   /**

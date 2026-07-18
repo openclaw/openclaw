@@ -52,7 +52,7 @@ on:
         default: false
         type: boolean
       allow_unreleased_changelog:
-        description: Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict
+        description: Allow explicitly opted-in current-tree packaging to use Unreleased notes
         required: false
         default: false
         type: boolean
@@ -76,7 +76,7 @@ on:
           - qa-parity
           - qa-live
       live_suite_filter:
-        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram,qa-live-discord,qa-live-whatsapp; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lane ids (qa-live-matrix, qa-live-telegram, qa-live-discord, qa-live-whatsapp, qa-live-slack); blank runs all selected live suites
         required: false
         default: ""
         type: string
@@ -203,6 +203,9 @@ jobs:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
 
       - name: Resolve checked-out fallback SHA
         if: steps.fast_ref.outputs.fallback == 'true'
@@ -368,12 +371,12 @@ jobs:
           allow_unreleased_changelog="$(printf '%s' "$RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT" | tr '[:upper:]' '[:lower:]')"
           if [[ "$RELEASE_REF_INPUT" == "main" || "$RELEASE_REF_INPUT" == "refs/heads/main" ]]; then
             allow_unreleased_changelog=true
+          elif [[ "$allow_unreleased_changelog" == "true" || "$allow_unreleased_changelog" == "1" || "$allow_unreleased_changelog" == "yes" ]]; then
+            allow_unreleased_changelog=true
           elif [[ "$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33|tideclaw/alpha/) ]] || [[ "$RELEASE_REF_INPUT" =~ ^(refs/tags/)?v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
             allow_unreleased_changelog=false
-          elif [[ "$allow_unreleased_changelog" != "true" && "$allow_unreleased_changelog" != "1" && "$allow_unreleased_changelog" != "yes" ]]; then
-            allow_unreleased_changelog=false
           else
-            allow_unreleased_changelog=true
+            allow_unreleased_changelog=false
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
@@ -565,6 +568,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
+          filter: blob:none
 
       - name: Set artifact metadata
         id: artifact
@@ -836,6 +840,7 @@ jobs:
     uses: ./.github/workflows/package-acceptance.yml
     with:
       advisory: false
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       workflow_ref: ${{ github.sha }}
       source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
@@ -1681,7 +1686,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 
@@ -1781,7 +1785,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 
@@ -1878,7 +1881,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_SLACK_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 

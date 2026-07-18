@@ -5,10 +5,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
-  CompactionSafetyTimeoutError,
-  markCompactionTimeoutPartialResult,
-} from "../compaction-timeout.js";
-import {
+  acquireSessionWriteLockMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildAgentRuntimePlanMock,
@@ -48,10 +45,8 @@ import {
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
-  sessionCompactionCompletionMock,
   sessionMessages,
   sessionCompactImpl,
-  settleCompactionLifecycleWithinGraceMock,
   triggerInternalHook,
 } from "./compact.hooks.harness.js";
 import {
@@ -67,6 +62,7 @@ let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmb
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
+let withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -313,6 +309,7 @@ beforeAll(async () => {
   compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
+  withOwnedSessionTranscriptWrites = loaded.withOwnedSessionTranscriptWrites;
 });
 
 beforeEach(() => {
@@ -335,6 +332,36 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
+  });
+
+  it("acquires the normal session lock without process-wide reentry", async () => {
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    const lockOptions = mockCallArg(acquireSessionWriteLockMock);
+    expect(lockOptions).toMatchObject({ sessionFile: TEST_SESSION_FILE });
+    expect(lockOptions).not.toHaveProperty("allowReentrant");
+  });
+
+  it("reuses the matching logical writer lock during direct compaction", async () => {
+    const withSessionWriteLockCall = vi.fn();
+    const withSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> => {
+      withSessionWriteLockCall();
+      return await run();
+    };
+
+    const result = await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: TEST_SESSION_FILE,
+        sessionKey: TEST_SESSION_KEY,
+        withSessionWriteLock,
+      },
+      async () => await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs()),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(withSessionWriteLockCall).toHaveBeenCalledOnce();
+    expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
   });
 
   it("fails closed before generic compaction for a model-locked native session", async () => {
@@ -2286,102 +2313,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       api: "ollama",
       id: "qwen3:8b",
     });
-  });
-
-  it("passes the safety timeout signal only to its native compaction request", async () => {
-    const safetyTimeoutModule = await import("./compaction-safety-timeout.js");
-    const timeoutReason = new CompactionSafetyTimeoutError();
-    vi.mocked(safetyTimeoutModule.compactWithSafetyTimeout).mockImplementationOnce(
-      async (compact, _timeoutMs, opts) => {
-        expect(
-          opts?.acceptResultAfterTimeout?.(
-            markCompactionTimeoutPartialResult({ summary: "partial" }),
-          ),
-        ).toBe(true);
-        expect(opts?.acceptResultAfterTimeout?.({ summary: "ordinary" })).toBe(false);
-        const controller = new AbortController();
-        controller.abort(timeoutReason);
-        return await compact(controller.signal);
-      },
-    );
-
-    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
-
-    expect(result.ok).toBe(true);
-    expect(result.result?.summary).toBe("summary");
-    expect(sessionAbortCompactionMock).not.toHaveBeenCalled();
-    expect(sessionCompactImpl.mock.lastCall?.[1]?.reason).toBe(timeoutReason);
-  });
-
-  it("waits for native compaction completion before outer side effects and dispose", async () => {
-    const completion = createDeferred<void>();
-    sessionCompactionCompletionMock.mockReturnValueOnce(completion.promise);
-
-    const resultPromise = compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
-    await vi.waitFor(() => expect(sessionCompactImpl).toHaveBeenCalledTimes(1));
-    const created = await createAgentSessionMock.mock.results[0]?.value;
-    if (!created) {
-      throw new Error("Expected a created compaction session");
-    }
-
-    const settledBeforeCompletion = await Promise.race([
-      resultPromise.then(() => true),
-      new Promise<false>((resolve) => {
-        setTimeout(() => resolve(false), 25);
-      }),
-    ]);
-    expect(rotateTranscriptAfterCompactionMock).not.toHaveBeenCalled();
-    expect(created.session.dispose).not.toHaveBeenCalled();
-
-    completion.resolve(undefined);
-    expect(settledBeforeCompletion).toBe(false);
-    await expect(resultPromise).resolves.toMatchObject({ ok: true, compacted: true });
-    expect(created.session.dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it("bounds a stalled accepted compaction lifecycle before releasing outer work", async () => {
-    const completion = createDeferred<void>();
-    sessionCompactionCompletionMock.mockReturnValueOnce(completion.promise);
-    settleCompactionLifecycleWithinGraceMock.mockResolvedValueOnce(false);
-
-    const resultPromise = compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
-    await vi.waitFor(() => expect(sessionCompactImpl).toHaveBeenCalledTimes(1));
-    const created = await createAgentSessionMock.mock.results[0]?.value;
-    if (!created) {
-      throw new Error("Expected a created compaction session");
-    }
-
-    const settledWithinBound = await Promise.race([
-      resultPromise.then(() => true),
-      new Promise<false>((resolve) => {
-        setTimeout(() => resolve(false), 25);
-      }),
-    ]);
-    completion.resolve(undefined);
-    await expect(resultPromise).resolves.toMatchObject({ ok: true, compacted: true });
-    expect(settledWithinBound).toBe(true);
-    expect(created.session.dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it("drains a rejected compaction lifecycle within a bound before disposal", async () => {
-    const completion = createDeferred<void>();
-    sessionCompactionCompletionMock.mockReturnValueOnce(completion.promise);
-    settleCompactionLifecycleWithinGraceMock.mockResolvedValueOnce(false);
-    compactWithSafetyTimeoutMock.mockImplementationOnce(async (compact) => {
-      void compact();
-      throw new CompactionSafetyTimeoutError();
-    });
-
-    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
-    const created = await createAgentSessionMock.mock.results[0]?.value;
-    if (!created) {
-      throw new Error("Expected a created compaction session");
-    }
-    completion.resolve(undefined);
-
-    expect(result).toMatchObject({ ok: false, compacted: false });
-    expect(settleCompactionLifecycleWithinGraceMock).toHaveBeenCalledWith(completion.promise);
-    expect(created.session.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {

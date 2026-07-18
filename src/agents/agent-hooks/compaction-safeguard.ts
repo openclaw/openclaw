@@ -12,6 +12,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
@@ -21,10 +22,6 @@ import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
-import {
-  isCompactionSafetyTimeoutError,
-  markCompactionTimeoutPartialResult,
-} from "../compaction-timeout.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -78,6 +75,7 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -182,6 +180,154 @@ function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
     .filter((message): message is AgentMessage => Boolean(message));
 }
 
+function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
+  if ((message as { role?: unknown }).role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
+function isSessionsSendToolName(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/^(?:functions?|tools?)[./_-]/, "") === "sessions_send"
+  );
+}
+
+function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
+  const sendCallIds = new Set<string>();
+  const resolvedCallIds = new Set<string>();
+  const resultTextByCallId = new Map<string, string>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const record = block as { type?: unknown; id?: unknown; name?: unknown };
+      if (
+        typeof record.type === "string" &&
+        TOOL_CALL_BLOCK_TYPES.has(record.type) &&
+        isSessionsSendToolName(record.name) &&
+        typeof record.id === "string" &&
+        record.id.trim()
+      ) {
+        sendCallIds.add(record.id.trim());
+      }
+    }
+  }
+
+  for (const message of messages) {
+    if (message.role !== "toolResult") {
+      continue;
+    }
+    const callId = extractToolResultId(message);
+    if (!callId || !sendCallIds.has(callId)) {
+      continue;
+    }
+    resolvedCallIds.add(callId);
+    const resultText = extractMessageText(message) || formatNonTextPlaceholder(message.content);
+    if (resultText) {
+      resultTextByCallId.set(callId, resultText);
+    }
+  }
+
+  return messages.flatMap((message) => {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      let replaced = false;
+      const content = message.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const record = block as {
+          type?: unknown;
+          id?: unknown;
+          name?: unknown;
+          arguments?: unknown;
+        };
+        if (
+          typeof record.type !== "string" ||
+          !TOOL_CALL_BLOCK_TYPES.has(record.type) ||
+          !isSessionsSendToolName(record.name)
+        ) {
+          return block;
+        }
+        replaced = true;
+        const callId = typeof record.id === "string" ? record.id.trim() : "";
+        const resultText = callId ? resultTextByCallId.get(callId) : undefined;
+        const resolved = Boolean(callId && resolvedCallIds.has(callId));
+        const requestText = JSON.stringify({ callId: callId || undefined, args: record.arguments });
+        return {
+          type: "text",
+          text:
+            resolved && resultText
+              ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: ${resultText}`
+              : resolved
+                ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: [empty]`
+                : `sessions_send result missing; delivery call omitted from replay.\nRequest: ${requestText}`,
+        };
+      });
+      return replaced ? [{ ...message, content } as AgentMessage] : [message];
+    }
+    if (message.role === "toolResult") {
+      const callId = extractToolResultId(message);
+      if ((callId && sendCallIds.has(callId)) || isSessionsSendToolName(message.toolName)) {
+        return [];
+      }
+    }
+    return [message];
+  });
+}
+
+function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): AgentMessage[] {
+  const sanitizedMessages = sanitizeSourceSessionSends(messages);
+  let turnStart = sanitizedMessages.length;
+  while (turnStart > 0) {
+    const role = (sanitizedMessages[turnStart - 1] as { role?: unknown }).role;
+    if (role !== "assistant" && role !== "toolResult") {
+      break;
+    }
+    turnStart -= 1;
+  }
+
+  const tailMessage = messages.at(-1);
+  const endsWithTerminalAssistantText =
+    tailMessage !== undefined &&
+    tailMessage.role === "assistant" &&
+    Boolean(extractMessageText(tailMessage).trim()) &&
+    (!Array.isArray(tailMessage.content) ||
+      !tailMessage.content.some((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const type = (block as { type?: unknown }).type;
+        return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
+      }));
+  const activeInput = sanitizedMessages[turnStart - 1];
+
+  // A completed sessions_send target run is already delivered to its caller.
+  // Require terminal text so compaction after tool output can still recover unfinished work.
+  if (
+    endsWithTerminalAssistantText &&
+    turnStart < sanitizedMessages.length &&
+    turnStart > 0 &&
+    activeInput !== undefined &&
+    isReplayUnsafeInterSessionInput(activeInput)
+  ) {
+    return sanitizedMessages.slice(0, turnStart - 1);
+  }
+  return sanitizedMessages;
+}
+
 function containsRealConversation(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>
     isRealConversationMessage(message, allMessages, index),
@@ -246,14 +392,12 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
-  onPartialSummary?: Parameters<typeof summarizeInStages>[0]["onPartialSummary"];
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
     previousSummary: params.previousSummary,
   });
-  const prependedMessages = messages.length - params.messages.length;
-  return compactionSafeguardDeps.summarizeInStages({
+  const result = await compactionSafeguardDeps.summarizeInStages({
     messages,
     model: params.model,
     apiKey: params.apiKey,
@@ -265,68 +409,15 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
-    onPartialSummary: params.onPartialSummary
-      ? (progress) => {
-          const completedMessages = Math.max(
-            0,
-            Math.min(params.messages.length, progress.completedMessages - prependedMessages),
-          );
-          params.onPartialSummary?.({
-            ...progress,
-            completedMessages,
-            totalMessages: params.messages.length,
-          });
-        }
-      : undefined,
   });
-}
-
-function selectAlignedEntryIds(params: {
-  sourceMessages: AgentMessage[];
-  sourceEntryIds?: string[];
-  selectedMessages: AgentMessage[];
-}): string[] | undefined {
-  if (params.sourceEntryIds?.length !== params.sourceMessages.length) {
-    return undefined;
-  }
-  const entryIdsByMessage = new Map<AgentMessage, string[]>();
-  for (const [index, message] of params.sourceMessages.entries()) {
-    const entryId = params.sourceEntryIds[index];
-    if (!entryId) {
-      return undefined;
-    }
-    const entryIds = entryIdsByMessage.get(message) ?? [];
-    entryIds.push(entryId);
-    entryIdsByMessage.set(message, entryIds);
+  if (result.kind === "summary") {
+    return result.text;
   }
 
-  const selectedEntryIds: string[] = [];
-  for (const message of params.selectedMessages) {
-    const entryIds = entryIdsByMessage.get(message);
-    const entryId = entryIds?.shift();
-    if (!entryId) {
-      return undefined;
-    }
-    selectedEntryIds.push(entryId);
-  }
-  return selectedEntryIds;
-}
-
-function resolvePartialFirstKeptEntryId(params: {
-  progress: Parameters<NonNullable<Parameters<typeof summarizeViaLLM>[0]["onPartialSummary"]>>[0];
-  entryIds?: string[];
-  afterSummarizedRangeEntryId: string;
-}): string | undefined {
-  if (
-    !params.entryIds ||
-    params.entryIds.length !== params.progress.totalMessages ||
-    params.progress.completedMessages <= 0
-  ) {
-    return undefined;
-  }
-  return (
-    params.entryIds.at(params.progress.completedMessages) ?? params.afterSummarizedRangeEntryId
-  );
+  // A generic fallback means redistillation never happened. Preserve the
+  // known summary verbatim so a temporary model outage cannot erase it.
+  const previousSummary = params.previousSummary?.trim();
+  return previousSummary ? `${previousSummary}\n\n${result.text}` : result.text;
 }
 
 /**
@@ -962,31 +1053,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
     );
-    let messageEntryIdsToSummarize = selectAlignedEntryIds({
-      sourceMessages: preparation.messagesToSummarize,
-      sourceEntryIds: preparation.messageEntryIdsToSummarize,
-      selectedMessages: baseMessagesToSummarize,
-    });
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
-    let turnPrefixEntryIds = selectAlignedEntryIds({
-      sourceMessages: rawTurnPrefixMessages,
-      sourceEntryIds: preparation.turnPrefixEntryIds,
-      selectedMessages: baseTurnPrefixMessages,
-    });
     let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
     let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
-      const branchMessages = stripRuntimeContextCustomMessages(
-        collectSessionBranchMessages(ctx.sessionManager),
+      const branchMessages = filterReplayUnsafeSessionBranchMessages(
+        stripRuntimeContextCustomMessages(collectSessionBranchMessages(ctx.sessionManager)),
       );
       if (containsRealConversation(branchMessages)) {
         log.info(
           "Compaction safeguard: using session branch messages after compaction preparation omitted real conversation content.",
         );
         baseMessagesToSummarize = branchMessages;
-        messageEntryIdsToSummarize = undefined;
         baseTurnPrefixMessages = [];
-        turnPrefixEntryIds = [];
         hasRealSummarizable = true;
         hasRealTurnPrefix = false;
       }
@@ -1189,9 +1268,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
             messagesToSummarize = pruned.messages;
-            // The worker may clone and repair messages while pruning. Without an exact
-            // source-id alignment, a timeout partial result must fail closed.
-            messageEntryIdsToSummarize = undefined;
 
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
@@ -1241,11 +1317,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      messageEntryIdsToSummarize = selectAlignedEntryIds({
-        sourceMessages: messagesToSummarize,
-        sourceEntryIds: messageEntryIdsToSummarize,
-        selectedMessages: summaryTargetMessages,
-      });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
@@ -1279,8 +1350,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let lastHistorySummary = "";
       let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
-      let timeoutPartialProgress = false;
-      let partialFirstKeptEntryId: string | undefined;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
 
@@ -1289,7 +1358,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         let summaryWithPreservedTurns = "";
         let splitTurnSectionLocal = "";
         let historySummary = "";
-        let completedHistoryStage = false;
         try {
           historySummary =
             messagesToSummarize.length > 0
@@ -1305,21 +1373,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
-                  onPartialSummary: (progress) => {
-                    timeoutPartialProgress = true;
-                    partialFirstKeptEntryId = resolvePartialFirstKeptEntryId({
-                      progress,
-                      entryIds: messageEntryIdsToSummarize,
-                      afterSummarizedRangeEntryId:
-                        turnPrefixEntryIds?.at(0) ?? preparation.firstKeptEntryId,
-                    });
-                  },
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
-          completedHistoryStage = messagesToSummarize.length > 0;
-          if (!timeoutPartialProgress && preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+          if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeViaLLM({
               messages: turnPrefixMessages,
               model,
@@ -1335,14 +1393,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
-              onPartialSummary: (progress) => {
-                timeoutPartialProgress = true;
-                partialFirstKeptEntryId = resolvePartialFirstKeptEntryId({
-                  progress,
-                  entryIds: turnPrefixEntryIds,
-                  afterSummarizedRangeEntryId: preparation.firstKeptEntryId,
-                });
-              },
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
@@ -1354,25 +1404,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             preservedTurnsSectionLocal,
           );
         } catch (attemptError) {
-          if (
-            completedHistoryStage &&
-            preparation.isSplitTurn &&
-            turnPrefixMessages.length > 0 &&
-            signal.aborted &&
-            isCompactionSafetyTimeoutError(signal.reason)
-          ) {
-            timeoutPartialProgress = true;
-            partialFirstKeptEntryId = turnPrefixEntryIds?.at(0) ?? preparation.firstKeptEntryId;
-            lastHistorySummary = historySummary;
-            lastSplitTurnSection = "";
-            summary = appendSummarySection(historySummary, preservedTurnsSectionLocal);
-            break;
-          }
           if (lastSuccessfulSummary && attempt > 0) {
-            if (signal.aborted && isCompactionSafetyTimeoutError(signal.reason)) {
-              timeoutPartialProgress = true;
-              partialFirstKeptEntryId = preparation.firstKeptEntryId;
-            }
             log.warn(
               `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
                 `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
@@ -1385,11 +1417,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         lastSuccessfulSummary = summaryWithPreservedTurns;
         lastHistorySummary = historySummary;
         lastSplitTurnSection = splitTurnSectionLocal;
-
-        if (timeoutPartialProgress) {
-          summary = summaryWithPreservedTurns;
-          break;
-        }
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -1438,22 +1465,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const bodyToCap = lastHistorySummary || summary;
       summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
 
-      if (timeoutPartialProgress && !partialFirstKeptEntryId) {
-        throw signal.reason ?? new Error("Compaction partial summary has no retained boundary");
-      }
-
-      const compaction = {
-        summary,
-        firstKeptEntryId: partialFirstKeptEntryId ?? preparation.firstKeptEntryId,
-        tokensBefore: preparation.tokensBefore,
-        details: { readFiles, modifiedFiles },
-      };
-      const isAcceptedSafetyTimeoutPartial =
-        timeoutPartialProgress && signal.aborted && isCompactionSafetyTimeoutError(signal.reason);
       return {
-        compaction: isAcceptedSafetyTimeoutPartial
-          ? markCompactionTimeoutPartialResult(compaction)
-          : compaction,
+        compaction: {
+          summary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
       };
     } catch (error) {
       const message = formatErrorMessage(error);

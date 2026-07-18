@@ -7,6 +7,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -86,7 +87,6 @@ import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
-import { isCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -191,7 +191,6 @@ import {
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
-  settleCompactionLifecycleWithinGrace,
 } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import {
@@ -1378,14 +1377,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      ...resolveSessionWriteLockOptions(params.config, {
-        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-          timeoutMs: compactionTimeoutMs,
+    const sessionLock =
+      (await acquireOwnedSessionTranscriptWriteLock({
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+      })) ??
+      (await acquireSessionWriteLock({
+        sessionFile: params.sessionFile,
+        ...resolveSessionWriteLockOptions(params.config, {
+          maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+            timeoutMs: compactionTimeoutMs,
+          }),
         }),
-      }),
-    });
+      }));
     try {
       if (!isSqliteSessionTranscript) {
         await repairSessionFileIfNeeded({
@@ -1494,44 +1498,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
-        let nativeCompactionCompletion: Promise<void> | undefined;
-        let nativeCompactionLifecycleObserved = false;
-        let sessionDisposed = false;
-        const disposeSession = () => {
-          if (sessionDisposed) {
-            return;
-          }
-          sessionDisposed = true;
-          try {
-            session?.dispose();
-          } catch {
-            /* best-effort */
-          }
-        };
-        const settleNativeCompactionLifecycle = async (propagateFailure: boolean) => {
-          if (!nativeCompactionCompletion || nativeCompactionLifecycleObserved) {
-            return;
-          }
-          nativeCompactionLifecycleObserved = true;
-          try {
-            const completed = await settleCompactionLifecycleWithinGrace(
-              nativeCompactionCompletion,
-            );
-            if (!completed) {
-              log.warn(
-                "[compaction] post-commit lifecycle exceeded bounded settlement grace; invalidating the compaction session",
-              );
-              disposeSession();
-            }
-          } catch (lifecycleError) {
-            if (propagateFailure) {
-              throw lifecycleError;
-            }
-            log.warn("[compaction] failed while draining rejected compaction lifecycle", {
-              error: formatErrorMessage(lifecycleError),
-            });
-          }
-        };
         try {
           const createdSession = await createAgentSession({
             cwd: effectiveCwd,
@@ -1716,26 +1682,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
           }
           const activeSession = session;
           const result = await compactWithSafetyTimeout(
-            (compactAbortSignal) => {
+            () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              const compactionRun = activeSession.startCompaction(
-                params.customInstructions,
-                compactAbortSignal,
-              );
-              nativeCompactionCompletion = compactionRun.completion;
-              return compactionRun.result;
+              return activeSession.compact(params.customInstructions);
             },
             compactionTimeoutMs,
             {
               abortSignal: params.abortSignal,
-              acceptResultAfterTimeout: isCompactionTimeoutPartialResult,
+              onCancel: () => {
+                activeSession.abortCompaction();
+              },
             },
           );
-          // A typed partial result may settle as soon as it is durably committed, but
-          // transcript rotation, outer hooks, lane release, and session disposal must
-          // remain behind the exact AgentSession compaction lifecycle that produced it,
-          // up to the bounded post-commit cleanup grace.
-          await settleNativeCompactionLifecycle(true);
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;
           let postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"
@@ -1904,18 +1862,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
           }
           throw err;
         } finally {
-          await settleNativeCompactionLifecycle(false);
-          if (!sessionDisposed) {
-            try {
-              await flushPendingToolResultsAfterIdle({
-                agent: session?.agent,
-                sessionManager,
-              });
-            } catch {
-              /* best-effort */
-            }
+          try {
+            await flushPendingToolResultsAfterIdle({
+              agent: session?.agent,
+              sessionManager,
+            });
+          } catch {
+            /* best-effort */
           }
-          disposeSession();
+          try {
+            session?.dispose();
+          } catch {
+            /* best-effort */
+          }
         }
       }
     } finally {

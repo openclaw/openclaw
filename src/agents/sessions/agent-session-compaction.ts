@@ -1,7 +1,6 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
-import { acceptsCompactionTimeoutPartialResult } from "../compaction-timeout.js";
 import {
   calculateContextTokens,
   compact,
@@ -32,112 +31,39 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * Aborts current agent operation first.
    * @param customInstructions Optional instructions for the compaction summary
    */
-  async compact(
-    customInstructions?: string,
-    requestAbortSignal?: AbortSignal,
-  ): Promise<CompactionResult> {
-    const compaction = this.startCompaction(customInstructions, requestAbortSignal);
-    // Public callers observe the full lifecycle through completion. The internal
-    // result promise can reject at the same failure point, so mark that plumbing
-    // rejection as observed while preserving it for the return below.
-    void compaction.result.catch(() => {});
-    await compaction.completion;
-    return await compaction.result;
-  }
-
-  startCompaction(
-    customInstructions?: string,
-    requestAbortSignal?: AbortSignal,
-  ): { result: Promise<CompactionResult>; completion: Promise<void> } {
-    const abortController = new AbortController();
-    const signal = requestAbortSignal
-      ? AbortSignal.any([abortController.signal, requestAbortSignal])
-      : abortController.signal;
-    this.compactionAbortControllers.add(abortController);
-    let resolveResult = (_result: CompactionResult) => {};
-    let rejectResult = (_error: unknown) => {};
-    const result = new Promise<CompactionResult>((resolve, reject) => {
-      resolveResult = resolve;
-      rejectResult = reject;
-    });
-    let settled = false;
-    const resolveOnce = (value: CompactionResult) => {
-      if (!settled) {
-        settled = true;
-        resolveResult(value);
-      }
-    };
-    const rejectOnce = (error: unknown) => {
-      if (!settled) {
-        settled = true;
-        rejectResult(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    const work = this.runWithSessionWriteLock(async () => {
-      if (signal.aborted) {
-        throw new Error("Compaction cancelled");
-      }
-      return await this.compactWithSessionWriteLock(signal, customInstructions, resolveOnce);
-    });
-    const completion = work
-      .then(
-        (value) => {
-          resolveOnce(value);
-        },
-        (error: unknown) => {
-          rejectOnce(error);
-          throw error;
-        },
-      )
-      .finally(() => {
-        this.compactionAbortControllers.delete(abortController);
-      });
-    // Most callers only need the public result promise. Keep a late hook failure from
-    // becoming an unhandled rejection while allowing lifecycle owners to await the
-    // original completion promise and observe that failure.
-    void completion.catch(() => {});
-    return { result, completion };
+  async compact(customInstructions?: string): Promise<CompactionResult> {
+    return await this.runWithSessionWriteLock(
+      async () => await this.compactWithSessionWriteLock(customInstructions),
+    );
   }
 
   private async compactWithSessionWriteLock(
-    signal: AbortSignal,
     customInstructions?: string,
-    onTimeoutPartialCommitted?: (result: CompactionResult) => void,
   ): Promise<CompactionResult> {
     this.disconnectFromAgent();
     await this.abort();
+    this.compactionAbortController = new AbortController();
     this.emit({ type: "compaction_start", reason: "manual" });
 
     try {
       const settings = this.settingsManager.getCompactionSettings();
-      let emittedCompactionEnd = false;
-      const emitCompactionEnd = (result: CompactionResult) => {
-        if (emittedCompactionEnd) {
-          return;
-        }
-        emittedCompactionEnd = true;
-        this.emit({
-          type: "compaction_end",
-          reason: "manual",
-          result,
-          aborted: false,
-          willRetry: false,
-        });
-      };
       const outcome = await this.runCompactionWork({
         customInstructions,
         mode: "manual",
-        onTimeoutPartialCommitted: (result) => {
-          onTimeoutPartialCommitted?.(result);
-        },
         settings,
-        signal,
+        signal: this.compactionAbortController.signal,
       });
       if (outcome.status !== "compacted") {
         throw new Error("Compaction cancelled");
       }
 
-      emitCompactionEnd(outcome.result);
+      this.emit({
+        type: "compaction_end",
+        reason: "manual",
+        result: outcome.result,
+        aborted: false,
+        willRetry: false,
+      });
       return outcome.result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -154,6 +80,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
       throw error;
     } finally {
+      this.compactionAbortController = undefined;
       this.reconnectToAgent();
     }
   }
@@ -161,11 +88,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   /**
    * Cancel in-progress compaction (manual or auto).
    */
-  abortCompaction(reason?: unknown): void {
-    for (const controller of this.compactionAbortControllers) {
-      controller.abort(reason);
-    }
-    this.autoCompactionAbortController?.abort(reason);
+  abortCompaction(): void {
+    this.compactionAbortController?.abort();
+    this.autoCompactionAbortController?.abort();
   }
 
   /**
@@ -199,11 +124,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     signal: AbortSignal;
     customInstructions?: string;
     mode: "manual" | "auto";
-    onTimeoutPartialCommitted?: (result: CompactionResult) => void;
   }): Promise<CompactionWorkOutcome> {
-    if (options.signal.aborted) {
-      return { status: "aborted" };
-    }
     const isManual = options.mode === "manual";
     if (!this.model) {
       if (isManual) {
@@ -220,7 +141,14 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    const preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
+    let preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
+    if (!preparation && isManual) {
+      // An explicit request should compact the smallest valid history instead of
+      // relying on the old empty-summary behavior when the whole session fits the keep budget.
+      preparation = unwrapCoreResult(
+        prepareCompaction(pathEntries, { ...options.settings, keepRecentTokens: 0 }),
+      );
+    }
     if (!preparation) {
       if (isManual) {
         const lastEntry = pathEntries[pathEntries.length - 1];
@@ -267,11 +195,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       ),
     );
 
-    const acceptsTimeoutPartialResult = acceptsCompactionTimeoutPartialResult(
-      options.signal.reason,
-      compactionResult,
-    );
-    if (options.signal.aborted && !acceptsTimeoutPartialResult) {
+    if (options.signal.aborted) {
       return { status: "aborted" };
     }
 
@@ -290,19 +214,12 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,
     ) as CompactionEntry | undefined;
 
-    if (acceptsTimeoutPartialResult) {
-      // The caller may settle from the authoritative commit while this internal task
-      // keeps the session write lock until post-compaction hooks finish.
-      options.onTimeoutPartialCommitted?.(compactionResult);
-    }
-
     if (this.currentExtensionRunner && savedCompactionEntry) {
-      const event = {
+      await this.currentExtensionRunner.emit({
         type: "session_compact",
         compactionEntry: savedCompactionEntry,
         fromExtension,
-      } as const;
-      await this.currentExtensionRunner.emit(event);
+      });
     }
 
     return { status: "compacted", result: compactionResult };
@@ -355,8 +272,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return false;
     }
 
-    // Case 1: Overflow - LLM returned context overflow error
-    if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+    // Case 1: Overflow - an unsuccessful response needs compact-and-retry recovery.
+    // Successful high-usage responses fall through to threshold maintenance below.
+    if (
+      sameModel &&
+      (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length") &&
+      isContextOverflow(assistantMessage, contextWindow)
+    ) {
       if (this.overflowRecoveryAttempted) {
         this.emit({
           type: "compaction_end",
@@ -371,8 +293,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
 
       this.overflowRecoveryAttempted = true;
-      // Remove the error message from agent state (it IS saved to session for history,
-      // but we don't want it in context for the retry)
+      // Keep the failed response in history, but exclude it from the retry context.
       const messages = this.agent.state.messages;
       if (messages.at(-1)?.role === "assistant") {
         this.agent.state.messages = messages.slice(0, -1);
@@ -466,7 +387,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (willRetry) {
         const messages = this.agent.state.messages;
         const lastMsg = messages[messages.length - 1];
-        if (lastMsg?.role === "assistant" && lastMsg.stopReason === "error") {
+        if (
+          lastMsg?.role === "assistant" &&
+          (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")
+        ) {
           this.agent.state.messages = messages.slice(0, -1);
         }
         return true;

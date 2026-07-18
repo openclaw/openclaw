@@ -36,9 +36,14 @@ import type {
   BufferedAgentEvent,
   ChatAbortMarker,
   ChatRunEntry,
+  ChatRunPlanSnapshot,
   ChatRunRegistration,
 } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
+import type {
+  GatewayApprovalEventPublisher,
+  GatewayRecoveryRuntime,
+} from "../server-instance-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
@@ -113,6 +118,7 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
@@ -120,6 +126,15 @@ export type GatewayRequestContext = {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  pluginApprovalIosPushDelivery?: {
+    handleRequested?: (
+      request: PluginApprovalRequest,
+      opts?: {
+        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+      },
+    ) => Promise<boolean>;
+    handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
+  };
   listSessionPendingApprovals?: (
     sessionKey: string,
     client: GatewayClient | null,
@@ -147,7 +162,11 @@ export type GatewayRequestContext = {
   hasConnectedTalkNode: () => boolean;
   isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
+  /** Instance-local native approval subscribers; never derived from a network client. */
+  approvalEvents?: GatewayApprovalEventPublisher;
+  recoveryRuntime?: GatewayRecoveryRuntime;
   getApprovalClientConnIds?: <TPayload>(params?: {
+    approvalKind?: "exec" | "plugin" | "system-agent";
     excludeConnId?: string;
     filter?: (client: GatewayClient, record?: ExecApprovalRecord<TPayload>) => boolean;
     record?: ExecApprovalRecord<TPayload>;
@@ -176,6 +195,7 @@ export type GatewayRequestContext = {
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;
   chatRunBuffers: Map<string, string>;
+  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
   chatDeltaLastBroadcastText: Map<string, string>;

@@ -1,5 +1,4 @@
 // Feishu tests cover bot.broadcast plugin behavior.
-import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
@@ -7,25 +6,71 @@ import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
-const { mockCreateFeishuReplyDispatcher, mockCreateFeishuClient, mockResolveAgentRoute } =
-  vi.hoisted(() => ({
-    mockCreateFeishuReplyDispatcher: vi.fn((_params?: unknown) => ({
-      dispatcher: {
-        sendToolResult: vi.fn(),
-        sendBlockReply: vi.fn(),
-        sendFinalReply: vi.fn(),
-        waitForIdle: vi.fn(),
-        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-        markComplete: vi.fn(),
-      },
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      ensureNoVisibleReplyFallback: vi.fn(),
-    })),
-    mockCreateFeishuClient: vi.fn(),
-    mockResolveAgentRoute: vi.fn(),
-  }));
+const {
+  builtInboundContextCalls,
+  mockCreateFeishuReplyDispatcher,
+  mockCreateFeishuClient,
+  mockDispatchInboundMessage,
+  mockRecordInboundSession,
+  mockResolveAgentRoute,
+  mockResolveStorePath,
+} = vi.hoisted(() => ({
+  builtInboundContextCalls: [] as Array<Record<string, unknown>>,
+  mockCreateFeishuReplyDispatcher: vi.fn((_params?: unknown) => ({
+    dispatcher: {
+      sendToolResult: vi.fn(),
+      sendBlockReply: vi.fn(),
+      sendFinalReply: vi.fn(),
+      waitForIdle: vi.fn(),
+      getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      markComplete: vi.fn(),
+    },
+    replyOptions: {},
+    markDispatchIdle: vi.fn(),
+    ensureNoVisibleReplyFallback: vi.fn(),
+  })),
+  mockCreateFeishuClient: vi.fn(),
+  mockDispatchInboundMessage: vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } }),
+  mockRecordInboundSession: vi.fn().mockResolvedValue(undefined),
+  mockResolveAgentRoute: vi.fn(),
+  mockResolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    buildChannelInboundEventContext: (
+      params: Parameters<typeof actual.buildChannelInboundEventContext>[0],
+    ) =>
+      actual.buildChannelInboundEventContext({
+        ...params,
+        finalize: (ctx) => {
+          builtInboundContextCalls.push(ctx);
+          return ctx as never;
+        },
+      }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return { ...actual, dispatchInboundMessage: mockDispatchInboundMessage };
+});
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
+  return { ...actual, resolveStorePath: mockResolveStorePath };
+});
 
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: mockCreateFeishuReplyDispatcher,
@@ -48,43 +93,7 @@ function createRuntimeEnv() {
 }
 
 describe("broadcast dispatch", () => {
-  const finalizeInboundContextCalls: Array<Record<string, unknown>> = [];
   const mockGetChatInfo = vi.fn();
-  const mockFinalizeInboundContext: PluginRuntime["channel"]["reply"]["finalizeInboundContext"] = (
-    ctx,
-  ) => {
-    finalizeInboundContextCalls.push(ctx);
-    return {
-      ...ctx,
-      CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
-      CommandTurn: {
-        kind: "normal",
-        source: "message",
-        authorized: false,
-      },
-    };
-  };
-  const mockDispatchReplyFromConfig = vi
-    .fn()
-    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
-  const mockWithReplyDispatcher: PluginRuntime["channel"]["reply"]["withReplyDispatcher"] = async ({
-    dispatcher,
-    run,
-    onSettled,
-  }) => {
-    try {
-      return await run();
-    } finally {
-      dispatcher.markComplete();
-      try {
-        await dispatcher.waitForIdle();
-      } finally {
-        await onSettled?.();
-      }
-    }
-  };
-  const resolveEnvelopeFormatOptionsMock: PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"] =
-    () => ({}) satisfies EnvelopeFormatOptions;
   const mockShouldComputeCommandAuthorized = vi.fn(() => false);
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
     path: "/tmp/inbound-clip.mp4",
@@ -99,18 +108,10 @@ describe("broadcast dispatch", () => {
         resolveAgentRoute: (params: unknown) => mockResolveAgentRoute(params),
       },
       session: {
-        resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
-        recordInboundSession: vi.fn().mockResolvedValue(undefined),
+        resolveStorePath: mockResolveStorePath,
+        recordInboundSession: mockRecordInboundSession,
       },
-      reply: {
-        resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
-        formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-        finalizeInboundContext:
-          mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-        dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-        withReplyDispatcher:
-          mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
-      },
+      reply: {},
       commands: {
         shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
@@ -135,9 +136,13 @@ describe("broadcast dispatch", () => {
           if (!("runDispatch" in turn)) {
             throw new Error("feishu broadcast test runtime only supports prepared turns");
           }
-          await turn.recordInboundSession({
-            storePath: turn.storePath,
-            sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+          const routeSessionKey = "route" in turn ? turn.route.sessionKey : turn.routeSessionKey;
+          const storePath = "storePath" in turn ? turn.storePath : mockResolveStorePath();
+          const recordInboundSession =
+            "recordInboundSession" in turn ? turn.recordInboundSession : mockRecordInboundSession;
+          await recordInboundSession({
+            storePath,
+            sessionKey: turn.ctxPayload.SessionKey ?? routeSessionKey,
             ctx: turn.ctxPayload,
             groupResolution: turn.record?.groupResolution,
             createIfMissing: turn.record?.createIfMissing,
@@ -148,7 +153,7 @@ describe("broadcast dispatch", () => {
             admission: { kind: "dispatch" as const },
             dispatched: true,
             ctxPayload: turn.ctxPayload,
-            routeSessionKey: turn.routeSessionKey,
+            routeSessionKey,
             dispatchResult: await turn.runDispatch(),
           };
         }),
@@ -219,8 +224,12 @@ describe("broadcast dispatch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDispatchInboundMessage.mockReset().mockResolvedValue({
+      queuedFinal: false,
+      counts: { final: 1 },
+    });
     feishuGroupNameCache.clear();
-    finalizeInboundContextCalls.length = 0;
+    builtInboundContextCalls.length = 0;
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
       channel: "feishu",
@@ -277,8 +286,8 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
-    const sessionKeys = finalizeInboundContextCalls.map((call) => call.SessionKey);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(2);
+    const sessionKeys = builtInboundContextCalls.map((call) => call.SessionKey);
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
     const recordCalls = (
@@ -320,7 +329,7 @@ describe("broadcast dispatch", () => {
     ]);
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
     expect(
-      finalizeInboundContextCalls
+      builtInboundContextCalls
         .map((call) => ({
           sessionKey: call.SessionKey,
           groupSubject: call.GroupSubject,
@@ -347,7 +356,7 @@ describe("broadcast dispatch", () => {
   });
 
   it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {
-    mockDispatchReplyFromConfig
+    mockDispatchInboundMessage
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
       .mockResolvedValueOnce({
         queuedFinal: false,
@@ -389,7 +398,7 @@ describe("broadcast dispatch", () => {
   });
 
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
-    mockDispatchReplyFromConfig
+    mockDispatchInboundMessage
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
       .mockResolvedValueOnce({
         queuedFinal: true,
@@ -430,7 +439,7 @@ describe("broadcast dispatch", () => {
   });
 
   it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {
-    mockDispatchReplyFromConfig
+    mockDispatchInboundMessage
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
       .mockResolvedValueOnce({
         queuedFinal: false,
@@ -484,7 +493,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
     expect(mockGetChatInfo).not.toHaveBeenCalled();
   });
@@ -502,7 +511,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
     expect(mockGetChatInfo).not.toHaveBeenCalled();
   });
@@ -539,14 +548,14 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(1);
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextCalls).toHaveLength(1);
-    expect(finalizeInboundContextCalls[0]?.SessionKey).toBe(
+    expect(builtInboundContextCalls).toHaveLength(1);
+    expect(builtInboundContextCalls[0]?.SessionKey).toBe(
       "agent:main:feishu:group:oc-broadcast-group",
     );
-    expect(finalizeInboundContextCalls[0]?.GroupSubject).toBe("Broadcast Team");
-    expect(finalizeInboundContextCalls[0]?.ConversationLabel).toBe("Broadcast Team");
+    expect(builtInboundContextCalls[0]?.GroupSubject).toBe("Broadcast Team");
+    expect(builtInboundContextCalls[0]?.ConversationLabel).toBe("Broadcast Team");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
   });
 
@@ -584,11 +593,11 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
       accountId: "account-A",
     });
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(2);
 
-    mockDispatchReplyFromConfig.mockClear();
+    mockDispatchInboundMessage.mockClear();
     mockGetChatInfo.mockClear();
-    finalizeInboundContextCalls.length = 0;
+    builtInboundContextCalls.length = 0;
 
     await handleFeishuMessage({
       cfg,
@@ -596,7 +605,7 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
       accountId: "account-B",
     });
-    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
     expect(mockGetChatInfo).not.toHaveBeenCalled();
   });
 
@@ -634,10 +643,10 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(1);
     const sessionKey =
-      typeof finalizeInboundContextCalls[0]?.SessionKey === "string"
-        ? finalizeInboundContextCalls[0].SessionKey
+      typeof builtInboundContextCalls[0]?.SessionKey === "string"
+        ? builtInboundContextCalls[0].SessionKey
         : "";
     expect(sessionKey).toBe("agent:susan:feishu:group:oc-broadcast-group");
   });

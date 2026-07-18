@@ -10,6 +10,7 @@ import {
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
+import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -183,6 +184,19 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         replyOptions?: unknown;
         replyResolver?: unknown;
       }) => Promise<unknown>;
+    const pipeline = params.replyPipeline
+      ? createChannelReplyPipeline({
+          ...(params.replyPipeline as Omit<
+            Parameters<typeof createChannelReplyPipeline>[0],
+            "cfg" | "agentId" | "channel" | "accountId"
+          >),
+          cfg: params.cfg as Parameters<typeof createChannelReplyPipeline>[0]["cfg"],
+          agentId: params.agentId as string,
+          channel: params.channel as string,
+          accountId: params.accountId as string | undefined,
+        })
+      : undefined;
+    const { onModelSelected, ...dispatcherPipeline } = pipeline ?? {};
     await recordInboundSession({
       storePath,
       sessionKey,
@@ -198,13 +212,17 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       ctx: ctxPayload,
       cfg: params.cfg,
       dispatcherOptions: {
+        ...dispatcherPipeline,
         ...(params.dispatcherOptions as Record<string, unknown> | undefined),
         deliver: async (payload, info) => {
           await delivery.deliver(payload, info);
         },
         onError: delivery.onError,
       },
-      replyOptions: params.replyOptions,
+      replyOptions: {
+        ...(onModelSelected ? { onModelSelected } : {}),
+        ...(params.replyOptions as Record<string, unknown> | undefined),
+      },
       replyResolver: params.replyResolver,
     });
     return {
@@ -254,6 +272,24 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       };
     },
   ) as unknown as PluginRuntime["channel"]["inbound"]["runPreparedReply"];
+  const dispatchChannelTurnPlanMock = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) => {
+      if (!mergedRuntime) {
+        throw new Error("plugin runtime mock dispatch used before initialization");
+      }
+      return await dispatchAssembledChannelTurnMock({
+        ...params,
+        agentId: params.route.agentId,
+        routeSessionKey: params.route.sessionKey,
+        storePath: mergedRuntime.channel.session.resolveStorePath(params.cfg.session?.store, {
+          agentId: params.route.agentId,
+        }),
+        recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          mergedRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      });
+    },
+  ) as unknown as PluginRuntime["channel"]["inbound"]["dispatch"];
   const runChannelTurnMock = vi.fn(
     async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
       const input = await params.adapter.ingest(params.raw);
@@ -289,21 +325,47 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         };
       }
       const resolved = await params.adapter.resolveTurn(input, eventClass, preflight ?? {});
+      const assembled =
+        "route" in resolved
+          ? (() => {
+              if (!mergedRuntime) {
+                throw new Error("plugin runtime mock turn used before initialization");
+              }
+              const { cfg, route, ...turn } = resolved;
+              const routedTurn = {
+                ...turn,
+                routeSessionKey: route.sessionKey,
+                storePath: mergedRuntime.channel.session.resolveStorePath(cfg.session?.store, {
+                  agentId: route.agentId,
+                }),
+                recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
+              };
+              return "runDispatch" in resolved
+                ? routedTurn
+                : {
+                    ...routedTurn,
+                    cfg,
+                    agentId: route.agentId,
+                    dispatchReplyWithBufferedBlockDispatcher:
+                      mergedRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+                  };
+            })()
+          : resolved;
       const admission =
-        resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
+        assembled.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       const dispatchResult =
-        "runDispatch" in resolved
+        "runDispatch" in assembled
           ? await runPreparedChannelTurnMock({
-              ...resolved,
+              ...assembled,
               admission,
-            })
+            } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0])
           : await dispatchAssembledChannelTurnMock({
-              ...resolved,
+              ...assembled,
               admission,
               delivery:
                 admission.kind === "observeOnly"
                   ? { deliver: async () => ({ visibleReplySent: false }) }
-                  : resolved.delivery,
+                  : assembled.delivery,
             });
       const result = {
         ...dispatchResult,
@@ -414,6 +476,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveThinkingDefault: vi.fn(
         () => "off",
       ) as unknown as PluginRuntime["agent"]["resolveThinkingDefault"],
+      resolveCliBackendDispatchEligibility: vi.fn(
+        () => undefined,
+      ) as unknown as PluginRuntime["agent"]["resolveCliBackendDispatchEligibility"],
       normalizeThinkingLevel: vi.fn(
         (raw?: string | null) => raw,
       ) as unknown as PluginRuntime["agent"]["normalizeThinkingLevel"],
@@ -531,6 +596,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resizeToJpeg: vi.fn() as unknown as PluginRuntime["media"]["resizeToJpeg"],
     },
     tts: {
+      prepareTtsRequest: vi.fn() as unknown as PluginRuntime["tts"]["prepareTtsRequest"],
       textToSpeech: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeech"],
       textToSpeechStream: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechStream"],
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
@@ -763,6 +829,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       inbound: {
         run: runChannelTurnMock,
+        dispatch: dispatchChannelTurnPlanMock,
         dispatchReply:
           dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
         buildContext: buildChannelInboundEventContextMock,
@@ -785,7 +852,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           runtimeContexts.watch,
         ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["watch"],
       },
-      activity: {} as PluginRuntime["channel"]["activity"],
+      activity: {
+        record: vi.fn(),
+        get: vi.fn(() => ({ inboundAt: null, outboundAt: null })),
+      },
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],
@@ -804,15 +874,25 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
+      openBlobStore: vi.fn(() => {
+        throw new Error("openBlobStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openBlobStore"],
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],
       openSyncKeyedStore: vi.fn(() => {
         throw new Error("openSyncKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
+      withLease: vi.fn(
+        async (_options, run) =>
+          await run({ signal: new AbortController().signal, assertOwned: vi.fn() }),
+      ),
       openChannelIngressQueue: vi.fn(() => {
         throw new Error("openChannelIngressQueue mock is not configured");
       }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
+      openChannelIngressDrain: vi.fn(() => {
+        throw new Error("openChannelIngressDrain mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openChannelIngressDrain"],
     },
     tasks: {
       runs: {
@@ -862,6 +942,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   };
 
-  return mergeDeep(base, overrides);
+  const mergedRuntime = mergeDeep(base, overrides);
+  return mergedRuntime;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

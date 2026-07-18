@@ -22,10 +22,6 @@ const WATCH_LOCK_DIR = path.join(".local", "watch-node");
 const WATCH_DIST_ENTRY_POLL_MS = 1_000;
 const WATCH_DIST_ENTRY_TIMEOUT_MS = 5 * 60 * 1_000;
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
-// The source watcher cannot import the TypeScript owner; keep this literal
-// aligned with src/commands/doctor-invocation.ts.
-const DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV =
-  "OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS";
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
 const buildDoctorRunnerArgs = () => [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"];
@@ -487,7 +483,6 @@ export async function runWatchMain(params = {}) {
         detached: useChildProcessGroup,
         env: {
           ...childEnv,
-          [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
         },
         stdio: "inherit",
       });
