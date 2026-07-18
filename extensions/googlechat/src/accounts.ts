@@ -25,7 +25,7 @@ type CredentialUnavailableDiagnostic = Extract<
 type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
 
 /** "strict" throws on unresolved SecretRefs; "inspect" reports the account as unconfigured. */
-export type GoogleChatAccountResolutionMode = "strict" | "inspect";
+type GoogleChatAccountResolutionMode = "strict" | "inspect";
 
 export type ResolvedGoogleChatAccount = {
   accountId: string;
