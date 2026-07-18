@@ -16,6 +16,7 @@ export type BrowserDownloadCaptureOptions = {
   mode?: "passive" | "explicit";
   outputPath?: string;
   outputRoot?: string;
+  signal?: AbortSignal;
   timeoutMessage?: string;
 };
 
@@ -41,11 +42,14 @@ export async function saveBrowserDownload(
     url: download.url?.() || "",
     suggestedFilename,
   };
+  opts.signal?.throwIfAborted();
   await opts.beforeSave?.(candidate);
+  opts.signal?.throwIfAborted();
   const saveAs = download.saveAs?.bind(download);
   if (!saveAs) {
     throw new Error("Download cannot be saved");
   }
+  opts.signal?.throwIfAborted();
   const requestedPath = opts.outputPath?.trim();
   const implicitRoot = opts.outputRoot ?? DEFAULT_DOWNLOAD_DIR;
   const managedPath = requestedPath || buildManagedDownloadPath(implicitRoot, suggestedFilename);
@@ -53,7 +57,11 @@ export async function saveBrowserDownload(
     rootDir: requestedPath ? opts.outputRoot : implicitRoot,
     path: managedPath,
     write: async (tempPath) => {
+      opts.signal?.throwIfAborted();
       await saveAs(tempPath);
+      // Playwright saveAs cannot always be interrupted; fence the atomic
+      // finalize step so timed-out saves cannot publish late output.
+      opts.signal?.throwIfAborted();
     },
   });
   return { ...candidate, path: savedPath };
@@ -86,6 +94,7 @@ export function createDownloadCaptureForPage(
   let depthReleased = false;
   let timer: NodeJS.Timeout | undefined;
   let handler: ((download: unknown) => void) | undefined;
+  const saveAbortController = new AbortController();
 
   const cleanup = () => {
     if (!depthReleased) {
@@ -112,7 +121,10 @@ export function createDownloadCaptureForPage(
       }
       done = true;
       cleanup();
-      void saveBrowserDownload(download as PlaywrightDownload, opts).then(
+      void saveBrowserDownload(download as PlaywrightDownload, {
+        ...opts,
+        signal: saveAbortController.signal,
+      }).then(
         (result) => {
           if (settled) {
             return;
@@ -139,8 +151,11 @@ export function createDownloadCaptureForPage(
         }
         settled = true;
         done = true;
+        const timeoutError = new Error(opts.timeoutMessage ?? "Timeout waiting for download");
+        saveAbortController.abort(timeoutError);
         cleanup();
-        reject(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
+        finish();
+        reject(timeoutError);
       },
       Math.max(1, timeoutMs),
     );
@@ -151,11 +166,12 @@ export function createDownloadCaptureForPage(
     armed: true,
     promise,
     cancel: () => {
-      if (done || settled) {
+      if (settled) {
         return;
       }
       settled = true;
       done = true;
+      saveAbortController.abort(new Error("Download capture cancelled"));
       cleanup();
       finish();
     },
