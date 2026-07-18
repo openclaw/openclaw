@@ -85,7 +85,7 @@ private func withPickerStore(_ body: (ChatModelPickerStore, UserDefaults) throws
 
         #expect(sections.pinned.map(\.selectionID) == ["c/three", "a/one"])
         #expect(sections.recent.map(\.selectionID) == ["d/four"])
-        #expect(sections.remaining.map(\.selectionID) == ["b/two"])
+        #expect(sections.providers.flatMap(\.models).map(\.selectionID) == ["b/two"])
         #expect(sections.providers.map(\.id) == ["b"])
         #expect(sections.providers.first?.isDefaultProvider == true)
     }
@@ -94,7 +94,7 @@ private func withPickerStore(_ body: (ChatModelPickerStore, UserDefaults) throws
         let sections = ChatModelPickerStore.sections(choices: [], favorites: [], recents: [])
         #expect(sections.pinned.isEmpty)
         #expect(sections.recent.isEmpty)
-        #expect(sections.remaining.isEmpty)
+        #expect(sections.providers.flatMap(\.models).isEmpty)
     }
 
     @Test func `missing default provider does not mark other as default`() {

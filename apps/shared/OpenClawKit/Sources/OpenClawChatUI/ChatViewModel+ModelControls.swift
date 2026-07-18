@@ -2,7 +2,6 @@ import Foundation
 
 extension OpenClawChatViewModel {
     public static let verboseLevelOptions = ["off", "on", "full"]
-    public static let fastModeSelectionIDs = ["on", "off"]
 
     public var thinkingSelectionID: String {
         self.thinkingOverrideIsInherited ? Self.inheritedThinkingSelectionID : self.thinkingLevel
@@ -30,11 +29,6 @@ extension OpenClawChatViewModel {
             return Self.inheritedThinkingSelectionID
         }
         return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true ? "on" : "off"
-    }
-
-    public var fastModeEnabled: Bool {
-        let session = self.currentSessionEntry()
-        return (session?.effectiveFastMode ?? session?.fastMode)?.isEnabled == true
     }
 
     /// `models.list` currently has no fast-support capability field. Keep the

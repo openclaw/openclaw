@@ -11,10 +11,6 @@ public struct ChatModelPickerSections: Sendable, Equatable {
     public let pinned: [OpenClawChatModelChoice]
     public let recent: [OpenClawChatModelChoice]
     public let providers: [ChatModelProviderSection]
-
-    public var remaining: [OpenClawChatModelChoice] {
-        self.providers.flatMap(\.models)
-    }
 }
 
 @MainActor

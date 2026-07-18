@@ -649,10 +649,6 @@ public final class OpenClawChatViewModel {
         performSelectFastMode(selectionID)
     }
 
-    public func setFastModeEnabled(_ enabled: Bool) {
-        performSelectFastMode(enabled ? "on" : "off")
-    }
-
     public func selectModel(_ selectionID: String) {
         guard let request = reserveModelSelection(selectionID) else { return }
         enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] routeLease in
