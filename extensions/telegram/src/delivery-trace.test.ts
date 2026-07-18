@@ -175,6 +175,9 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
       created: false,
     })) as unknown as TelegramBotDeps["upsertChannelPairingRequest"],
     enqueueSystemEvent: (async () => {}) as unknown as TelegramBotDeps["enqueueSystemEvent"],
+    dispatchReplyWithBufferedBlockDispatcher: (() => {
+      throw new Error("trace dispatch bypassed the core runtime mock");
+    }) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
     buildModelsProviderData: (async () => ({
       byProvider: new Map<string, Set<string>>(),
       providers: [],
