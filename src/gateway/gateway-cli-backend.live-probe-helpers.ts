@@ -255,7 +255,7 @@ async function readBoundedResponseText(response: Response, byteLimit: number): P
     }
     totalBytes += value.byteLength;
     if (totalBytes > byteLimit) {
-      await reader.cancel();
+      await reader.cancel().catch(() => undefined);
       throw new Error(`mcp loopback response body exceeded ${byteLimit} bytes`);
     }
     chunks.push(Buffer.from(value));

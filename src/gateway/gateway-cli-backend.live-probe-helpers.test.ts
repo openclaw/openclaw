@@ -68,6 +68,7 @@ describe("gateway CLI backend live probe helpers", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
   });
 
@@ -147,5 +148,34 @@ describe("gateway CLI backend live probe helpers", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("preserves the loopback body-limit error when reader cleanup fails", async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({ done: false, value: new Uint8Array(65) })
+        .mockResolvedValue({ done: true, value: undefined }),
+      cancel,
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: { getReader: () => reader },
+      })),
+    );
+    activateLoopbackRuntime(12345);
+
+    await expect(
+      verifyCliCronMcpLoopbackPreflight(
+        preflightParams({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" }),
+      ),
+    ).rejects.toThrow("mcp loopback response body exceeded 64 bytes");
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 });
