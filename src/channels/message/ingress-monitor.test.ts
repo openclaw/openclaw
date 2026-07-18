@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelIngressMonitor,
@@ -17,14 +15,13 @@ class PermanentIngressError extends Error {}
 async function withQueue<T>(
   run: (queue: ChannelIngressQueue<StoredEvent>) => Promise<T>,
 ): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ingress-monitor-"));
+  const stateDir = tempDirs.make("openclaw-ingress-monitor-");
   try {
     return await run(
       createChannelIngressQueue<StoredEvent>({ channelId: "test", accountId: "a", stateDir }),
     );
   } finally {
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -59,6 +56,8 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("channel ingress monitor", () => {
   it("adopts terminal no-dispatch events", async () => {

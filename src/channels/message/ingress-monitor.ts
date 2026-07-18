@@ -155,6 +155,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     }
   };
 
+  const waitForPumpIdle = async (): Promise<void> => {
+    for (;;) {
+      const activePump = pumping;
+      if (!activePump) {
+        return;
+      }
+      await activePump;
+    }
+  };
+
   const getDrain = (): ChannelIngressDrain => {
     drain ??= createChannelIngressDrain<TStoredPayload, TMetadata>({
       ...options.drain,
@@ -317,7 +327,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     running = false;
     requested = false;
     clearPollTimer();
-    await pumping;
+    await waitForPumpIdle();
   };
 
   const admitOnce = async (params: {
@@ -342,7 +352,15 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       }
     }
     // Accepted transport input must fail closed if every durable append attempt fails.
-    throw lastError ?? new Error("Channel ingress append failed without an error.");
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error(
+      lastError === undefined
+        ? "Channel ingress append failed without an error."
+        : formatErrorMessage(lastError),
+      { cause: lastError },
+    );
   };
 
   return {
@@ -393,7 +411,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         await admissionTail;
         shutdown.abort(createStoppedError());
         drain?.dispose();
-        await pumping;
+        await waitForPumpIdle();
         await waitForActiveDeliveries();
         // A pump may have created the lazy drain just before observing running=false.
         drain?.dispose();
@@ -403,9 +421,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     },
     waitForIdle: async () => {
       await admissionTail;
-      while (pumping) {
-        await pumping;
-      }
+      await waitForPumpIdle();
       await waitForActiveDeliveries();
       await drain?.waitForIdle();
     },
