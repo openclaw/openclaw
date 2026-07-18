@@ -58,3 +58,7 @@ export function appendBoardEventNotice(params: {
     contextKey: `dashboard:${params.widget}:${now}`,
   });
 }
+
+export function resetBoardEventNoticeStateForTest(): void {
+  recentNotices.clear();
+}
