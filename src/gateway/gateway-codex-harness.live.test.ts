@@ -944,12 +944,9 @@ async function waitForAssistantText(params: {
       limit: 24,
     });
     const assistantTexts = extractAssistantTexts(history.messages ?? []);
-    const normalizedContains = params.contains.toUpperCase();
+    const normalizedContains = normalizeAssistantTokenText(params.contains);
     const matched = assistantTexts.find((text) =>
-      text
-        .toUpperCase()
-        .replace(/[^A-F0-9]/g, "")
-        .includes(normalizedContains),
+      normalizeAssistantTokenText(text).includes(normalizedContains),
     );
     if (matched) {
       return matched;
@@ -966,6 +963,10 @@ async function waitForAssistantText(params: {
       extractAssistantTexts(finalHistory.messages ?? []),
     )}`,
   );
+}
+
+function normalizeAssistantTokenText(text: string): string {
+  return text.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 async function verifyCodexImageProbe(params: {
@@ -1055,7 +1056,7 @@ async function verifyCodexChatImageProbe(params: {
     sessionKey: params.sessionKey,
     contains: token,
   });
-  const normalized = text.toUpperCase().replace(/[^A-F0-9]/g, "");
+  const normalized = normalizeAssistantTokenText(text);
   expect(normalized, `Expected Codex to read bitmap token ${token}; received:\n${text}`).toContain(
     token,
   );
