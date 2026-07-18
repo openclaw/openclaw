@@ -30,9 +30,13 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
     return;
   }
 
+  const encodedCsp = url.searchParams.get("csp");
   let csp;
   try {
-    csp = decodeMcpAppSandboxCsp(url.searchParams.get("csp"));
+    csp = decodeMcpAppSandboxCsp(encodedCsp);
+    if (encodedCsp !== null && !csp) {
+      throw new Error("invalid MCP App sandbox policy");
+    }
   } catch {
     res.statusCode = 400;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
