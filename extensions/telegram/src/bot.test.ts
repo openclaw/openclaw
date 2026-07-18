@@ -52,6 +52,49 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
   },
 }));
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      // This file's turn tests were authored against the injected harness
+      // dispatcher. Assembled turns now dispatch through core's own provider
+      // dispatcher, which an extension test cannot intercept; convert each
+      // resolved turn to a prepared one that drives the harness dispatcher,
+      // or reply waits never settle and turn tests hang to timeout.
+      const harness = await import("./bot.create-telegram-bot.test-harness.js");
+      const resolveTurn = params.adapter.resolveTurn;
+      return await actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (input, eventClass, preflight) => {
+            const resolved = await resolveTurn(input, eventClass, preflight);
+            if (!("route" in resolved) || "runDispatch" in resolved) {
+              return resolved;
+            }
+            type Assembled = Extract<typeof resolved, { dispatcherOptions: unknown }>;
+            const assembled = resolved as Assembled;
+            return {
+              ...assembled,
+              runDispatch: async () =>
+                await harness.dispatchReplyWithBufferedBlockDispatcher({
+                  ctx: assembled.ctxPayload,
+                  cfg: assembled.cfg,
+                  dispatcherOptions: assembled.dispatcherOptions,
+                  replyOptions: assembled.replyOptions,
+                } as Parameters<typeof harness.dispatchReplyWithBufferedBlockDispatcher>[0]),
+            } as typeof resolved;
+          },
+        },
+      });
+    },
+  };
+});
+
 const {
   answerCallbackQuerySpy,
   commandSpy,
