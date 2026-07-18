@@ -9,6 +9,9 @@ const A2UI_ACTION_KEYS = [
   "createSurface",
 ] as const;
 
+/** A2UI v0.9 introduced createSurface / deleteSurface / dataModelUpdate. */
+const V09_ONLY_ACTIONS = new Set<string>(["createSurface", "deleteSurface", "dataModelUpdate"]);
+
 /** A2UI message dialects recognized by the Canvas validator. */
 type A2UIVersion = "v0.8" | "v0.9";
 
@@ -84,8 +87,9 @@ function validateA2UIJsonl(jsonl: string) {
       return;
     }
     // v0.9 requires an explicit version, but keep recognizing legacy
-    // createSurface payloads so older generators still fail closed.
-    if (explicitVersion === "v0.9" || actionKeys[0] === "createSurface") {
+    // createSurface / deleteSurface / dataModelUpdate payloads so older
+    // generators still fail closed.
+    if (explicitVersion === "v0.9" || V09_ONLY_ACTIONS.has(actionKeys[0] ?? "")) {
       sawV09 = true;
     } else {
       sawV08 = true;

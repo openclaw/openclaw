@@ -224,6 +224,18 @@ describe("Canvas tool", () => {
       /OpenClaw currently supports v0\.8 only/,
     ],
     [
+      "legacy deleteSurface JSONL without explicit version",
+      JSON.stringify({ deleteSurface: { surfaceId: "main" } }),
+      /OpenClaw currently supports v0\.8 only/,
+    ],
+    [
+      "legacy dataModelUpdate JSONL without explicit version",
+      JSON.stringify({
+        dataModelUpdate: { surfaceId: "main", contents: [], path: "/" },
+      }),
+      /OpenClaw currently supports v0\.8 only/,
+    ],
+    [
       "A2UI v0.9 deleteSurface JSONL",
       JSON.stringify({ version: "v0.9", deleteSurface: { surfaceId: "main" } }),
       /OpenClaw currently supports v0\.8 only/,
