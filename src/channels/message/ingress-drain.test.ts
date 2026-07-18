@@ -146,13 +146,61 @@ describe("channel ingress drain", () => {
       expect(await queue.listPending()).toEqual([]);
 
       // Abandon releases for retry (attempts increment).
-      expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned();
+      await expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned();
       await drain.waitForIdle();
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
         expect(pending[0]?.attempts).toBeGreaterThanOrEqual(1);
       });
+      drain.dispose();
+    });
+  });
+
+  it("lets callers await an abandoned claim release", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<Payload>({
+        channelId: "test",
+        accountId: "a",
+        stateDir,
+      });
+      await queue.enqueue("evt-await-abandon", { text: "x" }, { laneKey: "l1" });
+
+      let finishRelease!: () => void;
+      const releaseGate = new Promise<void>((resolve) => {
+        finishRelease = resolve;
+      });
+      const release = vi.fn(async (...args: Parameters<typeof queue.release>) => {
+        await releaseGate;
+        return await queue.release(...args);
+      });
+      const capturedLifecycles: ChannelIngressDispatchLifecycle[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue: { ...queue, release },
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          capturedLifecycles.push(lifecycle);
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await vi.waitFor(() => expect(capturedLifecycles).toHaveLength(1));
+
+      let abandoned = false;
+      const abandonment = Promise.resolve(
+        expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned(),
+      ).then(() => {
+        abandoned = true;
+      });
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+      expect(abandoned).toBe(false);
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      finishRelease();
+      await abandonment;
+      expect(abandoned).toBe(true);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toHaveLength(1);
       drain.dispose();
     });
   });
@@ -172,7 +220,7 @@ describe("channel ingress drain", () => {
           const bound = bindIngressLifecycleToReplyOptions(lifecycle);
           bound.turnAdoptionLifecycle.onDeferred();
           // Never admitted — abandon path releases claim.
-          bound.turnAdoptionLifecycle.onAbandoned();
+          await bound.turnAdoptionLifecycle.onAbandoned();
           return { kind: "deferred" };
         },
       });
@@ -512,7 +560,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("bindIngressLifecycleToReplyOptions returns only turnAdoptionLifecycle", () => {
+  it("bindIngressLifecycleToReplyOptions returns only turnAdoptionLifecycle", async () => {
     const abort = new AbortController();
     const calls: string[] = [];
     const bound = bindIngressLifecycleToReplyOptions({
@@ -535,11 +583,11 @@ describe("channel ingress drain", () => {
     expect("onAdopted" in bound).toBe(false);
     expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
     bound.turnAdoptionLifecycle.onDeferred();
-    bound.turnAdoptionLifecycle.onAbandoned();
+    await bound.turnAdoptionLifecycle.onAbandoned();
     expect(calls).toEqual(["deferred", "abandoned"]);
     calls.length = 0;
     bound.turnAdoptionLifecycle.onDeferred();
-    void bound.turnAdoptionLifecycle.onAdopted();
+    await bound.turnAdoptionLifecycle.onAdopted();
     expect(calls).toEqual(["deferred", "adopted"]);
   });
 

@@ -11,11 +11,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  createReplyDispatcherWithTyping,
-  dispatchInboundMessage,
-  finalizeInboundContext,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -898,41 +894,37 @@ async function handleSlashCommandAsync(params: {
     dmRetryOptions: account.config.dmChannelRetry,
   });
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    ...replyPipeline,
-    resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-    onDeliverySettled: deliveryBarrier.markDeliverySettled,
-    humanDelay,
-    deliver: async (payload: ReplyPayload) => {
-      await deliverMattermostReplyPayload({
-        core,
-        cfg,
-        payload,
-        to,
-        accountId: account.accountId,
-        agentId: route.agentId,
-        textLimit,
-        tableMode,
-        sendMessage: sendMessageMattermost,
-        onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-      });
-      runtime.log?.(`delivered slash reply to ${to}`);
-    },
-    onError: (err, info) => {
-      runtime.error?.(
-        `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
-      );
-    },
-    onReplyStart: typingCallbacks?.onReplyStart,
-  });
-
-  await dispatchInboundMessage({
+  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
-    dispatcher,
-    onSettled: () => markDispatchIdle(),
+    dispatcherOptions: {
+      ...replyPipeline,
+      resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+      onDeliverySettled: deliveryBarrier.markDeliverySettled,
+      humanDelay,
+      deliver: async (payload: ReplyPayload) => {
+        await deliverMattermostReplyPayload({
+          core,
+          cfg,
+          payload,
+          to,
+          accountId: account.accountId,
+          agentId: route.agentId,
+          textLimit,
+          tableMode,
+          sendMessage: sendMessageMattermost,
+          onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+        });
+        runtime.log?.(`delivered slash reply to ${to}`);
+      },
+      onError: (err, info) => {
+        runtime.error?.(
+          `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
+        );
+      },
+      typingCallbacks,
+    },
     replyOptions: {
-      ...replyOptions,
       disableBlockStreaming:
         typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
       onModelSelected,

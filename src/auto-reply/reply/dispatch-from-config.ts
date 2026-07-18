@@ -30,6 +30,7 @@ import {
 } from "../../agents/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
+import { isAskUserPromptActive } from "../../agents/tools/ask-user-tool.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -1395,12 +1396,24 @@ async function dispatchReplyFromConfigInner(
           : undefined;
       return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
     };
+    const hasAskUserPayload = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      return askUser && typeof askUser === "object" && !Array.isArray(askUser);
+    };
+    const isInactiveAskUserPayload = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+        return false;
+      }
+      const questionId = (askUser as { questionId?: unknown }).questionId;
+      return typeof questionId === "string" && !isAskUserPromptActive(questionId);
+    };
     const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
       if (!finalReplyDeliveryStarted) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
-      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload) && !hasAskUserPayload(payload);
     };
     // Durable inter-tool commentary lane: with verbose progress on, preamble
     // items become standalone progress messages like tool summaries. The latest
@@ -1892,6 +1905,9 @@ async function dispatchReplyFromConfigInner(
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
+      if (hasAskUserPayload(payload)) {
+        return payload;
+      }
       if (isFastModeAutoProgressPayload(payload)) {
         return payload;
       }
@@ -2235,10 +2251,16 @@ async function dispatchReplyFromConfigInner(
                       if (isDispatchOperationAborted()) {
                         return;
                       }
+                      if (isInactiveAskUserPayload(payload)) {
+                        return;
+                      }
                       await waitForPendingDirectBlockReplyDelivery(
                         getDispatchAbortOperation()?.abortSignal,
                       );
                       if (isDispatchOperationAborted()) {
+                        return;
+                      }
+                      if (isInactiveAskUserPayload(payload)) {
                         return;
                       }
                       markInboundDedupeReplayUnsafe();
@@ -2310,6 +2332,9 @@ async function dispatchReplyFromConfigInner(
                         return;
                       }
                       if (isDispatchOperationAborted()) {
+                        return;
+                      }
+                      if (isInactiveAskUserPayload(deliveryPayload)) {
                         return;
                       }
                       if (

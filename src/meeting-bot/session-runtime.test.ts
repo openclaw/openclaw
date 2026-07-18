@@ -14,6 +14,7 @@ type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
     launched: boolean;
     tab?: MeetingBrowserTab;
     health?: MeetingBrowserHealth;
+    hasAudioBridge?: boolean;
   };
 };
 type TestJoinContext = MeetingSessionRuntimeJoinContext<
@@ -25,6 +26,7 @@ type TestJoinContext = MeetingSessionRuntimeJoinContext<
 >;
 
 function createTestRuntime(params: {
+  talkBack?: boolean;
   joinTransport(input: {
     request: TestRequest;
     session: TestSession;
@@ -91,7 +93,7 @@ function createTestRuntime(params: {
     },
     resolveSpeechInstructions: () => undefined,
     isBrowserTransport: () => true,
-    isTalkBackMode: () => false,
+    isTalkBackMode: () => params.talkBack === true,
     isTranscribeMode: () => false,
     sameMeetingUrl: (left, right) => left === right,
     normalizeMeetingUrlForReuse: (url) => url,
@@ -101,7 +103,7 @@ function createTestRuntime(params: {
             launched: session.browser.launched,
             tab: session.browser.tab,
             health: session.browser.health,
-            hasAudioBridge: false,
+            hasAudioBridge: session.browser.hasAudioBridge === true,
           }
         : undefined,
     setBrowserTab: (session, tab) => {
@@ -352,5 +354,39 @@ describe("MeetingSessionRuntime leave cleanup", () => {
 
     expect(stop).toHaveBeenCalledOnce();
     expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("MeetingSessionRuntime speech readiness", () => {
+  it("treats an unknown microphone state as transiently unverified", async () => {
+    const { runtime } = createTestRuntime({
+      talkBack: true,
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          hasAudioBridge: true,
+          health: { inCall: true },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    expect(runtime.refreshSpeechReadiness(session)).toEqual({
+      ready: false,
+      reason: "browser-unverified",
+      message: "browser unverified",
+    });
+    expect(session.browser?.health).toMatchObject({
+      speechReady: false,
+      speechBlockedReason: "browser-unverified",
+    });
+
+    session.browser!.health = { ...session.browser?.health, micMuted: false };
+    expect(runtime.refreshSpeechReadiness(session)).toEqual({ ready: true });
   });
 });

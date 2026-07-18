@@ -13,7 +13,7 @@ const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.route
 
 describe("sidebar pinned routes", () => {
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).toEqual(["usage", "cron", "plugins"]);
+    expect(DEFAULT_SIDEBAR_PINNED_ROUTES).toEqual(["custodian", "usage", "cron", "plugins"]);
   });
 
   it("drops the retired overview route from persisted pins", () => {
@@ -45,7 +45,12 @@ describe("sidebar pinned routes", () => {
     expect(settingsRoutes).toEqual(
       expect.arrayContaining(["worktrees", "activity", "channels", "config"]),
     );
-    expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
+    expect(
+      settingsRoutes
+        .filter((routeId) => routeId !== "custodian")
+        .every((routeId) => isSettingsNavigationRoute(routeId)),
+    ).toBe(true);
+    expect(isSettingsNavigationRoute("custodian")).toBe(false);
     expect(normalizeSidebarPinnedRoutes(["activity", "worktrees", "usage"])).toEqual(["usage"]);
   });
 
@@ -56,6 +61,12 @@ describe("sidebar pinned routes", () => {
     ]);
     expect(sidebarMoreRoutes(["usage"])).toContain("plugins");
     expect(settingsRoutes).not.toContain("plugins");
+  });
+
+  it("keeps OpenClaw pinnable and linked from Settings without Settings chrome", () => {
+    expect(SIDEBAR_NAV_ROUTES).toContain("custodian");
+    expect(settingsRoutes).toContain("custodian");
+    expect(isSettingsNavigationRoute("custodian")).toBe(false);
   });
 
   it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {

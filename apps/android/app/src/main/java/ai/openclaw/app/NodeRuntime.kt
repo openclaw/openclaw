@@ -101,6 +101,7 @@ import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
+import ai.openclaw.app.wear.WearProxyAgent
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
@@ -1138,6 +1139,30 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+      activeAgentId = {
+        resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
+      },
+      activeSessionKey = { chatSessionKey.value },
+      selectedModelRef = { chatSelectedModelRef.value },
+      agents = {
+        gatewayAgents.value.map { agent ->
+          WearProxyAgent(
+            id = agent.id,
+            name = agent.name,
+            emoji = agent.emoji,
+          )
+        }
+      },
+      selectGatewayAgent = { agentId ->
+        if (gatewayAgents.value.none { agent -> agent.id == agentId }) {
+          false
+        } else {
+          selectChatAgent(agentId)
+          true
+        }
+      },
+      connectGateway = { refreshGatewayConnection() },
+      disconnectGateway = { disconnect() },
       startRealtimeTalk = { nodeId, sessionKey, attemptId, language ->
         if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language)) wearRealtimeTalkSnapshot.value else null
       },

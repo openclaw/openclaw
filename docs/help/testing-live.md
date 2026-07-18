@@ -12,6 +12,22 @@ For quick start, QA runners, unit/integration suites, and Docker flows, see
 [Testing](/help/testing). This page covers **live** (network-touching) tests:
 model matrix, CLI backends, ACP, media providers, and credential handling.
 
+## Live tests vs your real gateway
+
+Live suites and ad hoc smokes must never disturb a gateway that is already
+serving real traffic (yours or another operator's):
+
+- Bring your own gateway: use the in-process gateway (Layer 2 below) or start a
+  dev instance with an isolated state dir (`OPENCLAW_STATE_DIR=<scratch>`) and a
+  free port. Do not bind the default gateway port (18789) while a real gateway
+  is running on it.
+- Do not `openclaw gateway stop`/`restart` (or `launchctl`/`systemctl`/tmux
+  equivalents) a service you did not start in this session — that is the
+  operator's live instance. Get explicit approval first.
+- Need realistic data? Copy the live state/DB into your dev state dir and test
+  against the copy. In-place migrations of a live gateway's state also require
+  explicit approval.
+
 ## Live: local smoke commands
 
 Export the needed provider key in the process environment before ad hoc live
