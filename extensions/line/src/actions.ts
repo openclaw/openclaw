@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 export type Action = messagingApi.Action;
 const LINE_ACTION_LABEL_LIMIT = 20;
 const LINE_ACTION_DATA_LIMIT = 300;
+const LINE_MESSAGE_ACTION_TEXT_LIMIT = 300;
 const lineMessageTextSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL_LIMIT): string {
@@ -19,7 +20,7 @@ function truncateLineMessageText(text: string): string {
   let count = 0;
   let output = "";
   for (const { segment } of lineMessageTextSegmenter.segment(text)) {
-    if (count >= LINE_ACTION_DATA_LIMIT) {
+    if (count >= LINE_MESSAGE_ACTION_TEXT_LIMIT) {
       break;
     }
     output += segment;
