@@ -69,6 +69,56 @@ describe("safety event store", () => {
     });
   });
 
+  it("bounds and redacts policy-provided block reasons before durable storage", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safety-reason-"));
+    tempDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    ensureSafetyEventStoreBridge();
+
+    const bearerCredential = "abcdef1234567890ghijklmn";
+    emitTrustedAISafetyEvent({
+      type: "ai_safety.tool_policy.decision",
+      sessionId: "session-reason",
+      toolName: "exec",
+      decision: "blocked",
+      policySource: "plugin",
+      severity: "warn",
+      reason: `first line\nsecond\u0007line Authorization: Bearer ${bearerCredential} ${"x".repeat(400)}`,
+    });
+
+    const [event] = querySafetyEvents({ sessionId: "session-reason" }).events;
+    expect(event).toBeDefined();
+    expect(event!.message.length).toBeLessThanOrEqual(256);
+    expect(event!.message).not.toContain("\n");
+    expect(event!.message).not.toContain("\u0007");
+    expect(event!.message).toContain("first line second line");
+    expect(event!.message).not.toContain(bearerCredential);
+    expect(event!.meta).toMatchObject({ trusted: true, messageTruncated: true });
+  });
+
+  it("stores the event type when a policy decision has no reason", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safety-noreason-"));
+    tempDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    ensureSafetyEventStoreBridge();
+
+    emitTrustedAISafetyEvent({
+      type: "ai_safety.tool_policy.decision",
+      sessionId: "session-noreason",
+      toolName: "exec",
+      decision: "allowed",
+      policySource: "static_config",
+      severity: "info",
+    });
+
+    const [event] = querySafetyEvents({ sessionId: "session-noreason" }).events;
+    expect(event).toMatchObject({
+      message: "ai_safety.tool_policy.decision",
+      meta: { trusted: true },
+    });
+    expect(event!.meta).not.toHaveProperty("messageTruncated");
+  });
+
   it("caps durable history at 10,000 records", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safety-retention-"));
     tempDirs.push(stateDir);

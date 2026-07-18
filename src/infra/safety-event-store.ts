@@ -1,4 +1,5 @@
 // Durable AI safety taxonomy history in the shared OpenClaw state database.
+import { redactSensitiveText } from "../logging/redact.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -249,20 +250,47 @@ function mapDiagnosticSeverity(event: DiagnosticAISafetyEventPayload): SafetyEve
 }
 
 /**
+ * Policy reasons are free text supplied by policies and plugins; they can carry
+ * user-derived or sensitive content. Durable rows must stay bounded and
+ * secret-free, so cap the length and run the shared log redaction pass before
+ * anything reaches SQLite or the query/export surfaces.
+ */
+const STORED_REASON_MAX_LENGTH = 256;
+
+function sanitizeStoredReason(reason: string): { message: string; truncated: boolean } {
+  // Control characters (including newlines) never belong in a one-line
+  // operator-facing summary and can smuggle log-injection sequences.
+  const flattened = reason
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const redacted = redactSensitiveText(flattened);
+  if (redacted.length <= STORED_REASON_MAX_LENGTH) {
+    return { message: redacted, truncated: false };
+  }
+  return { message: `${redacted.slice(0, STORED_REASON_MAX_LENGTH - 1)}…`, truncated: true };
+}
+
+/**
  * Idempotently bridge the self-contained AI safety diagnostic channel into the
  * ring-buffer store so CLI/gateway/UI queries see emitted taxonomy events.
  */
 export function ensureSafetyEventStoreBridge(): void {
   resolveGlobalSingleton(Symbol.for("openclaw.safety-event-store-bridge"), () =>
     onAISafetyDiagnosticEvent((event, metadata) => {
+      const rawReason = "reason" in event && event.reason ? event.reason : undefined;
+      const sanitized = rawReason ? sanitizeStoredReason(rawReason) : undefined;
       getSafetyEventStore().appendSafetyEvent({
         type: event.type,
         severity: mapDiagnosticSeverity(event),
         sessionId: event.sessionId,
         agentId: event.agentId,
         channel: event.channel,
-        message: "reason" in event && event.reason ? event.reason : event.type,
-        meta: { trusted: metadata.trusted },
+        message: sanitized?.message || event.type,
+        meta: {
+          trusted: metadata.trusted,
+          ...(sanitized?.truncated ? { messageTruncated: true } : {}),
+        },
       });
     }),
   );
