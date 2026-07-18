@@ -421,7 +421,9 @@ async function listQuarantineArchives(
         // part between the base prefix and the next dot.
         const afterPrefix = name.slice(prefix.length);
         const dotIdx = afterPrefix.indexOf(".");
-        if (dotIdx === -1) continue;
+        if (dotIdx === -1) {
+          continue;
+        }
         const tsStr = afterPrefix.slice(0, dotIdx);
         const ts = Number(tsStr);
         if (Number.isFinite(ts)) {
