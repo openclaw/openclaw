@@ -96,7 +96,7 @@ export function resolveMcpAppSandboxPort(gatewayPort: number, configuredPort?: n
 // includes valid JSON that is not a usable CSP — encodeCsp omits the query
 // param entirely in that case, so a present-but-empty value is never legitimate.
 export function decodeMcpAppSandboxCsp(value: string | null): McpAppCsp | undefined {
-  if (!value) {
+  if (value === null) {
     return undefined;
   }
   if (value.length > MCP_APP_SANDBOX_CSP_MAX_ENCODED_BYTES) {
