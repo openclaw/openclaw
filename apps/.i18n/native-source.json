@@ -539,7 +539,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 501,
+      "line": 463,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Searching…",
       "surface": "android",
@@ -547,7 +547,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 623,
+      "line": 585,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Mic off",
       "surface": "android",
@@ -555,7 +555,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 637,
+      "line": 599,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Off",
       "surface": "android",
@@ -11747,7 +11747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 290,
+      "line": 289,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Model",
       "surface": "android",
@@ -11755,7 +11755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 375,
+      "line": 374,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
       "source": "Some shared images were omitted or could not be added.",
       "surface": "android",

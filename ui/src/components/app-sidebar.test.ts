@@ -18,6 +18,7 @@ import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts"
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
 import "./app-sidebar.ts";
 import {
@@ -684,8 +685,8 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
 
     toggle?.click();
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledOnce());
-    await vi.waitFor(() =>
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
+    await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
     );
 
@@ -759,8 +760,8 @@ describe("AppSidebar agent chip", () => {
         ],
       },
     });
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() =>
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    await waitForFast(() =>
       expect(
         sidebar.querySelector('[data-session-key="agent:main:child-one"] [aria-label="Done"]'),
       ).not.toBeNull(),
@@ -810,12 +811,12 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(harness.list.mock.calls[1]?.[0]).toMatchObject({
       spawnedBy: "agent:main:parent",
       offset: 20,
     });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
     );
   });
@@ -871,12 +872,12 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
 
     publishParent(11);
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() =>
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(3));
+    await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
     );
   });
@@ -905,7 +906,7 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-    await vi.waitFor(() => expect(original.list).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(original.list).toHaveBeenCalledOnce());
 
     const replacement = createSessionsHarness("main", ["agent:main:parent"]);
     replacement.list.mockResolvedValue({
@@ -940,7 +941,7 @@ describe("AppSidebar agent chip", () => {
       },
     });
     provider.setContext(createContext(gateway, replacement.sessions));
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).not.toBeNull(),
     );
 
@@ -992,15 +993,15 @@ describe("AppSidebar agent chip", () => {
     context.agentSelection.state.scopeId = "worker";
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = "agent:worker:child";
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("sessions.describe", {
         key: "agent:worker:child",
       }),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(sidebar.querySelectorAll('[data-session-key="agent:worker:child"]')).toHaveLength(1),
     );
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
 
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(2);
     expect(sidebar.querySelectorAll('[data-session-key="agent:worker:child"]')).toHaveLength(1);
@@ -1026,7 +1027,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.sessionKey = "agent:main:parent";
     await sidebar.updateComplete;
     sidebar.sessionKey = "agent:worker:child";
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).not.toBeNull(),
     );
   });
@@ -1068,13 +1069,13 @@ describe("AppSidebar agent chip", () => {
     });
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
 
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(sidebar.textContent).toContain("Recovered child"));
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(sidebar.textContent).toContain("Recovered child"));
   });
 
   it("restores a directly opened child whose parent is outside the root page", async () => {
@@ -1102,8 +1103,8 @@ describe("AppSidebar agent chip", () => {
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = "agent:worker:child";
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() =>
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() =>
       expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).not.toBeNull(),
     );
     expect(
@@ -1158,9 +1159,9 @@ describe("AppSidebar agent chip", () => {
     });
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = "agent:worker:child";
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
 
     described.resolve({
       session: {
@@ -1172,7 +1173,7 @@ describe("AppSidebar agent chip", () => {
         status: "running",
       },
     });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
     );
     expect(sidebar.textContent).toContain("Loaded sibling");
@@ -3579,14 +3580,14 @@ describe("AppSidebar session mutation feedback", () => {
     const menu = await openSessionMenu(sidebar, row.key);
     menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "a"?');
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:a", agentId: "main" },
       { timeoutMs: 10 * 60_000 },
     );
-    await vi.waitFor(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
   });
 
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
@@ -3597,7 +3598,7 @@ describe("AppSidebar session mutation feedback", () => {
       const menu = await openSessionMenu(sidebar, "agent:main:a");
       menu.querySelector<HTMLButtonElement>('[data-shortcut="r"]')?.click();
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
           "rename rejected by Gateway",
         );
@@ -3633,7 +3634,7 @@ describe("AppSidebar session mutation feedback", () => {
       await menu?.updateComplete;
       menu?.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
           "agent:main:b: permission denied",
         );
@@ -3649,7 +3650,7 @@ describe("AppSidebar session mutation feedback", () => {
     harness.patch.mockImplementationOnce(() => pending.promise);
     const menu = await openSessionMenu(sidebar, "agent:main:a");
     menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
     gateway.publish({ connected: false, reconnecting: true });
     gateway.publish({ connected: true, reconnecting: false });
@@ -3674,7 +3675,7 @@ describe("AppSidebar session mutation feedback", () => {
     const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
     gateway.publish({ connected: false, reconnecting: true });
     gateway.publish({ connected: true, reconnecting: false });
@@ -3701,17 +3702,17 @@ describe("AppSidebar session mutation feedback", () => {
     let menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
     row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
     menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(3));
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(3));
 
     firstPatch.resolve(successfulSessionPatch("agent:main:a"));
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(4));
     expect(harness.patch.mock.calls.map(([, patch]) => patch)).toEqual(
       expect.arrayContaining([
         { archived: true },
@@ -3743,7 +3744,7 @@ describe("AppSidebar session mutation feedback", () => {
     try {
       const menu = await openSessionMenu(sidebar, "agent:main:a");
       menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
-      await vi.waitFor(() => expect(confirmations).toBe(2));
+      await waitForFast(() => expect(confirmations).toBe(2));
 
       expect(request).not.toHaveBeenCalled();
     } finally {
@@ -3866,7 +3867,7 @@ describe("AppSidebar multi-select", () => {
     expect(menu.querySelector('[data-shortcut="r"]')).toBeNull();
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
     expect(harness.patch).toHaveBeenNthCalledWith(
       1,
       "agent:main:a",
@@ -3895,7 +3896,7 @@ describe("AppSidebar multi-select", () => {
       const menu = await sessionMenu(sidebar);
       menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
 
-      await vi.waitFor(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
       expect(confirmSpy).toHaveBeenCalledOnce();
       expect(confirmSpy.mock.calls[0]?.[0]).toContain("2");
       expect(harness.deleteMany).toHaveBeenCalledWith([
@@ -4423,7 +4424,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     const menu = await openGroupMenu(sidebar);
     const rename = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0];
     rename?.click();
-    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+    await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
     await Promise.resolve();
     await Promise.resolve();
 
@@ -4438,7 +4439,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
     const menu = await openGroupMenu(sidebar);
     menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
-    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+    await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
     await Promise.resolve();
     await Promise.resolve();
 
@@ -4459,7 +4460,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
     const menu = await openGroupMenu(sidebar);
     menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
-    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+    await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
 
     gatewayHarness.publish({ connected: false });
     gatewayHarness.publish({ connected: true });
@@ -4479,7 +4480,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     const menu = await openGroupMenu(sidebar);
     const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
     items[items.length - 1]?.click();
-    await vi.waitFor(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
+    await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
     await Promise.resolve();
     await Promise.resolve();
 
@@ -4495,7 +4496,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     const menu = await openGroupMenu(sidebar);
     const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
     items[items.length - 1]?.click();
-    await vi.waitFor(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
+    await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
     await Promise.resolve();
     await Promise.resolve();
 

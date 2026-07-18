@@ -325,6 +325,9 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       // Keep the claim owner live until every real delivery and core handler exits;
       // disposing earlier lets a replacement drain recover work still producing replies.
       await Promise.allSettled(activeDeliveries);
+      // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
+      // A deadline would allow duplicate side effects after replacement recovery;
+      // remove this wait only when core can cancel or abandon the run before release.
       await Promise.allSettled(deferredClaims.values());
       await drain.waitForIdle();
       drain.dispose();

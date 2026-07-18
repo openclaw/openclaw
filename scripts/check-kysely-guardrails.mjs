@@ -53,6 +53,10 @@ const rawSqliteAllowPathGroups = {
   ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
   "read-only shared state database access": ["src/state/openclaw-state-db-readonly.ts"],
+  "read-only schema preflight and integrity verification access": [
+    "src/state/openclaw-database-preflight.ts",
+    "src/state/openclaw-database-verify.worker.ts",
+  ],
   "read-only SQLite status probes": [
     "src/commands/doctor-db-bloat.ts",
     "src/commands/status.scan.shared.ts",

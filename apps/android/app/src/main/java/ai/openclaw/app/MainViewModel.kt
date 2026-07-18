@@ -25,11 +25,9 @@ import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
-import ai.openclaw.app.ui.chat.CHAT_COMPOSER_MAX_SEND_CHARS
-import ai.openclaw.app.ui.chat.ChatComposerAttachmentStore
-import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
+import ai.openclaw.app.ui.chat.ChatComposerSendStartResult
+import ai.openclaw.app.ui.chat.ChatComposerStateStore
 import ai.openclaw.app.ui.chat.PendingAttachment
-import ai.openclaw.app.ui.chat.captureChatComposerSendPayload
 import ai.openclaw.app.ui.chat.chatComposerTextDraftsFromSnapshot
 import ai.openclaw.app.ui.chat.matchesSession
 import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
@@ -83,11 +81,6 @@ internal fun claimChatDraftForOwner(
   return draft.copy(owner = owner)
 }
 
-internal data class ChatComposerSendAdmission(
-  val id: Long,
-  val owner: ChatComposerOwner,
-)
-
 internal data class PendingAssistantAutoSend(
   val prompt: String,
   val owner: ChatComposerOwner,
@@ -97,6 +90,7 @@ internal data class PendingAssistantAutoSend(
 private data class AssistantAutoSendOperation(
   var owner: ChatComposerOwner,
   val pendingId: String,
+  val composerSendId: String,
 )
 
 internal fun clearCompletedAssistantAutoSend(
@@ -114,18 +108,6 @@ internal fun retainRefusedAssistantPrompt(
     else -> "$prompt\n\n$existing"
   }
 
-internal enum class ChatComposerAttachmentNotice {
-  Attachment,
-  Image,
-}
-
-internal enum class ChatComposerSendStartResult {
-  Started,
-  Unavailable,
-  MessageTooLong,
-  CheckpointFull,
-}
-
 data class ChatShareDraft(
   val id: Long,
   val text: String?,
@@ -135,7 +117,6 @@ data class ChatShareDraft(
 
 internal const val MAX_PENDING_CHAT_SHARES = 16
 private const val CHAT_COMPOSER_DRAFTS_STATE_KEY = "chat-composer-text-drafts"
-private const val CHAT_COMPOSER_MAX_MEDIA_AUTHORIZATIONS = 32
 
 /** Bounded process-local queue whose stable head survives Activity recreation with the ViewModel. */
 internal class ChatShareDraftQueue(
@@ -322,40 +303,20 @@ class MainViewModel private constructor(
   private val chatDraftState = MutableStateFlow<ChatDraft?>(null)
   internal val chatDraft: StateFlow<ChatDraft?> = chatDraftState
   private val chatDraftLock = Any()
-  private val chatComposerAttachmentStore = ChatComposerAttachmentStore()
-  private val chatComposerMediaLock = Any()
-  private val chatComposerMediaOwners = linkedMapOf<String, ChatComposerOwner>()
   private var attachedComposerRuntime: NodeRuntime? = null
   private var removeChatSessionDeletionListener: (() -> Unit)? = null
 
   // SavedStateHandle preserves a bounded set of complete owner-scoped drafts through process
   // recreation. Durable admission clears only the accepted snapshot, so later edits survive.
-  internal val chatComposerTextDrafts =
-    ChatComposerTextDraftStore(
-      initial = chatComposerTextDraftsFromSnapshot(savedStateHandle[CHAT_COMPOSER_DRAFTS_STATE_KEY]),
-      onSnapshotChanged = { snapshot -> savedStateHandle[CHAT_COMPOSER_DRAFTS_STATE_KEY] = snapshot },
+  internal val chatComposerState =
+    ChatComposerStateStore(
+      initialDrafts = chatComposerTextDraftsFromSnapshot(savedStateHandle[CHAT_COMPOSER_DRAFTS_STATE_KEY]),
+      onDraftSnapshotChanged = { snapshot -> savedStateHandle[CHAT_COMPOSER_DRAFTS_STATE_KEY] = snapshot },
     )
-
-  internal val chatComposerAttachments = chatComposerAttachmentStore.attachments
-  private val chatComposerAttachmentNoticeLock = Any()
-  private val chatComposerAttachmentNoticesState =
-    MutableStateFlow<Map<ChatComposerOwner, ChatComposerAttachmentNotice>>(emptyMap())
-  internal val chatComposerAttachmentNotices: StateFlow<Map<ChatComposerOwner, ChatComposerAttachmentNotice>> =
-    chatComposerAttachmentNoticesState.asStateFlow()
-  private val chatComposerSendLock = Any()
-  private val chatComposerSendSeq = AtomicLong()
-  private val recoveredChatComposerSends = chatComposerTextDrafts.pendingAdmissions()
-  private val chatComposerSendOwnersState =
-    MutableStateFlow<Set<ChatComposerOwner>>(
-      recoveredChatComposerSends.mapTo(linkedSetOf()) { pending -> pending.owner },
-    )
-  internal val chatComposerSendOwners: StateFlow<Set<ChatComposerOwner>> = chatComposerSendOwnersState.asStateFlow()
-  private val chatComposerSendAdmissionsState =
-    MutableStateFlow<Map<ChatComposerOwner, ChatComposerSendAdmission>>(emptyMap())
-  internal val chatComposerSendAdmissions: StateFlow<Map<ChatComposerOwner, ChatComposerSendAdmission>> =
-    chatComposerSendAdmissionsState.asStateFlow()
+  private val assistantAutoSendLock = Any()
 
   init {
+    val recoveredChatComposerSends = chatComposerState.recoveredSends()
     if (recoveredChatComposerSends.isNotEmpty()) {
       // A pending checkpoint is hidden until the durable outbox gives a definitive answer.
       // Database errors leave it parked instead of exposing text that may already be sending.
@@ -364,10 +325,11 @@ class MainViewModel private constructor(
         recoveredChatComposerSends.forEach { pending ->
           val admitted =
             runCatching { runtime.wasChatOutboxCommandAdmitted(pending.commandId) }.getOrNull() ?: return@forEach
-          synchronized(chatComposerSendLock) {
-            val resolvedOwner = chatComposerTextDrafts.resolveAdmission(pending.commandId, admitted)?.owner ?: pending.owner
-            chatComposerSendOwnersState.value = chatComposerSendOwnersState.value - pending.owner - resolvedOwner
-          }
+          chatComposerState.resolveRecoveredSend(
+            commandId = pending.commandId,
+            fallbackOwner = pending.owner,
+            admitted = admitted,
+          )
         }
       }
     }
@@ -777,17 +739,12 @@ class MainViewModel private constructor(
   }
 
   private suspend fun clearChatComposerOwners(matches: (ChatComposerOwner) -> Boolean) {
-    clearChatComposerMediaOwners(matches)
+    chatComposerState.removeMediaOwners(matches)
     chatShareDraftQueue.removeOwners(matches)
-    synchronized(chatComposerSendLock) {
-      chatComposerTextDrafts.removeOwners(matches)
-      val retainedSendOwners = chatComposerSendOwnersState.value.filterTo(linkedSetOf()) { !matches(it) }
-      // A dispatched request keeps its gate until its own finally block runs. Cleanup retires its
-      // visible state, but cannot make a second auto-send overlap the still-suspended operation.
-      assistantAutoSendOperation?.owner?.let(retainedSendOwners::add)
-      chatComposerSendOwnersState.value = retainedSendOwners
-      chatComposerSendAdmissionsState.value =
-        chatComposerSendAdmissionsState.value.filterKeys { !matches(it) }
+    synchronized(assistantAutoSendLock) {
+      // Read the live operation id while its start/finally paths are excluded so cleanup retains
+      // exactly that gate after removing other state owned by the retired identity.
+      chatComposerState.removeOwners(matches, assistantAutoSendOperation?.composerSendId)
     }
     pendingAssistantAutoSendMutable.update { pending ->
       pending?.takeIf { !matches(it.owner) }
@@ -795,20 +752,9 @@ class MainViewModel private constructor(
     synchronized(chatDraftLock) {
       chatDraftState.value = chatDraftState.value?.takeIf { draft -> draft.owner?.let(matches) != true }
     }
-    synchronized(chatComposerAttachmentNoticeLock) {
-      chatComposerAttachmentNoticesState.value =
-        chatComposerAttachmentNoticesState.value.filterKeys { !matches(it) }
-    }
     // Repeat after suspending share cleanup. Any callback that raced the first tombstone is
     // serialized with this final token-and-attachment purge before cleanup returns.
-    clearChatComposerMediaOwners(matches)
-  }
-
-  private fun clearChatComposerMediaOwners(matches: (ChatComposerOwner) -> Boolean) {
-    synchronized(chatComposerMediaLock) {
-      chatComposerMediaOwners.entries.removeAll { matches(it.value) }
-      chatComposerAttachmentStore.removeOwners(matches)
-    }
+    chatComposerState.removeMediaOwners(matches)
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
@@ -1076,24 +1022,24 @@ class MainViewModel private constructor(
     if (!isCurrentChatComposerOwner(pending.owner)) return
     if (runtimeRef.value?.canSendForOwner(pending.owner) != true) return
     val operation =
-      synchronized(chatComposerSendLock) {
-        if (
-          chatComposerOwnerHasActiveSend(
-            owner = pending.owner,
-            sendOwners = chatComposerSendOwnersState.value,
-            admissions = chatComposerSendAdmissionsState.value,
-          )
-        ) {
-          return
-        }
+      synchronized(assistantAutoSendLock) {
         if (!_assistantAutoSendInFlight.compareAndSet(false, true)) return
         if (pendingAssistantAutoSendMutable.value != pending) {
           _assistantAutoSendInFlight.value = false
           return
         }
-        val started = AssistantAutoSendOperation(owner = pending.owner, pendingId = pending.id)
+        val composerSendId = chatComposerState.tryBeginTrackedSend(pending.owner)
+        if (composerSendId == null) {
+          _assistantAutoSendInFlight.value = false
+          return
+        }
+        val started =
+          AssistantAutoSendOperation(
+            owner = pending.owner,
+            pendingId = pending.id,
+            composerSendId = composerSendId,
+          )
         assistantAutoSendOperation = started
-        chatComposerSendOwnersState.value = chatComposerSendOwnersState.value + pending.owner
         started
       }
     viewModelScope.launch {
@@ -1115,14 +1061,14 @@ class MainViewModel private constructor(
           if (current?.id == operation.pendingId && pendingAssistantAutoSendMutable.compareAndSet(current, null)) {
             // Refusal can mean owner validation changed before admission. Preserve the one-shot
             // prompt as editable text, using the operation owner that alias migration updates.
-            val currentDraft = chatComposerTextDrafts[operation.owner]
-            chatComposerTextDrafts[operation.owner] = retainRefusedAssistantPrompt(current.prompt, currentDraft)
+            val currentDraft = chatComposerState.textDrafts[operation.owner]
+            chatComposerState.textDrafts[operation.owner] = retainRefusedAssistantPrompt(current.prompt, currentDraft)
           }
         }
       } finally {
-        synchronized(chatComposerSendLock) {
+        synchronized(assistantAutoSendLock) {
           if (assistantAutoSendOperation === operation) {
-            chatComposerSendOwnersState.value = chatComposerSendOwnersState.value - operation.owner
+            chatComposerState.finishTrackedSend(operation.composerSendId)
             assistantAutoSendOperation = null
             // Observable releases wake a prompt blocked by this or a manual send admission.
             _assistantAutoSendInFlight.value = false
@@ -1613,89 +1559,21 @@ class MainViewModel private constructor(
       currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()
     ) == expected
 
-  internal fun beginChatComposerMediaAcquisition(owner: ChatComposerOwner): String? {
-    owner.gatewayStableId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    return synchronized(chatComposerMediaLock) {
-      while (chatComposerMediaOwners.size >= CHAT_COMPOSER_MAX_MEDIA_AUTHORIZATIONS) {
-        val oldest = chatComposerMediaOwners.keys.firstOrNull() ?: break
-        chatComposerMediaOwners.remove(oldest)
-      }
-      UUID.randomUUID().toString().also { id -> chatComposerMediaOwners[id] = owner }
-    }
-  }
-
-  internal fun isChatComposerMediaAcquisitionActive(id: String): Boolean = synchronized(chatComposerMediaLock) { id in chatComposerMediaOwners }
-
-  internal fun cancelChatComposerMediaAcquisition(id: String) {
-    synchronized(chatComposerMediaLock) { chatComposerMediaOwners.remove(id) }
-  }
-
-  internal fun addChatComposerAttachments(
-    owner: ChatComposerOwner,
-    attachments: List<PendingAttachment>,
-  ): Int =
-    chatComposerAttachmentStore.add(owner, attachments).also { omitted ->
-      recordChatComposerAttachmentOmission(owner, omitted)
-    }
-
-  internal fun addChatComposerAttachments(
-    owner: ChatComposerOwner,
-    mediaAuthorizationId: String,
-    attachments: List<PendingAttachment>,
-  ): Int? =
-    synchronized(chatComposerMediaLock) {
-      if (chatComposerMediaOwners.remove(mediaAuthorizationId) != owner) return@synchronized null
-      chatComposerAttachmentStore.add(owner, attachments).also { omitted ->
-        recordChatComposerAttachmentOmission(owner, omitted)
-      }
-    }
-
-  internal fun removeChatComposerAttachments(
-    owner: ChatComposerOwner,
-    ids: Set<String>,
-  ) {
-    chatComposerAttachmentStore.remove(owner, ids)
-  }
-
   internal fun resolveChatComposerOwnerAliases(
     to: ChatComposerOwner,
     mainSessionKey: String,
   ) {
-    val mediaSources =
-      synchronized(chatComposerMediaLock) {
-        val sources =
-          chatComposerMediaOwners.values
-            .filterTo(linkedSetOf()) { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }
-        if (sources.isNotEmpty()) {
-          for ((id, owner) in chatComposerMediaOwners.toMap()) {
-            if (owner in sources) chatComposerMediaOwners[id] = to
-          }
-        }
-        sources
-      }
-    val (composerSources, attachmentMigration) =
-      synchronized(chatComposerSendLock) {
-        val textSources = chatComposerTextDrafts.migrateMatching(to = to, mainSessionKey = mainSessionKey)
-        val attachments = chatComposerAttachmentStore.migrateMatching(to = to, mainSessionKey = mainSessionKey)
-        val stateSources =
-          (chatComposerSendOwnersState.value + chatComposerSendAdmissionsState.value.keys)
-            .filterTo(linkedSetOf()) { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }
-        val sources = textSources + attachments.sources + stateSources
-        if (sources.isNotEmpty()) {
-          chatComposerSendOwnersState.value =
-            chatComposerSendOwnersState.value
-              .mapTo(linkedSetOf()) { owner -> if (owner in sources) to else owner }
+    val (composerSources, operationSource) =
+      synchronized(assistantAutoSendLock) {
+        // The gate and operation owner must move together so finally releases the migrated key.
+        val sources = chatComposerState.resolveAliases(to = to, mainSessionKey = mainSessionKey)
+        val operationSource =
           assistantAutoSendOperation?.let { operation ->
-            if (operation.owner in sources) operation.owner = to
+            operation.owner.takeIf { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }?.also {
+              operation.owner = to
+            }
           }
-          val migratedAdmissions =
-            chatComposerSendAdmissionsState.value.values
-              .map { admission -> if (admission.owner in sources) admission.copy(owner = to) else admission }
-              .groupBy(ChatComposerSendAdmission::owner)
-              .mapValues { (_, admissions) -> admissions.maxBy(ChatComposerSendAdmission::id) }
-          chatComposerSendAdmissionsState.value = migratedAdmissions
-        }
-        sources to attachments
+        sources to operationSource
       }
     val pendingAutoSend = pendingAssistantAutoSendMutable.value
     val pendingAutoSendSource =
@@ -1705,56 +1583,8 @@ class MainViewModel private constructor(
     if (pendingAutoSendSource != null) {
       pendingAssistantAutoSendMutable.compareAndSet(pendingAutoSend, pendingAutoSend.copy(owner = to))
     }
-    val noticeSources =
-      synchronized(chatComposerAttachmentNoticeLock) {
-        chatComposerAttachmentNoticesState.value.keys.filterTo(linkedSetOf()) { source ->
-          shouldMigrateComposerDraft(source, to, mainSessionKey)
-        }
-      }
-    val sources = composerSources + mediaSources + noticeSources + listOfNotNull(pendingAutoSendSource)
+    val sources = composerSources + listOfNotNull(pendingAutoSendSource, operationSource)
     sources.forEach { source -> chatShareDraftQueue.migrateOwner(from = source, to = to) }
-    synchronized(chatComposerAttachmentNoticeLock) {
-      val current = chatComposerAttachmentNoticesState.value
-      val sourceNotices = sources.mapNotNull(current::get)
-      var next = current - sources
-      val nextNotice =
-        when {
-          attachmentMigration.omittedCount > 0 ||
-            current[to] == ChatComposerAttachmentNotice.Attachment ||
-            ChatComposerAttachmentNotice.Attachment in sourceNotices -> ChatComposerAttachmentNotice.Attachment
-          current[to] == ChatComposerAttachmentNotice.Image ||
-            ChatComposerAttachmentNotice.Image in sourceNotices -> ChatComposerAttachmentNotice.Image
-          else -> null
-        }
-      if (nextNotice != null) next += (to to nextNotice)
-      chatComposerAttachmentNoticesState.value = next
-    }
-  }
-
-  internal fun clearChatComposerAttachmentOmission(owner: ChatComposerOwner) {
-    synchronized(chatComposerAttachmentNoticeLock) {
-      chatComposerAttachmentNoticesState.value = chatComposerAttachmentNoticesState.value - owner
-    }
-  }
-
-  internal fun reportChatComposerImageOmission(
-    owner: ChatComposerOwner,
-    omitted: Int,
-  ) {
-    recordChatComposerAttachmentOmission(owner, omitted, ChatComposerAttachmentNotice.Image)
-  }
-
-  private fun recordChatComposerAttachmentOmission(
-    owner: ChatComposerOwner,
-    omitted: Int,
-    notice: ChatComposerAttachmentNotice = ChatComposerAttachmentNotice.Attachment,
-  ) {
-    if (omitted <= 0) return
-    synchronized(chatComposerAttachmentNoticeLock) {
-      val current = chatComposerAttachmentNoticesState.value[owner]
-      val resolved = if (current == ChatComposerAttachmentNotice.Attachment) current else notice
-      chatComposerAttachmentNoticesState.value = chatComposerAttachmentNoticesState.value + (owner to resolved)
-    }
   }
 
   /** The ViewModel owns image decoding so Activity recreation cannot cancel an accepted picker result. */
@@ -1766,11 +1596,7 @@ class MainViewModel private constructor(
     load: suspend () -> List<PendingAttachment>,
   ) {
     val importId =
-      synchronized(chatComposerMediaLock) {
-        val authorizedOwner = chatComposerMediaOwners.remove(mediaAuthorizationId) ?: return
-        if (authorizedOwner != owner && !shouldMigrateComposerDraft(authorizedOwner, owner, mainSessionKey)) return
-        chatComposerAttachmentStore.beginImport(owner)
-      }
+      chatComposerState.beginMediaImport(owner, mediaAuthorizationId, mainSessionKey) ?: return
     viewModelScope.launch(Dispatchers.IO) {
       try {
         val loaded =
@@ -1781,16 +1607,13 @@ class MainViewModel private constructor(
           } catch (_: Throwable) {
             emptyList()
           }
-        chatComposerAttachmentStore.completeImport(importId, loaded)?.let { (commitOwner, omitted) ->
-          val failed = (expectedCount - loaded.size).coerceAtLeast(0)
-          recordChatComposerAttachmentOmission(
-            commitOwner,
-            omitted + failed,
-            ChatComposerAttachmentNotice.Image,
-          )
-        }
+        chatComposerState.completeMediaImport(
+          importId = importId,
+          candidates = loaded,
+          failedCount = expectedCount - loaded.size,
+        )
       } catch (err: CancellationException) {
-        chatComposerAttachmentStore.cancelImport(importId)
+        chatComposerState.cancelMediaImport(importId)
         throw err
       }
     }
@@ -1858,81 +1681,26 @@ class MainViewModel private constructor(
     thinking: String,
   ): ChatComposerSendStartResult {
     if (!isCurrentChatComposerOwner(owner)) return ChatComposerSendStartResult.Unavailable
-    val admissionId = chatComposerSendSeq.incrementAndGet()
-    val commandId = UUID.randomUUID().toString()
-    val payload =
-      synchronized(chatComposerSendLock) {
-        if (
-          chatComposerOwnerHasActiveSend(
-            owner = owner,
-            sendOwners = chatComposerSendOwnersState.value,
-            admissions = chatComposerSendAdmissionsState.value,
-          )
-        ) {
-          return ChatComposerSendStartResult.Unavailable
-        }
-        val current =
-          captureChatComposerSendPayload(
-            owner = owner,
-            textDrafts = chatComposerTextDrafts,
-            attachmentStore = chatComposerAttachmentStore,
-          )
-        if (current.message.isEmpty() && current.attachments.isEmpty()) {
-          return ChatComposerSendStartResult.Unavailable
-        }
-        if (current.inputSnapshot.length > CHAT_COMPOSER_MAX_SEND_CHARS) {
-          return ChatComposerSendStartResult.MessageTooLong
-        }
-        if (!chatComposerTextDrafts.beginAdmission(commandId, owner, current.inputSnapshot)) {
-          return ChatComposerSendStartResult.CheckpointFull
-        }
-        chatComposerSendOwnersState.value = chatComposerSendOwnersState.value + owner
-        // One SavedState checkpoint now binds this exact draft to the outbox id that will own it.
-        // Process recreation hides the draft until Room proves whether admission committed.
-        current
-      }
-    val outgoing = payload.attachments.map(PendingAttachment::toOutgoingAttachment)
-    val attachmentIds = payload.attachments.mapTo(linkedSetOf()) { it.id }
+    val start = chatComposerState.beginSend(owner)
+    val request = start.request ?: return start.result
+    val outgoing = request.attachments.map(PendingAttachment::toOutgoingAttachment)
     viewModelScope.launch {
       var accepted: Boolean? = null
       try {
         accepted =
           sendChatForOwnerAwaitAcceptance(
-            owner = owner,
-            message = payload.message,
+            owner = request.owner,
+            message = request.message,
             thinking = thinking,
             attachments = outgoing,
-            idempotencyKey = commandId,
+            idempotencyKey = request.commandId,
           )
       } catch (err: CancellationException) {
         throw err
       } catch (_: Throwable) {
         accepted = false
       } finally {
-        synchronized(chatComposerSendLock) {
-          val result = accepted
-          if (result == null) {
-            val currentOwner = chatComposerTextDrafts.pendingAdmission(commandId)?.owner ?: owner
-            chatComposerSendOwnersState.value = chatComposerSendOwnersState.value - currentOwner
-          } else {
-            val pending = chatComposerTextDrafts.resolveAdmission(commandId, result)
-            val resolvedOwner = pending?.owner ?: owner
-            if (pending == null) {
-              chatComposerSendOwnersState.value = chatComposerSendOwnersState.value - owner
-            } else {
-              if (result) chatComposerAttachmentStore.remove(resolvedOwner, attachmentIds)
-              chatComposerSendAdmissionsState.value =
-                (chatComposerSendAdmissionsState.value - owner - resolvedOwner) +
-                (
-                  resolvedOwner to
-                    ChatComposerSendAdmission(
-                      id = admissionId,
-                      owner = resolvedOwner,
-                    )
-                )
-            }
-          }
-        }
+        chatComposerState.completeSend(request, accepted)
       }
     }
     return ChatComposerSendStartResult.Started
@@ -1940,14 +1708,9 @@ class MainViewModel private constructor(
 
   internal fun acknowledgeChatComposerSendAdmission(
     owner: ChatComposerOwner,
-    id: Long,
+    id: String,
   ) {
-    synchronized(chatComposerSendLock) {
-      if (chatComposerSendAdmissionsState.value[owner]?.id == id) {
-        chatComposerSendAdmissionsState.value = chatComposerSendAdmissionsState.value - owner
-        chatComposerSendOwnersState.value = chatComposerSendOwnersState.value - owner
-      }
-    }
+    chatComposerState.acknowledgeSendAdmission(owner, id)
   }
 
   suspend fun sendChatAwaitAcceptance(
@@ -1961,9 +1724,3 @@ class MainViewModel private constructor(
       attachments = attachments,
     )
 }
-
-internal fun chatComposerOwnerHasActiveSend(
-  owner: ChatComposerOwner,
-  sendOwners: Set<ChatComposerOwner>,
-  admissions: Map<ChatComposerOwner, ChatComposerSendAdmission>,
-): Boolean = owner in sendOwners || owner in admissions

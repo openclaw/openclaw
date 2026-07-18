@@ -39,7 +39,7 @@ Group, provider, sandbox, and per-agent policies can still remove those tools af
 
 ## Listing and reading sessions
 
-`sessions_list` returns sessions with their key, agentId, kind, channel, model, token counts, and timestamps. Filter by `kinds` (array; accepted values: `main`, `group`, `cron`, `hook`, `node`, `other`), exact `label`, exact `agentId`, `search` text, or recency (`activeMinutes`). Active sessions are returned by default; pass `archived: true` to inspect archived sessions instead. Rows include `pinned` and `archived` state. Set `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (capped at 20) when you need mailbox-style triage: a visibility-scoped derived title, a last-message preview snippet, or bounded recent messages on each row. Derived titles and previews are produced only for sessions the caller can already see under the configured session tool visibility policy, so unrelated sessions stay hidden. When visibility is restricted, `sessions_list` returns optional `visibility` metadata showing the effective mode and a warning that results may be scope-limited.
+`sessions_list` returns focused discovery rows: session key, agent, kind, channel, label/title/preview fields, parent and child relationships, last update, archive/pin state, state version, model, context/total token counts, run status, and whether the last run aborted. Filter by `kinds` (array; accepted values: `main`, `group`, `cron`, `hook`, `node`, `other`), exact `label`, exact `agentId`, `search` text, or recency (`activeMinutes`). Active sessions are returned by default; pass `archived: true` to inspect archived sessions instead. Set `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (capped at 20) when you need mailbox-style triage: a visibility-scoped derived title, a last-message preview snippet, or bounded recent messages on each row. Delivery routing, internal session IDs, per-run timings/settings, cost estimates, and transcript paths are intentionally omitted; use `session_status`, conversation tools, and `sessions_history` for those owner-specific details. Derived titles and previews are produced only for sessions the caller can already see under the configured session tool visibility policy, so unrelated sessions stay hidden. When visibility is restricted, `sessions_list` returns optional `visibility` metadata showing the effective mode and a warning that results may be scope-limited.
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. Explicit offset pages do not merge external CLI fallback imports; use the default newest-tail view (no `offset`) when you need that merged display history.
 
@@ -57,7 +57,7 @@ The returned view is intentionally bounded and safety-filtered:
 - very large histories can drop older rows or replace an oversized row with `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`, `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 
-Both tools accept either a **session key** (like `"main"`) or a **session ID** from a previous list call.
+Use the returned **session key** (like `"main"`) with `sessions_history`, `sessions_send`, and `session_status`. Those target tools can also resolve a known session ID, but `sessions_list` does not expose internal IDs.
 
 If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
@@ -99,6 +99,8 @@ When route metadata is available, `session_status` also includes a visible `Rout
 ## Session state changes
 
 OpenClaw keeps a durable signal log of material session state changes (direct human messages to watched sessions, child-run outcomes, goal changes, compaction). `sessions_list` rows and `session_status` expose the session's `stateVersion`, and `session_status` accepts `changesSince: <version>` to return the typed events after that version, with exact `historyGap` signaling when the requested version predates retained history. Watchers — spawn parents automatically, `sessions_send watch: true` explicitly — receive one coalesced stale-state notice when another actor changes a watched session.
+
+State-change events omit repeated session/agent IDs and expose only model-useful payload fields (`outcome`, `channel`, or `turns`). The event summary and actor/run identifiers remain available for reconciliation.
 
 See [Session state awareness](/concepts/session-state) for the full model: event kinds, watcher registration, the anti-spam notice protocol, reconciliation flow, and current limits.
 
