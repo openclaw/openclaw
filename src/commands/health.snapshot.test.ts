@@ -13,6 +13,7 @@ let testConfig: Record<string, unknown> = {};
 let testStore: Record<string, { updatedAt?: number }> = {};
 let listHealthSessionEntriesCalls: Array<{ agentId?: string; storePath?: string }> = [];
 let healthPluginsForTest: HealthTestPlugin[] = [];
+const healthTempPaths: string[] = [];
 
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
@@ -487,6 +488,9 @@ describe("getHealthSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    for (const tempPath of healthTempPaths.splice(0)) {
+      fs.rmSync(tempPath, { recursive: true, force: true });
+    }
   });
 
   it("clamps oversized probe timeouts", async () => {
@@ -560,7 +564,34 @@ describe("getHealthSnapshot", () => {
   it("includes configured-unavailable plugins in the health snapshot", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {};
-    setActivePluginRegistry(createTestRegistry([]));
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-plugin-"));
+    const pluginRootAlias = `${pluginRoot}-alias`;
+    fs.symlinkSync(pluginRoot, pluginRootAlias, "dir");
+    healthTempPaths.push(pluginRootAlias, pluginRoot);
+    setActivePluginRegistry({
+      ...createTestRegistry([]),
+      plugins: [
+        createPluginRecord({
+          id: "discord",
+          origin: "global",
+          rootDir: pluginRoot,
+          status: "error",
+          activated: false,
+          activationReason: "configured-unavailable: unreadable-package-json",
+          failurePhase: "validation",
+          error: "configured plugin payload verification failed",
+        }),
+        createPluginRecord({
+          id: "discord",
+          origin: "config",
+          rootDir: "/workspace/discord",
+          status: "error",
+          activated: false,
+          failurePhase: "load",
+          error: "healthy override has an unrelated import error",
+        }),
+      ],
+    });
     setActiveDegradedPlugins([
       {
         pluginId: "discord",
@@ -568,8 +599,8 @@ describe("getHealthSnapshot", () => {
         diagnostic: {
           kind: "plugin-verification",
           reason: "unreadable-package-json",
-          detail: "Could not read /private/plugins/discord/package.json: permission denied",
-          installPath: "/private/plugins/discord",
+          detail: `Could not read ${pluginRootAlias}/package.json: permission denied`,
+          installPath: pluginRootAlias,
         },
       },
     ]);
@@ -587,7 +618,17 @@ describe("getHealthSnapshot", () => {
         },
       },
     ]);
-    expect(JSON.stringify(snap.plugins?.unavailable)).not.toContain("/private/plugins");
+    expect(JSON.stringify(snap.plugins?.unavailable)).not.toContain(pluginRoot);
+    expect(snap.plugins?.errors).toEqual([
+      {
+        id: "discord",
+        origin: "config",
+        activated: false,
+        activationSource: "explicit",
+        failurePhase: "load",
+        error: "healthy override has an unrelated import error",
+      },
+    ]);
   });
 
   it("includes dead-lettered delivery queue entries in the health snapshot", async () => {

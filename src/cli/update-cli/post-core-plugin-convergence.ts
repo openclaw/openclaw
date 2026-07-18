@@ -5,21 +5,17 @@ import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/u
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
-import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../../plugins/official-external-install-records.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import { resolveUserPath } from "../../utils.js";
 import { VERSION } from "../../version.js";
 import {
-  runPluginPayloadSmokeCheck,
-  type PluginPayloadSmokeFailure,
-} from "./plugin-payload-validation.js";
+  filterRecordsToActive,
+  runActivePluginPayloadSmokeCheck,
+} from "./active-plugin-payload-validation.js";
+import { type PluginPayloadSmokeFailure } from "./plugin-payload-validation.js";
 
 type PostCoreConvergenceWarning = {
   pluginId?: string;
@@ -183,8 +179,12 @@ export async function runPostCorePluginConvergence(params: {
   // this filter, a stale install record for a disabled or no-longer-
   // configured plugin whose payload was deleted on disk would block the
   // entire update — even though the gateway will never load that plugin.
+  const smoke = await runActivePluginPayloadSmokeCheck({
+    cfg: params.cfg,
+    records,
+    env,
+  });
   const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
-  const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
   const resolveInstallRecordPaths = (
     installRecords: Record<string, PluginInstallRecord>,
   ): Set<string> =>
@@ -201,7 +201,9 @@ export async function runPostCorePluginConvergence(params: {
       failure.installPath ? [path.resolve(failure.installPath)] : [],
     ),
   );
-  for (const failure of peerLinkRepair.packageReadFailures) {
+  for (const failure of peerLinkRepair.packageReadFailures.toSorted((left, right) =>
+    left.packageDir.localeCompare(right.packageDir),
+  )) {
     // A typed smoke failure owns this exact package and startup quarantines it.
     // Re-emitting the repair error without that owner would turn it back into
     // an unknown warning and incorrectly block gateway readiness.
@@ -250,38 +252,6 @@ export async function runPostCorePluginConvergence(params: {
  * that are enabled implicitly via auth profiles or model refs. Effective
  * enable state is the right precision boundary.
  */
-export function filterRecordsToActive(params: {
-  cfg: OpenClawConfig;
-  records: Record<string, PluginInstallRecord>;
-}): Record<string, PluginInstallRecord> {
-  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
-  const filtered: Record<string, PluginInstallRecord> = {};
-  for (const [pluginId, record] of Object.entries(params.records)) {
-    if (!record || typeof record !== "object") {
-      continue;
-    }
-    const enableState = resolveEffectiveEnableState({
-      id: pluginId,
-      origin: "global",
-      config: normalizedPluginConfig,
-      rootConfig: params.cfg,
-    });
-    if (enableState.enabled) {
-      filtered[pluginId] = record;
-      continue;
-    }
-    // Even when disabled, retain trusted-source-linked official installs
-    // because the existing post-update sync path treats them as
-    // authoritative regardless of the entry's enable flag.
-    const officialNpm = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
-    const officialClawHub = resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record });
-    if (officialNpm || officialClawHub) {
-      filtered[pluginId] = record;
-    }
-  }
-  return filtered;
-}
-
 /**
  * Pure helper used by `updatePluginsAfterCoreUpdate` to fold a convergence
  * result into the existing `PluginUpdateOutcome[]` / warning shape that the

@@ -29,8 +29,11 @@ vi.mock("./plugin-payload-validation.js", () => ({
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { VERSION } from "../../version.js";
 import {
-  convergenceWarningsToOutcomes,
   filterRecordsToActive,
+  runActivePluginPayloadSmokeCheck,
+} from "./active-plugin-payload-validation.js";
+import {
+  convergenceWarningsToOutcomes,
   runPostCorePluginConvergence,
 } from "./post-core-plugin-convergence.js";
 
@@ -108,6 +111,28 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
+  });
+
+  it("checks active payloads without running repair or peer-link convergence", async () => {
+    const cfg = {
+      plugins: {
+        deny: ["disabled"],
+        entries: { active: { enabled: true }, disabled: { enabled: true } },
+      },
+    } as unknown as OpenClawConfig;
+    const records = {
+      active: { source: "npm" as const, installPath: "/p/active" },
+      disabled: { source: "npm" as const, installPath: "/p/disabled" },
+    };
+
+    await runActivePluginPayloadSmokeCheck({ cfg, records, env: { OPENCLAW_STATE_DIR: "/state" } });
+
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: { active: records.active },
+      env: { OPENCLAW_STATE_DIR: "/state" },
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).not.toHaveBeenCalled();
+    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).not.toHaveBeenCalled();
   });
 
   it("uses the candidate runtime version over a stale inherited host version", async () => {

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+
 /** Boot-stable quarantine state for configured plugins whose payload failed verification. */
 
 export type PluginVerificationFailureReason =
@@ -85,13 +88,37 @@ export function findActiveDegradedPlugin(pluginId: string): DegradedPlugin | und
   return plugin ? cloneDegradedPlugin(plugin) : undefined;
 }
 
+/** Drops a verification failure that belongs to a different selected plugin root. */
+export function clearActiveDegradedPlugin(pluginId: string): void {
+  activeDegradedPlugins = activeDegradedPlugins.filter((entry) => entry.pluginId !== pluginId);
+}
+
+/** Matches install-record and discovered roots across symlink/path aliases. */
+export function degradedPluginMatchesRoot(plugin: DegradedPlugin, rootDir: string): boolean {
+  const installPath = plugin.diagnostic.installPath;
+  if (!installPath) {
+    return false;
+  }
+  const canonicalize = (value: string) => {
+    try {
+      return fs.realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  return canonicalize(installPath) === canonicalize(rootDir);
+}
+
 /** Removes the known private install root before diagnostics leave the Gateway process. */
 export function toPublicPluginVerificationDiagnostic(
   diagnostic: PluginVerificationDiagnostic,
 ): PublicPluginVerificationDiagnostic {
-  const detail = diagnostic.installPath
-    ? diagnostic.detail.replaceAll(diagnostic.installPath, "<plugin-install>")
-    : diagnostic.detail;
+  const detail =
+    diagnostic.reason === "missing-openclaw-peer-link"
+      ? 'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.'
+      : diagnostic.installPath
+        ? diagnostic.detail.replaceAll(diagnostic.installPath, "<plugin-install>")
+        : diagnostic.detail;
   return {
     kind: diagnostic.kind,
     reason: diagnostic.reason,

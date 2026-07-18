@@ -17,7 +17,7 @@ export type PluginPayloadSmokeFailure = {
   detail: string;
 };
 
-type PluginPayloadSmokeResult = {
+export type PluginPayloadSmokeResult = {
   checked: string[];
   failures: PluginPayloadSmokeFailure[];
 };

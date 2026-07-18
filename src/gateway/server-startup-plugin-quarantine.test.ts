@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runPluginPayloadSmokeCheck } from "../cli/update-cli/plugin-payload-validation.js";
 import {
   buildDegradedPluginsFromVerificationFailures,
+  listActiveDegradedPlugins,
   setActiveDegradedPlugins,
 } from "../plugins/runtime-degraded-state.js";
 import {
@@ -26,6 +27,7 @@ describe("Gateway startup plugin quarantine", () => {
     server = undefined;
     setActiveDegradedPlugins([]);
     delete (globalThis as Record<string, unknown>).brokenPluginImported;
+    delete (globalThis as Record<string, unknown>).selectedPluginImported;
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -122,5 +124,140 @@ describe("Gateway startup plugin quarantine", () => {
     expect(ready.status).toBe(200);
     await expect(ready.json()).resolves.toMatchObject({ ready: true });
     expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
+  });
+
+  it("does not quarantine a healthy explicit root that shadows a broken install with the same id", async () => {
+    const pluginId = "shadowed-payload";
+    const brokenRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-broken-install-"));
+    const selectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-selected-plugin-"));
+    tempDirs.push(brokenRoot, selectedRoot);
+    fs.writeFileSync(
+      path.join(brokenRoot, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        type: "commonjs",
+        main: "./missing-main.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(selectedRoot, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        type: "commonjs",
+        main: "./index.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(selectedRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(selectedRoot, "index.cjs"),
+      "globalThis.selectedPluginImported = true; module.exports = { id: 'shadowed-payload', register() {} };",
+      "utf8",
+    );
+
+    const smoke = await runPluginPayloadSmokeCheck({
+      records: {
+        [pluginId]: { source: "npm", spec: pluginId, installPath: brokenRoot },
+      },
+      env: process.env,
+    });
+    setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
+
+    const { loadOpenClawPlugins } =
+      await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [selectedRoot] },
+          allow: [pluginId],
+          entries: { [pluginId]: { enabled: true } },
+        },
+      },
+      onlyPluginIds: [pluginId],
+    });
+
+    expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe("loaded");
+    expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
+    expect(listActiveDegradedPlugins()).toEqual([]);
+  });
+
+  it("keeps the broken install visible when its explicit override fails to load", async () => {
+    const pluginId = "failed-shadow";
+    const brokenRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-broken-install-"));
+    const selectedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-selected-plugin-"));
+    tempDirs.push(brokenRoot, selectedRoot);
+    fs.writeFileSync(
+      path.join(brokenRoot, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        type: "commonjs",
+        main: "./missing-main.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(selectedRoot, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        type: "commonjs",
+        main: "./index.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(selectedRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(selectedRoot, "index.cjs"),
+      "throw new Error('import failed');",
+      "utf8",
+    );
+
+    const smoke = await runPluginPayloadSmokeCheck({
+      records: {
+        [pluginId]: { source: "npm", spec: pluginId, installPath: brokenRoot },
+      },
+      env: process.env,
+    });
+    setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
+
+    const { loadOpenClawPlugins } =
+      await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [selectedRoot] },
+          allow: [pluginId],
+          entries: { [pluginId]: { enabled: true } },
+        },
+      },
+      onlyPluginIds: [pluginId],
+    });
+
+    expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe("error");
+    expect(listActiveDegradedPlugins()).toMatchObject([
+      { pluginId, diagnostic: { installPath: brokenRoot } },
+    ]);
   });
 });

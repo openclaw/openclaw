@@ -45,6 +45,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import {
+  degradedPluginMatchesRoot,
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
@@ -358,12 +359,31 @@ const buildSessionSummary = async (storePath: string, agentId?: string) => {
 
 function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   const registry = getActivePluginRegistry();
+  const degradedPlugins = listActiveDegradedPlugins();
+  const unavailable = degradedPlugins
+    .map(({ pluginId, state, diagnostic }) => ({
+      id: pluginId,
+      state,
+      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
   const loaded = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
   const errors = (registry?.plugins ?? [])
-    .filter((plugin) => plugin.status === "error")
+    .filter(
+      (plugin) =>
+        plugin.status === "error" &&
+        !degradedPlugins.some(
+          (degraded) =>
+            plugin.id === degraded.pluginId &&
+            plugin.failurePhase === "validation" &&
+            plugin.activationReason === `configured-unavailable: ${degraded.diagnostic.reason}` &&
+            Boolean(plugin.rootDir) &&
+            degradedPluginMatchesRoot(degraded, plugin.rootDir ?? ""),
+        ),
+    )
     .map((plugin) => {
       const error: PluginHealthErrorSummary = {
         id: plugin.id,
@@ -382,13 +402,6 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
       }
       return error;
     })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
-  const unavailable = listActiveDegradedPlugins()
-    .map(({ pluginId, state, diagnostic }) => ({
-      id: pluginId,
-      state,
-      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
-    }))
     .toSorted((left, right) => left.id.localeCompare(right.id));
   if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
     return undefined;

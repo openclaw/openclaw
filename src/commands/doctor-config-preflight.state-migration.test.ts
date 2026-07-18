@@ -24,7 +24,7 @@ type StartupConvergenceWarning = {
 type StartupSmokeFailure = {
   pluginId: string;
   installPath?: string;
-  reason: "missing-main-entry" | "unreadable-package-json";
+  reason: "missing-install-path" | "missing-main-entry" | "unreadable-package-json";
   detail: string;
 };
 
@@ -113,6 +113,9 @@ const runPostCorePluginConvergence = vi.hoisted(() =>
     }),
   ),
 );
+const runActivePluginPayloadSmokeCheck = vi.hoisted(() =>
+  vi.fn(async () => ({ checked: [] as string[], failures: [] as StartupSmokeFailure[] })),
+);
 const planStartupPluginConvergence = vi.hoisted(() =>
   vi.fn(async () => ({ required: true, installRecords: {} })),
 );
@@ -164,6 +167,10 @@ vi.mock("../infra/startup-migration-checkpoint.js", () => ({
   acquireStartupMigrationLease,
   needsStartupMigrationCheckpoint,
   recordSuccessfulStartupMigrations,
+}));
+
+vi.mock("../cli/update-cli/active-plugin-payload-validation.js", () => ({
+  runActivePluginPayloadSmokeCheck,
 }));
 
 vi.mock("../cli/update-cli/post-core-plugin-convergence.js", () => ({
@@ -465,28 +472,22 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("refreshes plugin quarantine without acquiring a migration lease when the checkpoint is current", async () => {
-    runPostCorePluginConvergence.mockResolvedValueOnce(
-      makeStartupConvergenceResult({
-        errored: true,
-        warnings: [
-          {
-            pluginId: "discord",
-            reason: "missing-main-entry: index.js",
-            message: 'Plugin "discord" failed post-core payload smoke check (missing): index.js',
-            guidance: ["Run `openclaw update repair` to retry plugin repair."],
-          },
-        ],
-        smokeFailures: [
-          {
-            pluginId: "discord",
-            installPath: "/plugins/discord",
-            reason: "missing-main-entry",
-            detail: "index.js",
-          },
-        ],
-      }),
-    );
+  it("refreshes plugin quarantine without repair when the checkpoint is current", async () => {
+    planStartupPluginConvergence.mockResolvedValueOnce({
+      required: true,
+      installRecords: { discord: { source: "npm", installPath: "/plugins/discord" } },
+    });
+    runActivePluginPayloadSmokeCheck.mockResolvedValueOnce({
+      checked: ["discord"],
+      failures: [
+        {
+          pluginId: "discord",
+          installPath: "/plugins/discord",
+          reason: "missing-main-entry",
+          detail: "index.js",
+        },
+      ],
+    });
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: true,
@@ -519,7 +520,15 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
-    expect(runPostCorePluginConvergence).toHaveBeenCalledOnce();
+    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
+    expect(runActivePluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      cfg: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      records: { discord: { source: "npm", installPath: "/plugins/discord" } },
+      env: process.env,
+    });
     expect(listActiveDegradedPlugins()).toMatchObject([
       {
         pluginId: "discord",
@@ -528,6 +537,107 @@ describe("runDoctorConfigPreflight state migration", () => {
       },
     ]);
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("keeps ownerless payload failures blocking when the checkpoint is current", async () => {
+    planStartupPluginConvergence.mockResolvedValueOnce({
+      required: true,
+      installRecords: { discord: { source: "npm" } },
+    });
+    runActivePluginPayloadSmokeCheck.mockResolvedValueOnce({
+      checked: ["discord"],
+      failures: [
+        {
+          pluginId: "discord",
+          reason: "missing-install-path",
+          detail: "Install path is missing from the plugin install record.",
+        },
+      ],
+    });
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      config: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      parsed: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      legacyIssues: [],
+      warnings: [],
+      issues: [],
+    });
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toThrow("Install path is missing from the plugin install record.");
+
+    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
+    expect(listActiveDegradedPlugins()).toEqual([]);
+  });
+
+  it("keeps ownerless install-record failures blocking", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      config: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      parsed: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      legacyIssues: [],
+      warnings: [],
+      issues: [],
+    });
+    runPostCorePluginConvergence.mockResolvedValueOnce(
+      makeStartupConvergenceResult({
+        errored: true,
+        warnings: [
+          {
+            pluginId: "discord",
+            reason: "missing-install-path: install path missing",
+            message: 'Plugin "discord" has no install path.',
+            guidance: ["Run `openclaw update repair` to retry plugin repair."],
+          },
+        ],
+        smokeFailures: [
+          {
+            pluginId: "discord",
+            reason: "missing-install-path",
+            detail: "install path missing",
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toThrow('Plugin "discord" has no install path.');
+
+    expect(listActiveDegradedPlugins()).toEqual([]);
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
   });
 
   it("checkpoints startup migrations without loading plugin convergence when the plan is empty", async () => {

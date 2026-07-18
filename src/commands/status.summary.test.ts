@@ -325,6 +325,17 @@ describe("getStatusSummary", () => {
           detail: "dist/index.js is missing",
         },
       },
+      {
+        pluginId: "peer-plugin",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-openclaw-peer-link",
+          detail:
+            "/private/plugins/peer-plugin/node_modules/openclaw points to /private/other/openclaw instead of /private/host/openclaw",
+          installPath: "/private/plugins/peer-plugin",
+        },
+      },
     ]);
 
     const summary = await getStatusSummary();
@@ -348,8 +359,19 @@ describe("getStatusSummary", () => {
           detail: "dist/index.js is missing",
         },
       },
+      {
+        pluginId: "peer-plugin",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-openclaw-peer-link",
+          detail:
+            'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
+        },
+      },
     ]);
     expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/plugins");
+    expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/host");
   });
 
   it("reuses one reconciled task snapshot for task summaries and audit findings", async () => {
