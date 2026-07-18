@@ -254,6 +254,38 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
   });
 
+  it("allows a remote file to replace a base directory with a new cache-only subtree", async () => {
+    const local = await temporaryDirectory("workspace-new-derived-subtree-replacement");
+    const staged = await temporaryDirectory("workspace-new-derived-subtree-replacement-staged");
+    await gitInit(local);
+    await fs.mkdir(path.join(local, "src"));
+    await fs.writeFile(path.join(local, "src", "old.txt"), "base");
+    const base = await manifestFor(local);
+    await fs.mkdir(path.join(local, "src", "tmp", "__pycache__"), { recursive: true });
+    await fs.writeFile(path.join(local, "src", "tmp", "__pycache__", "old.pyc"), "local cache");
+    await fs.writeFile(path.join(staged, "src"), "replacement");
+    const current = await manifestFor(staged);
+
+    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
+
+    await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
+  });
+
+  it("allows a remote file to replace a new cache-only directory", async () => {
+    const local = await temporaryDirectory("workspace-new-derived-directory-replacement");
+    const staged = await temporaryDirectory("workspace-new-derived-directory-replacement-staged");
+    await gitInit(local);
+    const base = await manifestFor(local);
+    await fs.mkdir(path.join(local, "src", "tmp", "__pycache__"), { recursive: true });
+    await fs.writeFile(path.join(local, "src", "tmp", "__pycache__", "old.pyc"), "local cache");
+    await fs.writeFile(path.join(staged, "src"), "replacement");
+    const current = await manifestFor(staged);
+
+    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
+
+    await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
+  });
+
   it("rolls back a remote file that replaced a base directory", async () => {
     const local = await temporaryDirectory("workspace-directory-rollback");
     const staged = await temporaryDirectory("workspace-directory-rollback-staged");

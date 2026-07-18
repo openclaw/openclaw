@@ -142,6 +142,9 @@ async function preflightWorkspaceApply(params: {
         const stats = await fs.lstat(localPath(params.root, childPath));
         if (stats.isDirectory() && !stats.isSymbolicLink()) {
           if (!baseDirectories.has(childPath)) {
+            if (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, childPath)) {
+              continue;
+            }
             return false;
           }
           pending.push(childPath);
@@ -186,8 +189,8 @@ async function preflightWorkspaceApply(params: {
     if (
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
-      baseDirectories.has(entry.path) &&
-      (await directoryContainsOnlyBase(entry.path))
+      ((baseDirectories.has(entry.path) && (await directoryContainsOnlyBase(entry.path))) ||
+        (await directoryContainsOnlyDerivedWorkspaceEntries(params.root, entry.path)))
     ) {
       continue;
     }
