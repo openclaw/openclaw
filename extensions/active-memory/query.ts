@@ -27,19 +27,26 @@ const PROJECTION_CONTEXT_OPEN = "<conversation_context>";
 const PROJECTION_CONTEXT_CLOSE = "</conversation_context>";
 const PROJECTION_REQUEST_HEADER = "Current user request:";
 const CHANNEL_CURRENT_MESSAGE_HEADER = "Current message:";
+const CHANNEL_REPLY_TARGET_HEADERS = [
+  "Reply target of current user message",
+  "Quoted Signal reply context",
+];
 
 const RECALL_TAIL_OMITTED_NOTE = "[older conversation content and tool traces omitted]";
 const TRUNCATED_REQUEST_NOTE = "[request truncated]";
+const TRUNCATED_QUOTE_NOTE = "[quoted reply truncated]";
 //: fixed scaffold headroom (headers/tags/notes) reserved out of the cap
 const RECALL_SCAFFOLD_RESERVE_CHARS = 400;
 //: below this leftover budget a context tail adds noise, not signal
 const MIN_CONTEXT_TAIL_CHARS = 400;
+const MAX_QUOTED_REPLY_CHARS = 4_000;
 
 // Generated projection lines that are runtime/tool traces, not conversation:
 // elide-mode tool markers, omitted-part placeholders, and truncation markers.
 const GENERATED_TRACE_LINE_PATTERNS = [
   /^tool call\b/i,
   /^tool result\b/i,
+  /^\[(?:toolCall|toolResult)\]$/i,
   /^\[(?:image|non-text|[\w-]+ content) omitted\]$/i,
   /^\[[^\]]*truncated \d+ chars[^\]]*\]$/i,
   /^OpenClaw assembled context for this turn:$/,
@@ -48,6 +55,8 @@ const GENERATED_TRACE_LINE_PATTERNS = [
 
 function sanitizeGeneratedContext(text: string): string {
   return text
+    .replace(/<tool_trace>[\s\S]*?<\/tool_trace>/gi, "")
+    .replace(/<runtime_context>[\s\S]*?<\/runtime_context>/gi, "")
     .split("\n")
     .filter((line) => {
       const trimmed = line.trim();
@@ -59,6 +68,26 @@ function sanitizeGeneratedContext(text: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function extractQuotedReplyContext(prefix: string): string {
+  let quoteIndex = -1;
+  for (const header of CHANNEL_REPLY_TARGET_HEADERS) {
+    quoteIndex = Math.max(quoteIndex, prefix.lastIndexOf(header));
+  }
+  if (quoteIndex === -1) {
+    return "";
+  }
+  return sanitizeGeneratedContext(prefix.slice(quoteIndex));
+}
+
+function boundQuotedReplyText(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= MAX_QUOTED_REPLY_CHARS) {
+    return trimmed;
+  }
+  const head = truncateUtf16Safe(trimmed, MAX_QUOTED_REPLY_CHARS - TRUNCATED_QUOTE_NOTE.length - 1);
+  return `${head}\n${TRUNCATED_QUOTE_NOTE}`;
 }
 
 /** Newest-tail slice snapped to a line boundary, prefixed with an omission note. */
@@ -92,6 +121,8 @@ function boundRequestText(text: string, budget: number): string {
 type BoundedLatestMessage = {
   /** The actual current user request; verbatim unless itself over budget. */
   request: string;
+  /** Native channel quoted-reply context that belongs to the current turn. */
+  quotedReply?: string;
   /** Sanitized newest tail of a generated conversation block, when present. */
   contextTail?: string;
   bounded: boolean;
@@ -107,25 +138,35 @@ function boundLatestUserMessageForRecall(raw: string): BoundedLatestMessage {
   if (raw.length <= MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS) {
     return { request: raw, bounded: false };
   }
-  const requestBudget = MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - RECALL_SCAFFOLD_RESERVE_CHARS;
 
   const closeIndex = raw.lastIndexOf(PROJECTION_CONTEXT_CLOSE);
   if (closeIndex !== -1) {
     const openIndex = raw.indexOf(PROJECTION_CONTEXT_OPEN);
     const headerIndex = raw.indexOf(PROJECTION_REQUEST_HEADER, closeIndex);
     if (openIndex !== -1 && openIndex < closeIndex && headerIndex !== -1) {
+      const quotedReply = boundQuotedReplyText(extractQuotedReplyContext(raw.slice(0, openIndex)));
+      const requestBudget =
+        MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - quotedReply.length - RECALL_SCAFFOLD_RESERVE_CHARS;
       const request = boundRequestText(
         raw.slice(headerIndex + PROJECTION_REQUEST_HEADER.length),
         requestBudget,
       );
       const tailBudget =
-        MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - request.length - RECALL_SCAFFOLD_RESERVE_CHARS;
+        MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS -
+        request.length -
+        quotedReply.length -
+        RECALL_SCAFFOLD_RESERVE_CHARS;
       const context = raw.slice(openIndex + PROJECTION_CONTEXT_OPEN.length, closeIndex);
       const contextTail =
         tailBudget >= MIN_CONTEXT_TAIL_CHARS
           ? newestTailWithinBudget(sanitizeGeneratedContext(context), tailBudget)
           : "";
-      return { request, ...(contextTail ? { contextTail } : {}), bounded: true };
+      return {
+        request,
+        ...(quotedReply ? { quotedReply } : {}),
+        ...(contextTail ? { contextTail } : {}),
+        bounded: true,
+      };
     }
   }
 
@@ -133,6 +174,7 @@ function boundLatestUserMessageForRecall(raw: string): BoundedLatestMessage {
   // quoted-reply context plus the user body — preserve it whole (bounded).
   const messageIndex = raw.lastIndexOf(CHANNEL_CURRENT_MESSAGE_HEADER);
   if (messageIndex !== -1) {
+    const requestBudget = MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - RECALL_SCAFFOLD_RESERVE_CHARS;
     const request = boundRequestText(raw.slice(messageIndex), requestBudget);
     const tailBudget =
       MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - request.length - RECALL_SCAFFOLD_RESERVE_CHARS;
@@ -144,7 +186,13 @@ function boundLatestUserMessageForRecall(raw: string): BoundedLatestMessage {
     return { request, ...(contextTail ? { contextTail } : {}), bounded: true };
   }
 
-  return { request: boundRequestText(raw, requestBudget), bounded: true };
+  return {
+    request: boundRequestText(
+      raw,
+      MAX_ACTIVE_MEMORY_RECALL_CONTEXT_CHARS - RECALL_SCAFFOLD_RESERVE_CHARS,
+    ),
+    bounded: true,
+  };
 }
 
 type BuiltRecallQuery = {
@@ -158,14 +206,34 @@ type BuiltRecallQuery = {
 };
 
 function composeMessageModeQuery(latest: BoundedLatestMessage): string {
-  if (!latest.contextTail) {
+  if (!latest.contextTail && !latest.quotedReply) {
+    return latest.request;
+  }
+  const sections: string[] = [];
+  if (latest.quotedReply) {
+    sections.push(`Quoted reply context (bounded):\n${latest.quotedReply}`);
+  }
+  if (latest.contextTail) {
+    sections.push(
+      [
+        "Recent conversation context (bounded; tool traces omitted):",
+        PROJECTION_CONTEXT_OPEN,
+        latest.contextTail,
+        PROJECTION_CONTEXT_CLOSE,
+      ].join("\n"),
+    );
+  }
+  sections.push(`${PROJECTION_REQUEST_HEADER}\n${latest.request}`);
+  return sections.join("\n\n");
+}
+
+function composeLatestRequestForTurns(latest: BoundedLatestMessage): string {
+  if (!latest.quotedReply) {
     return latest.request;
   }
   return [
-    "Recent conversation context (bounded; tool traces omitted):",
-    PROJECTION_CONTEXT_OPEN,
-    latest.contextTail,
-    PROJECTION_CONTEXT_CLOSE,
+    "Quoted reply context (bounded):",
+    latest.quotedReply,
     "",
     PROJECTION_REQUEST_HEADER,
     latest.request,
@@ -201,23 +269,25 @@ function buildQuery(params: {
   const rawChars = params.latestUserMessage.length;
   const boundedLatest = boundLatestUserMessageForRecall(params.latestUserMessage);
   // In recent/full modes the recent turns already carry conversation context
-  // under their own explicit budgets, so only the extracted request is used as
-  // the latest message — embedding the envelope tail too would duplicate it.
-  const latest = boundedLatest.request.trim();
+  // under their own explicit budgets, so use only current-turn material (the
+  // extracted request plus any native quoted reply) as the latest message.
+  // Embedding the generated envelope tail too would duplicate history.
+  const request = boundedLatest.request.trim();
   if (params.config.queryMode === "message") {
     return {
-      query: composeMessageModeQuery({ ...boundedLatest, request: latest }),
-      request: latest,
+      query: composeMessageModeQuery({ ...boundedLatest, request }),
+      request,
       rawChars,
       bounded: boundedLatest.bounded,
     };
   }
+  const latest = composeLatestRequestForTurns({ ...boundedLatest, request });
   if (params.config.queryMode === "full") {
     const allTurns = (params.recentTurns ?? [])
       .map((turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`)
       .filter((turn) => turn.length > 0);
     if (allTurns.length === 0) {
-      return { query: latest, request: latest, rawChars, bounded: boundedLatest.bounded };
+      return { query: latest, request, rawChars, bounded: boundedLatest.bounded };
     }
     const assembled = assembleBoundedTurnsQuery({
       header: "Full conversation context:",
@@ -226,7 +296,7 @@ function buildQuery(params: {
     });
     return {
       query: assembled.query,
-      request: latest,
+      request,
       rawChars,
       bounded: boundedLatest.bounded || assembled.trimmed,
     };
@@ -267,7 +337,7 @@ function buildQuery(params: {
   }
   const recentTurns = selected.toReversed().filter((turn) => turn.text.length > 0);
   if (recentTurns.length === 0) {
-    return { query: latest, request: latest, rawChars, bounded: boundedLatest.bounded };
+    return { query: latest, request, rawChars, bounded: boundedLatest.bounded };
   }
   const assembled = assembleBoundedTurnsQuery({
     header: "Recent conversation tail:",
@@ -276,7 +346,7 @@ function buildQuery(params: {
   });
   return {
     query: assembled.query,
-    request: latest,
+    request,
     rawChars,
     bounded: boundedLatest.bounded || assembled.trimmed,
   };
