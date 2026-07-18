@@ -2211,6 +2211,34 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(credentialTable?.name).toBe("worker_environment_credentials");
   });
 
+  it("adds staged worker-result refs during the v5 state migration", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE worker_workspace_pending_results DROP COLUMN staged_result_ref;
+      PRAGMA user_version = 4;
+      UPDATE schema_meta SET schema_version = 4 WHERE meta_key = 'primary';
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(worker_workspace_pending_results)")
+      .all() as Array<{ name?: string }>;
+    expect(columns.map((column) => column.name)).toContain("staged_result_ref");
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(
+      reopened.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+  });
+
   it("adds worker transcript commit tables to existing state databases", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

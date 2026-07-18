@@ -15,8 +15,19 @@ import {
   parseWorkerWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
   type WorkerWorkspaceReconciliationJournal,
-  workerWorkspaceTransferPaths,
 } from "./workspace-reconcile.js";
+import {
+  applyStagedWorkerWorkspaceResult,
+  deleteStagedWorkerWorkspaceResult,
+  hasWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
+  workerWorkspaceResultStaging,
+  workerWorkspaceResultRef,
+  workerWorkspaceTransferPaths,
+} from "./workspace-result-staging.js";
+
+const { prepareRequestedWorkerWorkspaceResult, stageWorkerWorkspaceResult } =
+  workerWorkspaceResultStaging;
 
 const roots: string[] = [];
 
@@ -80,6 +91,21 @@ function encodeManifest(value: unknown) {
   return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
 }
 
+function encodeWorkspaceManifest(manifest: WorkerWorkspaceManifest) {
+  return encodeManifest({
+    version: manifest.version,
+    baseCommit: manifest.baseCommit,
+    entries: [
+      ...(manifest.directories ?? []).map((entryPath) => ({
+        path: entryPath,
+        type: "directory",
+        mode: 0o700,
+      })),
+      ...manifest.entries,
+    ].toSorted((left, right) => left.path.localeCompare(right.path)),
+  });
+}
+
 async function applyWorkspace(params: {
   root: string;
   stagingRoot: string;
@@ -113,6 +139,216 @@ async function applyWorkspace(params: {
 }
 
 describe("worker workspace reconciliation", () => {
+  it("rejects unsafe claim ids before constructing a staged result ref", () => {
+    expect(workerWorkspaceResultRef("6f77e833-83d2-4db4-bdd4-2ad1d37edc28")).toBe(
+      "refs/openclaw/worker-results/6f77e833-83d2-4db4-bdd4-2ad1d37edc28",
+    );
+    for (const claimId of ["", "claim.with-dot", "claim_with_underscore", "claim/with-slash"]) {
+      expect(() => workerWorkspaceResultRef(claimId)).toThrow(
+        "Cloud workspace result claim id is invalid",
+      );
+    }
+  });
+
+  it("applies the complete candidate before publishing its recovery ref", async () => {
+    const local = await temporaryDirectory("workspace-staged-ref-local");
+    const payload = await temporaryDirectory("workspace-staged-ref-payload");
+    const complete = await temporaryDirectory("workspace-staged-ref-complete");
+    await Promise.all([
+      fs.writeFile(path.join(local, "changed.txt"), "base\n"),
+      fs.writeFile(path.join(local, "unchanged.txt"), "keep\n"),
+    ]);
+    const base = encodeWorkspaceManifest(await manifestFor(local));
+    await Promise.all([
+      fs.writeFile(path.join(payload, "changed.txt"), "worker\n"),
+      fs.writeFile(path.join(complete, "changed.txt"), "worker\n"),
+      fs.writeFile(path.join(complete, "unchanged.txt"), "keep\n"),
+      fs.writeFile(path.join(complete, "added.txt"), "added\n"),
+      fs.writeFile(path.join(payload, "added.txt"), "added\n"),
+      fs.writeFile(path.join(complete, "odd\nname.txt"), "quoted path\n"),
+      fs.writeFile(path.join(payload, "odd\nname.txt"), "quoted path\n"),
+    ]);
+    const current = encodeWorkspaceManifest(await manifestFor(complete));
+    const ref = workerWorkspaceResultRef("claim-stage-order");
+    let recordedRef: string | undefined;
+    let acceptedManifestRef: string | undefined;
+    const prepared = await prepareRequestedWorkerWorkspaceResult({
+      request: {
+        localPath: local,
+        remoteWorkspaceDir: "/worker/workspace",
+        baseManifestRef: base.ref,
+        journal: {
+          load: () => undefined,
+          begin: () => {},
+          commit: (manifestRef) => {
+            expect(recordedRef).toBeUndefined();
+            acceptedManifestRef = manifestRef;
+          },
+          abort: () => {},
+        },
+        stagedResult: {
+          ref,
+          record: (stagedResultRef) => {
+            recordedRef = stagedResultRef;
+          },
+        },
+      },
+      stagingRoot: payload,
+      currentManifestRef: current.ref,
+      baseManifestRaw: base.raw,
+      currentManifestRaw: current.raw,
+    });
+
+    expect(
+      await runCommandWithTimeout(
+        ["git", "-C", local, "show-ref", "--verify", preparedWorkerWorkspaceResultRef(ref)],
+        { timeoutMs: 10_000 },
+      ),
+    ).toMatchObject({ code: 0 });
+    expect(
+      (
+        await runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", ref], {
+          timeoutMs: 10_000,
+        })
+      ).code,
+    ).not.toBe(0);
+    expect(recordedRef).toBeUndefined();
+    await expect(fs.readFile(path.join(local, "changed.txt"), "utf8")).resolves.toBe("base\n");
+    await prepared.applyPreparedStagedResult();
+
+    expect(recordedRef).toBeUndefined();
+    expect(acceptedManifestRef).toBe(current.ref);
+    expect(
+      await runCommandWithTimeout(
+        ["git", "-C", local, "show-ref", "--verify", preparedWorkerWorkspaceResultRef(ref)],
+        { timeoutMs: 10_000 },
+      ),
+    ).toMatchObject({ code: 0 });
+    expect(
+      (
+        await runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", ref], {
+          timeoutMs: 10_000,
+        })
+      ).code,
+    ).not.toBe(0);
+    await prepared.publishStagedResult();
+
+    expect(recordedRef).toBe(ref);
+    expect(acceptedManifestRef).toBe(current.ref);
+    await expect(fs.readFile(path.join(local, "changed.txt"), "utf8")).resolves.toBe("worker\n");
+    await expect(fs.readFile(path.join(local, "unchanged.txt"), "utf8")).resolves.toBe("keep\n");
+    await expect(fs.readFile(path.join(local, "added.txt"), "utf8")).resolves.toBe("added\n");
+    await expect(fs.readFile(path.join(local, "odd\nname.txt"), "utf8")).resolves.toBe(
+      "quoted path\n",
+    );
+    const replayCommit = vi.fn();
+    await applyStagedWorkerWorkspaceResult({
+      root: local,
+      stagedResultRef: ref,
+      expectedBaseManifestRef: current.ref,
+      journal: {
+        load: () => undefined,
+        begin: () => {},
+        commit: replayCommit,
+        abort: () => {},
+      },
+    });
+    expect(replayCommit).not.toHaveBeenCalled();
+    await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: ref });
+    expect(
+      (
+        await runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", ref], {
+          timeoutMs: 10_000,
+        })
+      ).code,
+    ).not.toBe(0);
+  });
+
+  it("preserves the published result when its fence-row update fails", async () => {
+    const local = await temporaryDirectory("workspace-staged-record-failure-local");
+    const payload = await temporaryDirectory("workspace-staged-record-failure-payload");
+    await fs.writeFile(path.join(local, "result.txt"), "base\n");
+    await fs.writeFile(path.join(payload, "result.txt"), "worker\n");
+    const base = encodeWorkspaceManifest(await manifestFor(local));
+    const current = encodeWorkspaceManifest(await manifestFor(payload));
+    const ref = workerWorkspaceResultRef("claim-record-failure");
+    const prepared = await prepareRequestedWorkerWorkspaceResult({
+      request: {
+        localPath: local,
+        remoteWorkspaceDir: "/worker/workspace",
+        baseManifestRef: base.ref,
+        journal: {
+          load: () => undefined,
+          begin: () => {},
+          commit: () => {},
+          abort: () => {},
+        },
+        stagedResult: {
+          ref,
+          record: () => {
+            throw new Error("state database unavailable");
+          },
+        },
+      },
+      stagingRoot: payload,
+      currentManifestRef: current.ref,
+      baseManifestRaw: base.raw,
+      currentManifestRaw: current.raw,
+    });
+
+    await prepared.applyPreparedStagedResult();
+    await expect(prepared.publishStagedResult()).rejects.toThrow("state database unavailable");
+    await expect(hasWorkerWorkspaceResultRef({ root: local, stagedResultRef: ref })).resolves.toBe(
+      true,
+    );
+    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("worker\n");
+    await expect(
+      hasWorkerWorkspaceResultRef({
+        root: local,
+        stagedResultRef: preparedWorkerWorkspaceResultRef(ref),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not treat a Git probe failure as an absent staged result", async () => {
+    const local = await temporaryDirectory("workspace-staged-probe-failure");
+    await fs.writeFile(path.join(local, ".git"), "gitdir: /missing/openclaw-repository\n");
+
+    await expect(
+      hasWorkerWorkspaceResultRef({
+        root: local,
+        stagedResultRef: workerWorkspaceResultRef("claim-probe-failure"),
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("disables workspace repository hooks while publishing result refs", async () => {
+    const local = await temporaryDirectory("workspace-staged-hooks-local");
+    const payload = await temporaryDirectory("workspace-staged-hooks-payload");
+    await gitInit(local);
+    const hook = path.join(local, ".git", "hooks", "reference-transaction");
+    await fs.writeFile(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    await fs.writeFile(path.join(local, "result.txt"), "base\n");
+    await fs.writeFile(path.join(payload, "result.txt"), "worker\n");
+    const base = encodeWorkspaceManifest(await manifestFor(local));
+    const current = encodeWorkspaceManifest(await manifestFor(payload));
+    const ref = workerWorkspaceResultRef("claim-disabled-hooks");
+
+    await stageWorkerWorkspaceResult({
+      root: local,
+      stagingRoot: payload,
+      stagedResultRef: ref,
+      baseManifestRef: base.ref,
+      currentManifestRef: current.ref,
+      baseManifestRaw: base.raw,
+      currentManifestRaw: current.raw,
+    });
+
+    await expect(hasWorkerWorkspaceResultRef({ root: local, stagedResultRef: ref })).resolves.toBe(
+      true,
+    );
+  });
+
   it("applies changed, added, deleted, executable, binary, and symlink results", async () => {
     const local = await temporaryDirectory("workspace-local");
     const staged = await temporaryDirectory("workspace-staged");
