@@ -796,7 +796,7 @@ describe("vault SecretRef resolver", () => {
     expect(result.stdout).not.toContain("invalid token");
   });
 
-  it("reports one provider failure for Vault's standard revoked-token 403 response", async () => {
+  it("keeps ambiguous token self-lookup 403 responses scoped per id", async () => {
     const fixture = await startVaultErrorFixture(403, ["permission denied"], false);
     const result = await runResolver({
       request: {
@@ -810,13 +810,16 @@ describe("vault SecretRef resolver", () => {
       },
     });
 
-    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(result).toMatchObject({ code: 0, stderr: "" });
     expect(JSON.parse(result.stdout)).toEqual({
       protocolVersion: 1,
       values: {},
       errors: {
-        request: {
-          message: "Vault token validation failed (403).",
+        "providers/openai/apiKey": {
+          message: 'Vault read failed for "providers/openai/apiKey" (403).',
+        },
+        "tts/elevenlabs/apiKey": {
+          message: 'Vault read failed for "tts/elevenlabs/apiKey" (403).',
         },
       },
     });

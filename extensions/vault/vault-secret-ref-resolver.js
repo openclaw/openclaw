@@ -310,12 +310,9 @@ async function classifyVaultClientToken(baseUrl, vaultToken) {
     return "valid";
   }
   if (response.status === 403) {
-    if (isInvalidVaultTokenPayload(payload)) {
-      return "invalid";
-    }
-    // Vault returns the same bare 403 for expired tokens and callers that cannot
-    // read lookup-self. Treat it as provider-wide so revoked-token outages fan out once.
-    throw new VaultProviderError("Vault token validation failed (403).");
+    // A valid no-default-policy token may lack lookup-self. Only Vault's explicit
+    // invalid-token marker distinguishes auth failure from a least-privilege ACL.
+    return isInvalidVaultTokenPayload(payload) ? "invalid" : "unknown";
   }
   throw new VaultProviderError(`Vault token validation failed (${response.status}).`);
 }

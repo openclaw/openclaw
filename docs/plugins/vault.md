@@ -72,19 +72,6 @@ path "secret/data/providers/*" {
 }
 ```
 
-Keep Vault's `default` policy on the OpenClaw token. If you intentionally create
-the token with `no_default_policy`, add this equivalent capability:
-
-```hcl
-path "auth/token/lookup-self" {
-  capabilities = ["read"]
-}
-```
-
-The resolver uses `lookup-self` only when every requested secret read returns 403. Vault returns the same bare 403 for an expired token and a token that cannot
-read `lookup-self`, so this capability lets OpenClaw distinguish a provider-wide
-token outage from path-specific ACL failures.
-
 ## Make Vault visible to the Gateway
 
 For an uncontainerized local Gateway, export Vault settings in the same shell

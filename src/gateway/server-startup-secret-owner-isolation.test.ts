@@ -1,5 +1,6 @@
 /** Real Gateway startup coverage for SecretRef owner isolation boundaries. */
 import { readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -35,6 +36,26 @@ function baseConfig(): OpenClawConfig {
       bind: "loopback",
       auth: { mode: "none" },
     },
+  };
+}
+
+async function startVaultAclFixture() {
+  const requests: string[] = [];
+  const vault = createServer((request, response) => {
+    requests.push(request.url ?? "");
+    response.setHeader("content-type", "application/json");
+    response.statusCode = 403;
+    response.end(JSON.stringify({ errors: ["permission denied"] }));
+  });
+  await new Promise<void>((resolve) => vault.listen(0, "127.0.0.1", resolve));
+  const address = vault.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Vault ACL fixture did not bind to a TCP port");
+  }
+  return {
+    requests,
+    vaultAddr: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve) => vault.close(() => resolve())),
   };
 }
 
@@ -168,6 +189,88 @@ describe("Gateway startup SecretRef owner isolation", () => {
         },
       ]);
     });
+  });
+
+  it("keeps Vault path ACL failures scoped when token introspection is denied", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = tempDirs.make("openclaw-gateway-vault-acl-");
+    const commandPath = path.join(root, "provider.sh");
+    const resolverPath = path.resolve("extensions/vault/vault-secret-ref-resolver.js");
+    writeFileSync(
+      commandPath,
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(resolverPath)}\n`,
+      { encoding: "utf8", mode: 0o700 },
+    );
+    const vault = await startVaultAclFixture();
+    try {
+      await withEnvAsync(
+        { VAULT_ADDR: vault.vaultAddr, VAULT_TOKEN: "not-a-real-auth-header" },
+        async () => {
+          await writeConfig({
+            ...baseConfig(),
+            secrets: {
+              providers: {
+                vault: {
+                  source: "exec",
+                  command: commandPath,
+                  passEnv: ["PATH", "VAULT_ADDR", "VAULT_TOKEN"],
+                },
+              },
+            },
+            models: {
+              providers: {
+                openai: {
+                  apiKey: { source: "exec", provider: "vault", id: "models/openai" },
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [],
+                },
+              },
+            },
+            messages: {
+              tts: {
+                providers: {
+                  elevenlabs: {
+                    apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
+                  },
+                },
+              },
+            },
+          });
+
+          const port = await getFreePort();
+          server = await startGatewayServer(port, { auth: { mode: "none" } });
+          const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+          expect(ready.status).toBe(200);
+          await expect(ready.json()).resolves.toMatchObject({ ready: true });
+          const snapshot = getActiveSecretsRuntimeSnapshot();
+          expect(snapshot?.degradedOwners).toMatchObject([
+            { ownerKind: "provider", ownerId: "openai", state: "unavailable" },
+            { ownerKind: "capability", ownerId: "tts", state: "unavailable" },
+          ]);
+          expect(snapshot?.degradedOwners.every((owner) => !owner.providerFailures)).toBe(true);
+          expect(snapshot?.warnings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                code: "SECRETS_OWNER_UNAVAILABLE",
+                path: "models.providers.openai.apiKey",
+              }),
+              expect.objectContaining({
+                code: "SECRETS_OWNER_UNAVAILABLE",
+                path: "messages.tts.providers.elevenlabs.apiKey",
+              }),
+            ]),
+          );
+          expect(
+            vault.requests.filter((url) => url === "/v1/auth/token/lookup-self").length,
+          ).toBeGreaterThan(0);
+        },
+      );
+    } finally {
+      await vault.close();
+    }
   });
 
   it("reaches /readyz with a cold memory provider and rejects only that owner", async () => {
