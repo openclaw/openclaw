@@ -7,6 +7,7 @@
  */
 
 import { promises as fs } from "node:fs";
+import { statSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import {
@@ -160,13 +161,25 @@ function catchSentinel<T>(
   }
 }
 
-async function loadAst(
-  absPath: string,
-  fileName: string,
-  runtime: OutputRuntimeEnv,
-  mode: OutputMode,
-): Promise<OcAst | null> {
-  const raw = await fs.readFile(absPath, "utf-8");
+// OcPath config files are JSONC/YAML/Markdown — typically < 1 MiB.
+// Cap at 10 MiB to prevent OOM on user-supplied paths.
+const MAX_OC_PATH_FILE_BYTES = 10 * 1024 * 1024;
+
+async function loadOcPathFileSafely(filePath: string): Promise<string> {
+  const stat = statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`not a regular file: ${filePath}`);
+  }
+  if (stat.size > MAX_OC_PATH_FILE_BYTES) {
+    throw new Error(
+      `file too large: ${stat.size} bytes exceeds ${MAX_OC_PATH_FILE_BYTES} bytes: ${filePath}`,
+    );
+  }
+  return await fs.readFile(filePath, "utf-8");
+}
+
+async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
+  const raw = await loadOcPathFileSafely(absPath);
   const kind = inferKind(fileName);
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
@@ -349,11 +362,8 @@ async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const oldBytes = await fs.readFile(fsPath, "utf-8");
-  const ast = await loadAst(fsPath, ocPath.file, runtime, mode);
-  if (ast === null) {
-    return;
-  }
+  const oldBytes = await loadOcPathFileSafely(fsPath);
+  const ast = await loadAst(fsPath, ocPath.file);
 
   const result = catchSentinel("set", runtime, mode, () =>
     setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true }),
