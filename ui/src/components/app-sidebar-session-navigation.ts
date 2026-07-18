@@ -39,6 +39,7 @@ import {
   formatSidebarTimestamp,
 } from "./app-sidebar-session-catalogs.ts";
 import { AppSidebarSessionDataElement } from "./app-sidebar-session-data.ts";
+import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   limitSidebarSessionRows,
   loadStoredSidebarSessionsGrouping,
@@ -612,11 +613,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     // `adopted` holds only catalog-bound keys (adoptedCatalogSessionKeys), not
     // fetched child rows: a catalog-adopted promoted child intentionally
     // renders as its live row inside the Coding catalog, never as a thread.
-    return this.projectSessionTree(
-      orderedRootRows.filter((row) => !adopted.has(row.key)),
-      rows,
-      navigationState.toSidebarSession,
-    );
+    return projectSessionTree({
+      roots: orderedRootRows.filter((row) => !adopted.has(row.key)),
+      agentRows: rows,
+      childRowsByParent: this.childSessionRowsByParent,
+      loadingChildKeys: this.loadingChildSessionKeys,
+      toSidebarSession: navigationState.toSidebarSession,
+    });
   }
 
   /** Canonical main-session key for the selected (or given) agent. */
@@ -699,93 +702,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
 
   protected showAllSessionChildren(sessionKey: string) {
     this.fullyShownChildSessionKeys = new Set(this.fullyShownChildSessionKeys).add(sessionKey);
-  }
-
-  private projectSessionTree(
-    roots: readonly GatewaySessionRow[],
-    agentRows: readonly GatewaySessionRow[],
-    toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession,
-  ): SidebarRecentSession[] {
-    const rowsByKey = new Map<string, GatewaySessionRow>();
-    for (const rows of Object.values(this.childSessionRowsByParent)) {
-      for (const row of rows) {
-        rowsByKey.set(row.key, row);
-      }
-    }
-    for (const row of agentRows) {
-      rowsByKey.set(row.key, row);
-    }
-    const childKeysByParent = new Map<string, string[]>();
-    const appendChild = (parentKey: string, childKey: string) => {
-      const keys = childKeysByParent.get(parentKey) ?? [];
-      if (!keys.includes(childKey)) {
-        keys.push(childKey);
-        childKeysByParent.set(parentKey, keys);
-      }
-    };
-    for (const row of rowsByKey.values()) {
-      for (const childKey of row.childSessions ?? []) {
-        appendChild(row.key, childKey);
-      }
-    }
-    for (const row of rowsByKey.values()) {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
-      if (parentKey) {
-        appendChild(parentKey, row.key);
-      }
-    }
-
-    const build = (
-      row: GatewaySessionRow,
-      isChild: boolean,
-      ancestors: ReadonlySet<string>,
-    ): SidebarRecentSession => {
-      const childSessionKeys = childKeysByParent.get(row.key) ?? [];
-      const nextAncestors = new Set(ancestors);
-      nextAncestors.add(row.key);
-      const children = childSessionKeys.flatMap((key) => {
-        const child = rowsByKey.get(key);
-        return child && !nextAncestors.has(key) ? [build(child, true, nextAncestors)] : [];
-      });
-      const projected = toSidebarSession(row, isChild);
-      const projectedRunningChildCount = children.reduce(
-        (count, child) =>
-          count +
-          (child.hasActiveRun || child.status === "running" ? 1 : 0) +
-          child.runningChildCount,
-        0,
-      );
-      const runningChildCount = Math.max(
-        projectedRunningChildCount,
-        row.hasActiveSubagentRun ? 1 : 0,
-      );
-      const failedChildCount = children.reduce(
-        (count, child) =>
-          count +
-          (child.status === "failed" || child.status === "timeout" ? 1 : 0) +
-          child.failedChildCount,
-        0,
-      );
-      return {
-        ...projected,
-        childSessionKeys,
-        children,
-        loadingChildren: this.loadingChildSessionKeys.has(row.key),
-        containsActiveDescendant: children.some(
-          (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
-        ),
-        runningChildCount,
-        failedChildCount,
-      };
-    };
-
-    const rootKeys = new Set(roots.map((row) => row.key));
-    return roots
-      .filter((row) => {
-        const parentKey = row.spawnedBy ?? row.parentSessionKey;
-        return !parentKey || !rootKeys.has(parentKey);
-      })
-      .map((row) => build(row, false, new Set()));
   }
 
   protected agentUnreadCount(agentId: string): number {

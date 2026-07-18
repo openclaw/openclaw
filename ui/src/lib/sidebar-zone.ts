@@ -5,7 +5,7 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 
-export type SidebarPinnedSession = { key: string };
+type SidebarPinnedSession = { key: string };
 
 /**
  * Reconcile the persisted zone order against the sessions we can actually see.
