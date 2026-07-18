@@ -37,10 +37,6 @@ extension OpenClawChatViewModel {
             routeLease: routeLease)
     }
 
-    public func fetchAgents() async throws -> OpenClawChatAgentsListResponse? {
-        try await self.transport.listAgents()
-    }
-
     func newSessionRouteLease() async throws -> OpenClawChatNewSessionRouteLease {
         guard let routeLease = await self.transport.acquireNewSessionRouteLease() else {
             throw OpenClawChatTransportSendError.notDispatched

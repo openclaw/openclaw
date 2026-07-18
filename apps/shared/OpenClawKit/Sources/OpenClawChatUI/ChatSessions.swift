@@ -246,12 +246,6 @@ public struct OpenClawChatAgentRuntime: Codable, Sendable, Hashable {
     public let id: String
     public let fallback: String?
     public let source: String?
-
-    public init(id: String, fallback: String? = nil, source: String? = nil) {
-        self.id = id
-        self.fallback = fallback
-        self.source = source
-    }
 }
 
 public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashable {
