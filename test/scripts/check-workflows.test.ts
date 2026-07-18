@@ -2,11 +2,30 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  timeoutTerminationPlan,
+  windowsProcessTreeKillCommand,
+} from "../../scripts/check-workflows.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const scriptPath = path.resolve("scripts/check-workflows.mjs");
 const tempDirs: string[] = [];
+
+function writeTimeoutHook(tempDir: string): string {
+  const hookPath = path.join(tempDir, "shorten-command-timeout.mjs");
+  writeFileSync(
+    hookPath,
+    [
+      "const nativeSetTimeout = globalThis.setTimeout;",
+      "globalThis.setTimeout = (callback, delay, ...args) =>",
+      "  nativeSetTimeout(callback, delay === 300_000 ? 500 : delay, ...args);",
+      "",
+    ].join("\n"),
+  );
+  return hookPath;
+}
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -82,6 +101,7 @@ describe("check-workflows", () => {
   it("fails with an actionable timeout when a workflow command ignores SIGTERM", () => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
+    const timeoutHookPath = writeTimeoutHook(tempDir);
     mkdirSync(binDir);
     writeFileSync(
       path.join(binDir, "actionlint"),
@@ -99,7 +119,7 @@ describe("check-workflows", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        OPENCLAW_CHECK_WORKFLOWS_COMMAND_TIMEOUT_MS: "500",
+        NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
         PATH: binDir,
       },
       timeout: 5_000,
@@ -107,8 +127,29 @@ describe("check-workflows", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("[check-workflows] timed out after 500ms: actionlint");
+    expect(result.stderr).toContain("[check-workflows] timed out after 300000ms: actionlint");
     expect(result.stderr).toContain(".github/workflows/ci.yml");
+  });
+
+  it("uses taskkill tree termination for Windows timeout escalation", () => {
+    expect(windowsProcessTreeKillCommand(undefined)).toBeNull();
+    expect(windowsProcessTreeKillCommand(1234)).toEqual({
+      command: "taskkill",
+      args: ["/pid", "1234", "/T", "/F"],
+    });
+  });
+
+  it("terminates the Windows process tree before signaling the root", () => {
+    const plan = timeoutTerminationPlan("win32", 1234);
+
+    expect(plan).toEqual([
+      {
+        type: "taskkill",
+        command: "taskkill",
+        args: ["/pid", "1234", "/T", "/F"],
+      },
+    ]);
+    expect(JSON.stringify(plan)).not.toContain("SIGTERM");
   });
 
   it("bootstraps pinned pre-commit in a temporary Python venv when needed", () => {

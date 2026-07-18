@@ -2,62 +2,85 @@
 // Runs local workflow sanity checks.
 // Uses installed tools when present, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const ACTIONLINT_VERSION = "1.7.11";
 const PRE_COMMIT_VERSION = "4.2.0";
 const WORKFLOW_DIR = ".github/workflows";
 const DEFAULT_COMMAND_TIMEOUT_MS = 5 * 60_000;
-const MAX_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const COMMAND_TIMEOUT_KILL_GRACE_MS = 1_000;
-const COMMAND_TIMEOUT_ENV = "OPENCLAW_CHECK_WORKFLOWS_COMMAND_TIMEOUT_MS";
-
-function resolveCommandTimeoutMs() {
-  const raw = process.env[COMMAND_TIMEOUT_ENV]?.trim();
-  if (!raw) {
-    return DEFAULT_COMMAND_TIMEOUT_MS;
-  }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return DEFAULT_COMMAND_TIMEOUT_MS;
-  }
-  return Math.min(parsed, MAX_COMMAND_TIMEOUT_MS);
-}
-
-const commandTimeoutMs = resolveCommandTimeoutMs();
 
 function commandLabel(command, args) {
   return [command, ...args].join(" ");
 }
 
-function killProcessTree(child, signal) {
-  const killChild = () => {
-    try {
-      child.kill(signal);
-    } catch (error) {
-      if (error?.code !== "ESRCH") {
-        throw error;
-      }
-    }
+export function windowsProcessTreeKillCommand(pid) {
+  if (!pid) {
+    return null;
+  }
+  return {
+    command: "taskkill",
+    args: ["/pid", String(pid), "/T", "/F"],
   };
+}
+
+export function timeoutTerminationPlan(platform, pid) {
+  if (platform === "win32") {
+    const treeKill = windowsProcessTreeKillCommand(pid);
+    return treeKill
+      ? [{ type: "taskkill", ...treeKill }]
+      : [{ type: "child-kill", signal: "SIGKILL" }];
+  }
+  return [
+    { type: "process-group", signal: "SIGTERM" },
+    { type: "process-group", signal: "SIGKILL", delayMs: COMMAND_TIMEOUT_KILL_GRACE_MS },
+  ];
+}
+
+function killChild(child, signal) {
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
+function killWindowsProcessTree(child) {
+  const treeKill = windowsProcessTreeKillCommand(child.pid);
+  if (!treeKill) {
+    killChild(child, "SIGKILL");
+    return;
+  }
+  const result = spawnSync(treeKill.command, treeKill.args, {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    killChild(child, "SIGKILL");
+  }
+}
+
+function killProcessTree(child, signal) {
   if (process.platform === "win32") {
-    killChild();
+    killWindowsProcessTree(child);
     return;
   }
   try {
     process.kill(-child.pid, signal);
   } catch (error) {
     if (error?.code !== "ESRCH") {
-      killChild();
+      killChild(child, signal);
     }
   }
 }
 
 function spawnCommand(command, args, options = {}) {
-  return new Promise((resolve) => {
+  return new Promise((finish) => {
     // Node's sync timeout waits for SIGTERM handlers to exit. Run POSIX tools in
     // a process group so timeout escalation can terminate non-cooperative scans.
     const child = spawn(command, args, {
@@ -69,11 +92,15 @@ function spawnCommand(command, args, options = {}) {
     let killTimer;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
+      if (process.platform === "win32") {
+        killWindowsProcessTree(child);
+        return;
+      }
       killProcessTree(child, "SIGTERM");
       killTimer = setTimeout(() => {
         killProcessTree(child, "SIGKILL");
       }, COMMAND_TIMEOUT_KILL_GRACE_MS);
-    }, commandTimeoutMs);
+    }, DEFAULT_COMMAND_TIMEOUT_MS);
 
     child.on("error", (error) => {
       if (settled) {
@@ -82,7 +109,7 @@ function spawnCommand(command, args, options = {}) {
       settled = true;
       clearTimeout(timeoutTimer);
       clearTimeout(killTimer);
-      resolve({ error, status: null, timedOut });
+      finish({ error, status: null, timedOut });
     });
 
     child.on("exit", (status, signal) => {
@@ -95,14 +122,40 @@ function spawnCommand(command, args, options = {}) {
       const error = timedOut
         ? Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" })
         : null;
-      resolve({ error, signal, status, timedOut });
+      finish({ error, signal, status, timedOut });
     });
   });
 }
 
+async function main() {
+  const workflows = workflowFiles();
+
+  if (await commandExists("actionlint")) {
+    await run("actionlint", workflows);
+  } else if (await commandExists("go", ["version"])) {
+    await run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`]);
+  } else if (
+    (await commandExists("pre-commit")) ||
+    (await commandExists("python3", ["-m", "pre_commit", "--version"])) ||
+    (await commandExists("python3", ["--version"]))
+  ) {
+    await runPreCommitHook("actionlint", workflows);
+  } else {
+    console.error(
+      `[check-workflows] missing workflow linter: install actionlint, Go ${ACTIONLINT_VERSION} fallback support, or pre-commit.`,
+    );
+    process.exit(1);
+  }
+
+  await runPreCommitHook("zizmor", workflows);
+
+  await run("python3", ["scripts/check-composite-action-input-interpolation.py"]);
+  await run("node", ["scripts/check-no-conflict-markers.mjs"]);
+}
+
 function commandFailureMessage(command, args, error) {
   if (error?.code === "ETIMEDOUT") {
-    return `[check-workflows] timed out after ${commandTimeoutMs}ms: ${commandLabel(command, args)}`;
+    return `[check-workflows] timed out after ${DEFAULT_COMMAND_TIMEOUT_MS}ms: ${commandLabel(command, args)}`;
   }
   return `[check-workflows] failed to run ${command}: ${error?.message ?? "unknown error"}`;
 }
@@ -209,26 +262,6 @@ async function runPreCommitHook(hook, files) {
   process.exit(1);
 }
 
-const workflows = workflowFiles();
-
-if (await commandExists("actionlint")) {
-  await run("actionlint", workflows);
-} else if (await commandExists("go", ["version"])) {
-  await run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`]);
-} else if (
-  (await commandExists("pre-commit")) ||
-  (await commandExists("python3", ["-m", "pre_commit", "--version"])) ||
-  (await commandExists("python3", ["--version"]))
-) {
-  await runPreCommitHook("actionlint", workflows);
-} else {
-  console.error(
-    `[check-workflows] missing workflow linter: install actionlint, Go ${ACTIONLINT_VERSION} fallback support, or pre-commit.`,
-  );
-  process.exit(1);
+if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
+  await main();
 }
-
-await runPreCommitHook("zizmor", workflows);
-
-await run("python3", ["scripts/check-composite-action-input-interpolation.py"]);
-await run("node", ["scripts/check-no-conflict-markers.mjs"]);
