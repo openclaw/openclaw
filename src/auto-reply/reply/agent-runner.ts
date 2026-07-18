@@ -2115,7 +2115,6 @@ export async function runReplyAgent(params: {
     const fallbackNoticePayloads: ReplyPayload[] = [];
     const suppressFallbackNoticeForSource = shouldSuppressFallbackStatusNoticeForSource(sessionCtx);
     if (
-      !suppressFallbackNoticeForSource &&
       !fallbackExhausted &&
       !preserveUserFacingSessionState &&
       fallbackTransition.fallbackTransitioned
@@ -2135,25 +2134,26 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      const fallbackNotice = buildFallbackNotice({
-        selectedProvider,
-        selectedModel,
-        activeProvider: providerUsed,
-        activeModel: modelUsed,
-        attempts: fallbackAttempts,
-        cfg,
-      });
-      if (fallbackNotice) {
-        fallbackNoticePayloads.push(
-          markReplyPayloadForSourceSuppressionDelivery({
-            text: fallbackNotice,
-            isFallbackNotice: true,
-          }),
-        );
+      if (!suppressFallbackNoticeForSource) {
+        const fallbackNotice = buildFallbackNotice({
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          attempts: fallbackAttempts,
+          cfg,
+        });
+        if (fallbackNotice) {
+          fallbackNoticePayloads.push(
+            markReplyPayloadForSourceSuppressionDelivery({
+              text: fallbackNotice,
+              isFallbackNotice: true,
+            }),
+          );
+        }
       }
     }
     if (
-      !suppressFallbackNoticeForSource &&
       !fallbackExhausted &&
       !preserveUserFacingSessionState &&
       fallbackTransition.fallbackCleared
@@ -2171,16 +2171,18 @@ export async function runReplyAgent(params: {
           previousActiveModel: fallbackTransition.previousState.activeModel,
         },
       });
-      fallbackNoticePayloads.push(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: buildFallbackClearedNotice({
-            selectedProvider,
-            selectedModel,
-            previousActiveModel: fallbackTransition.previousState.activeModel,
+      if (!suppressFallbackNoticeForSource) {
+        fallbackNoticePayloads.push(
+          markReplyPayloadForSourceSuppressionDelivery({
+            text: buildFallbackClearedNotice({
+              selectedProvider,
+              selectedModel,
+              previousActiveModel: fallbackTransition.previousState.activeModel,
+            }),
+            isFallbackNotice: true,
           }),
-          isFallbackNotice: true,
-        }),
-      );
+        );
+      }
     }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

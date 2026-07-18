@@ -2292,12 +2292,25 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
       });
-      const res = await run();
+      const fallbackEvents: Array<Record<string, unknown>> = [];
+      const off = onAgentEvent((evt) => {
+        if (evt.stream === "lifecycle" && evt.data?.phase === "fallback") {
+          fallbackEvents.push(evt.data);
+        }
+      });
+      let res: Awaited<ReturnType<typeof run>>;
+      try {
+        res = await run();
+      } finally {
+        off();
+      }
       const payloads = Array.isArray(res) ? res : res ? [res] : [];
 
       expect(payloads).toHaveLength(1);
       expect(payloads[0]?.text).toBe("final");
       expect(payloads[0]?.text).not.toContain("Model Fallback:");
+      expect(fallbackEvents).toHaveLength(1);
+      expect(fallbackEvents[0]?.activeModel).toBe("moonshotai/Kimi-K2.5");
       expect(sessionEntry.fallbackNoticeSelectedModel).toBe("anthropic/claude");
       expect(sessionEntry.fallbackNoticeActiveModel).toBe("deepinfra/moonshotai/Kimi-K2.5");
     } finally {
@@ -2326,12 +2339,25 @@ describe("runReplyAgent typing (heartbeat)", () => {
       sessionStore,
       sessionKey: "main",
     });
-    const res = await run();
+    const fallbackClearedEvents: Array<Record<string, unknown>> = [];
+    const off = onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle" && evt.data?.phase === "fallback_cleared") {
+        fallbackClearedEvents.push(evt.data);
+      }
+    });
+    let res: Awaited<ReturnType<typeof run>>;
+    try {
+      res = await run();
+    } finally {
+      off();
+    }
     const payloads = Array.isArray(res) ? res : res ? [res] : [];
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("final");
     expect(payloads[0]?.text).not.toContain("Fallback cleared");
+    expect(fallbackClearedEvents).toHaveLength(1);
+    expect(fallbackClearedEvents[0]?.previousActiveModel).toBe("deepinfra/moonshotai/Kimi-K2.5");
     expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
     expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
   });
