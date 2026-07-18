@@ -35,6 +35,7 @@ import {
   MANIFEST_REF_PATTERN,
   parseManifestRef,
   parseRemoteWorkspaceDirectory,
+  probeWorkspaceGitMode,
   readTransferredManifest,
   runBoundedInboundRsync as runBoundedInboundRsyncTransfer,
   stableWorkerPathComponent,
@@ -253,17 +254,15 @@ export function createWorkerWorkspaceActions(
       throw workspaceSyncError(setup);
     }
     const remoteWorkspaceDir = parseRemoteWorkspaceDirectory(setup.stdout.trim());
-
-    const gitRootResult = await runTask(
-      ["git", "-C", request.localPath, "rev-parse", "--show-toplevel"],
-      workerSshCommandOptions({
+    // Result refs can make plain workspaces unborn repos; only committed repos use Git sync.
+    const { mode, gitRoot, baseCommit } = await probeWorkspaceGitMode({
+      localPath: request.localPath,
+      commandOptions: workerSshCommandOptions({
         timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
         signal: options.ownerSignal,
       }),
-    );
-    const mode = success(gitRootResult) ? "git" : "plain";
-    let baseCommit = "";
-    let gitRoot = request.localPath;
+      runTask,
+    });
     const temporaryDirectory = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
     );
@@ -279,7 +278,6 @@ export function createWorkerWorkspaceActions(
     try {
       let fileListPath: string | undefined;
       if (mode === "git") {
-        gitRoot = gitRootResult.stdout.trim();
         const [canonicalRequestPath, canonicalGitRoot] = await Promise.all([
           fs.realpath(request.localPath),
           fs.realpath(gitRoot),
@@ -287,17 +285,6 @@ export function createWorkerWorkspaceActions(
         if (canonicalRequestPath !== canonicalGitRoot) {
           throw new Error("Worker git workspace sync requires the managed worktree root");
         }
-        const gitBase = await runTask(
-          ["git", "-C", gitRoot, "rev-parse", "--verify", "HEAD"],
-          workerSshCommandOptions({
-            timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
-            signal: options.ownerSignal,
-          }),
-        );
-        if (!success(gitBase)) {
-          throw new Error("Worker git workspace has no base commit");
-        }
-        baseCommit = gitBase.stdout.trim();
         if (!GIT_COMMIT_PATTERN.test(baseCommit)) {
           throw new Error("Worker workspace git base is not a commit id");
         }

@@ -7,6 +7,23 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
+async function tryResolveWorkspacePath(
+  resolveWorkspacePath: (placement: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<string>,
+  placement: { sessionId: string; sessionKey: string; agentId: string },
+): Promise<string | undefined> {
+  try {
+    return await resolveWorkspacePath(placement);
+  } catch {
+    // Forced teardown is the last-resort state owner. If the session/worktree is
+    // already gone, skip local repair/ref cleanup and still release the claim.
+    return undefined;
+  }
+}
+
 export async function forceAbandonWorkerEnvironment(params: {
   placements: WorkerDispatchPlacementStore;
   environmentId: string;
@@ -33,8 +50,10 @@ export async function forceAbandonWorkerEnvironment(params: {
     }
     const journal = placements.loadWorkspaceReconciliation(owner);
     if (journal) {
-      const root = await params.resolveWorkspacePath(placement);
-      await recoverWorkerWorkspaceReconciliation({ root, journal });
+      const root = await tryResolveWorkspacePath(params.resolveWorkspacePath, placement);
+      if (root) {
+        await recoverWorkerWorkspaceReconciliation({ root, journal });
+      }
       placements.abortWorkspaceReconciliation(owner);
     }
   }
@@ -48,12 +67,14 @@ export async function forceAbandonWorkerEnvironment(params: {
           );
         }
       } else {
-        const root = await params.resolveWorkspacePath(placement);
-        const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
-        const refs = [finalRef, preparedWorkerWorkspaceResultRef(finalRef)];
-        for (const stagedResultRef of refs) {
-          if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
-            await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
+        const root = await tryResolveWorkspacePath(params.resolveWorkspacePath, placement);
+        if (root) {
+          const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
+          const refs = [finalRef, preparedWorkerWorkspaceResultRef(finalRef)];
+          for (const stagedResultRef of refs) {
+            if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
+              await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
+            }
           }
         }
       }
