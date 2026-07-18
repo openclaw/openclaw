@@ -113,6 +113,7 @@ function credentialState(
     string,
     Pick<
       RuntimeAuthProfileStore,
+      | "order"
       | "profiles"
       | "runtimePersistedProfileIds"
       | "runtimeExternalProfileIds"
@@ -128,6 +129,7 @@ function credentialState(
         [
           key,
           {
+            order: store.order,
             profiles: store.profiles,
             runtimePersistedProfileIds: store.runtimePersistedProfileIds,
             runtimeExternalProfileIds: store.runtimeExternalProfileIds,

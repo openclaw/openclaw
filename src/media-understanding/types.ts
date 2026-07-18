@@ -1,6 +1,7 @@
 // Shared media-understanding types for attachments, provider hooks, request
 // auth, decisions, and structured extraction inputs.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -148,8 +149,10 @@ export type ImageDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   cfg: OpenClawConfig;
   model: string;
   provider: string;
@@ -171,8 +174,10 @@ export type ImagesDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   cfg: OpenClawConfig;
 };
 

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { discoverCachedAgentStores } from "../src/agents/embedded-agent-runner/model-discovery-cache.js";
+import { discoverAuthStorage, discoverModels } from "../src/agents/agent-model-discovery.js";
 import { ensureOpenClawModelsJson } from "../src/agents/models-config.js";
 import {
   prepareModelRuntimeSnapshot,
@@ -68,7 +68,16 @@ async function main(): Promise<void> {
     setCurrentPluginMetadataSnapshot(pluginMetadataSnapshot, { config, workspaceDir });
     await ensureOpenClawModelsJson(config, agentDir, { workspaceDir });
     const legacy = () => {
-      discoverCachedAgentStores({ agentDir, config, inheritedAuthDir: agentDir, workspaceDir });
+      const authStorage = discoverAuthStorage(agentDir, {
+        config,
+        inheritedAuthDir: agentDir,
+        workspaceDir,
+      });
+      discoverModels(authStorage, agentDir, {
+        config,
+        pluginMetadataSnapshot,
+        workspaceDir,
+      });
     };
     for (let index = 0; index < WARMUP_OPERATIONS; index += 1) {
       legacy();

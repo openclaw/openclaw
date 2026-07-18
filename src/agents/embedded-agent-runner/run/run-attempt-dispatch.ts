@@ -32,6 +32,7 @@ type AttemptRuntime = {
   workspaceDir: string;
   isCanonicalWorkspace: boolean;
   agentDir: string;
+  preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
@@ -204,6 +205,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
     agentDir: runtime.agentDir,
+    preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(runtime.contextEngine

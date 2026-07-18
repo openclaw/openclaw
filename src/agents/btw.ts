@@ -494,6 +494,7 @@ async function resolveRuntimeModel(params: {
 }> {
   const preparedModelRuntime = await prepareModelRuntimeSnapshot({
     config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     agentDir: params.agentDir,
     inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),

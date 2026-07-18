@@ -737,7 +737,14 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../prepared-model-runtime.js", () => ({
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+      snapshot: { createStores: () => ({ authStorage: {}, modelRegistry: {} }) },
+      release: vi.fn(),
+    })),
     prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+    loadPreparedModelRuntimeSnapshot: vi.fn(async () => ({
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     })),
   }));

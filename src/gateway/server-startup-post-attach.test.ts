@@ -194,8 +194,8 @@ vi.mock("../infra/update-startup.js", () => ({
   scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: hoisted.loadModelCatalog,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: hoisted.loadModelCatalog,
 }));
 
 vi.mock("../agents/model-selection.js", () => ({

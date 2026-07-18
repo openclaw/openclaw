@@ -90,6 +90,33 @@ describe("runtime auth profile snapshots", () => {
     }
   });
 
+  it("notifies when provider credential order changes", () => {
+    const agentDir = "/tmp/openclaw-auth-runtime-order";
+    const store = createStore("order");
+    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            ...store,
+            order: { openai: [] },
+          },
+        },
+      ]);
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledWith({
+        affectsInheritedStores: true,
+      });
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
   it("notifies when an empty runtime snapshot starts or stops shadowing persisted auth", () => {
     const agentDir = "/tmp/openclaw-auth-runtime-empty-owner";
     const listener = vi.fn();

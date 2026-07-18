@@ -504,15 +504,18 @@ async function requireTuiVerifiedInference(
   try {
     const route = await resolveSystemAgentVerifiedInferenceRoute(binding, opts.deps);
     if (route) {
-      const [{ loadModelCatalog }, { resolveThinkingDefault }] = await Promise.all([
-        import("../agents/model-catalog.js"),
+      const [{ loadPreparedModelCatalog }, { resolveThinkingDefault }] = await Promise.all([
+        import("../agents/prepared-model-catalog.js"),
         import("../agents/model-thinking-default.js"),
       ]);
       // Catalog metadata improves the label but must not become a new startup
       // dependency after this exact inference route has already been verified.
-      const catalog = await loadModelCatalog({ config: route.runConfig, readOnly: true }).catch(
-        () => undefined,
-      );
+      const catalog = await loadPreparedModelCatalog({
+        config: route.runConfig,
+        agentId: route.agentId,
+        agentDir: route.agentDir,
+        readOnly: true,
+      }).catch(() => undefined);
       const model = splitModelRef(route.modelLabel);
       return {
         model: model.model,

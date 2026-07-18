@@ -37,6 +37,8 @@ const hoisted = vi.hoisted(() => ({
   registerProviderStreamForModelMock: vi.fn(),
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
   prepareProviderRuntimeAuthMock: vi.fn(),
+  acquireAgentRunPreparedModelRuntimeMock: vi.fn(),
+  releasePreparedModelRuntimeMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
@@ -54,11 +56,14 @@ const {
   registerProviderStreamForModelMock,
   prepareProviderDynamicModelMock,
   prepareProviderRuntimeAuthMock,
+  acquireAgentRunPreparedModelRuntimeMock,
+  releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
   shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
+const preparedAuthStorage = { setRuntimeApiKey: setRuntimeApiKeyMock };
 
 type ResolveModelWithRegistryTestParams = {
   modelRegistry: { find: (provider: string, modelId: string) => unknown };
@@ -140,6 +145,10 @@ vi.mock("../agents/agent-model-discovery.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: acquireAgentRunPreparedModelRuntimeMock,
+}));
+
 vi.mock("../plugins/provider-runtime.js", async () => ({
   ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
     "../plugins/provider-runtime.js",
@@ -207,6 +216,20 @@ describe("describeImageWithModel", () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementation(
+      async (input: { agentDir: string; config: object; workspaceDir?: string }) => ({
+        snapshot: {
+          agentDir: input.agentDir,
+          config: input.config,
+          workspaceDir: input.workspaceDir,
+          createStores: () => ({
+            authStorage: preparedAuthStorage,
+            modelRegistry: {},
+          }),
+        },
+        release: releasePreparedModelRuntimeMock,
+      }),
+    );
     fetchMock.mockImplementation(async () =>
       Response.json({
         base_resp: { status_code: 0 },
@@ -688,6 +711,7 @@ describe("describeImageWithModel", () => {
 
     const result = await describeImageWithModel({
       cfg: {},
+      agentId: "vision-agent",
       agentDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/openclaw-workspace",
       provider: "google",
@@ -701,6 +725,14 @@ describe("describeImageWithModel", () => {
 
     expect(result.text).toBe("workspace ok");
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "vision-agent",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    );
+    expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "google",
       "gemini-2.5-flash",
@@ -708,6 +740,8 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
+        authStorage: preparedAuthStorage,
+        modelRegistry: {},
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
@@ -784,6 +818,8 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
+        authStorage: preparedAuthStorage,
+        modelRegistry: {},
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
       },
@@ -796,6 +832,8 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
+        authStorage: preparedAuthStorage,
+        modelRegistry: {},
         skipAgentDiscovery: true,
       },
     );
@@ -1424,6 +1462,52 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("releases a prepared generation that resolves after the setup timeout", async () => {
+    vi.useFakeTimers();
+    let finishResolution!: (value: {
+      authStorage: typeof preparedAuthStorage;
+      model: { provider: string; id: string; api: string; input: string[] };
+      modelRegistry: object;
+    }) => void;
+    resolveModelAsyncMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishResolution = resolve;
+        }),
+    );
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 25,
+    });
+    const assertion = expect(result).rejects.toThrow(
+      "image description setup timed out after 25ms before provider request started",
+    );
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+
+    finishResolution({
+      authStorage: preparedAuthStorage,
+      model: {
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        api: "openai-responses",
+        input: ["text", "image"],
+      },
+      modelRegistry: {},
+    });
+    await vi.runAllTimersAsync();
+    await vi.waitFor(() => expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce());
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
   it("normalizes deprecated google flash ids and keeps profile model/auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
@@ -1869,5 +1953,165 @@ describe("describeImageWithModel", () => {
     const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(1024);
   });
+
+  it("derives workspaceDir from agentId for image runtime resolution", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "google",
+        id: "gemini-2.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "workspace ok" }],
+    });
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "vision-agent",
+            agentDir: "/tmp/openclaw-agent",
+            workspace: "/tmp/openclaw-workspace",
+          },
+        ],
+      },
+    };
+
+    await describeImageWithModel({
+      cfg,
+      agentId: "vision-agent",
+      agentDir: "/tmp/openclaw-agent",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      buffer: Buffer.alloc(1),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
+    );
+    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+      "google",
+      "gemini-2.5-flash",
+      "/tmp/openclaw-agent",
+      cfg,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
+    );
+  });
+
+  it("uses one committed prepared generation for image setup and streaming", async () => {
+    const requestedCfg = { logging: { level: "info" } };
+    const committedCfg = { logging: { level: "debug" } };
+    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
+      snapshot: {
+        agentDir: "/tmp/committed-agent",
+        config: committedCfg,
+        workspaceDir: "/tmp/committed-workspace",
+        createStores: () => ({
+          authStorage: preparedAuthStorage,
+          modelRegistry: {},
+        }),
+      },
+      release: releasePreparedModelRuntimeMock,
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "google",
+        id: "gemini-2.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "committed runtime" }],
+    });
+
+    await describeImageWithModel({
+      cfg: requestedCfg,
+      agentDir: "/tmp/requested-agent",
+      workspaceDir: "/tmp/requested-workspace",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      buffer: Buffer.alloc(1),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+      "google",
+      "gemini-2.5-flash",
+      "/tmp/committed-agent",
+      committedCfg,
+      expect.objectContaining({ workspaceDir: "/tmp/committed-workspace" }),
+    );
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
+      model: expect.objectContaining({ id: "gemini-2.5-flash" }),
+      cfg: committedCfg,
+      agentDir: "/tmp/committed-agent",
+      workspaceDir: "/tmp/committed-workspace",
+    });
+  });
+
+  it("reuses a parent run generation without acquiring another image lease", async () => {
+    const cfg = { logging: { level: "info" } };
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "google",
+        id: "gemini-2.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "parent runtime" }],
+    });
+    const preparedModelRuntime = {
+      agentDir: "/tmp/parent-agent",
+      config: cfg,
+      workspaceDir: "/tmp/parent-workspace",
+      createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
+    } as never;
+
+    const result = await describeImageWithModel({
+      cfg,
+      agentDir: "/tmp/parent-agent",
+      workspaceDir: "/tmp/parent-workspace",
+      preparedModelRuntime,
+      provider: "google",
+      model: "gemini-2.5-flash",
+      buffer: Buffer.alloc(1),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result.text).toBe("parent runtime");
+    expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
+    expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

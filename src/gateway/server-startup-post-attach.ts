@@ -851,11 +851,11 @@ export async function startGatewaySidecars(params: {
         run: async (isStopped) => {
           const [
             { DEFAULT_MODEL, DEFAULT_PROVIDER },
-            { loadModelCatalog },
+            { loadPreparedModelCatalog },
             { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
           ] = await Promise.all([
             loadAgentDefaultsModule(),
-            import("../agents/model-catalog.js"),
+            import("../agents/prepared-model-catalog.js"),
             loadAgentModelSelectionModule(),
           ]);
           if (isStopped()) {
@@ -872,7 +872,7 @@ export async function startGatewaySidecars(params: {
                 defaultProvider: DEFAULT_PROVIDER,
                 defaultModel: DEFAULT_MODEL,
               });
-            const catalog = await loadModelCatalog({ config: params.cfg });
+            const catalog = await loadPreparedModelCatalog({ config: params.cfg });
             const status = getModelRefStatus({
               cfg: params.cfg,
               catalog,

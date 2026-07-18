@@ -14,7 +14,7 @@ import {
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -100,7 +100,13 @@ async function setGatewayModelCatalogForTest(
 ): Promise<void> {
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = models;
-  await resetGatewayModelCatalogCacheForTest();
+  await resetPreparedModelCatalogForTest();
+  const [
+    { refreshPreparedModelRuntimeSnapshots },
+    { clearRuntimeConfigSnapshot, getRuntimeConfig },
+  ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
+  clearRuntimeConfigSnapshot();
+  await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
 
 const baseImageAttachment = () => ({

@@ -120,7 +120,7 @@ import {
 } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { isOpenAIProvider } from "../openai-routing.js";
-import { prepareModelRuntimeSnapshot } from "../prepared-model-runtime.js";
+import { loadPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import {
@@ -677,8 +677,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
   };
   const snapshotConfig = params.config ?? {};
-  const preparedModelRuntime = await prepareModelRuntimeSnapshot({
+  const preparedModelRuntime = await loadPreparedModelRuntimeSnapshot({
     config: snapshotConfig,
+    agentId: earlyAgentIds.sessionAgentId,
     agentDir,
     inheritedAuthDir: resolveDefaultAgentDir(snapshotConfig),
     workspaceDir: resolvedWorkspace,

@@ -60,7 +60,10 @@ vi.mock("../agents/embedded-agent.js", () => ({
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
-  loadModelCatalog: vi.fn(),
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(),
 }));
 
 vi.mock("../agents/model-selection.js", () => {
