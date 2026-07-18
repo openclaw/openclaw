@@ -214,7 +214,9 @@ describe("loadUsageBarTemplate", () => {
       // entry.template = undefined.
       writeFileSync(path, "{ not json");
       // Wait for the watcher to deliver the change event.
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => {
+        setTimeout(r, 200);
+      });
 
       // The template is now invalid — served as DEFAULT.
       expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
