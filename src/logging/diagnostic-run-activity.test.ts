@@ -308,6 +308,49 @@ describe("diagnostic run activity retention", () => {
     expect(completedSnapshot).not.toHaveProperty("hasActiveEmbeddedRun");
   });
 
+  it("keeps replacement embedded activity from run start before its first progress", () => {
+    startDiagnosticRunActivityTracking();
+    const session = {
+      sessionId: "replacement-startup-session",
+      sessionKey: "agent:main:replacement-startup",
+    };
+    markDiagnosticRunProgress({ ...session, runId: "older-run", reason: "older:active" });
+    emitTrustedDiagnosticEvent({
+      type: "run.started",
+      ...session,
+      runId: "replacement-run",
+    });
+    markDiagnosticEmbeddedRunStarted(session);
+
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...session,
+      runId: "older-run",
+      durationMs: 1,
+      outcome: "completed",
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(session)).toMatchObject({
+      activeWorkKind: "embedded_run",
+      hasActiveEmbeddedRun: true,
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...session,
+      runId: "replacement-run",
+      durationMs: 1,
+      outcome: "completed",
+    });
+
+    const completedSnapshot = getDiagnosticSessionActivitySnapshot(session);
+    expect(completedSnapshot).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "run:completed",
+    });
+    expect(completedSnapshot).not.toHaveProperty("hasActiveEmbeddedRun");
+  });
+
   it("bounds completed session activity while preserving active runs", () => {
     startDiagnosticRunActivityTracking();
     const active = {

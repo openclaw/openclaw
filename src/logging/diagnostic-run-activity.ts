@@ -718,6 +718,9 @@ export function startDiagnosticRunActivityTracking(): void {
       return;
     }
     switch (event.type) {
+      case "run.started":
+        markDiagnosticRunProgress({ ...event, reason: "run:started" });
+        return;
       case "tool.execution.started":
         recordToolStarted(event);
         return;
