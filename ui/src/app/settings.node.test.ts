@@ -7,6 +7,7 @@ import {
   loadSettings,
   persistSessionToken,
   resolvePageGatewaySettings,
+  saveLocalUserIdentity,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
@@ -365,7 +366,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(1);
   });
 
-  it("persists sidebar customization across save and load, normalizing bad values", () => {
+  it("persists custodian unpinning across save and load, normalizing bad values", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -402,7 +403,7 @@ describe("loadSettings default gateway URL derivation", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["usage", "cron", "plugins"]);
+    expect(loadSettings().sidebarPinnedRoutes).toEqual(["custodian", "usage", "cron", "plugins"]);
     expect(loadSettings().navWidth).toBe(258);
   });
 
@@ -508,7 +509,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSendShortcut).toBe("enter");
   });
 
-  it("persists only the non-default chat follow-up mode", () => {
+  it("persists only explicit chat follow-up overrides", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -517,12 +518,16 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    expect(loadSettings().chatFollowUpMode).toBe("steer");
+    expect(loadSettings().chatFollowUpMode).toBeUndefined();
     saveSettings({ ...loadSettings(), chatFollowUpMode: "queue" });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatFollowUpMode).toBe("queue");
     expect(loadSettings().chatFollowUpMode).toBe("queue");
 
     saveSettings({ ...loadSettings(), chatFollowUpMode: "steer" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatFollowUpMode).toBe("steer");
+    expect(loadSettings().chatFollowUpMode).toBe("steer");
+
+    saveSettings({ ...loadSettings(), chatFollowUpMode: undefined });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "chatFollowUpMode",
     );
@@ -530,7 +535,7 @@ describe("loadSettings default gateway URL derivation", () => {
       scopedKey,
       JSON.stringify({ gatewayUrl: gwUrl, chatFollowUpMode: "interrupt" }),
     );
-    expect(loadSettings().chatFollowUpMode).toBe("steer");
+    expect(loadSettings().chatFollowUpMode).toBeUndefined();
   });
 
   it("persists only the non-default catalog open target", () => {
@@ -906,6 +911,20 @@ describe("loadSettings default gateway URL derivation", () => {
       name: "Buns",
       avatar: "🦞",
     });
+  });
+
+  it("persists and clears normalized local user identity", () => {
+    expect(saveLocalUserIdentity({ name: " Buns ", avatar: " 🦞 " })).toEqual({
+      name: "Buns",
+      avatar: "🦞",
+    });
+    expect(loadLocalUserIdentity()).toEqual({ name: "Buns", avatar: "🦞" });
+
+    expect(saveLocalUserIdentity({ name: null, avatar: null })).toEqual({
+      name: null,
+      avatar: null,
+    });
+    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 
   it("normalizes invalid local user identity values on load", () => {

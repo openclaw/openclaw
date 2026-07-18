@@ -9,6 +9,7 @@ const qaFlowModuleSchema = z.object({
 const qaFlowExecutionShape = {
   providerMode: z.enum(["aimock", "live-frontier", "mock-openai"]).optional(),
   retryCount: z.number().int().min(0).max(1).optional(),
+  runtime: z.enum(["openclaw", "codex"]).optional(),
   timeoutMs: z.number().int().positive().optional(),
 };
 

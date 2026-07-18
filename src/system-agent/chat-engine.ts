@@ -1,4 +1,5 @@
 // OpenClaw chat engine: transport-agnostic conversation over typed operations.
+import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
@@ -78,10 +79,14 @@ type SystemAgentChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 type SystemAgentChatReply = {
   text: string;
   action: SystemAgentChatReplyAction;
+  /** Client-localized draft intent for the destination agent chat. */
+  agentDraft?: "hatch";
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
   /** Present when the host must leave chat for an interactive handoff. */
   handoff?: SystemAgentOperation;
+  /** Structured choice mirroring the awaited wizard step for card-capable clients. */
+  question?: SystemAgentChatQuestion;
 };
 
 type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
@@ -178,6 +183,50 @@ function formatWizardOptions(step: WizardStep): string[] {
     const hint = option.hint ? ` — ${option.hint}` : "";
     return `${index + 1}. ${option.label}${hint}`;
   });
+}
+
+/**
+ * Mirror the awaited wizard step as a typed question for card clients. Only
+ * closed choices small enough for cards qualify; everything else stays text.
+ * Option replies are labels/yes/no because parseWizardAnswer matches those.
+ */
+function wizardStepChatQuestion(step: WizardStep | null): SystemAgentChatQuestion | undefined {
+  if (!step) {
+    return undefined;
+  }
+  if (step.type === "confirm") {
+    return {
+      id: step.id,
+      header: step.title ?? "Confirm",
+      question: step.message ?? "Continue?",
+      options: [
+        { label: "Yes", reply: "yes", recommended: true },
+        { label: "No", reply: "no" },
+      ],
+    };
+  }
+  if (step.type !== "select") {
+    return undefined;
+  }
+  const options = step.options ?? [];
+  if (options.length < 2 || options.length > 4) {
+    return undefined;
+  }
+  return {
+    id: step.id,
+    header: step.title ?? "Choose one",
+    question: step.message ?? "Choose one.",
+    options: options.map((option) => {
+      const mapped: SystemAgentChatQuestion["options"][number] = { label: option.label };
+      if (option.hint) {
+        mapped.description = option.hint;
+      }
+      if (step.initialValue !== undefined && option.value === step.initialValue) {
+        mapped.recommended = true;
+      }
+      return mapped;
+    }),
+  };
 }
 
 function renderWizardStep(step: WizardStep): string {
@@ -404,9 +453,13 @@ export class SystemAgentChatEngine {
     if (reply.text) {
       this.history.push({ role: "assistant", text: reply.text });
     }
+    // While a hosted wizard awaits a step, every turn routes to it, so the
+    // awaited step is always the question this reply asks.
+    const question = wizardStepChatQuestion(this.wizardBridge?.step ?? null);
     return {
       ...reply,
       ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...(question ? { question } : {}),
     };
   }
 
@@ -572,10 +625,37 @@ export class SystemAgentChatEngine {
     }
     const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
+    const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
+      .filter(Boolean)
+      .join("\n\n");
+    // The hatch is a ceremony: a fresh-install setup just created the agent,
+    // so hand the user straight into it instead of parking them here. The
+    // seeded BOOTSTRAP runs the birth sequence on the agent's first turn.
+    // Only on clean post-write verification: a non-null verify means the
+    // written config is suspect, and handing off would bury the warning in an
+    // agent session that may not answer — stay in setup to repair it.
+    if (
+      operation.kind === "setup" &&
+      result?.applied &&
+      result.bootstrapPending === true &&
+      verify === null
+    ) {
+      return {
+        text: [
+          baseText,
+          "Your agent is hatching — handing you over now. You can always find me in Settings → Ask OpenClaw.",
+        ].join("\n\n"),
+        action: "open-tui",
+        agentDraft: "hatch",
+        handoff: {
+          kind: "open-tui",
+          agentDraft: "hatch",
+          ...(operation.workspace ? { workspace: operation.workspace } : {}),
+        },
+      };
+    }
     return {
-      text: [capture.read() || "Applied. Audit entry written.", verify, followUp]
-        .filter(Boolean)
-        .join("\n\n"),
+      text: baseText,
       action: "none",
     };
   }

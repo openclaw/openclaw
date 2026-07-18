@@ -214,7 +214,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -298,6 +298,63 @@ describe("Parallels smoke model selection", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("run-tests --app-option");
+  });
+
+  it("bounds Windows prerequisite metadata downloads", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; curl() { printf "%s\\n" "$@"; }; fetch_host_metadata "https://example.test/metadata"',
+        "bash",
+        WINDOWS_PREPARE_WRAPPER,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "-fsSL",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "120",
+      "https://example.test/metadata",
+    ]);
+
+    const controller = readFileSync(WINDOWS_PREPARE_WRAPPER, "utf8");
+    expect(controller.match(/\bcurl -fsSL\b/g)).toHaveLength(1);
+    expect(controller.match(/\bfetch_host_metadata\b/g)).toHaveLength(5);
+    expect(controller).toContain("for attempt in 1 2 3");
+    expect(controller).not.toContain("--retry 2");
+
+    const tempDir = makeTempDir(tempDirs, "openclaw-windows-metadata-retry-");
+    const callCount = join(tempDir, "curl-calls");
+    writeFileSync(callCount, "0\n");
+    const retryResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        `OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
+curl() {
+  count="$(<"$CURL_CALL_COUNT")"
+  count=$((count + 1))
+  printf '%s\\n' "$count" >"$CURL_CALL_COUNT"
+  if [[ "$count" == "1" ]]; then
+    printf 'partial-'
+    return 28
+  fi
+  printf 'complete'
+}
+sleep() { :; }
+fetch_host_metadata "https://example.test/metadata"`,
+        "bash",
+        WINDOWS_PREPARE_WRAPPER,
+      ],
+      { encoding: "utf8", env: { ...process.env, CURL_CALL_COUNT: callCount } },
+    );
+    expect(retryResult.status, retryResult.stderr).toBe(0);
+    expect(retryResult.stdout).toBe("complete");
+    expect(readFileSync(callCount, "utf8")).toBe("2\n");
   });
 
   it("accepts leading package-manager separators and still honors later terminators", () => {
@@ -421,7 +478,16 @@ describe("Parallels smoke model selection", () => {
 
     expect(common).toContain('export * from "./host-command.ts"');
     expect(common).toContain('export * from "./lane-runner.ts"');
-    expect(common).toContain('export * from "./package-artifact.ts"');
+    const packageArtifactExports = new Set(
+      (common.match(/export \{([^}]*)\} from "\.\/package-artifact\.ts";/)?.[1] ?? "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean),
+    );
+    expect(packageArtifactExports).toContain("packOpenClaw");
+    expect(packageArtifactExports).toContain("packageVersionFromTgz");
+    expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
+    expect(common).not.toContain('export * from "./package-artifact.ts"');
     expect(common).toContain('export * from "./parallels-vm.ts"');
     expect(common).toContain('export * from "./snapshots.ts"');
     expect(hostCommand).toContain("export function shellQuote");
@@ -1117,7 +1183,9 @@ if (isPrlctl) {
   it("seeds agent workspace state before OS smoke agent turns", () => {
     const workspace = readFileSync(TS_PATHS.agentWorkspace, "utf8");
 
-    expect(workspace).toContain("workspace-state.json");
+    // workspace-state.json was retired (b6535fb8de5: stop writing retired
+    // smoke state); identity/bootstrap seeding remains the contract.
+    expect(workspace).not.toContain("workspace-state.json");
     expect(workspace).toContain("IDENTITY.md");
     expect(workspace).toContain("BOOTSTRAP.md");
 

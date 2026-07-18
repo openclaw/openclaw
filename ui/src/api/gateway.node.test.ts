@@ -28,10 +28,12 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
   "operator.pairing",
 ] as const;
 const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.approvals",
+  "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write",
@@ -423,10 +425,12 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.APPROVALS,
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
@@ -1049,6 +1053,7 @@ describe("GatewayBrowserClient", () => {
         "operator.admin",
         "operator.approvals",
         "operator.pairing",
+        "operator.questions",
         "operator.read",
         "operator.write",
       ],

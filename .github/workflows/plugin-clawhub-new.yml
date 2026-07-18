@@ -344,6 +344,7 @@ jobs:
 
       - name: Validate release publish approval run
         env:
+          ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
           APPROVAL_PATH: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
           CHILD_WORKFLOW_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
@@ -823,6 +824,8 @@ jobs:
           ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
+          WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.sha }}
           CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
           CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
@@ -844,6 +847,8 @@ jobs:
             --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
             --run-id "${ARTIFACT_RUN_ID}" \
             --target-sha "${TARGET_SHA}" \
+            --workflow-head-branch "${WORKFLOW_HEAD_BRANCH}" \
+            --workflow-ref "${WORKFLOW_REF}" \
             --workflow-sha "${WORKFLOW_SHA}"
 
       - name: Rehash immutable ClawHub bootstrap artifacts

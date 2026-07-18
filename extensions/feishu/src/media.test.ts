@@ -208,6 +208,29 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).toBe(false);
   });
 
+  it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+          visibleTextAlreadyDelivered: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("uses msg_type=media for mp4 video", async () => {
     runFfprobeMock.mockResolvedValueOnce("4.2\n");
 
@@ -927,6 +950,56 @@ describe("saveMessageResourceFeishu", () => {
         Buffer.from([0xff, 0xd8, 0xff, 0x00]),
       );
     });
+  });
+
+  it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
+    vi.useFakeTimers();
+    let markReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const stalled = new Readable({
+      read() {
+        markReadStarted?.();
+      },
+    });
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => stalled,
+      headers: { "content-type": "image/jpeg" },
+    });
+
+    try {
+      let settled = false;
+      const download = withIsolatedHome(() =>
+        saveMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: "om_stalled_stream",
+          fileKey: "img_key_stalled",
+          type: "image",
+          maxBytes: 1024,
+        }),
+      );
+      void download.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await readStarted;
+      await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(download).rejects.toMatchObject({
+        name: "FeishuInboundMediaTimeoutError",
+        chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+      });
+      expect(stalled.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recovers CJK filenames from the inbound message payload fallback", async () => {

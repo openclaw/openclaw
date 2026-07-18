@@ -55,6 +55,23 @@ function installWritableStdin(
 }
 
 describe("process input-wait hints", () => {
+  it("reports the UTF-8 byte count for process writes", async () => {
+    const processTool = createProcessTool();
+    const session = createProcessSessionFixture({
+      id: "sess-write-bytes",
+      command: "cat",
+      backgrounded: true,
+    });
+    installWritableStdin(session);
+    addSession(session);
+    const result = await runProcessAction(processTool, {
+      action: "write",
+      sessionId: "sess-write-bytes",
+      data: "你好😀",
+    });
+    expect(textOf(result)).toContain("Wrote 10 bytes to session sess-write-bytes");
+  });
+
   it("adds output and input-wait metadata to log for an idle writable session", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:20.000Z"));

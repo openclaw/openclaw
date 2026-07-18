@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -46,6 +47,16 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const { createTempDir } = createScriptTestHarness();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+
+function writeFrozenScenarioContract(root: string, scenarios: string[]): string {
+  const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+  mkdirSync(path.dirname(assertionsFile), { recursive: true });
+  writeFileSync(
+    assertionsFile,
+    `process.stdout.write(${JSON.stringify(`${JSON.stringify(scenarios)}\n`)});\n`,
+  );
+  return assertionsFile;
+}
 
 function expectDeclaredDispatchInputs(command: string): void {
   const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW, "utf8")) as {
@@ -92,7 +103,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -150,6 +161,35 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stderr).toContain("unknown argument: --bogus");
     expect(result.stderr).toContain("Usage: node scripts/test-docker-all.mjs [--plan-json]");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("plans from an isolated release harness without installed dependencies", () => {
+    const root = tempDirs.make("openclaw-docker-plan-isolated-harness-");
+    const scriptsDir = path.join(root, "scripts");
+    const libDir = path.join(scriptsDir, "lib");
+    mkdirSync(libDir, { recursive: true });
+    copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
+    for (const fileName of ["docker-e2e-plan.mjs", "docker-e2e-scenarios.mjs", "sleep.mjs"]) {
+      copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
+    }
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(scriptsDir, "test-docker-all.mjs"), "--plan-json"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
+          OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ profile: "release-path" });
   });
 
   it("rejects loose numeric runner env vars without a stack trace", () => {
@@ -305,10 +345,17 @@ describe("scripts/test-docker-all scheduler", () => {
 
   it("rejects candidate-controlled survivor omissions without trusted opt-in", () => {
     const root = tempDirs.make("openclaw-docker-all-untrusted-filter-");
-    const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     try {
-      mkdirSync(path.dirname(assertionsFile), { recursive: true });
-      writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+      const assertionsFile = writeFrozenScenarioContract(root, ["unrelated"]);
+      const executionMarker = path.join(root, "candidate-contract-executed");
+      writeFileSync(
+        assertionsFile,
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(executionMarker)}, "executed");`,
+          'process.stdout.write("[\\"unrelated\\"]\\n");',
+        ].join("\n"),
+      );
       const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -325,6 +372,7 @@ describe("scripts/test-docker-all scheduler", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("require trusted workflow opt-in");
       expect(result.stdout).not.toContain("Dry run complete");
+      expect(existsSync(executionMarker)).toBe(false);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -333,10 +381,8 @@ describe("scripts/test-docker-all scheduler", () => {
   it("writes a passing summary when a frozen target cannot run selected survivor lanes", () => {
     const root = tempDirs.make("openclaw-docker-all-filtered-");
     const logDir = path.join(root, "logs");
-    const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     try {
-      mkdirSync(path.dirname(assertionsFile), { recursive: true });
-      writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+      writeFrozenScenarioContract(root, ["unrelated"]);
       const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -369,10 +415,8 @@ describe("scripts/test-docker-all scheduler", () => {
 
   it("reports omitted frozen-target lanes when another selected lane remains runnable", () => {
     const root = tempDirs.make("openclaw-docker-all-mixed-filtered-");
-    const assertionsFile = path.join(root, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     try {
-      mkdirSync(path.dirname(assertionsFile), { recursive: true });
-      writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+      writeFrozenScenarioContract(root, ["unrelated"]);
       const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
         cwd: process.cwd(),
         encoding: "utf8",

@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -28,6 +28,13 @@ import {
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 
 describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
+  it("keeps trusted release verification independent from target app dependencies", () => {
+    const source = readFileSync("scripts/openclaw-npm-postpublish-verify.ts", "utf8");
+
+    expect(source).toContain('from "./lib/error-format.mjs"');
+    expect(source).not.toContain('from "../src/infra/errors.ts"');
+  });
+
   it("supports help and package-manager separators", () => {
     expect(parseOpenClawNpmPostpublishVerifyArgs(["--help"])).toEqual({
       help: true,
@@ -421,7 +428,7 @@ describe("npm registry provenance verification", () => {
     ).rejects.toThrow("failed Sigstore verification");
   });
 
-  it("retries incomplete registry metadata while npm publish propagates", async () => {
+  it("retries incomplete or briefly stale provenance while npm publish propagates", async () => {
     let attempts = 0;
     const delays: number[] = [];
 
@@ -429,7 +436,12 @@ describe("npm registry provenance verification", () => {
       retryNpmRegistryProvenanceRead(
         async () => {
           attempts += 1;
-          if (attempts < 3) {
+          if (attempts === 1) {
+            throw new Error(
+              "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+            );
+          }
+          if (attempts === 2) {
             throw new Error(
               "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
             );

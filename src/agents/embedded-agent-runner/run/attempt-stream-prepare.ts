@@ -223,6 +223,7 @@ export function prepareEmbeddedAttemptStream(input: {
       hasDeliveredMessageToolOnlySourceReply: input.hasDeliveredSourceReply,
       onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
       onAgentToolResult: attempt.onAgentToolResult,
+      observeToolTerminal: attempt.observeToolTerminal,
       onToolResult: attempt.onToolResult,
       onReasoningStream: attempt.onReasoningStream,
       streamReasoningInNonStreamModes: attempt.streamReasoningInNonStreamModes,
@@ -236,8 +237,7 @@ export function prepareEmbeddedAttemptStream(input: {
       onAssistantMessageStart: attempt.onAssistantMessageStart,
       onExecutionPhase: attempt.onExecutionPhase,
       onAgentEvent: attempt.onAgentEvent,
-      terminalLifecyclePhase:
-        (attempt.deferTerminalLifecycle ?? attempt.deferTerminalLifecycleEnd) ? "finishing" : "end",
+      terminalLifecyclePhase: attempt.deferTerminalLifecycle ? "finishing" : "end",
       onToolStreamBoundary: attempt.onToolStreamBoundary,
       isTerminalAborted: () => input.getRunState().aborted,
       resolveTerminalStopReason: () =>
@@ -308,16 +308,19 @@ export function prepareEmbeddedAttemptStream(input: {
             undefined as never,
           ),
       });
+      // Settlement persists every queued projection. Validate the final result
+      // first so a rejected hidden-tool value never enters session history.
+      const acceptedResult = await toolParams.acceptResultBeforeProjection(result);
       input.toolSearchTargetTranscriptProjections.push({
         parentToolCallId: toolParams.parentToolCallId,
         toolCallId: toolParams.toolCallId,
         toolName: toolParams.toolName,
         input: toolParams.input,
-        result,
+        result: acceptedResult,
         timestamp: Date.now(),
       });
       notifyToolActivity(attempt.runId);
-      return result;
+      return acceptedResult;
     } catch (error) {
       const message = formatErrorMessage(error);
       input.toolSearchTargetTranscriptProjections.push({
@@ -350,7 +353,12 @@ export function prepareEmbeddedAttemptStream(input: {
       if (options?.steeringMode) {
         input.activeSession.agent.steeringMode = options.steeringMode;
       }
-      await steerActiveSessionWithOptionalDeliveryWait(input.activeSession, text, options);
+      await steerActiveSessionWithOptionalDeliveryWait(
+        input.activeSession,
+        text,
+        options,
+        attempt.sessionKey,
+      );
     },
     isStreaming: () => input.activeSession.isStreaming,
     isStopped: () =>
@@ -359,6 +367,7 @@ export function prepareEmbeddedAttemptStream(input: {
       input.runAbortController.signal.aborted,
     isCompacting: () => subscription.isCompacting(),
     supportsTranscriptCommitWait: true,
+    supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,

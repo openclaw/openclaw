@@ -361,7 +361,7 @@ export function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
   });
 }
 
-export function createMockReplyOperation(): {
+export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
   freezeAbortMock: ReturnType<typeof vi.fn>;
@@ -380,7 +380,7 @@ export function createMockReplyOperation(): {
     replyOperation: {
       key: "main",
       sessionId: "session",
-      abortSignal: new AbortController().signal,
+      abortSignal: options?.abortSignal ?? new AbortController().signal,
       resetTriggered: false,
       terminalRecovery: false,
       acceptedSteeredInboundAudio: false,

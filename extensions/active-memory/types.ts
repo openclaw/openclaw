@@ -1,6 +1,12 @@
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionTranscriptTargetParams } from "openclaw/plugin-sdk/session-transcript-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+// CLI-runtime recalls dispatch through a fresh CLI process (spawn + MCP
+// handshake + tool roundtrips); measured runs take 14-20s, so the plain
+// default budget would time out most of them. Explicit timeoutMs config
+// always wins over this default.
+const DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS = 45_000;
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAX_SUMMARY_CHARS = 220;
 const DEFAULT_RECENT_USER_TURNS = 2;
@@ -186,6 +192,8 @@ type ResolvedActiveRecallPluginConfig = {
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs: number;
+  /** True when timeoutMs is the built-in default rather than operator config. */
+  timeoutMsIsDefault: boolean;
   setupGraceTimeoutMs: number;
   queryMode: "message" | "recent" | "full";
   maxSummaryChars: number;
@@ -311,6 +319,7 @@ type ActiveMemoryThinkingLevel =
   | "adaptive"
   | "max";
 type ActiveMemoryFastMode = boolean | "auto";
+type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 type ActiveMemoryPromptStyle =
   | "balanced"
   | "strict"
@@ -358,6 +367,7 @@ export {
   DEFAULT_RECENT_ASSISTANT_TURNS,
   DEFAULT_RECENT_USER_CHARS,
   DEFAULT_RECENT_USER_TURNS,
+  DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS,
   DEFAULT_SETUP_GRACE_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_TRANSCRIPT_DIR,
@@ -394,6 +404,7 @@ export type {
   ActiveRecallResult,
   CachedActiveRecallResult,
   CircuitBreakerEntry,
+  ConversationRecallContext,
   PluginDebugEntry,
   RecallSubagentResult,
   ResolvedActiveRecallPluginConfig,
