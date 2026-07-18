@@ -15,6 +15,11 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
+  shouldDetachChildForProcessTree,
+  signalChildProcessTree,
+} from "../process/child-process-tree.js";
+import { killProcessTree } from "../process/kill-tree.js";
+import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
   resolveAcpClientSpawnInvocation,
@@ -27,6 +32,7 @@ type AcpClientOptions = {
   serverCommand?: string;
   serverArgs?: string[];
   serverVerbose?: boolean;
+  setupTimeoutMs?: number;
   verbose?: boolean;
 };
 
@@ -35,6 +41,58 @@ type AcpClientHandle = {
   agent: ChildProcess;
   sessionId: string;
 };
+
+const ACP_CLIENT_SETUP_TIMEOUT_MS = 30_000;
+const ACP_CLIENT_TERMINATION_GRACE_MS = 500;
+const ACP_CLIENT_FORCE_KILL_WAIT_MS = 500;
+
+type AcpClientSetupPhase = "initialization" | "session creation";
+
+function isAgentRunning(agent: ChildProcess): boolean {
+  return agent.exitCode === null && agent.signalCode === null;
+}
+
+function waitForAgentClose(agent: ChildProcess, timeoutMs: number): Promise<void> {
+  if (!isAgentRunning(agent)) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      agent.off("close", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    agent.once("close", finish);
+  });
+}
+
+async function terminateAcpAgent(agent: ChildProcess): Promise<void> {
+  if (!isAgentRunning(agent)) {
+    return;
+  }
+
+  try {
+    agent.stdin?.end();
+  } catch {
+    // Best-effort pipe cleanup before terminating the owned process tree.
+  }
+
+  if (agent.pid) {
+    killProcessTree(agent.pid, {
+      graceMs: ACP_CLIENT_TERMINATION_GRACE_MS,
+      detached: shouldDetachChildForProcessTree(),
+    });
+  } else {
+    agent.kill("SIGTERM");
+  }
+
+  await waitForAgentClose(agent, ACP_CLIENT_TERMINATION_GRACE_MS + ACP_CLIENT_FORCE_KILL_WAIT_MS);
+  if (isAgentRunning(agent)) {
+    signalChildProcessTree(agent, "SIGKILL");
+    await waitForAgentClose(agent, ACP_CLIENT_FORCE_KILL_WAIT_MS);
+  }
+}
 
 function toArgs(value: string[] | string | undefined): string[] {
   if (!value) {
@@ -138,6 +196,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   const agent = spawn(spawnInvocation.command, spawnInvocation.args, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
+    detached: shouldDetachChildForProcessTree(),
     env: spawnEnv,
     shell: spawnInvocation.shell,
     windowsHide: spawnInvocation.windowsHide,
@@ -163,27 +222,60 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
     stream,
   );
 
-  log("initializing");
-  await client.initialize({
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: {
-      fs: { readTextFile: true, writeTextFile: true },
-      terminal: true,
-    },
-    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
-  });
+  const setupTimeoutMs = opts.setupTimeoutMs ?? ACP_CLIENT_SETUP_TIMEOUT_MS;
+  let setupPhase: AcpClientSetupPhase = "initialization";
+  let setupTimer: NodeJS.Timeout | undefined;
+  try {
+    // One deadline covers both setup RPCs so a slow initialize cannot consume a fresh
+    // full timeout before session creation. Closing the child is required because the
+    // ACP SDK's request cancellation remains cooperative when a peer stops responding.
+    const setupTimeout = new Promise<never>((_resolve, reject) => {
+      setupTimer = setTimeout(() => {
+        reject(
+          new Error(
+            `ACP client setup timed out during ${setupPhase} after ${String(setupTimeoutMs)}ms`,
+          ),
+        );
+      }, setupTimeoutMs);
+    });
+    const setup = (async () => {
+      log("initializing");
+      await client.initialize({
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: true },
+          terminal: true,
+        },
+        clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
+      });
 
-  log("creating session");
-  const session = await client.newSession({
-    cwd,
-    mcpServers: [],
-  });
+      setupPhase = "session creation";
+      log("creating session");
+      return await client.newSession({
+        cwd,
+        mcpServers: [],
+      });
+    })();
+    // Terminating a timed-out agent rejects the still-pending SDK request after the race settles.
+    void setup.catch(() => {});
 
-  return {
-    client,
-    agent,
-    sessionId: session.sessionId,
-  };
+    const session = await Promise.race([setup, setupTimeout]);
+
+    return {
+      client,
+      agent,
+      sessionId: session.sessionId,
+    };
+  } catch (err) {
+    await terminateAcpAgent(agent).catch((cleanupErr: unknown) => {
+      log(`setup cleanup failed: ${String(cleanupErr)}`);
+    });
+    throw err;
+  } finally {
+    if (setupTimer) {
+      clearTimeout(setupTimer);
+    }
+  }
 }
 
 /** Starts the terminal prompt loop for a local ACP client session. */
@@ -194,6 +286,31 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
     input: process.stdin,
     output: process.stdout,
   });
+
+  // The server runs in its own process group so setup failures can terminate descendants.
+  // Handle terminal shutdown while the event loop is live; Windows tree cleanup starts taskkill.
+  const shutdownSignals = [
+    { signal: "SIGHUP", exitCode: 129 },
+    { signal: "SIGINT", exitCode: 130 },
+    { signal: "SIGTERM", exitCode: 143 },
+  ] as const;
+  const shutdownHandlers: Array<{ signal: NodeJS.Signals; handler: () => void }> = [];
+  const removeShutdownHandlers = () => {
+    for (const { signal, handler } of shutdownHandlers) {
+      process.off(signal, handler);
+    }
+  };
+  for (const { signal, exitCode } of shutdownSignals) {
+    const handler = () => {
+      removeShutdownHandlers();
+      signalChildProcessTree(agent, "SIGTERM");
+      rl.close();
+      process.exit(exitCode);
+    };
+    process.once(signal, handler);
+    shutdownHandlers.push({ signal, handler });
+  }
+  agent.once("exit", removeShutdownHandlers);
 
   console.log("OpenClaw ACP client");
   console.log(`Session: ${sessionId}`);
@@ -208,7 +325,8 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
           return;
         }
         if (text === "exit" || text === "quit") {
-          agent.kill();
+          removeShutdownHandlers();
+          signalChildProcessTree(agent, "SIGTERM");
           rl.close();
           process.exit(0);
         }
