@@ -808,7 +808,7 @@ export function listSessionStateWatchTargets(
         .selectFrom("session_watch_cursors")
         .select("target_session_key")
         .where("watcher_session_key", "=", watcherSessionKey),
-    );
+    ).rows;
     return new Set(rows.map((row) => row.target_session_key));
   } catch (error) {
     log.warn(`failed to list session state watch targets: ${String(error)}`);

@@ -2,7 +2,12 @@
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import { classifySessionKind } from "./classify-session-kind.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
@@ -33,18 +38,25 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
   return !isSubagentSessionKey(watcherSessionKey);
 }
 
-function isGroupActivityTarget(targetSessionKey: string): boolean {
-  if (isSubagentSessionKey(targetSessionKey)) {
+function isAmbientMainGroupNotice(params: {
+  watcherSessionKey: string;
+  targetSessionKey: string;
+}): boolean {
+  if (isSubagentSessionKey(params.targetSessionKey)) {
     return false;
   }
-  if (classifySessionKind(targetSessionKey) === "group") {
+  const targetAgentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
+  if (params.watcherSessionKey !== buildAgentMainSessionKey({ agentId: targetAgentId })) {
+    return false;
+  }
+  if (classifySessionKind(params.targetSessionKey) === "group") {
     return true;
   }
   try {
     return (
       classifySessionKind(
-        targetSessionKey,
-        loadSessionEntry({ sessionKey: targetSessionKey, clone: false }),
+        params.targetSessionKey,
+        loadSessionEntry({ sessionKey: params.targetSessionKey, clone: false }),
       ) === "group"
     );
   } catch {
@@ -67,7 +79,7 @@ export function enqueueSessionStateNotice(params: {
   targetSessionKey: string;
   lastSeenSequence: number;
 }): void {
-  const groupActivity = isGroupActivityTarget(params.targetSessionKey);
+  const groupActivity = isAmbientMainGroupNotice(params);
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,

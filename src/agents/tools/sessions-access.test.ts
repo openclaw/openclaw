@@ -11,7 +11,10 @@ import {
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
-import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
+import {
+  listSessionStateWatchTargets,
+  registerSessionStateWatch,
+} from "../../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
@@ -231,19 +234,25 @@ describe("createSessionVisibilityGuard", () => {
   it("allows watched group reads under tree while denying unwatched peers", () => {
     const tempDirs: string[] = [];
     const stateDir = makeTempDir(tempDirs, "openclaw-session-visibility-");
+    closeOpenClawStateDatabaseForTest();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
       const requesterSessionKey = "agent:main:main";
       const watchedSessionKey = "agent:main:telegram:group:watched";
-      registerSessionStateWatch({
-        watcherSessionKey: requesterSessionKey,
-        targetSessionKey: watchedSessionKey,
-      });
+      expect(
+        registerSessionStateWatch({
+          watcherSessionKey: requesterSessionKey,
+          targetSessionKey: watchedSessionKey,
+        }),
+      ).toBe(true);
       const crossAgentSessionKey = "agent:ops:telegram:group:watched";
       registerSessionStateWatch({
         watcherSessionKey: requesterSessionKey,
         targetSessionKey: crossAgentSessionKey,
       });
+      expect(listSessionStateWatchTargets(requesterSessionKey)).toEqual(
+        new Set([watchedSessionKey, crossAgentSessionKey]),
+      );
       const guard = createSessionVisibilityRowChecker({
         action: "history",
         requesterSessionKey,
@@ -263,6 +272,18 @@ describe("createSessionVisibilityGuard", () => {
         status: "forbidden",
         error:
           "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+      });
+      const sendGuard = createSessionVisibilityRowChecker({
+        action: "send",
+        requesterSessionKey,
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
+      });
+      expect(sendGuard.check({ key: watchedSessionKey })).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session send visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
       });
     } finally {
       closeOpenClawStateDatabaseForTest();

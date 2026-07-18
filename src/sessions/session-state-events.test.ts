@@ -604,6 +604,35 @@ describe("session state events", () => {
     expect(wakes).not.toHaveBeenCalled();
   });
 
+  it("keeps explicit A2A group watches on the immediate wake path", async () => {
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    const coordinator = "agent:main:coordinator";
+    registerSessionStateWatch(
+      { watcherSessionKey: coordinator, targetSessionKey: group },
+      database,
+    );
+
+    recordSessionHumanDirectMessage(
+      {
+        sessionKey: group,
+        entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
+        agentId: "main",
+        actor: { actorType: "human", actorId: "human-1" },
+        channel: "telegram",
+      },
+      database,
+    );
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(peekSystemEventEntries(coordinator)).toHaveLength(1);
+    expect(wakes).toHaveBeenCalledTimes(1);
+  });
+
   it("gates unparented human turns on registered watchers", () => {
     const database = createDatabaseOptions();
     const entry = { sessionId: "session-child", updatedAt: Date.now() };
