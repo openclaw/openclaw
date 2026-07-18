@@ -696,6 +696,92 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   ]);
 });
 
+test.each([undefined, "main"])(
+  "sessions.create parents dashboard sessions to agent main when dmScope is %s",
+  async (dmScope) => {
+    await createSessionStoreDir();
+    testState.sessionConfig = dmScope ? { dmScope } : undefined;
+
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: { parentSessionKey?: string };
+    }>("sessions.create", { agentId: "main" });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  },
+);
+
+test("sessions.create preserves an explicit parent under main dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      "agent:main:explicit-parent": sessionStoreEntry("sess-explicit-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:explicit-parent",
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+
+  const reused = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    key: created.payload?.key,
+  });
+
+  expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
+  expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+});
+
+test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "per-channel-peer" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create leaves dashboard sessions unparented under global session scope", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main", scope: "global" };
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create does not parent the main session to itself", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { parentSessionKey?: string };
+  }>("sessions.create", { agentId: "main", key: "main" });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toBe("agent:main:main");
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+});
+
 test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };

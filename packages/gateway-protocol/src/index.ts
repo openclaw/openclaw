@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export * from "./session-icon.js";
 export * from "./terminal-validators.js";
 export {
   validateApprovalGetResult,
@@ -357,6 +358,7 @@ import {
   SendParamsSchema,
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
+  SessionBranchSchema,
   SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
   SessionsCleanupParamsSchema,
@@ -364,6 +366,10 @@ import {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionsBranchesListParamsSchema,
+  SessionsBranchesListResultSchema,
+  SessionsBranchesSwitchParamsSchema,
+  SessionsBranchesSwitchResultSchema,
   SessionsForkParamsSchema,
   SessionsForkResultSchema,
   SessionsRewindParamsSchema,
@@ -724,6 +730,8 @@ export const validateSessionsCompactionBranchParams = lazyCompile(
 export const validateSessionsCompactionRestoreParams = lazyCompile(
   SessionsCompactionRestoreParamsSchema,
 );
+export const validateSessionsBranchesListParams = lazyCompile(SessionsBranchesListParamsSchema);
+export const validateSessionsBranchesSwitchParams = lazyCompile(SessionsBranchesSwitchParamsSchema);
 export const validateSessionsRewindParams = lazyCompile(SessionsRewindParamsSchema);
 export const validateSessionsForkParams = lazyCompile(SessionsForkParamsSchema);
 export const validateSessionsUsageParams = lazyCompile(SessionsUsageParamsSchema);
@@ -1077,6 +1085,11 @@ export {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionBranchSchema,
+  SessionsBranchesListParamsSchema,
+  SessionsBranchesListResultSchema,
+  SessionsBranchesSwitchParamsSchema,
+  SessionsBranchesSwitchResultSchema,
   SessionsForkParamsSchema,
   SessionsForkResultSchema,
   SessionsRewindParamsSchema,
@@ -1686,6 +1699,11 @@ export type {
   SessionsReclaimParams,
   SessionsReclaimResult,
   SessionsCreateResult,
+  SessionBranch,
+  SessionsBranchesListParams,
+  SessionsBranchesListResult,
+  SessionsBranchesSwitchParams,
+  SessionsBranchesSwitchResult,
   SessionsForkParams,
   SessionsForkResult,
   SessionsRewindParams,

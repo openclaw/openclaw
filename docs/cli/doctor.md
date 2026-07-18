@@ -10,7 +10,7 @@ title: "Doctor"
 
 Health checks and quick fixes for the gateway, channels, plugins, skills, model routing, local state, and config migrations. Use it whenever something is not behaving as expected and you want one command to explain what is wrong.
 
-When Gateway status reports SecretRef owners isolated during cold startup, doctor prints a **Secret runtime degradation** warning with every cold owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.
+When Gateway status reports degraded SecretRef owners, doctor prints a **Secret runtime degradation** warning with every cold or stale owner, affected config path, redacted reason, and the `openclaw secrets reload` retry command.
 
 Related:
 

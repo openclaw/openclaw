@@ -212,6 +212,12 @@ export interface SessionTranscriptFtsIdx {
   term: string;
 }
 
+export interface SessionTranscriptGenerations {
+  generation: string;
+  session_id: string;
+  updated_at: number;
+}
+
 export interface SessionTranscriptIndexState {
   active_event_count: Generated<number>;
   active_message_count: Generated<number>;
@@ -309,6 +315,7 @@ export interface DB {
   session_transcript_fts_data: SessionTranscriptFtsData;
   session_transcript_fts_docsize: SessionTranscriptFtsDocsize;
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
+  session_transcript_generations: SessionTranscriptGenerations;
   session_transcript_index_state: SessionTranscriptIndexState;
   sessions: Sessions;
   state_leases: StateLeases;

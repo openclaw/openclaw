@@ -1180,6 +1180,28 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("preserves user-authored bang commands through the normal composer send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "bang-command-run", status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "!pwd",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "!pwd", sessionKey: "agent:main" }),
+    );
+    expect(host.chatMessage).toBe("");
+  });
+
   it.each(["stop", "esc", "abort", "wait", "exit"])(
     "sends the idle conversational word %s as a normal message",
     async (message) => {
@@ -1259,7 +1281,7 @@ describe("handleSendChat", () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
-    const createChatSession = vi.fn();
+    const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "restore me",
@@ -1282,7 +1304,7 @@ describe("handleSendChat", () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
-    const createChatSession = vi.fn();
+    const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/new",
@@ -1298,8 +1320,22 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("restores typed /new when session creation is cancelled", async () => {
+    const createChatSession = vi.fn(async () => false);
+    const host = makeHost({
+      chatMessage: "/new",
+      sessionKey: "agent:main",
+      createChatSession,
+    });
+
+    await handleSendChat(host);
+
+    expect(createChatSession).toHaveBeenCalledOnce();
+    expect(host.chatMessage).toBe("/new");
+  });
+
   it("does not queue typed /new behind an active run", async () => {
-    const createChatSession = vi.fn();
+    const createChatSession = vi.fn(async () => true);
     const host = makeHost({
       chatMessage: "/new",
       chatRunId: "run-main",
@@ -3884,6 +3920,40 @@ describe("handleSendChat", () => {
       stopPeer();
       stopHost();
     }
+  });
+
+  it("returns a confirmed clear to waiting-idle when a run starts during the dialog", async () => {
+    const confirmation = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "clear-confirmation-race",
+      text: "/clear",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "clear",
+      sessionKey: "agent:main",
+    };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+      confirmConversationReset: vi.fn(async () => await confirmation.promise),
+    });
+    const reset = vi.spyOn(host.sessions, "reset");
+    admitHostQueueItems(host);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() => expect(host.chatQueue[0]?.sendState).toBe("executing-command"));
+    host.chatRunId = "run-started-during-confirmation";
+    confirmation.resolve(true);
+    await draining;
+
+    expect(host.chatQueue[0]?.sendState).toBe("waiting-idle");
+    expect(reset).not.toHaveBeenCalled();
   });
 
   it("retires a queued local command without applying its late result after a route switch", async () => {

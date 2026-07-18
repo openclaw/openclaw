@@ -634,6 +634,13 @@ select {
   color: inherit;
 }
 
+/* One accent for every native check control; without this, surfaces that
+   forget a local override render the browser's stock blue. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
 input,
 textarea,
 [contenteditable]:not([contenteditable="false"]) {

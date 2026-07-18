@@ -4,7 +4,7 @@
   "openclaw": {
     "schemaVersions": {
       "state": 4,
-      "agent": 12
+      "agent": 13
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1167,6 +1167,10 @@
     "./plugin-sdk/persistent-dedupe": {
       "types": "./dist/plugin-sdk/persistent-dedupe.d.ts",
       "default": "./dist/plugin-sdk/persistent-dedupe.js"
+    },
+    "./plugin-sdk/ingress-effect-once": {
+      "types": "./dist/plugin-sdk/ingress-effect-once.d.ts",
+      "default": "./dist/plugin-sdk/ingress-effect-once.js"
     },
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",

@@ -5268,6 +5268,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let agentid: String?
     public let label: AnyCodable?
     public let category: AnyCodable?
+    public let icon: AnyCodable?
     public let archived: Bool?
     public let pinned: Bool?
     public let unread: Bool?
@@ -5299,6 +5300,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         agentid: String? = nil,
         label: AnyCodable? = nil,
         category: AnyCodable? = nil,
+        icon: AnyCodable? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
         unread: Bool? = nil,
@@ -5329,6 +5331,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.category = category
+        self.icon = icon
         self.archived = archived
         self.pinned = pinned
         self.unread = unread
@@ -5361,6 +5364,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case category
+        case icon
         case archived
         case pinned
         case unread

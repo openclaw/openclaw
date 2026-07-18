@@ -1181,6 +1181,7 @@ class SessionsPage extends OpenClawLightDomElement {
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
+          icon: row.icon,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
@@ -1217,6 +1218,9 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });
+              break;
+            case "set-icon":
+              void this.patchSession(row.key, { icon: action.icon });
               break;
             case "toggle-unread":
               void this.patchSession(row.key, { unread: row.unread !== true });
