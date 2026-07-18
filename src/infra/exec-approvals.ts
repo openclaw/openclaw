@@ -1092,10 +1092,20 @@ export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
 type ExecApprovalsSyncLock = {
   descriptor: number;
   lockPath: string;
-  device: number;
-  inode: number;
+  nonce: string;
   raw: string;
 };
+
+const HELD_EXEC_APPROVALS_SYNC_LOCKS = resolveGlobalMap<
+  string,
+  { lock: ExecApprovalsSyncLock; depth: number }
+>(Symbol.for("openclaw.heldExecApprovalsSyncLocks"));
+
+export function resetExecApprovalsSyncLockStateForTest(): void {
+  for (const key of HELD_EXEC_APPROVALS_SYNC_LOCKS.keys()) {
+    HELD_EXEC_APPROVALS_SYNC_LOCKS.delete(key);
+  }
+}
 
 function readLockPayload(raw: string): Record<string, unknown> | null {
   try {
@@ -1142,23 +1152,34 @@ function removeOwnedExecApprovalsLock(
   lock: ExecApprovalsSyncLock,
   options: { requirePayloadMatch: boolean },
 ): void {
+  const held = HELD_EXEC_APPROVALS_SYNC_LOCKS.get(lock.lockPath);
+  if (held && held.depth > 1) {
+    held.depth -= 1;
+    return;
+  }
   try {
-    const current = fs.lstatSync(lock.lockPath);
-    if (
-      current.dev === lock.device &&
-      current.ino === lock.inode &&
-      (!options.requirePayloadMatch || fs.readFileSync(lock.lockPath, "utf8") === lock.raw)
-    ) {
+    const currentRaw = fs.readFileSync(lock.lockPath, "utf8");
+    const currentPayload = readLockPayload(currentRaw);
+    const nonceMatch =
+      currentPayload?.nonce === lock.nonce ||
+      (!options.requirePayloadMatch && currentRaw === lock.raw);
+    if (nonceMatch) {
       fs.rmSync(lock.lockPath, { force: true });
     }
   } catch {
     // Best-effort release; a changed path belongs to another lock owner.
   }
+  HELD_EXEC_APPROVALS_SYNC_LOCKS.delete(lock.lockPath);
 }
 
 function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
   const normalizedTarget = resolveCanonicalExecApprovalsTarget(filePath);
   const lockPath = `${normalizedTarget}.lock`;
+  const held = HELD_EXEC_APPROVALS_SYNC_LOCKS.get(lockPath);
+  if (held) {
+    held.depth += 1;
+    return held.lock;
+  }
   const payload: Record<string, unknown> = {
     pid: process.pid,
     createdAt: new Date().toISOString(),
@@ -1197,22 +1218,16 @@ function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
         lockPath,
       });
     }
-    let stat: fs.Stats;
-    try {
-      stat = fs.fstatSync(descriptor);
-    } catch (err) {
-      fs.closeSync(descriptor);
-      throw err;
-    }
+    const nonce = payload.nonce as string;
     const lock: ExecApprovalsSyncLock = {
       descriptor,
       lockPath,
-      device: stat.dev,
-      inode: stat.ino,
+      nonce,
       raw,
     };
     try {
       fs.writeFileSync(descriptor, raw, "utf8");
+      HELD_EXEC_APPROVALS_SYNC_LOCKS.set(lockPath, { lock, depth: 1 });
       return lock;
     } catch (err) {
       fs.closeSync(descriptor);
@@ -1225,10 +1240,14 @@ function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
 
 function withExecApprovalsLockSync<T>(fn: () => T): T {
   const lock = acquireExecApprovalsLockSync(resolveExecApprovalsPath());
+  const held = HELD_EXEC_APPROVALS_SYNC_LOCKS.get(lock.lockPath);
+  const isOutermost = held?.depth === 1;
   try {
     return fn();
   } finally {
-    fs.closeSync(lock.descriptor);
+    if (isOutermost) {
+      fs.closeSync(lock.descriptor);
+    }
     removeOwnedExecApprovalsLock(lock, { requirePayloadMatch: true });
   }
 }
