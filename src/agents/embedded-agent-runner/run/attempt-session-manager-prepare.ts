@@ -32,7 +32,7 @@ type CompactionPersistenceGuard = Pick<
   "withCompactionPersistence"
 >;
 
-export function buildCompactionPersistenceGuard(params: {
+function buildCompactionPersistenceGuard(params: {
   sessionFile: string;
   sessionLockController: Pick<EmbeddedAttemptSessionLockController, "withOwnedSessionFileWrite">;
 }): CompactionPersistenceGuard {
