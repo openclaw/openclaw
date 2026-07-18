@@ -69,6 +69,8 @@ function createQuickChatHarness(): Record<string, any> {
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
   const elements = new Map();
+  const invokeCalls: string[] = [];
+  const timers: Array<() => void> = [];
   let resolveSend;
   const sendResult = new Promise((resolve) => {
     resolveSend = resolve;
@@ -77,6 +79,7 @@ function createQuickChatHarness(): Record<string, any> {
     __TAURI__: {
       core: {
         invoke(method: string) {
+          invokeCalls.push(method);
           return method === "quickchat_send" ? sendResult : Promise.resolve(null);
         },
       },
@@ -87,7 +90,10 @@ function createQuickChatHarness(): Record<string, any> {
     requestAnimationFrame(callback: () => void) {
       callback();
     },
-    setTimeout: () => 1,
+    setTimeout: (callback: () => void) => {
+      timers.push(callback);
+      return timers.length;
+    },
   };
   const document = {
     body: createFakeElement(),
@@ -100,7 +106,7 @@ function createQuickChatHarness(): Record<string, any> {
       return elements.get(selector);
     },
   };
-  const browserContext: Record<string, any> = { document, window };
+  const browserContext: Record<string, any> = { document, invokeCalls, timers, window };
   vm.runInNewContext(
     `${quickchatSource.slice(0, browserBindingsEnd)}
 this.harness = {
@@ -109,6 +115,13 @@ this.harness = {
   requestHide,
   setGatewayUp() { gatewayState = "up"; },
   setMessage(value) { elements.input.value = value; },
+  quickchatSendCount() { return invokeCalls.filter((method) => method === "quickchat_send").length; },
+  runTimers() {
+    const callbacks = timers.splice(0);
+    for (const callback of callbacks) {
+      callback();
+    }
+  },
   pendingCount() { return pendingChatEvents.length; },
   activeRunId() { return activeReply?.runId ?? null; },
   replyText() { return elements.replyText.textContent; },
@@ -246,6 +259,31 @@ test("pre-ack frames replay once for only the acknowledged run", async () => {
     deltaText: "!",
   });
   assert.equal(harness.replyText(), "right!");
+});
+
+test("active streaming reply blocks duplicate programmatic sends", async () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage("hello");
+  const sending = harness.send(false);
+  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "right-run" });
+  await sending;
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "right-run",
+    state: "delta",
+    deltaText: "partial",
+  });
+  harness.runTimers();
+  assert.equal(harness.quickchatSendCount(), 1);
+
+  harness.setMessage("second");
+  await harness.send(false);
+
+  assert.equal(harness.quickchatSendCount(), 1);
+  assert.equal(harness.activeRunId(), "right-run");
+  assert.equal(harness.replyText(), "partial");
 });
 
 test("hiding clears buffered pre-ack frames", async () => {

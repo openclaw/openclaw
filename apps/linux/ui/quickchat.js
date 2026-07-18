@@ -143,13 +143,17 @@ function setGatewayState(payload) {
 
 function updateSendButton() {
   const empty = !elements.input.value.trim();
-  const streaming = activeReply !== null && !activeReply.terminal;
+  const streaming = replyStreaming();
   elements.send.disabled =
     gatewayState !== "up" || empty || selectingAgent || sending || accepted || streaming;
   elements.send.classList.toggle("sending", sending);
   elements.send.classList.toggle("accepted", accepted);
   elements.sendIcon.textContent = sending ? "" : accepted ? "✓" : "↑";
   elements.input.readOnly = sending || accepted || streaming;
+}
+
+function replyStreaming() {
+  return activeReply !== null && !activeReply.terminal;
 }
 
 function nameHue(name) {
@@ -587,7 +591,7 @@ function reveal() {
 
 async function send(openDashboard) {
   const message = elements.input.value.trim();
-  if (gatewayState !== "up" || !message || selectingAgent || sending || accepted) {
+  if (gatewayState !== "up" || !message || selectingAgent || sending || accepted || replyStreaming()) {
     return;
   }
   sending = true;
