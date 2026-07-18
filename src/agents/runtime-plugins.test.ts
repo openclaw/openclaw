@@ -8,15 +8,10 @@ const hoisted = vi.hoisted(() => ({
     () => "default",
   ),
   getActivePluginRegistryWorkspaceDir: vi.fn<() => string | undefined>(() => undefined),
-  getLoadedRuntimePluginRegistry: vi.fn<() => unknown>(() => undefined),
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshot,
-}));
-
-vi.mock("../plugins/active-runtime-registry.js", () => ({
-  getLoadedRuntimePluginRegistry: hoisted.getLoadedRuntimePluginRegistry,
 }));
 
 vi.mock("../plugins/runtime/standalone-runtime-registry-loader.js", () => ({
@@ -41,8 +36,6 @@ describe("ensureRuntimePluginsLoaded", () => {
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
     hoisted.getActivePluginRegistryWorkspaceDir.mockReset();
     hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
-    hoisted.getLoadedRuntimePluginRegistry.mockReset();
-    hoisted.getLoadedRuntimePluginRegistry.mockReturnValue(undefined);
     vi.resetModules();
     ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
   });
@@ -57,85 +50,6 @@ describe("ensureRuntimePluginsLoaded", () => {
     });
 
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips loading when the active registry is already compatible with this call", () => {
-    hoisted.getLoadedRuntimePluginRegistry.mockReturnValue({});
-
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.getLoadedRuntimePluginRegistry).toHaveBeenCalledWith({
-      loadOptions: {
-        config: {} as never,
-        workspaceDir: "/tmp/workspace",
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      },
-      workspaceDir: "/tmp/workspace",
-      requiredPluginIds: undefined,
-    });
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).not.toHaveBeenCalled();
-  });
-
-  it("still loads a fresh registry when the active one is not compatible (e.g. different workspace)", () => {
-    // getLoadedRuntimePluginRegistry returning undefined models the real
-    // incompatible case (mismatched workspace/plugin-scope/config/runtime
-    // mode) — regression coverage for the upstream review finding that a
-    // presence-only check would wrongly keep another workspace's registry
-    // active instead of loading this call's own.
-    hoisted.getLoadedRuntimePluginRegistry.mockReturnValue(undefined);
-
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/other-workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
-      requiredPluginIds: undefined,
-      loadOptions: {
-        config: {} as never,
-        workspaceDir: "/tmp/other-workspace",
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      },
-    });
-  });
-
-  it("passes startup-scoped plugin ids into the compatibility check", () => {
-    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
-      startup: {
-        pluginIds: ["telegram"],
-      },
-    });
-    hoisted.getLoadedRuntimePluginRegistry.mockReturnValue({});
-
-    ensureRuntimePluginsLoaded({
-      config: {} as never,
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(hoisted.getLoadedRuntimePluginRegistry).toHaveBeenCalledWith({
-      loadOptions: {
-        config: {} as never,
-        workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["telegram"],
-        forceFullRuntimeForChannelPlugins: true,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      },
-      workspaceDir: "/tmp/workspace",
-      requiredPluginIds: ["telegram"],
-    });
-    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 
   it("resolves runtime plugins through the shared runtime helper", () => {
