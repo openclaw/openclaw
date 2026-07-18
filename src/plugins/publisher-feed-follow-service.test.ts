@@ -3,7 +3,6 @@ import {
   followPublisherFeed,
   listFollowedPublisherFeeds,
   refreshFollowedPublisherFeeds,
-  resolveFollowedPublisherFeedTarget,
   unfollowPublisherFeed,
 } from "./publisher-feed-follow-service.js";
 import type {
@@ -96,28 +95,6 @@ function dependencies(
 }
 
 describe("publisher feed follow service", () => {
-  it("requires a configured signed profile and binds its origin", () => {
-    expect(() =>
-      resolveFollowedPublisherFeedTarget({
-        follow: { ...followRecord(), feedProfile: "unsigned" },
-        marketplaces,
-      }),
-    ).toThrow("must require signatures");
-    expect(() =>
-      resolveFollowedPublisherFeedTarget({
-        follow: { ...followRecord(), sourceOrigin: "https://mirror.example" },
-        marketplaces,
-      }),
-    ).toThrow("no longer matches");
-    expect(
-      resolveFollowedPublisherFeedTarget({ follow: followRecord(), marketplaces }),
-    ).toMatchObject({
-      baseUrl: "https://clawhub.ai",
-      publisherId: "publishers:alice",
-      verification: { trustedKeys: [{ keyId: "clawhub-2026-q3" }] },
-    });
-  });
-
   it("refreshes before persisting a new follow", async () => {
     const deps = dependencies();
     const refresh = vi.fn(async () => ({

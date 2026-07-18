@@ -26,7 +26,7 @@ export type TrustedFeedSigningKey = {
   publicKey: string;
 };
 
-export type SignedFeedEnvelopePayloadVerificationResult =
+type SignedFeedEnvelopePayloadVerificationResult =
   | {
       ok: true;
       payloadType: string;

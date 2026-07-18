@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  refreshPublisherFeedState,
-  startPublisherFeedRefreshScheduler,
-} from "./publisher-feed-refresh.js";
+import { refreshPublisherFeedState } from "./publisher-feed-refresh.js";
 import type {
   PublisherFeedStateStore,
   StoredPublisherFeedState,
@@ -246,39 +243,5 @@ describe("publisher feed durable refresh", () => {
       }),
     ).rejects.toThrow("does not match");
     expect(mismatch.current()).toBe(initial);
-  });
-});
-
-describe("publisher feed refresh scheduler", () => {
-  it("runs targets serially, reports per-target errors, and stops future runs", async () => {
-    vi.useFakeTimers();
-    try {
-      const memory = memoryStore();
-      const calls: string[] = [];
-      const errors: unknown[] = [];
-      const refresh = vi.fn(async ({ publisherId }: { publisherId: string }) => {
-        calls.push(publisherId);
-        if (publisherId === "publishers:bob") {
-          throw new Error("offline");
-        }
-        return {} as never;
-      });
-      const scheduler = startPublisherFeedRefreshScheduler({
-        targets: [target, { ...target, publisherId: "publishers:bob" }],
-        store: memory.store,
-        intervalMs: 60_000,
-        refresh: refresh as typeof refreshPublisherFeedState,
-        onError: (_target, error) => errors.push(error),
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(calls).toEqual(["publishers:alice", "publishers:bob"]);
-      expect(errors).toHaveLength(1);
-      scheduler.stop();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(calls).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

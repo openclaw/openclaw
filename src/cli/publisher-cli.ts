@@ -5,6 +5,7 @@ import {
   followPublisherFeed,
   listFollowedPublisherFeeds,
   refreshFollowedPublisherFeeds,
+  searchPublisherFeed,
   unfollowPublisherFeed,
 } from "../plugins/publisher-feed-follow-service.js";
 import { createSqlitePublisherFeedFollowStore } from "../plugins/publisher-feed-follow-store.js";
@@ -15,6 +16,8 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 type PublisherCommandOptions = {
   feedProfile?: string;
   json?: boolean;
+  kind?: string[];
+  limit?: string;
 };
 
 function createDependencies() {
@@ -46,6 +49,46 @@ export function registerPublisherCli(program: Command): void {
   const publisher = program
     .command("publisher")
     .description("Follow and refresh signed publisher feeds");
+
+  publisher
+    .command("search")
+    .description("Search a signed publisher feed")
+    .argument("<publisher-id>", "Stable publisher id")
+    .argument("[query]", "Search text")
+    .requiredOption("--feed-profile <name>", "Configured signed marketplace feed profile")
+    .option("--kind <kind...>", "Limit results to skill or plugin")
+    .option("--limit <count>", "Maximum result count")
+    .option("--json", "Print JSON")
+    .action(
+      async (publisherId: string, query: string | undefined, opts: PublisherCommandOptions) => {
+        const kinds = opts.kind?.map((kind) => {
+          if (kind !== "skill" && kind !== "plugin") {
+            throw new Error("--kind must be skill or plugin");
+          }
+          return kind;
+        });
+        const limit = opts.limit === undefined ? undefined : Number(opts.limit);
+        const result = await searchPublisherFeed({
+          publisherId,
+          feedProfile: feedProfile(opts),
+          query: {
+            ...(query ? { text: query } : {}),
+            ...(kinds && kinds.length > 0 ? { kinds } : {}),
+          },
+          ...(limit === undefined ? {} : { limit }),
+          deps: createDependencies(),
+        });
+        if (opts.json) {
+          defaultRuntime.writeJson(result);
+          return;
+        }
+        defaultRuntime.log(
+          result.entries
+            .map((entry) => `${theme.command(entry.name)} ${theme.muted(entry.url)}`)
+            .join("\n"),
+        );
+      },
+    );
 
   publisher
     .command("list")

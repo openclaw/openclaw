@@ -50,7 +50,7 @@ export type PublisherFeedVerificationEvidence = {
   threshold: number;
 };
 
-export type PublisherFeedChangesResult =
+type PublisherFeedChangesResult =
   | {
       status: "complete";
       feedId: string;
@@ -83,7 +83,7 @@ export type PublisherFeedSnapshotResult = {
   verification: PublisherFeedVerificationEvidence;
 };
 
-export type PublisherFeedApplyResult =
+type PublisherFeedApplyResult =
   | { status: "applied"; state: PublisherFeedState }
   | {
       status: "reset-required";

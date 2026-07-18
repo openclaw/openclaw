@@ -3,21 +3,26 @@ import type {
   FollowedPublisherFeed,
   PublisherFeedFollowStore,
 } from "./publisher-feed-follow-store.js";
+import type { PublisherFeedQuery } from "./publisher-feed-projections.js";
 import {
   refreshPublisherFeedState,
   type PublisherFeedRefreshResult,
   type PublisherFeedRefreshTarget,
 } from "./publisher-feed-refresh.js";
 import type { PublisherFeedStateStore } from "./publisher-feed-state-store.js";
+import {
+  fetchPublisherFeedQuery,
+  type PublisherFeedQueryResult,
+} from "./publisher-feed-transport.js";
 
-export type PublisherFeedFollowServiceDependencies = {
+type PublisherFeedFollowServiceDependencies = {
   follows: PublisherFeedFollowStore;
   states: PublisherFeedStateStore;
   marketplaces: MarketplacesConfig | undefined;
   refresh?: typeof refreshPublisherFeedState;
 };
 
-export type FollowedPublisherFeedStatus = FollowedPublisherFeed & {
+type FollowedPublisherFeedStatus = FollowedPublisherFeed & {
   acceptedSequence: number | null;
   displayName: string | null;
   verifiedAt: string | null;
@@ -59,7 +64,7 @@ function resolveProfile(params: {
   };
 }
 
-export function resolveFollowedPublisherFeedTarget(params: {
+function resolveFollowedPublisherFeedTarget(params: {
   follow: FollowedPublisherFeed;
   marketplaces: MarketplacesConfig | undefined;
 }): PublisherFeedRefreshTarget {
@@ -118,6 +123,25 @@ export async function followPublisherFeed(params: {
     feedProfile: params.feedProfile,
   });
   return { follow, refresh: refreshed };
+}
+
+export async function searchPublisherFeed(params: {
+  publisherId: string;
+  feedProfile: string;
+  query: PublisherFeedQuery;
+  limit?: number;
+  deps: PublisherFeedFollowServiceDependencies;
+}): Promise<PublisherFeedQueryResult> {
+  const target = resolveProfile({
+    marketplaces: params.deps.marketplaces,
+    profileName: params.feedProfile,
+  });
+  return await fetchPublisherFeedQuery({
+    ...target,
+    publisherId: params.publisherId,
+    query: params.query,
+    ...(params.limit === undefined ? {} : { limit: params.limit }),
+  });
 }
 
 export async function unfollowPublisherFeed(params: {

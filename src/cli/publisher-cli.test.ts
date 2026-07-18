@@ -9,6 +9,7 @@ describe("publisher CLI", () => {
 
     const publisher = program.commands.find((command) => command.name() === "publisher");
     expect(publisher?.commands.map((command) => command.name())).toEqual([
+      "search",
       "list",
       "follow",
       "unfollow",

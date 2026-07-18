@@ -90,7 +90,7 @@ export type PublisherFeedSnapshot = {
   entries: readonly PublisherFeedEntry[];
 };
 
-export type VerifiedPublisherFeedProjection = {
+type VerifiedPublisherFeedProjection = {
   payload:
     | PublisherFeedSnapshot
     | PublisherFeedQueryPage
