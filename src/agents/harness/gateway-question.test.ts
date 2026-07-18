@@ -215,19 +215,49 @@ describe("gateway harness questions", () => {
       questionId: "ask_33333333333333333333333333333333",
     });
 
-    await expect(
-      claimPendingAgentQuestionAnswer({
-        sessionKey: "agent:main:buffered-reply",
-        text: "Continue",
-      }),
-    ).resolves.toBe(true);
+    // The claim settles only after registration commits so a failed request
+    // cannot swallow the reply.
+    const claim = claimPendingAgentQuestionAnswer({
+      sessionKey: "agent:main:buffered-reply",
+      text: "Continue",
+    });
     registration.resolve({ id: "ask_33333333333333333333333333333333" });
+    await expect(claim).resolves.toBe(true);
 
     await expect(run).resolves.toEqual({
       status: "answered",
       answers: { answers: { answer: { answers: ["Continue"] } } },
     });
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("releases a claimed reply when gateway registration fails", async () => {
+    const registration = deferred<{ id: string }>();
+    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
+      if (method === "question.request") {
+        return await registration.promise;
+      }
+      if (method === "question.resolve") {
+        return { status: "cancelled" };
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    };
+    const run = runAgentHarnessGatewayQuestion({
+      questions,
+      sessionKey: "agent:main:failed-registration",
+      timeoutMs: 60_000,
+      gatewayCall,
+      delivery: { onBlockReply: vi.fn() },
+      questionId: "ask_44444444444444444444444444444444",
+    });
+
+    const claim = claimPendingAgentQuestionAnswer({
+      sessionKey: "agent:main:failed-registration",
+      text: "Continue",
+    });
+    registration.reject(new Error("gateway unavailable"));
+    await expect(claim).resolves.toBe(false);
+    await expect(run).rejects.toThrow("gateway unavailable");
   });
 
   it("accepts a later text answer after cancellation fails", async () => {

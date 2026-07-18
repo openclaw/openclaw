@@ -503,11 +503,27 @@ export function createAskUserTool(params: {
       };
 
       try {
+        const registration = Promise.resolve().then(
+          () =>
+            gatewayCall(
+              "question.request",
+              {},
+              {
+                id: questionId,
+                questions: normalized.questions,
+                ...(params.agentId ? { agentId: params.agentId } : {}),
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                timeoutMs,
+              },
+              signal ? { signal } : undefined,
+            ) as Promise<{ id?: unknown }>,
+        );
         state.claim = registerPendingAgentQuestion({
           questionId,
           sessionKey,
           questions: normalized.questions,
           gatewayCall,
+          registration,
           onCancel: () => {
             if (
               askUserQuestions.get(questionId) === state &&
@@ -519,18 +535,7 @@ export function createAskUserTool(params: {
             }
           },
         });
-        const requestResult = (await gatewayCall(
-          "question.request",
-          {},
-          {
-            id: questionId,
-            questions: normalized.questions,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-            timeoutMs,
-          },
-          signal ? { signal } : undefined,
-        )) as { id?: unknown };
+        const requestResult = await registration;
         registered = true;
         if (requestResult.id !== questionId) {
           throw new Error("question.request returned an unexpected question id");

@@ -30,6 +30,7 @@ type PendingAgentQuestion = {
   sessionKey: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall: AgentHarnessQuestionGatewayCall;
+  registration: Promise<unknown>;
   answer?: Promise<QuestionWaitAnswerResult>;
   bufferedAnswers?: AgentHarnessUserInputAnswers;
   cancelRequested: boolean;
@@ -115,6 +116,7 @@ export function registerPendingAgentQuestion(params: {
   sessionKey: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall: AgentHarnessQuestionGatewayCall;
+  registration: Promise<unknown>;
   answer?: Promise<QuestionWaitAnswerResult>;
   onCancel?: (resolvedBy: string) => void;
 }): {
@@ -180,8 +182,22 @@ export async function claimPendingAgentQuestionAnswer(params: {
   }
   const answers = buildAgentHarnessUserInputAnswers(state.questions, params.text);
   if (!state.answer) {
-    state.bufferedAnswers = answers;
-    return true;
+    // A consumed claim must be backed by a registered gateway question; if
+    // registration fails the message returns false so normal steering runs.
+    try {
+      await state.registration;
+    } catch {
+      state.resolving = false;
+      return false;
+    }
+    if (pendingAgentQuestions.get(state.sessionKey) !== state) {
+      state.resolving = false;
+      return false;
+    }
+    if (!state.answer) {
+      state.bufferedAnswers = answers;
+      return true;
+    }
   }
   return await resolvePendingAgentQuestionAnswers(state, answers);
 }
@@ -240,11 +256,27 @@ export async function runAgentHarnessGatewayQuestion(
   }));
   let aborted = false;
   params.signal?.throwIfAborted();
+  const registration = Promise.resolve().then(
+    () =>
+      params.gatewayCall(
+        "question.request",
+        {},
+        {
+          id: questionId,
+          questions,
+          sessionKey: params.sessionKey,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          timeoutMs: params.timeoutMs,
+        },
+        params.signal ? { signal: params.signal } : undefined,
+      ) as Promise<{ id?: unknown }>,
+  );
   const claim = registerPendingAgentQuestion({
     questionId,
     sessionKey: params.sessionKey,
     questions: params.questions,
     gatewayCall: params.gatewayCall,
+    registration,
   });
   const cancel = async (resolvedBy: string): Promise<QuestionWaitAnswerResult | undefined> => {
     try {
@@ -283,18 +315,7 @@ export async function runAgentHarnessGatewayQuestion(
       onAbort();
       params.signal.throwIfAborted();
     }
-    const request = (await params.gatewayCall(
-      "question.request",
-      {},
-      {
-        id: questionId,
-        questions,
-        sessionKey: params.sessionKey,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        timeoutMs: params.timeoutMs,
-      },
-      params.signal ? { signal: params.signal } : undefined,
-    )) as { id?: unknown };
+    const request = await registration;
     if (request.id !== questionId) {
       throw new Error("question.request returned an unexpected question id");
     }
