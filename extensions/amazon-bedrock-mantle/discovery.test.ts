@@ -789,8 +789,8 @@ describe("credential sanitization before IAM token generation", () => {
 
   it("clears whitespace-only static credentials before invoking the token provider", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
-    vi.stubEnv("AWS_SESSION_TOKEN", "token");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "test-aws-secret-access-key");
+    vi.stubEnv("AWS_SESSION_TOKEN", "test-aws-session-token");
     const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
     await generateBearerTokenFromIam({
@@ -804,8 +804,8 @@ describe("credential sanitization before IAM token generation", () => {
   });
 
   it("clears a blank session token without removing valid static keys", async () => {
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "test-access-key-id");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "test-aws-secret-access-key");
     vi.stubEnv("AWS_SESSION_TOKEN", " \t ");
     const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
@@ -814,14 +814,14 @@ describe("credential sanitization before IAM token generation", () => {
       tokenProviderFactory: createTokenProviderFactory(tokenProvider),
     });
 
-    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
-    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("test-access-key-id");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("test-aws-secret-access-key");
     expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
   });
 
   it("clears a blank Bedrock bearer token without removing valid static keys", async () => {
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "test-access-key-id");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "test-aws-secret-access-key");
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
     const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
@@ -830,14 +830,14 @@ describe("credential sanitization before IAM token generation", () => {
       tokenProviderFactory: createTokenProviderFactory(tokenProvider),
     });
 
-    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
-    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("test-access-key-id");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("test-aws-secret-access-key");
     expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
   });
 
   it("preserves valid static credentials", async () => {
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "test-access-key-id");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "test-aws-secret-access-key");
     const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
     await generateBearerTokenFromIam({
@@ -845,8 +845,8 @@ describe("credential sanitization before IAM token generation", () => {
       tokenProviderFactory: createTokenProviderFactory(tokenProvider),
     });
 
-    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
-    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("test-access-key-id");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("test-aws-secret-access-key");
   });
 
   it("does not throw when no AWS credential env vars are set", async () => {

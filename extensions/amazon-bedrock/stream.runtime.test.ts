@@ -77,7 +77,6 @@ async function captureClientRegion(
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
 });
 
 describe("Bedrock tool-result replay", () => {
@@ -340,17 +339,17 @@ describe("Bedrock bearer token resolution", () => {
   });
 
   it("trims configured bearer tokens", async () => {
-    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "env-token");
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "test-aws-bearer-token-bedrock");
     const getConfiguredToken = mockSendAndCaptureToken();
 
-    await runWithBearerToken("  option-token  ");
+    await runWithBearerToken("  test-token  ");
 
-    expect(getConfiguredToken()).toEqual({ token: "option-token" });
+    expect(getConfiguredToken()).toEqual({ token: "test-token" });
   });
 
   it("sanitizes blank static AWS keys to keep the default credential chain available", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "   ");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "test-aws-secret-access-key");
     const getConfiguredToken = mockSendAndCaptureToken();
 
     // No bearer token + blank static keys → sanitization clears them

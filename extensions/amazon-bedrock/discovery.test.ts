@@ -57,7 +57,7 @@ describe("bedrock discovery", () => {
 
   it("sanitizes blank static credentials before creating the discovery client", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "test-aws-secret-access-key");
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
     vi.spyOn(BedrockClient.prototype, "send")
       .mockResolvedValueOnce({ modelSummaries: [] } as never)

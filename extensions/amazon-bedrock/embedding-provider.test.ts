@@ -12,7 +12,7 @@ afterEach(() => {
 describe("Bedrock embedding credentials", () => {
   it("sanitizes blank static credentials before creating the runtime client", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "test-aws-secret-access-key");
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
     vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       body: new TextEncoder().encode('{"embedding":[1,0]}'),
