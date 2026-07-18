@@ -109,11 +109,7 @@ function getProcEnv(key: string): string | undefined {
 }
 
 function getEnvValue(key: string): string | undefined {
-  return getProcessEnv()?.[key] || getProcEnv(key);
-}
-
-function getNonBlankEnvValue(key: string): string | undefined {
-  return getEnvValue(key)?.trim() || undefined;
+  return (getProcessEnv()?.[key] || getProcEnv(key))?.trim() || undefined;
 }
 
 let cachedVertexAdcCredentialsExists: true | null = null;
@@ -216,7 +212,7 @@ export function findEnvKeys(provider: string): string[] | undefined {
     return undefined;
   }
 
-  const found = envVars.filter((envVar) => Boolean(getNonBlankEnvValue(envVar)));
+  const found = envVars.filter((envVar) => Boolean(getEnvValue(envVar)));
   return found.length > 0 ? found : undefined;
 }
 
@@ -228,7 +224,7 @@ export function findEnvKeys(provider: string): string[] | undefined {
 export function getEnvApiKey(provider: string): string | undefined {
   const envKeys = findEnvKeys(provider);
   if (envKeys?.[0]) {
-    return getNonBlankEnvValue(envKeys[0]);
+    return getEnvValue(envKeys[0]);
   }
 
   // Vertex AI supports either an explicit API key or Application Default Credentials.
@@ -236,9 +232,9 @@ export function getEnvApiKey(provider: string): string | undefined {
   if (provider === "google-vertex") {
     const hasCredentials = hasVertexAdcCredentials();
     const hasProject = Boolean(
-      getNonBlankEnvValue("GOOGLE_CLOUD_PROJECT") || getNonBlankEnvValue("GCLOUD_PROJECT"),
+      getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"),
     );
-    const hasLocation = Boolean(getNonBlankEnvValue("GOOGLE_CLOUD_LOCATION"));
+    const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION"));
 
     if (hasCredentials && hasProject && hasLocation) {
       return "<authenticated>";
@@ -254,12 +250,12 @@ export function getEnvApiKey(provider: string): string | undefined {
     // 5. AWS_CONTAINER_CREDENTIALS_FULL_URI - ECS task roles (full URI)
     // 6. AWS_WEB_IDENTITY_TOKEN_FILE - IRSA (IAM Roles for Service Accounts)
     if (
-      getNonBlankEnvValue("AWS_PROFILE") ||
-      (getNonBlankEnvValue("AWS_ACCESS_KEY_ID") && getNonBlankEnvValue("AWS_SECRET_ACCESS_KEY")) ||
-      getNonBlankEnvValue("AWS_BEARER_TOKEN_BEDROCK") ||
-      getNonBlankEnvValue("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ||
-      getNonBlankEnvValue("AWS_CONTAINER_CREDENTIALS_FULL_URI") ||
-      getNonBlankEnvValue("AWS_WEB_IDENTITY_TOKEN_FILE")
+      getEnvValue("AWS_PROFILE") ||
+      (getEnvValue("AWS_ACCESS_KEY_ID") && getEnvValue("AWS_SECRET_ACCESS_KEY")) ||
+      getEnvValue("AWS_BEARER_TOKEN_BEDROCK") ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_FULL_URI") ||
+      getEnvValue("AWS_WEB_IDENTITY_TOKEN_FILE")
     ) {
       return "<authenticated>";
     }

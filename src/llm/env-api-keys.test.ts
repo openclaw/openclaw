@@ -98,22 +98,21 @@ describe("getEnvApiKey", () => {
   });
 
   it("skips blank API keys and trims the selected fallback", async () => {
-    await withEnvAsync(
-      {
-        ANTHROPIC_OAUTH_TOKEN: "  ",
-        ANTHROPIC_API_KEY: "  anthropic-key  ",
-        OPENAI_API_KEY: " \t ",
-      },
-      async () => {
-        vi.resetModules();
-        const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+    const env = {
+      ANTHROPIC_OAUTH_TOKEN: "  ",
+      OPENAI_API_KEY: " \t ",
+    } as NodeJS.ProcessEnv;
+    Reflect.set(env, "ANTHROPIC_API_KEY", "  test-anthropic-key  ");
 
-        expect(findEnvKeys("anthropic")).toEqual(["ANTHROPIC_API_KEY"]);
-        expect(getEnvApiKey("anthropic")).toBe("anthropic-key");
-        expect(findEnvKeys("openai")).toBeUndefined();
-        expect(getEnvApiKey("openai")).toBeUndefined();
-      },
-    );
+    await withEnvAsync(env, async () => {
+      vi.resetModules();
+      const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+      expect(findEnvKeys("anthropic")).toEqual(["ANTHROPIC_API_KEY"]);
+      expect(getEnvApiKey("anthropic")).toBe("test-anthropic-key");
+      expect(findEnvKeys("openai")).toBeUndefined();
+      expect(getEnvApiKey("openai")).toBeUndefined();
+    });
   });
 
   it("does not report blank AWS credential markers as authentication", async () => {
@@ -150,19 +149,18 @@ describe("getEnvApiKey", () => {
     tempDirs.push(dir);
     const credentialsPath = join(dir, "application_default_credentials.json");
     await writeFile(credentialsPath, "{}", "utf-8");
-    await withEnvAsync(
-      {
-        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-        GOOGLE_CLOUD_LOCATION: "  ",
-        GOOGLE_CLOUD_PROJECT: "\t",
-      },
-      async () => {
-        vi.resetModules();
-        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+    const env = {
+      GOOGLE_CLOUD_LOCATION: "  ",
+      GOOGLE_CLOUD_PROJECT: "\t",
+    } as NodeJS.ProcessEnv;
+    Reflect.set(env, "GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
 
-        expect(getEnvApiKey("google-vertex")).toBeUndefined();
-      },
-    );
+    await withEnvAsync(env, async () => {
+      vi.resetModules();
+      const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+      expect(getEnvApiKey("google-vertex")).toBeUndefined();
+    });
   });
 
   it("does not cache missing Google Vertex ADC credentials", async () => {
@@ -184,5 +182,24 @@ describe("getEnvApiKey", () => {
         expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
       },
     );
+  });
+
+  it("trims the Google Vertex credentials path before checking it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-vertex-adc-"));
+    tempDirs.push(dir);
+    const credentialsPath = join(dir, "application_default_credentials.json");
+    await writeFile(credentialsPath, "{}", "utf-8");
+    const env = {
+      GOOGLE_CLOUD_LOCATION: "us-central1",
+      GOOGLE_CLOUD_PROJECT: "vertex-project",
+    } as NodeJS.ProcessEnv;
+    Reflect.set(env, "GOOGLE_APPLICATION_CREDENTIALS", `  ${credentialsPath}  `);
+
+    await withEnvAsync(env, async () => {
+      vi.resetModules();
+      const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+      expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
+    });
   });
 });
