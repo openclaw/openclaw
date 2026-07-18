@@ -24,6 +24,7 @@ import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
+  DEFAULT_SESSION_LIST_QUERY,
   filterSessionRows,
   scopedAgentParamsForSession,
   searchForSession,
@@ -79,8 +80,8 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
   @state() private error: string | null = null;
-  @state() private activeMinutes = "60";
-  @state() private limit = "50";
+  @state() private activeMinutes = "";
+  @state() private limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
   @state() private includeGlobal = true;
   @state() private includeUnknown = false;
   @state() private showArchived = false;
@@ -338,15 +339,15 @@ class SessionsPage extends OpenClawLightDomElement {
     this.showArchived = data.showArchived;
     if (data.expandedSessionKey) {
       this.activeMinutes = "";
-      this.limit = "";
+      this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
       this.includeGlobal = true;
       this.includeUnknown = true;
       this.searchQuery = "";
       this.page = 0;
       this.selectedKeys = new Set();
     } else {
-      this.activeMinutes = "60";
-      this.limit = "50";
+      this.activeMinutes = "";
+      this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
       this.includeGlobal = true;
       this.includeUnknown = false;
     }
@@ -427,8 +428,9 @@ class SessionsPage extends OpenClawLightDomElement {
     const deepLinkKey = this.deepLinkSessionKey;
     const scopeAgentId = this.context?.agentSelection.state.scopeId ?? undefined;
     return {
-      activeMinutes: deepLinkKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
-      limit: deepLinkKey ? 50 : parseFilterInteger(this.limit),
+      activeMinutes:
+        deepLinkKey || this.showArchived ? undefined : parseFilterInteger(this.activeMinutes),
+      limit: deepLinkKey ? DEFAULT_SESSION_LIST_QUERY.limit : parseFilterInteger(this.limit),
       search: deepLinkKey ?? undefined,
       includeGlobal: deepLinkKey ? true : this.includeGlobal,
       includeUnknown: deepLinkKey ? true : this.includeUnknown,
@@ -1318,9 +1320,9 @@ class SessionsPage extends OpenClawLightDomElement {
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
             this.activeMinutes = "";
-            this.limit = "";
+            this.limit = String(DEFAULT_SESSION_LIST_QUERY.limit);
             this.includeGlobal = true;
-            this.includeUnknown = true;
+            this.includeUnknown = false;
             this.showArchived = false;
             this.searchQuery = "";
             this.page = 0;
