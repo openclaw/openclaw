@@ -565,8 +565,8 @@ describe("TUI shutdown safety", () => {
 });
 
 describe("resolveCodexCliBin", () => {
-  it("returns a string path when codex CLI is installed", () => {
-    const result = resolveCodexCliBin();
+  it("returns a string path when codex CLI is installed", async () => {
+    const result = await resolveCodexCliBin();
     // In this test environment codex is installed; verify it returns a non-empty path
     if (result !== null) {
       expect(typeof result).toBe("string");
@@ -575,8 +575,8 @@ describe("resolveCodexCliBin", () => {
     }
   });
 
-  it("returns null or a valid path (never throws)", () => {
-    const result = resolveCodexCliBin();
+  it("returns null or a valid path (never throws)", async () => {
+    const result = await resolveCodexCliBin();
     if (result === null) {
       expect(result).toBeNull();
     } else {

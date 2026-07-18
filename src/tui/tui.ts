@@ -1,5 +1,5 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
@@ -118,17 +119,20 @@ type RunTuiOptions = TuiOptions & {
 };
 
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
-export function resolveCodexCliBin(): string | null {
+export async function resolveCodexCliBin(): Promise<string | null> {
+  const lookupCommand =
+    process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
   try {
-    const lookupCmd =
-      process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
-    // `where` on Windows can return multiple lines; take the first match.
-    const raw = execFileSync(lookupCmd, ["codex"], {
-      encoding: "utf8",
+    const result = await runCommandWithTimeout([lookupCommand, "codex"], {
       killSignal: "SIGKILL",
-      timeout: CODEX_CLI_LOOKUP_TIMEOUT_MS,
-    }).trim();
-    return raw.split(/\r?\n/)[0] || null;
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: CODEX_CLI_LOOKUP_TIMEOUT_MS,
+    });
+    if (result.code !== 0 || result.termination !== "exit") {
+      return null;
+    }
+    // `where` on Windows can return multiple matches; use PATH order.
+    return result.stdout.trim().split(/\r?\n/)[0]?.trim() || null;
   } catch {
     return null;
   }
@@ -1189,18 +1193,18 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const runAuthFlow = isLocalMode
     ? async (params: { provider?: string }) =>
         await withTuiSuspended(
-          async () =>
-            await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
+          async () => {
+            const provider = params.provider?.trim() || undefined;
+
+            // Codex owns its auth store; delegate when the CLI is available.
+            const codexBin =
+              provider === OPENAI_CODEX_PROVIDER ||
+              (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
+                ? await resolveCodexCliBin()
+                : null;
+
+            return await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
               (resolve, reject) => {
-                const provider = params.provider?.trim() || undefined;
-
-                // Codex owns its auth store; delegate when the CLI is available.
-                const codexBin =
-                  provider === OPENAI_CODEX_PROVIDER ||
-                  (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
-                    ? resolveCodexCliBin()
-                    : null;
-
                 let command: string;
                 let args: string[];
                 if (codexBin) {
@@ -1225,7 +1229,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
                   resolve({ exitCode, signal });
                 });
               },
-            ),
+            );
+          },
         )
     : undefined;
 
