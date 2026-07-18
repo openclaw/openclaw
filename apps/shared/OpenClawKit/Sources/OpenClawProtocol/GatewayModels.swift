@@ -26,6 +26,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
+    case forbidden = "FORBIDDEN"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
     case unavailable = "UNAVAILABLE"
 }
