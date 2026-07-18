@@ -106,9 +106,14 @@ export type ChatProps = {
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkVideoCapable?: boolean;
+  realtimeTalkVideoPending?: boolean;
+  realtimeTalkCameraError?: boolean;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
+  disabledActionLabel?: string | null;
+  onDisabledAction?: (() => void) | null;
   error: string | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
@@ -154,7 +159,7 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeVideo?: () => void;
+  onToggleRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -327,6 +332,8 @@ export function renderChat(props: ChatProps) {
     connected: props.connected,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
+    disabledActionLabel: props.disabledActionLabel,
+    onDisabledAction: props.onDisabledAction,
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
@@ -352,6 +359,9 @@ export function renderChat(props: ChatProps) {
     realtimeTalkInputLevel: props.realtimeTalkInputLevel,
     realtimeTalkConversation: props.realtimeTalkConversation,
     realtimeTalkVideoStream: props.realtimeTalkVideoStream,
+    realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
+    realtimeTalkVideoPending: props.realtimeTalkVideoPending,
+    realtimeTalkCameraError: props.realtimeTalkCameraError,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -361,7 +371,7 @@ export function renderChat(props: ChatProps) {
     onSend: props.onSend,
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
-    onToggleRealtimeVideo: props.onToggleRealtimeVideo,
+    onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
@@ -437,7 +447,6 @@ export function renderChat(props: ChatProps) {
         }
       }}
     >
-      ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error
         ? html`
             <div class="callout danger callout--dismissible" role="alert">

@@ -273,6 +273,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  const { repairStaleAgentModelRefs } =
+    await import("./doctor/shared/stale-agent-model-ref-repair.js");
+  const staleAgentModelRepair = repairStaleAgentModelRefs(candidate, { env: process.env });
+  emitDoctorChangesPanel(staleAgentModelRepair.changes, shouldRepair, { sanitize: true });
+  if (staleAgentModelRepair.warnings.length > 0) {
+    emitDoctorNotes({ note, warningNotes: staleAgentModelRepair.warnings });
+  }
+  ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    mutation: staleAgentModelRepair,
+    shouldRepair,
+    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+  }));
+
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
   const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({

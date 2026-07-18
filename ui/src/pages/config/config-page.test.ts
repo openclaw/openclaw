@@ -11,6 +11,7 @@ import type {
 } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
+import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
 function deferred<T>() {
@@ -48,6 +49,28 @@ describe("configSelectionFromSearch", () => {
       activeSubsection: null,
     });
   });
+
+  it("keeps MCP separate from Infrastructure", () => {
+    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
+    expect(configSectionKeysForPage("infrastructure")).toEqual([
+      "gateway",
+      "web",
+      "browser",
+      "nodeHost",
+      "canvasHost",
+      "discovery",
+      "media",
+      "acp",
+    ]);
+    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
+      activeSection: "mcp",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
+      activeSection: "gateway",
+      activeSubsection: null,
+    });
+  });
 });
 
 describe("supportsSystemInfo", () => {
@@ -73,6 +96,10 @@ describe("ConfigPage advanced selection guard", () => {
     });
     expect(configSelectionFromSearch("advanced", "?section=env")).toEqual({
       activeSection: "env",
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
+      activeSection: null,
       activeSubsection: null,
     });
   });

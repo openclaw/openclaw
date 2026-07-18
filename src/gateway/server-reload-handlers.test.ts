@@ -40,7 +40,10 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
+import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
+import { listActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
+import { classifySecretOwnerDegradationState } from "../secrets/runtime-owner-assignments.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -420,6 +423,14 @@ function createManagedRestartSequenceHarness(
     },
   } as OpenClawConfig;
   setRuntimeConfigSnapshot(initialConfig, initialConfig);
+  activateSecretsRuntimeSnapshot({
+    sourceConfig: initialConfig,
+    config: initialConfig,
+    authStores: [],
+    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    warnings: [],
+    webTools: createEmptyRuntimeWebToolsMetadata(),
+  });
   const deferredConfig = {
     gateway: {
       port: 18790,
@@ -3880,7 +3891,7 @@ describe("gateway Gmail hot reload handlers", () => {
       gateway: { reload: { debounceMs: 0 } },
       messages: { visibleReplies: "message_tool" },
     };
-    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) => ({
+    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig, _params: unknown) => ({
       sourceConfig: config,
       config,
       authStores: [],
@@ -3977,6 +3988,9 @@ describe("gateway Gmail hot reload handlers", () => {
     expect(activateRuntimeSecrets).toHaveBeenCalledWith(nextConfig, {
       reason: "reload",
       activate: false,
+      publishFailureAsDegraded: true,
+      canPublishFailureAsDegraded: expect.any(Function),
+      includeAuthStoreRefs: undefined,
     });
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(nextConfig);
     expect(acceptTerminalConfig).toHaveBeenCalledWith({
@@ -3985,6 +3999,380 @@ describe("gateway Gmail hot reload handlers", () => {
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
     expect(commitTerminalConfig).toHaveBeenCalledWith(nextConfig);
     await reloader.stop();
+  });
+
+  it("refreshes owner refs when only the resolved source snapshot changes", async () => {
+    vi.useFakeTimers();
+    const authAgentDir = "/tmp/openclaw-source-only-auth-owner";
+    const authProfileId = "openai:source-only";
+    const authOwnerId = resolveAuthProfileSecretOwnerId({
+      agentDir: authAgentDir,
+      profileId: authProfileId,
+    });
+    const firstRef = { source: "env" as const, provider: "default", id: "TTS_FIRST" };
+    const secondRef = { source: "env" as const, provider: "default", id: "TTS_SECOND" };
+    const thirdRef = { source: "env" as const, provider: "default", id: "TTS_THIRD" };
+    const fourthRef = { source: "env" as const, provider: "default", id: "TTS_FOURTH" };
+    const sourceConfig = (ref: typeof firstRef): OpenClawConfig => ({
+      gateway: { reload: { debounceMs: 0 } },
+      messages: { tts: { providers: { elevenlabs: { apiKey: ref } } } },
+    });
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      messages: { tts: { providers: { elevenlabs: { apiKey: String(42) } } } },
+    };
+    const initialSourceConfig = sourceConfig(firstRef);
+    const nextSourceConfig = sourceConfig(secondRef);
+    activateSecretsRuntimeSnapshot({
+      sourceConfig: initialSourceConfig,
+      config: runtimeConfig,
+      authStores: [
+        {
+          agentDir: authAgentDir,
+          store: {
+            version: 1,
+            profiles: {
+              [authProfileId]: {
+                type: "api_key",
+                provider: "openai",
+                key: String(42),
+                keyRef: { source: "env", provider: "default", id: "AUTH_FIRST" },
+              },
+            },
+          },
+        },
+      ],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      degradedOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:TTS_FIRST"],
+          reason: "secret reference was not found",
+        },
+        {
+          ownerKind: "account",
+          ownerId: authOwnerId,
+          state: "unavailable",
+          paths: [`${authAgentDir}.auth-profiles.${authProfileId}.key`],
+          refKeys: ["env:default:AUTH_FIRST"],
+          reason: "secret provider failed",
+        },
+      ],
+      secretOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          refKeys: ["env:default:TTS_FIRST"],
+        },
+        {
+          ownerKind: "account",
+          ownerId: authOwnerId,
+          refKeys: ["env:default:AUTH_FIRST"],
+        },
+      ],
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    });
+    const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {
+      current: null,
+    };
+    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig, _params: unknown) => ({
+      sourceConfig: config,
+      config: runtimeConfig,
+      authStores: [
+        {
+          agentDir: authAgentDir,
+          store: {
+            version: 1,
+            profiles: {
+              [authProfileId]: {
+                type: "api_key" as const,
+                provider: "openai",
+                key: String(42),
+                keyRef: { source: "env" as const, provider: "default", id: "AUTH_SECOND" },
+              },
+            },
+          },
+        },
+      ],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      secretOwners: [
+        {
+          ownerKind: "capability" as const,
+          ownerId: "tts",
+          refKeys: ["env:default:TTS_SECOND"],
+        },
+        {
+          ownerKind: "account" as const,
+          ownerId: authOwnerId,
+          refKeys: ["env:default:AUTH_SECOND"],
+        },
+      ],
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    }));
+    const reloader = startManagedGatewayConfigReloader({
+      minimalTestGateway: false,
+      initialConfig: runtimeConfig,
+      initialCompareConfig: runtimeConfig,
+      initialInternalWriteHash: null,
+      watchPath: "/tmp/openclaw.json",
+      readSnapshot: vi.fn(async () => ({
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: nextSourceConfig,
+        sourceConfig: nextSourceConfig,
+        resolved: runtimeConfig,
+        valid: true,
+        runtimeConfig,
+        config: runtimeConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+        hash: "same-runtime-next-source",
+      })) as never,
+      promoteSnapshot: vi.fn(async () => true) as never,
+      subscribeToWrites: ((listener: (event: ConfigWriteNotification) => void) => {
+        writeListenerRef.current = listener;
+        return () => {
+          if (writeListenerRef.current === listener) {
+            writeListenerRef.current = null;
+          }
+        };
+      }) as never,
+      prepareConfigCandidate: ({ runtimeConfig: candidateRuntime }) => ({
+        runtimeConfig: candidateRuntime,
+        compareConfig: candidateRuntime,
+      }),
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins: vi.fn(async () => ({
+        restartChannels: new Set<ChannelKind>(),
+        activeChannels: new Set<ChannelKind>(),
+      })),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      channelManager: {} as never,
+      activateRuntimeSecrets: activateRuntimeSecrets as never,
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      clients: [],
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
+      acceptTerminalConfig: vi.fn(),
+    });
+
+    try {
+      const listener = writeListenerRef.current;
+      if (!listener) {
+        throw new Error("Expected config write listener to be registered");
+      }
+      const unrelatedSourceConfig = {
+        ...initialSourceConfig,
+        logging: { level: "info" as const },
+      };
+      listener({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: unrelatedSourceConfig,
+        runtimeConfig,
+        persistedHash: "same-secrets-new-source",
+        revision: 1,
+        fingerprint: "same-runtime",
+        sourceFingerprint: "same-secrets-new-source",
+        writtenAtMs: Date.now(),
+      });
+      await vi.runAllTimersAsync();
+
+      expect(activateRuntimeSecrets).not.toHaveBeenCalled();
+      expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(unrelatedSourceConfig);
+      expect(getActiveSecretsRuntimeSnapshot()?.secretOwners).toEqual([
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          refKeys: ["env:default:TTS_FIRST"],
+        },
+        {
+          ownerKind: "account",
+          ownerId: authOwnerId,
+          refKeys: ["env:default:AUTH_FIRST"],
+        },
+      ]);
+
+      listener({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: nextSourceConfig,
+        runtimeConfig,
+        persistedHash: "same-runtime-next-source",
+        revision: 2,
+        fingerprint: "same-runtime",
+        sourceFingerprint: "next-source",
+        writtenAtMs: Date.now(),
+      });
+      await vi.runAllTimersAsync();
+
+      expect(activateRuntimeSecrets.mock.calls[0]?.[1]).toMatchObject({
+        activate: false,
+        includeAuthStoreRefs: true,
+        publishFailureAsDegraded: true,
+      });
+      expect(listActiveDegradedSecretOwners()).toEqual([]);
+      expect(getActiveSecretsRuntimeSnapshot()?.secretOwners).toEqual([
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          refKeys: ["env:default:TTS_SECOND"],
+        },
+        {
+          ownerKind: "account",
+          ownerId: authOwnerId,
+          refKeys: ["env:default:AUTH_SECOND"],
+        },
+      ]);
+      expect(
+        getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[authProfileId],
+      ).toMatchObject({
+        key: String(42),
+        keyRef: { source: "env", provider: "default", id: "AUTH_SECOND" },
+      });
+      expect(
+        classifySecretOwnerDegradationState({
+          ownerKind: "capability",
+          ownerId: "tts",
+          refs: [secondRef],
+          config: nextSourceConfig,
+        }),
+      ).toBe("stale");
+
+      activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => ({
+        sourceConfig: config,
+        config: { ...runtimeConfig, logging: { level: "debug" } },
+        authStores: [],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+        warnings: [],
+        secretOwners: [
+          {
+            ownerKind: "capability" as const,
+            ownerId: "tts",
+            refKeys: ["env:default:TTS_THIRD"],
+          },
+        ],
+        webTools: createEmptyRuntimeWebToolsMetadata(),
+      }));
+      listener({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: sourceConfig(thirdRef),
+        runtimeConfig,
+        persistedHash: "changed-second-resolution",
+        revision: 2,
+        fingerprint: "same-runtime",
+        sourceFingerprint: "changed-second-resolution",
+        writtenAtMs: Date.now(),
+      });
+      await vi.runAllTimersAsync();
+
+      expect(getActiveSecretsRuntimeSnapshot()?.secretOwners).toEqual([
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          refKeys: ["env:default:TTS_SECOND"],
+        },
+        {
+          ownerKind: "account",
+          ownerId: authOwnerId,
+          refKeys: ["env:default:AUTH_SECOND"],
+        },
+      ]);
+
+      let releasePreparation = () => {};
+      let markPreparationStarted: (() => void) | undefined;
+      const preparationStarted = new Promise<void>((resolve) => {
+        markPreparationStarted = resolve;
+      });
+      const preparationGate = new Promise<void>((resolve) => {
+        releasePreparation = resolve;
+      });
+      activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => {
+        markPreparationStarted?.();
+        await preparationGate;
+        return {
+          sourceConfig: config,
+          config: runtimeConfig,
+          authStores: [],
+          authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+          warnings: [],
+          secretOwners: [
+            {
+              ownerKind: "capability" as const,
+              ownerId: "tts",
+              refKeys: ["env:default:TTS_THIRD"],
+            },
+          ],
+          webTools: createEmptyRuntimeWebToolsMetadata(),
+        };
+      });
+      listener({
+        configPath: "/tmp/openclaw.json",
+        sourceConfig: sourceConfig(thirdRef),
+        runtimeConfig,
+        persistedHash: "superseded-source-owner",
+        revision: 3,
+        fingerprint: "same-runtime",
+        sourceFingerprint: "superseded-source-owner",
+        writtenAtMs: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await preparationStarted;
+
+      const concurrentSourceConfig = sourceConfig(fourthRef);
+      activateSecretsRuntimeSnapshot({
+        sourceConfig: concurrentSourceConfig,
+        config: runtimeConfig,
+        authStores: [],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+        warnings: [],
+        secretOwners: [
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            refKeys: ["env:default:TTS_FOURTH"],
+          },
+        ],
+        webTools: createEmptyRuntimeWebToolsMetadata(),
+      });
+      releasePreparation();
+      await vi.runAllTimersAsync();
+
+      expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(concurrentSourceConfig);
+      expect(getActiveSecretsRuntimeSnapshot()?.secretOwners).toEqual([
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          refKeys: ["env:default:TTS_FOURTH"],
+        },
+      ]);
+    } finally {
+      await reloader.stop();
+    }
   });
 
   it("rejects ownerless irreversible plans but applies safe hot plans", async () => {
@@ -4408,10 +4796,14 @@ describe("gateway Gmail hot reload handlers", () => {
       expect(harness.activateRuntimeSecrets).toHaveBeenNthCalledWith(1, harness.deferredConfig, {
         reason: "restart-check",
         activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
       });
       expect(harness.activateRuntimeSecrets).toHaveBeenNthCalledWith(2, harness.invalidConfig, {
         reason: "restart-check",
         activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
       });
       expect(harness.terminalPolicy.isEnabled()).toBe(false);
       expect(harness.promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).not.toContain(
@@ -4435,11 +4827,15 @@ describe("gateway Gmail hot reload handlers", () => {
       expect(harness.activateRuntimeSecrets).toHaveBeenNthCalledWith(3, acceptedWithLogging, {
         reason: "reload",
         activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
         includeAuthStoreRefs: undefined,
       });
       expect(harness.activateRuntimeSecrets).toHaveBeenNthCalledWith(4, acceptedWithLogging, {
         reason: "restart-check",
         activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
       });
       const deferredPlan = buildGatewayReloadPlan(
         diffConfigPaths(harness.initialConfig, harness.deferredConfig),
@@ -4588,6 +4984,8 @@ describe("gateway Gmail hot reload handlers", () => {
         {
           reason: "restart-check",
           activate: false,
+          publishFailureAsDegraded: true,
+          canPublishFailureAsDegraded: expect.any(Function),
         },
       );
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
@@ -4692,6 +5090,8 @@ describe("gateway Gmail hot reload handlers", () => {
       expect(harness.activateRuntimeSecrets).toHaveBeenCalledWith(harness.deferredConfig, {
         reason: "restart-check",
         activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
       });
       await vi.advanceTimersByTimeAsync(500);
       expect(harness.requestRecoveryRestart.mock.calls).toEqual([
@@ -4739,6 +5139,8 @@ describe("gateway Gmail hot reload handlers", () => {
       expect(harness.activateRuntimeSecrets).toHaveBeenNthCalledWith(3, harness.deferredConfig, {
         reason: "restart-check",
         activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
       });
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
       expect(harness.promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).not.toContain(
@@ -4773,6 +5175,8 @@ describe("gateway Gmail hot reload handlers", () => {
       expect(harness.activateRuntimeSecrets).toHaveBeenNthCalledWith(2, harness.replacementConfig, {
         reason: "restart-check",
         activate: false,
+        publishFailureAsDegraded: true,
+        canPublishFailureAsDegraded: expect.any(Function),
       });
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
 

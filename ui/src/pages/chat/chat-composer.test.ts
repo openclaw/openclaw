@@ -81,11 +81,27 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
+  it("renders and invokes an action beside the disabled reason", () => {
+    const onDisabledAction = vi.fn();
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "This session is archived.",
+      disabledActionLabel: "Restore",
+      onDisabledAction,
+    });
+
+    const reason = container.querySelector(".agent-chat__disabled-reason");
+    expect(reason?.textContent).toContain("This session is archived.");
+    reason?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onDisabledAction).toHaveBeenCalledOnce();
+  });
+
   it("switches the primary action between voice, send, queue, and stop", () => {
     const onToggleRealtimeTalk = vi.fn();
     let view = renderComposer({ onToggleRealtimeTalk });
     button(view.container, t("chat.composer.startVoiceInput")).click();
     expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+    expect(view.container.querySelector('[aria-label="Start video talk"]')).toBeNull();
 
     const onSend = vi.fn();
     view = renderComposer({ draft: "Send this", onSend });
@@ -121,6 +137,30 @@ describe("renderChatComposer controls", () => {
       onAbort,
     });
     expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
+  });
+
+  it("offers camera only inside a video-capable active talk session", () => {
+    const onToggleRealtimeCamera = vi.fn();
+    const { container } = renderComposer({
+      onToggleRealtimeTalk: vi.fn(),
+      onToggleRealtimeCamera,
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+      realtimeTalkVideoCapable: true,
+    });
+
+    button(container, t("chat.composer.turnCameraOn")).click();
+    expect(onToggleRealtimeCamera).toHaveBeenCalledOnce();
+    expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
+
+    const failed = renderComposer({
+      onToggleRealtimeTalk: vi.fn(),
+      onToggleRealtimeCamera,
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "error",
+      realtimeTalkVideoCapable: true,
+    });
+    expect(button(failed.container, t("chat.composer.turnCameraOn")).disabled).toBe(true);
   });
 
   it("sends attachment-only drafts instead of starting voice", () => {

@@ -501,6 +501,7 @@ export interface DiagnosticEvents {
   event_key: string;
   payload_json: string;
   scope: string;
+  sequence: Generated<number>;
 }
 
 export interface DiagnosticStabilityBundles {

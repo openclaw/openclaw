@@ -550,6 +550,17 @@ function buildConfigMocks() {
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
+    mcp: {
+      servers: {
+        context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
+        github: {
+          url: "https://api.githubcopilot.com/mcp/",
+          transport: "streamable-http",
+          auth: "oauth",
+        },
+        "local-tools": { command: "npx", args: ["some-mcp-server", "--stdio"], enabled: false },
+      },
+    },
   };
   const schema = {
     type: "object",

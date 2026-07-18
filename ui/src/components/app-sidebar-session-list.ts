@@ -27,6 +27,8 @@ import { icons } from "./icons.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import "./elapsed-time.ts";
 
+const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
+
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
   @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
@@ -242,6 +244,22 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
 
   private renderSessionTree(session: SidebarRecentSession): TemplateResult {
     const expanded = this.isSessionChildrenExpanded(session);
+    const showAllChildren = this.fullyShownChildSessionKeys.has(session.key);
+    // The cap hides quiet children only: the active branch and any branch with
+    // live runs (runningChildCount is transitive) must stay visible, or an
+    // auto-expanded parent would omit its own selection or a running session.
+    const visibleChildren = showAllChildren
+      ? session.children
+      : session.children.filter(
+          (child, index) =>
+            index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT ||
+            child.visuallyActive ||
+            child.containsActiveDescendant ||
+            child.hasActiveRun ||
+            child.status === "running" ||
+            child.runningChildCount > 0,
+        );
+    const hiddenChildCount = session.children.length - visibleChildren.length;
     return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
       ${this.renderRecentSession(session)}
       ${expanded
@@ -249,7 +267,20 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             class="sidebar-session-tree__children"
             aria-label=${t("sessionsView.childSessions")}
           >
-            ${session.children.map((child) => this.renderSessionTree(child))}
+            ${visibleChildren.map((child) => this.renderSessionTree(child))}
+            ${hiddenChildCount > 0
+              ? html`<button
+                  class="sidebar-session-tree__show-more"
+                  type="button"
+                  data-show-more-children=${session.key}
+                  aria-label=${t("sessionsView.showMoreChildren", {
+                    count: String(hiddenChildCount),
+                  })}
+                  @click=${() => this.showAllSessionChildren(session.key)}
+                >
+                  ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
+                </button>`
+              : nothing}
             ${session.loadingChildren && session.children.length === 0
               ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
               : nothing}
@@ -564,6 +595,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             codingTrailing: html`${this.renderSessionCatalogs(navigationState)}`,
             codingTrailingPresent: this.sessionCatalogs.length > 0,
           })}
+          <button
+            type="button"
+            class="sidebar-view-archived"
+            @click=${() => this.onNavigate?.("sessions", { search: "?showArchived=1" })}
+          >
+            ${icons.archive} ${t("sessionsView.viewArchived")}
+          </button>
         </div>
       </section>
     `;

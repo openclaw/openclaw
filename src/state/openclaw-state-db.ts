@@ -94,6 +94,7 @@ const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
   allowedColumnDefinitions: {
+    "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
     "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
     "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
@@ -1446,6 +1447,33 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  const addedDiagnosticEventSequence = ensureColumn(
+    db,
+    "diagnostic_events",
+    "sequence INTEGER NOT NULL DEFAULT 0",
+  );
+  if (addedDiagnosticEventSequence) {
+    // Preserve the legacy (created_at, rowid) order before the new sequence
+    // index becomes authoritative, including stable ties within each scope.
+    db.exec(`
+      WITH ranked AS (
+        SELECT
+          rowid AS event_rowid,
+          ROW_NUMBER() OVER (
+            PARTITION BY scope
+            ORDER BY created_at ASC, rowid ASC
+          ) AS sequence
+        FROM diagnostic_events
+      )
+      UPDATE diagnostic_events
+      SET sequence = (
+        SELECT ranked.sequence
+        FROM ranked
+        WHERE ranked.event_rowid = diagnostic_events.rowid
+      );
+    `);
+  }
+  db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");

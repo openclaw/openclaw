@@ -229,8 +229,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
 }
 
 .shell--settings .content-header,
-.shell--settings .settings-workspace,
-.shell--settings .config-view-toggle-row {
+.shell--settings .settings-workspace {
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
@@ -1505,6 +1504,22 @@ html.openclaw-native-macos
   font-size: 11px;
 }
 
+.sidebar-session-tree__show-more {
+  min-height: 28px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.sidebar-session-tree__show-more:hover,
+.sidebar-session-tree__show-more:focus-visible {
+  color: var(--text);
+}
+
 .sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
   gap: 8px;
 }
@@ -1648,6 +1663,30 @@ html.openclaw-native-macos
 .sidebar-session-pagination__button:hover,
 .sidebar-session-pagination__button:focus-visible {
   color: var(--text);
+}
+
+.sidebar-view-archived {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 10px 2px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-view-archived:hover,
+.sidebar-view-archived:focus-visible {
+  color: var(--text);
+}
+
+.sidebar-view-archived svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
 }
 
 .sidebar-recent-session--dragging {

@@ -265,9 +265,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
       // +1: async memory prompt preparation registration.
+      // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
       // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
       // Harvest: internal question runtime exports -2.
-      8155,
+      8157,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -303,9 +305,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolver.
       // +1: async memory prompt preparation registration.
+      // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
       // +3: gateway-backed harness question runner and claim/cancel helpers.
       // Harvest: internal question runtime callable -1.
-      4537,
+      4539,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -330,8 +334,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
-      // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      104,
+      // Harvest: freeze the compat config-schema barrel to explicit exports -1;
+      // retire the Memory Core facade's event-store wildcard -1.
+      103,
       env,
     ),
   };

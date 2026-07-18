@@ -232,13 +232,22 @@ describe("AppSidebar logo stand-in wiring", () => {
       );
     const logo = () => sidebar.querySelector(".sidebar-brand__logo");
     const standIn = () => sidebar.querySelector(".sidebar-brand__pet");
+    const standInHost = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-lobster-logo-standin",
+    );
+    const settleStandIn = async () => {
+      await sidebar.updateComplete;
+      await standInHost?.updateComplete;
+    };
 
+    expect(standInHost).not.toBeNull();
+    await standInHost?.updateComplete;
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
     expect(standIn()).toBeNull();
 
     const look = createLobsterPetLook(70);
     dispatch({ phase: "in", look, name: "Pinchy" });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
     const sprite = standIn();
     expect(sprite).not.toBeNull();
@@ -247,23 +256,23 @@ describe("AppSidebar logo stand-in wiring", () => {
     expect(sprite?.querySelector(".lobster-pet__svg")).not.toBeNull();
 
     dispatch({ phase: "leaving", look, name: "Pinchy" });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(standIn()?.classList.contains("sidebar-brand__pet--leaving")).toBe(true);
 
     dispatch({ phase: "out", look: null, name: null });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(standIn()).toBeNull();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
 
     // A lookless scare phase hides the logo with no stand-in crab, and the
     // "out" edge restores it.
     dispatch({ phase: "in", look: null, name: null });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
     expect(standIn()).toBeNull();
 
     dispatch({ phase: "out", look: null, name: null });
-    await sidebar.updateComplete;
+    await settleStandIn();
     expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
   });
 });
@@ -499,6 +508,57 @@ describe("AppSidebar session mutation feedback", () => {
     }
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
   }
+
+  async function mountToastHost() {
+    const host = document.createElement("openclaw-toast-host");
+    document.body.append(host);
+    await host.updateComplete;
+    return host;
+  }
+
+  it("offers undo after archiving and restores a pinned active session", async () => {
+    const { gateway, harness, sidebar } = await mountMutationHarness();
+    const setSessionKey = vi.fn();
+    (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
+    const state = createSessionState("main", ["agent:main:main", "agent:main:a", "agent:main:b"]);
+    const archivedRow = state.result?.sessions.find((row) => row.key === "agent:main:a");
+    if (!archivedRow) {
+      throw new Error("expected archive row");
+    }
+    archivedRow.pinned = true;
+    harness.publishList({ result: state.result, agentId: state.agentId });
+    gateway.publish({ sessionKey: archivedRow.key });
+    sidebar.sessionKey = archivedRow.key;
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    const toast = await mountToastHost();
+    await sidebar.updateComplete;
+
+    const menu = await openSessionMenu(sidebar, archivedRow.key);
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived"),
+    );
+    expect(harness.patch).toHaveBeenCalledWith(
+      archivedRow.key,
+      { archived: true },
+      { agentId: "main" },
+    );
+    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
+    expect(harness.patch).toHaveBeenLastCalledWith(
+      archivedRow.key,
+      { archived: false, pinned: true },
+      { agentId: "main" },
+    );
+    expect(navigate).toHaveBeenLastCalledWith("chat", {
+      search: "?session=agent%3Amain%3Aa",
+    });
+  });
 
   it("reconciles and stops an idle active cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
