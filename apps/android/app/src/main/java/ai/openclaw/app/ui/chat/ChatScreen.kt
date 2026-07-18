@@ -85,6 +85,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
@@ -1152,22 +1153,32 @@ private fun ChatMessageList(
     }
 
     if (readerScroll.showJumpToLatest) {
+      // Compact icon-only affordance; parity with the iOS/macOS chat reader circle.
+      // The clickable outer surface stays unsized so Material's 48dp minimum
+      // interactive size applies; the 36dp inner circle is visual only.
       Surface(
         onClick = readerScroll.jumpToLatest,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
-        shape = RoundedCornerShape(999.dp),
-        color = ClawTheme.colors.surfaceRaised,
-        contentColor = ClawTheme.colors.text,
-        shadowElevation = 6.dp,
-        border = BorderStroke(1.dp, ClawTheme.colors.border),
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
+        shape = CircleShape,
+        color = Color.Transparent,
       ) {
-        Row(
-          modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
-          Text(text = nativeString("Jump to latest"), style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold))
+        Box(contentAlignment = Alignment.Center) {
+          Surface(
+            modifier = Modifier.size(36.dp),
+            shape = CircleShape,
+            color = ClawTheme.colors.surfaceRaised,
+            contentColor = ClawTheme.colors.text,
+            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, ClawTheme.colors.border),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.ArrowDownward,
+                contentDescription = nativeString("Jump to latest"),
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          }
         }
       }
     }
