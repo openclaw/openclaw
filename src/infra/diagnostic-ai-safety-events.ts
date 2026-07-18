@@ -7,13 +7,14 @@ import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
 type DiagnosticAISafetyBaseFields = {
   ts: number;
   seq: number;
+  /** Authoritative runtime session identifier, omitted when no session is available. */
+  sessionId?: string;
   trace?: DiagnosticTraceContext;
 };
 
 /** Emitted when a prompt injection signal is detected in model input or tool output. */
 export type DiagnosticPromptInjectionSignalEvent = DiagnosticAISafetyBaseFields & {
   type: "ai_safety.prompt_injection.signal";
-  sessionId: string;
   agentId?: string;
   severity: "info" | "warn" | "error" | "critical";
   category: "direct" | "indirect" | "jailbreak" | "role_override" | "unknown";
@@ -30,7 +31,6 @@ export type DiagnosticPromptInjectionSignalEvent = DiagnosticAISafetyBaseFields 
 /** Emitted when a tool policy decision is made (allow/block/approve). */
 export type DiagnosticToolPolicyDecisionEvent = DiagnosticAISafetyBaseFields & {
   type: "ai_safety.tool_policy.decision";
-  sessionId: string;
   agentId?: string;
   toolName: string;
   decision: "allowed" | "blocked" | "approval_required" | "approved" | "denied";
@@ -43,7 +43,6 @@ export type DiagnosticToolPolicyDecisionEvent = DiagnosticAISafetyBaseFields & {
 /** Emitted when external content is fetched and consumed by an agent. */
 export type DiagnosticExternalContentConsumedEvent = DiagnosticAISafetyBaseFields & {
   type: "ai_safety.external_content.consumed";
-  sessionId: string;
   agentId?: string;
   sourceType: "web_fetch" | "file" | "mcp_tool" | "api" | "unknown";
   trusted: boolean;
@@ -59,7 +58,6 @@ export type DiagnosticExternalContentConsumedEvent = DiagnosticAISafetyBaseField
 /** Emitted when structured user feedback is captured (thumbs up/down, rating, correction). */
 export type DiagnosticUserFeedbackReceivedEvent = DiagnosticAISafetyBaseFields & {
   type: "ai_safety.user_feedback.received";
-  sessionId: string;
   agentId?: string;
   label: "positive" | "negative" | "correction" | "flag" | "other";
   /** Normalized feedback score in the range 0.0–1.0. */
@@ -70,7 +68,6 @@ export type DiagnosticUserFeedbackReceivedEvent = DiagnosticAISafetyBaseFields &
 /** Emitted when memory or context selection decisions are made. */
 export type DiagnosticMemoryContextSelectionEvent = DiagnosticAISafetyBaseFields & {
   type: "ai_safety.memory_context.selected";
-  sessionId: string;
   agentId?: string;
   memoryType: "short_term" | "long_term" | "project" | "workspace" | "external";
   itemCount: number;
@@ -81,7 +78,6 @@ export type DiagnosticMemoryContextSelectionEvent = DiagnosticAISafetyBaseFields
 /** Emitted when an eval or quality check produces a result. */
 export type DiagnosticEvalResultEvent = DiagnosticAISafetyBaseFields & {
   type: "ai_safety.eval.result";
-  sessionId: string;
   agentId?: string;
   evalName: string;
   /** Normalized eval score in the range 0.0–1.0. */

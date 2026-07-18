@@ -283,7 +283,6 @@ export async function runTrustedToolPolicies(
         // Fix #3 (tool-policy): emit at the real block boundary.
         emitTrustedAISafetyEvent({
           type: "ai_safety.tool_policy.decision",
-          sessionId: ctx.sessionKey ?? "unknown",
           toolName: event.toolName,
           decision: "blocked",
           policySource: "plugin",
@@ -302,7 +301,6 @@ export async function runTrustedToolPolicies(
         // Fix #3 (tool-policy): emit at the real block boundary.
         emitTrustedAISafetyEvent({
           type: "ai_safety.tool_policy.decision",
-          sessionId: ctx.sessionKey ?? "unknown",
           toolName: event.toolName,
           decision: "blocked",
           policySource: "plugin",
