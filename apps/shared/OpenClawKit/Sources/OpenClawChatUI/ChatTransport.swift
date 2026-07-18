@@ -18,6 +18,7 @@ public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
     public let status: QuestionStatus
     public let answers: QuestionAnswers?
 
+    // periphery:ignore - Package consumers construct transport events; native apps decode them.
     public init(id: String, status: QuestionStatus, answers: QuestionAnswers? = nil) {
         self.id = id
         self.status = status
