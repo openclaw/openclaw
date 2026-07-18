@@ -10428,6 +10428,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Tool parameters
+  - H2: Result
   - H2: How it works
   - H2: Progress updates
   - H2: Config
