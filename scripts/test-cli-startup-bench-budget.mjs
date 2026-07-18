@@ -1,11 +1,45 @@
 // Compares CLI startup benchmark reports against checked-in budgets.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { resolveCliStartupBuildTimeoutMs } from "./ensure-cli-startup-build.mjs";
 import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mjs";
 import { readJsonFile } from "./test-report-utils.mjs";
 
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
+const BENCHMARK_CASE_DEADLINE_CAP = 50;
+const DEFAULT_BENCHMARK_CLEANUP_GRACE_MS = 1_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
+function clampTimerTimeoutMs(value) {
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveBenchmarkCleanupGraceMs(env) {
+  const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return DEFAULT_BENCHMARK_CLEANUP_GRACE_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_BENCHMARK_CLEANUP_GRACE_MS;
+}
+
+function resolveBuildDeadlineMs(env) {
+  return clampTimerTimeoutMs(
+    resolveCliStartupBuildTimeoutMs(env) + resolveBenchmarkCleanupGraceMs(env),
+  );
+}
+
+function resolveBenchmarkDeadlineMs(options, env) {
+  const cleanupGraceMs = resolveBenchmarkCleanupGraceMs(env);
+  const sampleLifecycleMs = options.timeoutMs + cleanupGraceMs * 2;
+  const totalRunsPerCase = options.runs + options.warmup;
+  // The current all preset has 43 cases. Keep headroom for case growth and for module/report
+  // teardown while preserving both cleanup waits used by each timed-out sample.
+  return clampTimerTimeoutMs(
+    BENCHMARK_CASE_DEADLINE_CAP * totalRunsPerCase * sampleLifecycleMs + cleanupGraceMs,
+  );
+}
 
 function formatMs(value) {
   return `${value.toFixed(1)}ms`;
@@ -111,6 +145,8 @@ function resolveCurrentReportPath() {
     cwd: process.cwd(),
     stdio: "inherit",
     env: process.env,
+    killSignal: "SIGKILL",
+    timeout: resolveBuildDeadlineMs(process.env),
   });
   if (build.status !== 0) {
     process.exit(build.status ?? 1);
@@ -138,6 +174,8 @@ function resolveCurrentReportPath() {
     cwd: process.cwd(),
     stdio: "inherit",
     env: process.env,
+    killSignal: "SIGKILL",
+    timeout: resolveBenchmarkDeadlineMs(opts, process.env),
   });
   if (run.status !== 0) {
     process.exit(run.status ?? 1);
