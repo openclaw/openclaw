@@ -67,12 +67,12 @@ import {
   registerQueuedChatTurn,
   retireQueuedChatTurnCancellation,
 } from "../chat-queued-turns.js";
-import {
-  isDashboardSessionTitleCandidate,
-  maybeGenerateDashboardSessionTitle,
-} from "../dashboard-session-title.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import {
+  isSessionAutoTitleCandidate,
+  maybeGenerateSessionAutoTitle,
+} from "../session-auto-title.js";
 import {
   capArrayByJsonBytes,
   readSessionMessageByIdAsync,
@@ -1151,7 +1151,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
       const titleSource = stripInlineDirectiveTagsForDisplay(rawMessage).text;
-      if (isDashboardSessionTitleCandidate({ sessionKey, userMessage: titleSource })) {
+      if (isSessionAutoTitleCandidate({ sessionKey, userMessage: titleSource })) {
         void runWithGatewayIndependentRootWorkContinuation(async () => {
           const titleEntry =
             entry?.sessionId === admittedSessionId
@@ -1161,7 +1161,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!titleSessionId) {
             return;
           }
-          const updated = await maybeGenerateDashboardSessionTitle({
+          const updated = await maybeGenerateSessionAutoTitle({
             cfg,
             agentId,
             entry: titleEntry,
@@ -1178,9 +1178,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
           }
         }).catch((err: unknown) => {
-          context.logGateway.warn(
-            `dashboard session title generation failed: ${formatForLog(err)}`,
-          );
+          context.logGateway.warn(`session title generation failed: ${formatForLog(err)}`);
         });
       }
       const {

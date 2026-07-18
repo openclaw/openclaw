@@ -16,6 +16,10 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  isSessionAutoTitleCandidate,
+  maybeGenerateSessionAutoTitle,
+} from "../../gateway/session-auto-title.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -544,6 +548,35 @@ export async function getReplyFromConfig(
     sessionId,
     storePath,
   });
+
+  // Auto-title sessions whose derived title would otherwise fall back to a
+  // truncated first message or session-id prefix. Fire-and-forget on the
+  // utility model; automated system events never carry a user first turn.
+  // (Gateway chat.send has its own trigger that also broadcasts the update;
+  // the shared attempt marker keeps generation to one request per session.)
+  const autoTitleSource = finalized.BodyForAgent ?? finalized.Body ?? "";
+  if (
+    !systemSent &&
+    sessionKey &&
+    sessionId &&
+    storePath &&
+    finalized.Provider !== "heartbeat" &&
+    finalized.Provider !== "cron-event" &&
+    finalized.Provider !== "exec-event" &&
+    isSessionAutoTitleCandidate({ sessionKey, userMessage: autoTitleSource })
+  ) {
+    void maybeGenerateSessionAutoTitle({
+      cfg,
+      agentId,
+      entry: sessionEntry,
+      sessionId,
+      sessionKey,
+      storePath,
+      userMessage: autoTitleSource,
+    }).catch((err) => {
+      logVerbose(`session auto-title generation failed: ${String(err)}`);
+    });
+  }
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);

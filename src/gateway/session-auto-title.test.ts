@@ -1,16 +1,21 @@
-// Dashboard title tests cover eligibility, normalization, and guarded persistence.
+// Session auto-title tests cover eligibility, normalization, and guarded persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const generateConversationLabel = vi.hoisted(() => vi.fn());
 const updateSessionEntry = vi.hoisted(() => vi.fn());
+const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabel,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry }));
+vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent }));
 
 import type { SessionEntry } from "../config/sessions/types.js";
-import { maybeGenerateDashboardSessionTitle } from "./dashboard-session-title.js";
+import {
+  maybeGenerateSessionAutoTitle,
+  resetSessionAutoTitleAttemptsForTest,
+} from "./session-auto-title.js";
 
 const baseEntry: SessionEntry = {
   sessionId: "session-1",
@@ -36,16 +41,19 @@ function mockSessionUpdate(current: SessionEntry): void {
   });
 }
 
-describe("maybeGenerateDashboardSessionTitle", () => {
+describe("maybeGenerateSessionAutoTitle", () => {
   beforeEach(() => {
+    resetSessionAutoTitleAttemptsForTest();
     generateConversationLabel.mockReset();
     updateSessionEntry.mockReset();
+    resolveUtilityModelRefForAgent.mockReset();
     generateConversationLabel.mockResolvedValue("Release Planning");
+    resolveUtilityModelRefForAgent.mockReturnValue("anthropic/claude-haiku-4-5");
     mockSessionUpdate(baseEntry);
   });
 
   it("generates and persists a dashboard display name", async () => {
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(true);
 
     expect(generateConversationLabel).toHaveBeenCalledWith({
       userMessage: "Help me plan the release",
@@ -70,9 +78,20 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     });
   });
 
+  it("generates titles for non-dashboard agent sessions", async () => {
+    await expect(
+      maybeGenerateSessionAutoTitle({
+        ...titleParams(),
+        sessionKey: "agent:main:discord:channel:12345",
+      }),
+    ).resolves.toBe(true);
+
+    expect(generateConversationLabel).toHaveBeenCalledOnce();
+  });
+
   it("keeps utility title prompt input on a UTF-16 boundary", async () => {
     await expect(
-      maybeGenerateDashboardSessionTitle({
+      maybeGenerateSessionAutoTitle({
         ...titleParams(),
         userMessage: `${"m".repeat(999)}🚀tail`,
       }),
@@ -87,7 +106,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   ])("normalizes generated title wrappers", async (generated, expected) => {
     generateConversationLabel.mockResolvedValue(generated);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(true);
 
     const update = updateSessionEntry.mock.calls[0]?.[1];
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: expected });
@@ -96,22 +115,34 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it("keeps persisted titles on a UTF-16 boundary", async () => {
     generateConversationLabel.mockResolvedValue(`${"a".repeat(59)}🚀tail`);
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(true);
 
     const update = updateSessionEntry.mock.calls[0]?.[1];
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: "a".repeat(59) });
   });
 
   it.each([
-    ["non-dashboard session", { sessionKey: "agent:main:main" }],
+    ["non-agent session key", { sessionKey: "global" }],
+    ["acp session", { sessionKey: "agent:main:acp:0b1e0f5e" }],
+    ["cron run session", { sessionKey: "agent:main:cron:job-1:run:1700000000000" }],
     ["slash command", { userMessage: "/status" }],
     ["manual label", { entry: { ...baseEntry, label: "My release" } }],
     ["manual display name", { entry: { ...baseEntry, displayName: "My release" } }],
+    ["channel subject", { entry: { ...baseEntry, subject: "Release thread" } }],
     ["existing session history", { entry: { ...baseEntry, systemSent: true } }],
   ])("skips %s", async (_name, override) => {
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), ...override }),
-    ).resolves.toBe(false);
+    await expect(maybeGenerateSessionAutoTitle({ ...titleParams(), ...override })).resolves.toBe(
+      false,
+    );
+
+    expect(generateConversationLabel).not.toHaveBeenCalled();
+    expect(updateSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("skips generation when utility routing is disabled", async () => {
+    resolveUtilityModelRefForAgent.mockReturnValue(undefined);
+
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(false);
 
     expect(generateConversationLabel).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
@@ -120,7 +151,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it("does not overwrite a name added while the model request is running", async () => {
     mockSessionUpdate({ ...baseEntry, label: "Manual title" });
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(false);
 
     expect(generateConversationLabel).toHaveBeenCalledOnce();
   });
@@ -128,7 +159,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it("does not write into a reset session generation", async () => {
     mockSessionUpdate({ ...baseEntry, sessionId: "session-2" });
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(false);
 
     expect(generateConversationLabel).toHaveBeenCalledOnce();
   });
@@ -141,10 +172,19 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       }),
     );
 
-    const first = maybeGenerateDashboardSessionTitle(titleParams());
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+    const first = maybeGenerateSessionAutoTitle(titleParams());
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(false);
     resolveLabel("Release Planning");
     await expect(first).resolves.toBe(true);
+
+    expect(generateConversationLabel).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry after a failed attempt for the same session generation", async () => {
+    generateConversationLabel.mockResolvedValueOnce(null);
+
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(false);
+    await expect(maybeGenerateSessionAutoTitle(titleParams())).resolves.toBe(false);
 
     expect(generateConversationLabel).toHaveBeenCalledOnce();
   });
