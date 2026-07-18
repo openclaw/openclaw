@@ -148,6 +148,8 @@ export type AuthenticatedGatewayConnect = {
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
   deviceToken: DeviceAuthToken | null;
+  /** Persisted last successful node connection observed before this handshake. */
+  nodeLastConnectedAtMs?: number;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;
     role: string;

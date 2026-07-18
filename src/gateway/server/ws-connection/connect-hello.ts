@@ -8,7 +8,10 @@ import {
   revokeDeviceBootstrapToken,
   restoreDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
-import { finalizeNodePairingCleanupClaim } from "../../../infra/node-pairing.js";
+import {
+  finalizeNodePairingCleanupClaim,
+  updatePairedNodeMetadata,
+} from "../../../infra/node-pairing.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
@@ -47,6 +50,7 @@ export async function sendGatewayHello(
     sendFrame,
     pendingNodePairingCleanup,
     releasePendingNodePairingCleanup,
+    runDetachedConnectWork,
   } = context;
   const {
     resolvedAuth,
@@ -188,7 +192,28 @@ export async function sendGatewayHello(
     // Only a current session that received hello-ok counts as connected;
     // failed or replaced handshakes must not alert or consume cooldown.
     if (nodeSession?.connId === connId) {
-      scheduleNodeConnectionNotification(requestContext.nodeRegistry, nodeSession);
+      scheduleNodeConnectionNotification(requestContext.nodeRegistry, nodeSession, {
+        previousConnectionAtMs: state.nodeLastConnectedAtMs,
+      });
+      const instanceIdRaw = connectParams.client.instanceId;
+      const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
+      const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
+      if (instanceIdLocal) {
+        nodeIdsForPairing.add(instanceIdLocal);
+      }
+      for (const pairingNodeId of nodeIdsForPairing) {
+        runDetachedConnectWork(
+          async () => {
+            await updatePairedNodeMetadata(pairingNodeId, {
+              lastConnectedAtMs: nodeSession.connectedAtMs,
+            });
+          },
+          (err) =>
+            logGateway.warn(
+              `failed to record last connect for ${pairingNodeId}: ${formatForLog(err)}`,
+            ),
+        );
+      }
     }
   }
   if (pendingNodePairingCleanup.value) {

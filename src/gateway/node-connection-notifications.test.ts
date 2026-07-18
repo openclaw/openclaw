@@ -32,7 +32,7 @@ function registry<T extends object>(params: T): T {
 }
 
 function schedule(registryValue: object, source: NodeSession): void {
-  scheduleNodeConnectionNotification(registryValue as never, source);
+  scheduleNodeConnectionNotification(registryValue as never, source, {});
 }
 
 afterEach(() => {
@@ -44,6 +44,21 @@ afterEach(() => {
 });
 
 describe("node connection notification routing", () => {
+  it("does not alert when a previously connected node reconnects", async () => {
+    vi.useFakeTimers();
+    const source = node("known-node");
+    const desk = node("desk");
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const registryValue = registry({ listConnected: () => [source, desk], invoke });
+
+    scheduleNodeConnectionNotification(registryValue as never, source, {
+      previousConnectionAtMs: 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS + RECONNECT_COOLDOWN_MS);
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("delivers only to the most recently active Mac when primary delivery succeeds", async () => {
     vi.useFakeTimers();
     const source = node("new-node", { lastActiveAtMs: 50 });

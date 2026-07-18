@@ -195,7 +195,11 @@ const routersByRegistry = new WeakMap<NodeRegistry, NodeConnectionNotificationRo
 export function scheduleNodeConnectionNotification(
   registry: NodeRegistry,
   source: NodeSession,
+  options: { previousConnectionAtMs?: number },
 ): void {
+  if (options.previousConnectionAtMs !== undefined) {
+    return;
+  }
   let router = routersByRegistry.get(registry);
   if (!router) {
     router = new NodeConnectionNotificationRouter(registry);
