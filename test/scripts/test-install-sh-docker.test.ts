@@ -826,11 +826,11 @@ printf 'status=%s\\n' "$status"
   it("aborts a stalled non-root installer fetch inside the bound without running partial payload", () => {
     const script = readFileSync(NONROOT_RUNNER_PATH, "utf8");
 
-    expect(script).toContain("--connect-timeout 10 --max-time 120");
+    expect(script).toContain("--connect-timeout 30 --max-time 300");
     expect(script).toContain("trap 'rm -f \"$installer\"' EXIT");
 
     expectStalledInstallerFetchAborts({
-      connectTimeout: 10,
+      connectTimeout: 30,
       maxTime: 2,
       trapEvent: "EXIT",
     });
@@ -1137,8 +1137,9 @@ printf 'status=%s\\n' "$status"
       `'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 -- "$OPENCLAW_INSTALL_CLI_URL" | bash -s -- --set-npm-prefix --no-onboard'`,
     );
     expect(nonrootRunner).toContain(
-      'curl -fsSL --connect-timeout 30 --max-time 300 -- "$INSTALL_URL" | bash',
+      'curl -fsSL --connect-timeout 30 --max-time 300 -o "$installer" -- "$INSTALL_URL"',
     );
+    expect(nonrootRunner).toContain('bash "$installer"');
   });
 
   it("uses public npm latest as the non-root installer expectation", () => {
