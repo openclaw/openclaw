@@ -1424,7 +1424,7 @@ export async function spawnAcpDirect(
         task: params.task,
         taskName: params.taskName,
         agentId: targetAgentId,
-        requesterAgentId: ctx.requesterAgentIdOverride,
+        requesterAgentId,
         cleanup: spawnMode === "session" ? "keep" : params.cleanup === "delete" ? "delete" : "keep",
         label: params.label,
         runTimeoutSeconds,
