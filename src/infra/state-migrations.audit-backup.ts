@@ -68,7 +68,7 @@ export function isLegacyAuditMigrationBackupPath(sourcePath: string, stateDir: s
   return false;
 }
 
-export type LegacyAuditBackupSnapshot = {
+type LegacyAuditBackupSnapshot = {
   sourcePath: string;
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;

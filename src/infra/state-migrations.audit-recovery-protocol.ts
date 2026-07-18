@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { LegacyAuditFileCheckpoint } from "./state-migrations.audit-checkpoints.js";
 
-export type AuditRecoveryRestoreJournal = {
+type AuditRecoveryRestoreJournal = {
   schemaVersion: 6;
   rawBase64: string;
   scrubPatternBase64: string;
