@@ -6,16 +6,9 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
-  assertProviderPromptRetryProgress,
-  beginProviderPromptAttempt,
   clearProviderPromptState,
-  createProviderPromptState,
   getProviderPromptState,
   markLastProviderPromptContextRejected,
-  markProviderPromptSucceeded,
-  ProviderPromptRetryNoProgressError,
-  recordProviderPromptAttempt,
-  snapshotProviderPrompt,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
 
@@ -26,18 +19,32 @@ const model = {
   baseUrl: "https://api.openai.com/v1",
 } as Model;
 
-function snapshot(text: string, effectiveContextTokenBudget = 128_000) {
-  return snapshotProviderPrompt({
-    model,
-    effectiveContextTokenBudget,
-    payload: { input: text, model: model.id },
+function createResultStream(stopReason: "error" | "stop") {
+  const stream = createAssistantMessageEventStream();
+  stream.end({
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    ...(stopReason === "error" ? { errorMessage: "context length exceeded" } : {}),
+    timestamp: 1,
   });
+  return stream;
 }
 
 describe("provider prompt state", () => {
   it("keeps state within one run id and drops it at the run boundary", () => {
     const first = getProviderPromptState("run-1");
-    first.lastAttempt = snapshot("hello");
     expect(getProviderPromptState("run-1")).toBe(first);
 
     clearProviderPromptState("run-1");
@@ -59,75 +66,9 @@ describe("provider prompt state", () => {
     }
   });
 
-  it("builds a stable final-payload identity without retaining payload content", () => {
-    const first = snapshot("hello");
-    const second = snapshot("hello");
-    const changed = snapshot("hello again");
-
-    expect(first).toEqual(second);
-    expect(changed.digest).not.toBe(first.digest);
-    expect(Object.values(first)).not.toContain("hello");
-  });
-
-  it("allows any changed payload and rejects only an exact retry", () => {
-    const state = createProviderPromptState();
-    const rejected = snapshot("x".repeat(1_000));
-
-    expect(() => assertProviderPromptRetryProgress(state, rejected)).not.toThrow();
-    recordProviderPromptAttempt(state, rejected);
-    expect(markLastProviderPromptContextRejected(state)).toEqual(rejected);
-
-    expect(() => assertProviderPromptRetryProgress(state, rejected)).toThrow(
-      ProviderPromptRetryNoProgressError,
-    );
-    expect(() =>
-      assertProviderPromptRetryProgress(state, snapshot("y".repeat(1_000))),
-    ).not.toThrow();
-    expect(() =>
-      assertProviderPromptRetryProgress(state, snapshot("z".repeat(2_000))),
-    ).not.toThrow();
-    expect(() => assertProviderPromptRetryProgress(state, snapshot("short"))).not.toThrow();
-  });
-
-  it("clears the current attempt before a transport without payload observation", () => {
-    const state = createProviderPromptState();
-    const attempted = snapshot("hello");
-    recordProviderPromptAttempt(state, attempted);
-
-    beginProviderPromptAttempt(state);
-
-    expect(markLastProviderPromptContextRejected(state)).toBeUndefined();
-  });
-
-  it("does not compare rejections across a changed effective context scope", () => {
-    const state = createProviderPromptState();
-    const rejected = snapshot("x".repeat(1_000), 64_000);
-    recordProviderPromptAttempt(state, rejected);
-    markLastProviderPromptContextRejected(state);
-
-    expect(() =>
-      assertProviderPromptRetryProgress(state, snapshot("x".repeat(1_000), 128_000)),
-    ).not.toThrow();
-  });
-
-  it("clears rejection state only after the matching provider attempt succeeds", () => {
-    const state = createProviderPromptState();
-    const rejected = snapshot("x".repeat(1_000));
-    const smaller = snapshot("short");
-    recordProviderPromptAttempt(state, rejected);
-    markLastProviderPromptContextRejected(state);
-    recordProviderPromptAttempt(state, smaller);
-
-    markProviderPromptSucceeded(state, rejected);
-    expect(state.lastRejected).toEqual(rejected);
-    markProviderPromptSucceeded(state, smaller);
-    expect(state.lastRejected).toBeUndefined();
-    expect(state.lastAttempt).toBeUndefined();
-    expect(markLastProviderPromptContextRejected(state)).toBeUndefined();
-  });
-
   it("observes the final replacement body and blocks its rejected replay before network send", async () => {
-    const state = createProviderPromptState();
+    const runId = "replacement-body";
+    const state = getProviderPromptState(runId);
     const context = {
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello", timestamp: 1 }],
@@ -172,17 +113,103 @@ describe("provider prompt state", () => {
     await first.result();
     markLastProviderPromptContextRejected(state);
 
+    const changedPayload = { input: "changed", model: model.id };
+    const changed = await wrapped(model, context, {
+      onPayload: () => changedPayload,
+    });
+    await changed.result();
+
     await expect(
       wrapped(model, context, {
         onPayload: () => ({ ...finalPayload }),
       }),
     ).rejects.toThrow("byte-identical provider payload");
+    expect(transport).toHaveBeenCalledTimes(3);
+    expect(sentPayloads).toEqual([finalPayload, changedPayload]);
+    expect(JSON.stringify(state)).not.toContain("final");
+    clearProviderPromptState(runId);
+  });
+
+  it("does not compare rejected payloads across effective context scopes", async () => {
+    const runId = "changed-context-scope";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const payload = { input: "same", model: model.id };
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createResultStream("error");
+    });
+    const firstWrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 64_000,
+    });
+    const first = await firstWrapped(model, context);
+    await first.result();
+    markLastProviderPromptContextRejected(state);
+
+    const secondWrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+    const second = await secondWrapped(model, context);
+    await second.result();
+
     expect(transport).toHaveBeenCalledTimes(2);
-    expect(sentPayloads).toEqual([finalPayload]);
+    clearProviderPromptState(runId);
+  });
+
+  it("allows a legitimate identical payload after a matching attempt succeeds", async () => {
+    const runId = "success-clears-rejection";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const rejectedPayload = { input: "rejected", model: model.id };
+    const successfulPayload = { input: "successful", model: model.id };
+    const payloads = [rejectedPayload, successfulPayload, { ...rejectedPayload }];
+    const stopReasons: Array<"error" | "stop"> = ["error", "stop", "error"];
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      const payload = payloads.shift();
+      await options?.onPayload?.(payload, model);
+      return createResultStream(stopReasons.shift() ?? "error");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+
+    const rejected = await wrapped(model, context);
+    await rejected.result();
+    markLastProviderPromptContextRejected(state);
+    const successful = await wrapped(model, context);
+    await successful.result();
+    const repeated = await wrapped(model, context);
+    await repeated.result();
+
+    expect(transport).toHaveBeenCalledTimes(3);
+    clearProviderPromptState(runId);
   });
 
   it("does not invent an identity for a custom transport without onPayload", async () => {
-    const state = createProviderPromptState();
+    const runId = "custom-transport";
+    const state = getProviderPromptState(runId);
+    const observed = wrapStreamFnWithProviderPromptState({
+      streamFn: async (_model, _context, options) => {
+        await options?.onPayload?.({ input: "observed" }, model);
+        return createResultStream("error");
+      },
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+    const observedResult = await observed(model, {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    });
+    await observedResult.result();
+    expect(state.lastAttempt).toBeDefined();
+
     const stream = createAssistantMessageEventStream();
     stream.end({
       role: "assistant",
@@ -216,10 +243,13 @@ describe("provider prompt state", () => {
     await result.result();
 
     expect(state.lastAttempt).toBeUndefined();
+    expect(markLastProviderPromptContextRejected(state)).toBeUndefined();
+    clearProviderPromptState(runId);
   });
 
   it("records identity after an asynchronous payload hook finishes", async () => {
-    const state = createProviderPromptState();
+    const runId = "async-payload-hook";
+    const state = getProviderPromptState(runId);
     const stream = createAssistantMessageEventStream();
     let releasePayloadHook: (() => void) | undefined;
     const payloadHookGate = new Promise<void>((resolve) => {
@@ -270,5 +300,6 @@ describe("provider prompt state", () => {
       timestamp: 1,
     });
     await result.result();
+    clearProviderPromptState(runId);
   });
 });

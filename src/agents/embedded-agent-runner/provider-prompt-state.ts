@@ -5,7 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { stableStringify } from "../stable-stringify.js";
 
-export type ProviderPromptSnapshot = {
+type ProviderPromptSnapshot = {
   scopeDigest: string;
   digest: string;
   byteWeight: number;
@@ -22,7 +22,7 @@ const providerPromptStates = resolveGlobalSingleton(
   () => new Map<string, ProviderPromptState>(),
 );
 
-export class ProviderPromptRetryNoProgressError extends Error {
+class ProviderPromptRetryNoProgressError extends Error {
   constructor(payloadBytes: number) {
     super(
       "Context overflow: refusing to resend the byte-identical provider payload after a " +
@@ -36,7 +36,7 @@ function digest(serialized: string): string {
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
-export function createProviderPromptState(): ProviderPromptState {
+function createProviderPromptState(): ProviderPromptState {
   return {};
 }
 
@@ -56,7 +56,7 @@ export function clearProviderPromptState(runId: string): void {
 }
 
 /** Captures the final provider request identity without retaining payload content. */
-export function snapshotProviderPrompt(params: {
+function snapshotProviderPrompt(params: {
   model: Model;
   payload: unknown;
   effectiveContextTokenBudget: number;
@@ -77,7 +77,7 @@ export function snapshotProviderPrompt(params: {
 }
 
 /** Rejects only an exact replay of the last provider-rejected request body. */
-export function assertProviderPromptRetryProgress(
+function assertProviderPromptRetryProgress(
   state: ProviderPromptState,
   candidate: ProviderPromptSnapshot,
 ): void {
@@ -90,13 +90,13 @@ export function assertProviderPromptRetryProgress(
   }
 }
 
-export function beginProviderPromptAttempt(state: ProviderPromptState): void {
+function beginProviderPromptAttempt(state: ProviderPromptState): void {
   // A transport that does not implement onPayload must not leave a stale body
   // eligible to be marked as the current provider rejection.
   state.lastAttempt = undefined;
 }
 
-export function recordProviderPromptAttempt(
+function recordProviderPromptAttempt(
   state: ProviderPromptState,
   snapshot: ProviderPromptSnapshot,
 ): void {
@@ -113,7 +113,7 @@ export function markLastProviderPromptContextRejected(
   return attempted;
 }
 
-export function markProviderPromptSucceeded(
+function markProviderPromptSucceeded(
   state: ProviderPromptState,
   snapshot: ProviderPromptSnapshot,
 ): void {
