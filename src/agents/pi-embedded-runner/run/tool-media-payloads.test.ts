@@ -36,6 +36,22 @@ describe("mergeAttemptToolMediaPayloads", () => {
         mediaUrls: ["/tmp/reply.opus"],
         mediaUrl: "/tmp/reply.opus",
         audioAsVoice: true,
+        bypassMessagingToolSuppression: true,
+      },
+    ]);
+  });
+
+  it("marks synthetic media-only payload to bypass messaging tool suppression", () => {
+    const result = mergeAttemptToolMediaPayloads({
+      payloads: [],
+      toolMediaUrls: ["/tmp/image.png"],
+    });
+    expect(result).toEqual([
+      {
+        mediaUrls: ["/tmp/image.png"],
+        mediaUrl: "/tmp/image.png",
+        audioAsVoice: undefined,
+        bypassMessagingToolSuppression: true,
       },
     ]);
   });

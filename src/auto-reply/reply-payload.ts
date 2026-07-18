@@ -35,6 +35,9 @@ export type ReplyPayload = {
    *  Should be excluded from TTS transcript accumulation so compaction
    *  status lines are not synthesised into the spoken assistant reply. */
   isCompactionNotice?: boolean;
+  /** When true, this payload bypasses messaging-tool reply suppression.
+   *  Set on synthetic media-only payloads that were never sent via a messaging tool. */
+  bypassMessagingToolSuppression?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };

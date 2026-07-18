@@ -34,6 +34,7 @@ export function mergeAttemptToolMediaPayloads(params: {
       mediaUrls: mediaUrls.length ? mediaUrls : undefined,
       mediaUrl: mediaUrls[0],
       audioAsVoice: params.toolAudioAsVoice || undefined,
+      bypassMessagingToolSuppression: true,
     },
   ];
 }

@@ -236,7 +236,9 @@ export async function buildReplyPayloads(params: {
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
         : dedupedPayloads;
-  const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
+  const replyPayloads = suppressMessagingToolReplies
+    ? filteredPayloads.filter((payload) => payload.bypassMessagingToolSuppression)
+    : filteredPayloads;
 
   return {
     replyPayloads,
