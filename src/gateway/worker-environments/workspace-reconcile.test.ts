@@ -179,12 +179,58 @@ describe("worker workspace reconciliation", () => {
     ).rejects.toThrow("local-only path");
   });
 
+  it("ignores derived-cache divergence but still rejects real file divergence", async () => {
+    const local = await temporaryDirectory("workspace-derived-local");
+    const staged = await temporaryDirectory("workspace-derived-staged");
+    await gitInit(local);
+    await Promise.all([
+      fs.mkdir(path.join(local, "__pycache__")),
+      fs.mkdir(path.join(staged, "__pycache__")),
+    ]);
+    await Promise.all([
+      fs.writeFile(path.join(local, "real.txt"), "base"),
+      fs.writeFile(path.join(local, "__pycache__/fizzbuzz.pyc"), "base cache"),
+      fs.writeFile(path.join(staged, "real.txt"), "base"),
+      fs.writeFile(path.join(staged, "__pycache__/fizzbuzz.pyc"), "worker cache"),
+    ]);
+    const base = await manifestFor(local);
+    const current = await manifestFor(staged);
+    await fs.writeFile(path.join(local, "__pycache__/fizzbuzz.pyc"), "local cache");
+
+    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
+    await expect(fs.readFile(path.join(local, "__pycache__/fizzbuzz.pyc"), "utf8")).resolves.toBe(
+      "local cache",
+    );
+
+    await fs.writeFile(path.join(local, "real.txt"), "local divergence");
+    await expect(
+      applyWorkspace({ root: local, stagingRoot: staged, base, current }),
+    ).rejects.toThrow("Gateway workspace changed after cloud dispatch: real.txt");
+  });
+
   it("allows a remote file to replace an unchanged base directory", async () => {
     const local = await temporaryDirectory("workspace-directory-replacement");
     const staged = await temporaryDirectory("workspace-directory-replacement-staged");
     await gitInit(local);
     await fs.mkdir(path.join(local, "src"));
     await fs.writeFile(path.join(local, "src", "old.txt"), "base");
+    const base = await manifestFor(local);
+    await fs.mkdir(path.join(local, "src", "__pycache__"));
+    await fs.writeFile(path.join(local, "src", "__pycache__", "old.pyc"), "local cache");
+    await fs.writeFile(path.join(staged, "src"), "replacement");
+    const current = await manifestFor(staged);
+
+    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
+
+    await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
+  });
+
+  it("allows a remote file to replace a base directory containing only derived entries", async () => {
+    const local = await temporaryDirectory("workspace-derived-directory-replacement");
+    const staged = await temporaryDirectory("workspace-derived-directory-replacement-staged");
+    await gitInit(local);
+    await fs.mkdir(path.join(local, "src", "__pycache__"), { recursive: true });
+    await fs.writeFile(path.join(local, "src", "__pycache__", "old.pyc"), "local cache");
     const base = await manifestFor(local);
     await fs.writeFile(path.join(staged, "src"), "replacement");
     const current = await manifestFor(staged);
@@ -219,30 +265,64 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.readFile(path.join(local, "src", "old.txt"), "utf8")).resolves.toBe("base");
   });
 
+  it("restores a file over a directory containing only derived descendants", async () => {
+    const local = await temporaryDirectory("workspace-directory-recovery-cache");
+    const staged = await temporaryDirectory("workspace-directory-recovery-cache-staged");
+    await gitInit(local);
+    await fs.writeFile(path.join(local, "src"), "base");
+    const base = await manifestFor(local);
+    await fs.mkdir(path.join(staged, "src"));
+    const current = await manifestFor(staged);
+    let journal: WorkerWorkspaceReconciliationJournal | undefined;
+    await applyWorkspace({
+      root: local,
+      stagingRoot: staged,
+      base,
+      current,
+      begin: (value) => {
+        journal = value;
+      },
+    });
+    await fs.mkdir(path.join(local, "src", "__pycache__"), { recursive: true });
+    await fs.writeFile(path.join(local, "src", "__pycache__", "remote.pyc"), "local cache");
+
+    await recoverWorkerWorkspaceReconciliation({ root: local, journal: journal! });
+
+    await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("base");
+  });
+
   it("does not follow a base symlink while replacing it with a directory", async () => {
     const local = await temporaryDirectory("workspace-symlink-replacement");
     const staged = await temporaryDirectory("workspace-symlink-replacement-staged");
     await gitInit(local);
     await fs.mkdir(path.join(local, "target"));
+    await fs.mkdir(path.join(local, "target", "nested", "__pycache__"), { recursive: true });
     await fs.writeFile(path.join(local, "target", "file.txt"), "base target");
+    await fs.writeFile(
+      path.join(local, "target", "nested", "__pycache__", "cache.pyc"),
+      "outside cache",
+    );
     await fs.symlink("target", path.join(local, "entry"));
     const base = await manifestFor(local);
 
     await fs.mkdir(path.join(staged, "target"));
     await fs.writeFile(path.join(staged, "target", "file.txt"), "base target");
     await fs.mkdir(path.join(staged, "entry"));
-    await fs.writeFile(path.join(staged, "entry", "file.txt"), "remote directory");
+    await fs.writeFile(path.join(staged, "entry", "nested"), "remote directory");
     const current = await manifestFor(staged);
 
     await applyWorkspace({ root: local, stagingRoot: staged, base, current });
 
     expect((await fs.lstat(path.join(local, "entry"))).isDirectory()).toBe(true);
-    await expect(fs.readFile(path.join(local, "entry", "file.txt"), "utf8")).resolves.toBe(
+    await expect(fs.readFile(path.join(local, "entry", "nested"), "utf8")).resolves.toBe(
       "remote directory",
     );
     await expect(fs.readFile(path.join(local, "target", "file.txt"), "utf8")).resolves.toBe(
       "base target",
     );
+    await expect(
+      fs.readFile(path.join(local, "target", "nested", "__pycache__", "cache.pyc"), "utf8"),
+    ).resolves.toBe("outside cache");
   });
 
   it("rolls back atomically when durable manifest acceptance fails", async () => {
@@ -311,6 +391,54 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.access(path.join(local, "file.txt"))).rejects.toThrow();
   });
 
+  it("ignores derived paths in a journal created before the exclusion", async () => {
+    const local = await temporaryDirectory("workspace-derived-recovery");
+    const staged = await temporaryDirectory("workspace-derived-recovery-staged");
+    await gitInit(local);
+    await Promise.all([
+      fs.writeFile(path.join(local, "file.txt"), "base"),
+      fs.writeFile(path.join(local, ":literal.ts"), "base literal"),
+    ]);
+    const base = await manifestFor(local);
+    await Promise.all([
+      fs.writeFile(path.join(staged, "file.txt"), "remote"),
+      fs.writeFile(path.join(staged, ":literal.ts"), "remote literal"),
+    ]);
+    const current = await manifestFor(staged);
+    let journal: WorkerWorkspaceReconciliationJournal | undefined;
+    await applyWorkspace({
+      root: local,
+      stagingRoot: staged,
+      base,
+      current,
+      begin: (value) => {
+        journal = value;
+      },
+    });
+    expect(journal).toBeDefined();
+    expect(journal!.baseEntries.map((entry) => entry.path)).toContain(":literal.ts");
+    expect(await fs.readFile(path.join(local, ":literal.ts"), "utf8")).toBe("remote literal");
+    const legacyJournal = {
+      ...journal!,
+      baseEntries: journal!.baseEntries.map((entry) =>
+        entry.path === "file.txt" ? { ...entry, path: "__pycache__/file.pyc" } : entry,
+      ),
+      appliedEntries: journal!.appliedEntries.map((entry) =>
+        entry.path === "file.txt" ? { ...entry, path: "__pycache__/file.pyc" } : entry,
+      ),
+    } satisfies WorkerWorkspaceReconciliationJournal;
+    await fs.mkdir(path.join(local, "__pycache__"));
+    await fs.writeFile(path.join(local, "__pycache__/file.pyc"), "local cache");
+
+    await recoverWorkerWorkspaceReconciliation({ root: local, journal: legacyJournal });
+
+    expect(await fs.readFile(path.join(local, "file.txt"), "utf8")).toBe("remote");
+    expect(await fs.readFile(path.join(local, ":literal.ts"), "utf8")).toBe("base literal");
+    await expect(fs.readFile(path.join(local, "__pycache__/file.pyc"), "utf8")).resolves.toBe(
+      "local cache",
+    );
+  });
+
   it("does not follow a symlink-raced ancestor during Git patch application", async () => {
     const local = await temporaryDirectory("workspace-symlink-race");
     const staged = await temporaryDirectory("workspace-symlink-race-staged");
@@ -352,6 +480,24 @@ describe("worker workspace reconciliation", () => {
     expect(parseWorkerWorkspaceManifest(encoded.raw, encoded.ref).entries).toEqual([
       { path: "dir/file", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) },
     ]);
+    const legacyDerived = encodeManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        { path: "__pycache__", type: "directory", mode: 0o700 },
+        {
+          path: "__pycache__/fizzbuzz.pyc",
+          type: "file",
+          mode: 0o600,
+          size: 1,
+          sha256: "b".repeat(64),
+        },
+      ],
+    });
+    expect(parseWorkerWorkspaceManifest(legacyDerived.raw, legacyDerived.ref)).toMatchObject({
+      entries: [],
+      directories: [],
+    });
     expect(() => parseWorkerWorkspaceManifest(`${encoded.raw} `, encoded.ref)).toThrow("digest");
     for (const target of ["../outside", "..\\outside", "C:/outside"]) {
       const invalid = encodeManifest({
