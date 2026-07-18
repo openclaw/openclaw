@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { readRegularFileSync } from "../infra/regular-file.js";
@@ -9,8 +9,7 @@ const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 // workspace scanner.
 const IGNORE_FILE_MAX_BYTES = 4 * 1024 * 1024;
 // Returned instead of null when an ignore file exceeds IGNORE_FILE_MAX_BYTES so
-// the caller can fail closed; fs-safe signals oversize only via a generic
-// message, so the size is checked directly before the bounded read.
+// the caller can fail closed.
 const OVERSIZED_IGNORE_FILE = Symbol("oversizedIgnoreFile");
 
 export type IgnoreMatcher = ReturnType<typeof ignore>;
@@ -62,15 +61,18 @@ function readIgnoreFileContent(ignorePath: string): string | null | typeof OVERS
     return null;
   }
   try {
-    if (statSync(resolvedPath).size > IGNORE_FILE_MAX_BYTES) {
-      return OVERSIZED_IGNORE_FILE;
-    }
     const { buffer } = readRegularFileSync({
       filePath: resolvedPath,
       maxBytes: IGNORE_FILE_MAX_BYTES,
     });
     return buffer.toString("utf-8");
-  } catch {
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith(`File exceeds ${IGNORE_FILE_MAX_BYTES} bytes:`)
+    ) {
+      return OVERSIZED_IGNORE_FILE;
+    }
     return null;
   }
 }
