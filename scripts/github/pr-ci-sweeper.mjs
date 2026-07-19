@@ -131,13 +131,19 @@ async function reopenWithRetry({ github, core, owner, repo, pullNumber }) {
   return false;
 }
 
-export async function runPrCiSweeper({ github, context, core, dryRun = false, appSlug = "" }) {
+export async function runPrCiSweeper({
+  github,
+  context,
+  core,
+  dryRun = false,
+  appSlug = "",
+  now = Date.now(),
+}) {
   const sweeperLogins = new Set(KNOWN_SWEEPER_LOGINS);
   if (appSlug) {
     sweeperLogins.add(`${appSlug}[bot]`);
   }
   const { owner, repo } = context.repo;
-  const now = Date.now();
   const results = [];
   let refires = 0;
   const openPrs = await github.paginate(github.rest.pulls.list, {
