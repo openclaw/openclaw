@@ -14,14 +14,24 @@ function relativeLuminance(hex: string): number {
   if (!channels || channels.length !== 3) {
     throw new Error(`invalid color: ${hex}`);
   }
-  const [r, g, b] = channels;
+  const r = channels[0];
+  const g = channels[1];
+  const b = channels[2];
+  if (r === undefined || g === undefined || b === undefined) {
+    throw new Error(`invalid color: ${hex}`);
+  }
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 function contrastRatio(foreground: string, background: string): number {
-  const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].toSorted(
+  const luminances = [relativeLuminance(foreground), relativeLuminance(background)].toSorted(
     (a, b) => b - a,
   );
+  const lighter = luminances[0];
+  const darker = luminances[1];
+  if (lighter === undefined || darker === undefined) {
+    throw new Error("expected two luminance values");
+  }
   return (lighter + 0.05) / (darker + 0.05);
 }
 
@@ -43,28 +53,44 @@ function mixOpaque(foreground: string, background: string, opacity: number): str
 function readCssVarBlock(css: string, selector: string): Record<string, string> {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`, "u"));
-  if (!match?.[1]) {
+  const block = match?.[1];
+  if (!block) {
     throw new Error(`missing CSS block for ${selector}`);
   }
   const vars: Record<string, string> = {};
-  for (const line of match[1].matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/gu)) {
-    vars[line[1]] = line[2].toLowerCase();
+  for (const line of block.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/gu)) {
+    const name = line[1];
+    const value = line[2];
+    if (name === undefined || value === undefined) {
+      continue;
+    }
+    vars[name] = value.toLowerCase();
   }
   return vars;
+}
+
+function requireCssColor(vars: Record<string, string>, name: string): string {
+  const value = vars[name];
+  if (value === undefined) {
+    throw new Error(`missing CSS color --${name}`);
+  }
+  return value;
 }
 
 function readRuleBody(css: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "u"));
-  if (!match?.[1]) {
+  const body = match?.[1];
+  if (!body) {
     throw new Error(`missing CSS rule for ${selector}`);
   }
-  return match[1];
+  return body;
 }
 
 function readOpacity(ruleBody: string): number {
   const match = ruleBody.match(/opacity:\s*([0-9.]+)\s*;/u);
-  return match ? Number.parseFloat(match[1]) : 1;
+  const raw = match?.[1];
+  return raw === undefined ? 1 : Number.parseFloat(raw);
 }
 
 describe("Control UI theme contrast", () => {
@@ -74,8 +100,17 @@ describe("Control UI theme contrast", () => {
 
   it("keeps default dark muted text tokens at WCAG AA on declared surfaces", () => {
     const dark = readCssVarBlock(baseCss, ":root");
-    const backgrounds = [dark.bg, dark["bg-elevated"], dark["bg-muted"], dark.card];
-    const foregrounds = [dark.muted, dark["muted-strong"], dark["muted-foreground"]];
+    const backgrounds = [
+      requireCssColor(dark, "bg"),
+      requireCssColor(dark, "bg-elevated"),
+      requireCssColor(dark, "bg-muted"),
+      requireCssColor(dark, "card"),
+    ];
+    const foregrounds = [
+      requireCssColor(dark, "muted"),
+      requireCssColor(dark, "muted-strong"),
+      requireCssColor(dark, "muted-foreground"),
+    ];
 
     for (const foreground of foregrounds) {
       for (const background of backgrounds) {
@@ -86,6 +121,13 @@ describe("Control UI theme contrast", () => {
 
   it("keeps chat timestamps and slash-arg hints AA without opacity dimming", () => {
     const dark = readCssVarBlock(baseCss, ":root");
+    const muted = requireCssColor(dark, "muted");
+    const backgrounds = [
+      requireCssColor(dark, "bg"),
+      requireCssColor(dark, "bg-elevated"),
+      requireCssColor(dark, "bg-muted"),
+      requireCssColor(dark, "card"),
+    ];
     const timestampRule = readRuleBody(groupedCss, ".chat-group-timestamp");
     const slashArgsRule = readRuleBody(layoutCss, ".slash-menu-args");
 
@@ -97,9 +139,9 @@ describe("Control UI theme contrast", () => {
     expect(timestampOpacity).toBe(1);
     expect(slashArgsOpacity).toBe(1);
 
-    for (const background of [dark.bg, dark["bg-elevated"], dark["bg-muted"], dark.card]) {
-      const timestampFg = mixOpaque(dark.muted, background, timestampOpacity);
-      const slashArgsFg = mixOpaque(dark.muted, background, slashArgsOpacity);
+    for (const background of backgrounds) {
+      const timestampFg = mixOpaque(muted, background, timestampOpacity);
+      const slashArgsFg = mixOpaque(muted, background, slashArgsOpacity);
       expect(contrastRatio(timestampFg, background)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(slashArgsFg, background)).toBeGreaterThanOrEqual(4.5);
     }
