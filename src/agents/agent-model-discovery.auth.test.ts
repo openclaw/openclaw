@@ -137,8 +137,8 @@ describe("discoverAuthStorage", () => {
         "openai:sole-expired": {
           type: "oauth",
           provider: "openai",
-          access: "sole-access",
-          refresh: "sole-refresh",
+          access: "fake",
+          refresh: "sample",
           expires: Date.now() - 3600_000,
         },
       },
@@ -146,8 +146,8 @@ describe("discoverAuthStorage", () => {
 
     expect(credentials.openai).toEqual({
       type: "oauth",
-      access: "sole-access",
-      refresh: "sole-refresh",
+      access: "fake",
+      refresh: "sample",
       expires: expect.any(Number),
     });
   });
@@ -159,20 +159,20 @@ describe("discoverAuthStorage", () => {
         "openai:key": {
           type: "api_key",
           provider: "openai",
-          key: "insertion-order-key",
+          key: "test-key",
         },
         "openai:expired": {
           type: "oauth",
           provider: "openai",
-          access: "expired-access",
-          refresh: "expired-refresh",
+          access: "dummy",
+          refresh: "placeholder",
           expires: Date.now() - 3600_000,
         },
         "openai:valid": {
           type: "oauth",
           provider: "openai",
-          access: "valid-access",
-          refresh: "valid-refresh",
+          access: "fake",
+          refresh: "sample",
           expires: Date.now() + 3600_000,
         },
       },
@@ -180,8 +180,8 @@ describe("discoverAuthStorage", () => {
 
     expect(credentials.openai).toEqual({
       type: "oauth",
-      access: "valid-access",
-      refresh: "valid-refresh",
+      access: "fake",
+      refresh: "sample",
       expires: expect.any(Number),
     });
   });
@@ -194,14 +194,14 @@ describe("discoverAuthStorage", () => {
           "openai:oauth": {
             type: "oauth",
             provider: "openai",
-            access: "valid-access",
-            refresh: "valid-refresh",
+            access: "fake",
+            refresh: "sample",
             expires: Date.now() + 3600_000,
           },
           "openai:key": {
             type: "api_key",
             provider: "openai",
-            key: "configured-order-key",
+            key: "test-key",
           },
         },
       });
@@ -215,7 +215,7 @@ describe("discoverAuthStorage", () => {
 
       expect(authStorage.get("openai")).toEqual({
         type: "api_key",
-        key: "configured-order-key",
+        key: "test-key",
       });
     });
   });
