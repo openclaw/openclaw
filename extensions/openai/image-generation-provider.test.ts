@@ -1629,6 +1629,38 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it.each([
+    {
+      name: "output item",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs!bG8=" },
+      },
+    },
+    {
+      name: "completed output",
+      event: {
+        type: "response.completed",
+        response: {
+          output: [{ type: "image_generation_call", result: "aGVs!bG8=" }],
+        },
+      },
+    },
+  ])("rejects malformed Codex image base64 from $name events", async ({ event }) => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n`);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw from malformed image data",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation returned malformed base64 image data");
+  });
+
   it("honors configured Codex transport overrides for OAuth image generation", async () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });

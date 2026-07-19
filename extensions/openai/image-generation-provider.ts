@@ -14,7 +14,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
   hasConfiguredSecretInput,
@@ -577,7 +577,11 @@ function decodeCodexImagePayload(payload: string): Buffer {
   if (payload.length > MAX_CODEX_IMAGE_BASE64_CHARS) {
     throw new Error("OpenAI Codex image generation result exceeded size limit");
   }
-  return Buffer.from(payload, "base64");
+  const canonicalPayload = canonicalizeBase64(payload);
+  if (!canonicalPayload) {
+    throw new Error("OpenAI Codex image generation returned malformed base64 image data");
+  }
+  return Buffer.from(canonicalPayload, "base64");
 }
 
 function toCodexImage(
