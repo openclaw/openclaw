@@ -242,7 +242,7 @@ function isOpenRouterSessionIdForwardingEnabled(ctx: ProviderWrapStreamFnContext
 // domain-separates this from any other subsystem that hashes the same
 // session id, and the fixed 64-char hex digest is well under OpenRouter's
 // 256-character session_id cap.
-export function deriveOpenRouterSessionId(sessionId: string): string {
+function deriveOpenRouterSessionId(sessionId: string): string {
   return createHash("sha256").update(`openrouter-session:${sessionId}`).digest("hex");
 }
 

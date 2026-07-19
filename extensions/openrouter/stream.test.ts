@@ -2,9 +2,10 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
-import { deriveOpenRouterSessionId, wrapOpenRouterProviderStream } from "./stream.js";
+import { wrapOpenRouterProviderStream } from "./stream.js";
 
 const SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+const OTHER_SESSION_ID = "11111111-1111-1111-1111-111111111111";
 
 type CaseOptions = {
   forwardSessionId?: boolean;
@@ -49,25 +50,20 @@ function runSessionIdCase(opts: CaseOptions): Record<string, unknown> {
   return captured;
 }
 
-describe("deriveOpenRouterSessionId", () => {
-  it("is a deterministic 64-character hex digest, distinct from the raw session id", () => {
-    const derived = deriveOpenRouterSessionId(SESSION_ID);
-    expect(derived).toMatch(/^[0-9a-f]{64}$/);
-    expect(derived).not.toBe(SESSION_ID);
-    expect(deriveOpenRouterSessionId(SESSION_ID)).toBe(derived);
-  });
-
-  it("derives different values for different raw session ids", () => {
-    expect(deriveOpenRouterSessionId(SESSION_ID)).not.toBe(
-      deriveOpenRouterSessionId("11111111-1111-1111-1111-111111111111"),
-    );
-  });
-});
-
 describe("wrapOpenRouterProviderStream session_id forwarding", () => {
-  it("injects a derived session_id when enabled and options.sessionId is present", () => {
+  it("injects an opaque, deterministic session_id when enabled and options.sessionId is present", () => {
     const payload = runSessionIdCase({ forwardSessionId: true, sessionId: SESSION_ID });
-    expect(payload.session_id).toBe(deriveOpenRouterSessionId(SESSION_ID));
+    expect(payload.session_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(payload.session_id).not.toBe(SESSION_ID);
+
+    const again = runSessionIdCase({ forwardSessionId: true, sessionId: SESSION_ID });
+    expect(again.session_id).toBe(payload.session_id);
+  });
+
+  it("derives a different session_id for a different raw session id", () => {
+    const first = runSessionIdCase({ forwardSessionId: true, sessionId: SESSION_ID });
+    const second = runSessionIdCase({ forwardSessionId: true, sessionId: OTHER_SESSION_ID });
+    expect(first.session_id).not.toBe(second.session_id);
   });
 
   it("does not inject session_id when forwarding is disabled", () => {
