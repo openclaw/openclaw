@@ -628,6 +628,20 @@ export type PluginHookReplyPayloadSendingResult = {
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
 
+/** Host-derived identity for the message requester that initiated a tool call. */
+export type PluginHookToolRequesterContext = {
+  /** Channel/plugin id, for example `discord` or `telegram`. */
+  readonly channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  readonly accountId?: string;
+  /** Channel-scoped sender id when the host received one. */
+  readonly senderId?: string;
+  /** True only when the host resolved the sender as an owner. */
+  readonly senderIsOwner?: boolean;
+  /** Provider-native role ids when the channel supplies them. */
+  readonly roleIds?: readonly string[];
+};
+
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
@@ -642,6 +656,12 @@ export type PluginHookToolContext = {
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
+  /**
+   * Message requester for this turn. Absent for non-message runs and harnesses
+   * that cannot prove requester identity. Authorization hooks should fail
+   * closed when a required field is absent.
+   */
+  requester?: PluginHookToolRequesterContext;
 };
 
 export type PluginHookBeforeToolCallEvent = {
