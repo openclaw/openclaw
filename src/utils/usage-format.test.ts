@@ -326,7 +326,7 @@ describe("usage-format", () => {
       ).toBe(index + 1);
     }
 
-    const firstAgentDir = expectDefined(agentDirs[0]);
+    const firstAgentDir = expectDefined(agentDirs[0], "first bounded agent directory");
     await writePricing(firstAgentDir, 999);
     expect(
       resolveModelCostConfig({

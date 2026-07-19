@@ -187,10 +187,7 @@ function resolveUsageCostAgentDir(
   return agentId === undefined ? undefined : resolveAgentDir(config ?? {}, agentId);
 }
 
-function resolveUsageCostPricingFingerprint(
-  config?: OpenClawConfig,
-  agentDir?: string,
-): string {
+function resolveUsageCostPricingFingerprint(config?: OpenClawConfig, agentDir?: string): string {
   return resolveModelCostConfigFingerprint(config, agentDir);
 }
 
@@ -1546,8 +1543,7 @@ async function refreshCostUsageCacheForAgent(params?: {
     return "busy";
   }
   try {
-    const agentDir =
-      params?.agentDir ?? resolveUsageCostAgentDir(params?.config, params?.agentId);
+    const agentDir = params?.agentDir ?? resolveUsageCostAgentDir(params?.config, params?.agentId);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config, agentDir);
     const rows = readSessionCostUsageRollupRows(params?.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
