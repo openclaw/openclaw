@@ -255,34 +255,16 @@ public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashabl
 
     public let name: String
     public let position: Int
-
-    // periphery:ignore - Public DTO initializer for external OpenClawKit transport consumers.
-    public init(name: String, position: Int) {
-        self.name = name
-        self.position = position
-    }
 }
 
 public struct OpenClawChatSessionGroupsResponse: Codable, Sendable, Equatable {
     public let groups: [OpenClawChatSessionGroup]
-
-    // periphery:ignore - Public DTO initializer for external OpenClawKit transport consumers.
-    public init(groups: [OpenClawChatSessionGroup]) {
-        self.groups = groups
-    }
 }
 
 public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equatable {
     public let ok: Bool
     public let groups: [OpenClawChatSessionGroup]
     public let updatedSessions: Int?
-
-    // periphery:ignore - Public DTO initializer for external OpenClawKit transport consumers.
-    public init(ok: Bool, groups: [OpenClawChatSessionGroup], updatedSessions: Int? = nil) {
-        self.ok = ok
-        self.groups = groups
-        self.updatedSessions = updatedSessions
-    }
 }
 
 public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable {
