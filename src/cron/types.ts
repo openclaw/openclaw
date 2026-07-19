@@ -31,6 +31,17 @@ export type CronSchedule =
       kind: "on-exit";
       command: string;
       cwd?: string;
+    }
+  | {
+      /** Event-driven source whose supervised argv emits payload-triggering lines. */
+      kind: "stream";
+      command: string[];
+      cwd?: string;
+      mode?: "line" | "match";
+      /** JavaScript regular-expression source, required when mode is "match". */
+      match?: string;
+      batchMs?: number;
+      maxBatchBytes?: number;
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
@@ -372,6 +383,15 @@ export type CronJobState = {
   lastTriggerFireAtMs?: number;
   /** JSON state returned by the last trigger script evaluation. */
   triggerState?: unknown;
+  /** Current gateway-owned stream source lifecycle state. */
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */

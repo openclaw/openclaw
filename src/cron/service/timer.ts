@@ -37,6 +37,7 @@ import {
 } from "../run-diagnostics.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
+import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -211,6 +212,11 @@ type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  streamBatch?: string;
+  // Schedule key of the stream source that produced streamBatch. Guards against
+  // an ABA race: a batch emitted by an old stream schedule must not fire after
+  // the job was disabled and re-enabled (or edited) with a different schedule.
+  streamScheduleKey?: string;
 };
 
 /** Script payloads run headlessly even when their notifications target main. */
@@ -251,6 +257,8 @@ export async function executeJobCoreWithTimeout(
     runId?: string;
     activeJobMarker?: CronActiveJobMarker;
     owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+    streamBatch?: string;
+    streamScheduleKey?: string;
   },
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
@@ -297,6 +305,8 @@ export async function executeJobCoreWithTimeout(
       const corePromise = executeJobCore(state, job, runAbortController.signal, {
         activeJobMarker: opts?.activeJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
+        streamBatch: opts?.streamBatch,
+        streamScheduleKey: opts?.streamScheduleKey,
         onExecutionStarted: accumulateExecution,
         onExecutionPhase: accumulateExecution,
       });
@@ -352,6 +362,8 @@ export async function executeJobCoreWithTimeout(
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
+      streamBatch: opts?.streamBatch,
+      streamScheduleKey: opts?.streamScheduleKey,
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -2491,6 +2503,16 @@ async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+  if (options?.streamScheduleKey !== undefined) {
+    // Defense in depth over the watcher's per-owner generation guards: refuse a
+    // stream batch whose originating schedule is no longer the job's current
+    // schedule (disable→re-enable-as-different, or in-place edit).
+    const currentKey =
+      job.schedule.kind === "stream" ? cronStreamScheduleKey(job.schedule) : undefined;
+    if (currentKey !== options.streamScheduleKey) {
+      return { status: "skipped", error: "stream batch schedule no longer current" };
+    }
+  }
   let effectiveJob = job;
   let triggerEval: CronTriggerEvalOutcome | undefined;
   if (job.trigger) {
@@ -2502,6 +2524,7 @@ async function executeJobCore(
       job,
       script: job.trigger.script,
       state: job.state.triggerState,
+      streamBatch: options?.streamBatch,
       abortSignal,
     });
     if (evaluation.kind === "busy") {
@@ -2528,13 +2551,7 @@ async function executeJobCore(
       return { status: "ok", triggerEval };
     }
     if (evaluation.message !== undefined) {
-      const payload =
-        job.payload.kind === "systemEvent"
-          ? { ...job.payload, text: `${job.payload.text}\n\n${evaluation.message}` }
-          : job.payload.kind === "agentTurn"
-            ? { ...job.payload, message: `${job.payload.message}\n\n${evaluation.message}` }
-            : job.payload;
-      effectiveJob = { ...job, payload };
+      effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
     }
   }
   if (effectiveJob.payload.kind === "script") {
@@ -2543,8 +2560,15 @@ async function executeJobCore(
       effectiveJob,
       abortSignal,
       options?.activeJobMarker,
+      options?.streamBatch,
     );
     return triggerEval ? { ...result, triggerEval } : result;
+  }
+  if (options?.streamBatch !== undefined) {
+    effectiveJob = {
+      ...effectiveJob,
+      payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
+    };
   }
   if (effectiveJob.sessionTarget === "main") {
     const result = await executeMainSessionCronJob(
@@ -2833,6 +2857,7 @@ async function executeScriptCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   activeJobMarker?: CronActiveJobMarker,
+  streamBatch?: string,
 ) {
   if (state.deps.cronConfig?.triggers?.enabled !== true) {
     return {
@@ -2844,7 +2869,7 @@ async function executeScriptCronJob(
   if (!state.deps.runScriptJob) {
     return { status: "error" as const, error: "cron script payload executor is unavailable" };
   }
-  const result = await state.deps.runScriptJob({ job, abortSignal });
+  const result = await state.deps.runScriptJob({ job, streamBatch, abortSignal });
   // Script runners may settle after ignoring an abort. Recheck both operator
   // cancellation and scheduler ownership before any notify/wake side effect.
   if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
