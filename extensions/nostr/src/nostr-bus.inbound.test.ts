@@ -22,7 +22,6 @@ type TestNostrBusState = {
 };
 
 const mockState = vi.hoisted(() => ({
-  pool: null as { onRelayConnectionSuccess?: (relay: string) => void } | null,
   handlers: [] as Array<{
     onevent: (event: Record<string, unknown>) => void | Promise<void>;
     oneose?: () => void;
@@ -52,10 +51,6 @@ vi.mock("nostr-tools", () => {
   class MockSimplePool {
     onRelayConnectionSuccess?: (relay: string) => void;
 
-    constructor() {
-      mockState.pool = this;
-    }
-
     subscribeMany(
       relays: string[],
       filters: unknown,
@@ -66,6 +61,10 @@ vi.mock("nostr-tools", () => {
       },
     ) {
       mockState.subscribeMany(relays, filters, handlers);
+      const relay = relays[0];
+      if (relay) {
+        this.onRelayConnectionSuccess?.(new URL(relay).toString());
+      }
       mockState.handlers.push(handlers);
       return {
         close: mockState.subscriptionClose,
@@ -160,7 +159,6 @@ describe("startNostrBus inbound guards", () => {
       },
     } as unknown as PluginRuntime);
     mockState.handlers = [];
-    mockState.pool = null;
     ingressTasks = [];
     mockState.subscribeMany.mockClear();
     mockState.publish.mockReset();
@@ -217,8 +215,7 @@ describe("startNostrBus inbound guards", () => {
       onMetric: () => {},
     });
 
-    expect(mockState.pool?.onRelayConnectionSuccess).toBeTypeOf("function");
-    mockState.pool?.onRelayConnectionSuccess?.("wss://relay.example/");
+    expect(onConnect).toHaveBeenCalledOnce();
     expect(onConnect).toHaveBeenCalledWith("wss://relay.example/");
 
     await bus.close();
