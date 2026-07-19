@@ -512,7 +512,6 @@ async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<Gatew
   if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
     const url = await resolveValidatedRemoteGatewayUrl(config);
     const tlsFingerprint = normalizeOptionalString(config.gateway?.remote?.tlsFingerprint);
-    const preauthHandshakeTimeoutMs = config.gateway?.handshakeTimeoutMs;
     return url
       ? [
           {
@@ -520,7 +519,6 @@ async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<Gatew
             auth: "remote",
             scope: "remote",
             ...(tlsFingerprint ? { tlsFingerprint } : {}),
-            ...(preauthHandshakeTimeoutMs ? { preauthHandshakeTimeoutMs } : {}),
           },
         ]
       : [];

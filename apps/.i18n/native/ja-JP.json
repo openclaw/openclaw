@@ -16304,6 +16304,11 @@
       "translated": "OpenClawは利用できません"
     },
     {
+      "id": "native.apple.f4adf2762402e92a",
+      "source": "Confirmation needed",
+      "translated": "確認が必要です"
+    },
+    {
       "id": "native.apple.f703391677039fa3",
       "source": "iOS Speech + TTS",
       "translated": "iOS音声認識 + TTS"

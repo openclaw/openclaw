@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -8,8 +9,14 @@ struct TalkRealtimeTranscriptWriteQueueTests {
 
     @Test func `retries writes in order and continues after final failure`() async {
         var attempts: [String] = []
-        var failures: [String] = []
         let store = TalkRealtimeTranscriptStore(retryDelaysNanoseconds: [0, 0, 0, 0])
+        let delegate = RecordingTranscriptFailureDelegate()
+        let session = TalkRealtimeWebRTCSession(
+            gateway: GatewayNodeSession(),
+            sessionKey: "agent:main:main",
+            voiceSessionId: "voice-1",
+            transcriptStore: store,
+            delegate: delegate)
 
         for _ in 1...3 {
             store.enqueue(
@@ -27,14 +34,14 @@ struct TalkRealtimeTranscriptWriteQueueTests {
                         throw PersistError()
                     }
                 },
-                failureLog: { entryId, _ in
-                    failures.append(entryId)
+                failureLog: { entryId, error in
+                    session._test_reportTranscriptPersistenceFailure(entryId: entryId, error: error)
                 })
         }
         await store.flush(voiceSessionId: "voice-1")
 
         #expect(attempts == ["1", "1", "1", "2", "2", "2", "3"])
-        #expect(failures == ["2"])
+        #expect(delegate.failedEntryIds == ["2"])
     }
 
     @Test func `shares ordering across transport replacements`() async {
@@ -78,4 +85,25 @@ struct TalkRealtimeTranscriptWriteQueueTests {
         #expect(persisted.filter { $0.hasPrefix("voice-a:") } == ["voice-a:1", "voice-a:2"])
         #expect(persisted.filter { $0.hasPrefix("voice-b:") } == ["voice-b:1"])
     }
+}
+
+@MainActor
+private final class RecordingTranscriptFailureDelegate: TalkRealtimeWebRTCSessionDelegate {
+    var failedEntryIds: [String] = []
+
+    func realtimeSession(_: TalkRealtimeWebRTCSession, didChangeStatus _: String) {}
+    func realtimeSession(_: TalkRealtimeWebRTCSession, didDetectInputSpeech _: Bool) {}
+    func realtimeSession(_: TalkRealtimeWebRTCSession, didUpdateAudioLevels _: Double?, output _: Double?) {}
+    func realtimeSession(_: TalkRealtimeWebRTCSession, didReceiveUserTranscript _: String) {}
+    func realtimeSession(_: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript _: String) {}
+
+    func realtimeSession(
+        _: TalkRealtimeWebRTCSession,
+        didFailTranscriptPersistenceForEntry entryId: String,
+        error _: Error)
+    {
+        self.failedEntryIds.append(entryId)
+    }
+
+    func realtimeSessionDidFinish(_: TalkRealtimeWebRTCSession) {}
 }

@@ -19,7 +19,6 @@ extensions/browser/src/browser/chrome-mcp.ts
 extensions/browser/src/browser/chrome.executables.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
-extensions/browser/src/browser/config.test.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/pw-session.ts
@@ -545,7 +544,6 @@ src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
 src/agents/tool-loop-detection.test.ts
-src/agents/tool-loop-detection.ts
 src/agents/tool-search.test.ts
 src/agents/tool-search.ts
 src/agents/tools/computer-tool.ts

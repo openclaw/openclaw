@@ -26,7 +26,6 @@ vi.mock("../config/config.js", () => ({
     session: {
       mainKey: "main",
       scope: "per-sender",
-      agentToAgent: { maxPingPongTurns: 2 },
     },
     tools: {
       // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
@@ -54,7 +53,6 @@ const TEST_CONFIG = {
   session: {
     mainKey: "main",
     scope: "per-sender",
-    agentToAgent: { maxPingPongTurns: 2 },
   },
   tools: {
     sessions: { visibility: "all" },
@@ -1370,13 +1368,13 @@ describe("sessions tools", () => {
     expect(waitedDetails.reply).toBe("initial");
     await vi.waitFor(
       () => {
-        expect(countMatching(calls, (call) => call.method === "agent")).toBe(3);
+        expect(countMatching(calls, (call) => call.method === "agent")).toBe(6);
       },
       { timeout: 2_000, interval: 5 },
     );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(3);
+    expect(agentCalls).toHaveLength(6);
     for (const call of agentCalls) {
       const params = agentParams(call);
       expect(params.lane).toMatch(/^nested(?::|$)/);
@@ -1392,7 +1390,7 @@ describe("sessions tools", () => {
           "Agent-to-agent reply step",
         ),
     );
-    expect(replySteps).toHaveLength(2);
+    expect(replySteps).toHaveLength(5);
     expect(sendParams.to).toBe("group:target");
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.message).toBe("announce now");
@@ -1463,7 +1461,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 1 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1552,7 +1549,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1616,7 +1612,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1672,7 +1667,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1749,7 +1743,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
@@ -1827,7 +1820,6 @@ describe("sessions tools", () => {
         ...TEST_CONFIG,
         session: {
           ...TEST_CONFIG.session,
-          agentToAgent: { maxPingPongTurns: 0 },
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");

@@ -16304,6 +16304,11 @@
       "translated": "OpenClaw niet beschikbaar"
     },
     {
+      "id": "native.apple.f4adf2762402e92a",
+      "source": "Confirmation needed",
+      "translated": "Bevestiging vereist"
+    },
+    {
       "id": "native.apple.f703391677039fa3",
       "source": "iOS Speech + TTS",
       "translated": "iOS-spraak + TTS"

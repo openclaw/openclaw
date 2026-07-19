@@ -6,6 +6,8 @@ import Testing
 
 @MainActor
 struct TalkModeManagerTests {
+    private struct CloseError: Error {}
+
     @Test func `encodes realtime client voice session identity`() throws {
         let params = TalkRealtimeClientCreateParams(
             sessionKey: "agent:main:main",
@@ -34,6 +36,63 @@ struct TalkModeManagerTests {
             TalkRealtimeClientSession.self,
             from: Data(#"{"provider":"openai","transport":"gateway-relay","clientSecret":"secret"}"#.utf8))
         #expect(serverOwned.voiceSessionId == nil)
+    }
+
+    @Test func `config invalidation closes and clears an adopted realtime prefetch`() async throws {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let gateway = GatewayNodeSession()
+        manager.attachGateway(gateway)
+        var closeRequests: [(method: String, paramsJSON: String?)] = []
+        manager._test_setRealtimeVoiceSessionCloseRequest { method, paramsJSON in
+            closeRequests.append((method, paramsJSON))
+        }
+        manager._test_preparePrefetchedRealtimeVoiceSession("vs-A")
+
+        await manager._test_invalidatePrefetchedRealtimeSession()
+
+        #expect(manager._test_activeRealtimeVoiceSessionId() == nil)
+        #expect(!manager._test_hasPrefetchedRealtimeSession())
+        let request = try #require(closeRequests.first)
+        #expect(closeRequests.count == 1)
+        #expect(request.method == "talk.client.close")
+        let json = try #require(request.paramsJSON?.data(using: .utf8))
+        let params = try #require(JSONSerialization.jsonObject(with: json) as? [String: String])
+        #expect(params["voiceSessionId"] == "vs-A")
+        #expect(params["sessionKey"] == "main")
+    }
+
+    @Test func `config invalidation preserves a live realtime voice session`() async {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let gateway = GatewayNodeSession()
+        manager.attachGateway(gateway)
+        var closeRequestCount = 0
+        manager._test_setRealtimeVoiceSessionCloseRequest { _, _ in
+            closeRequestCount += 1
+        }
+        manager._test_prepareLiveRealtimeVoiceSession(
+            gateway: gateway,
+            voiceSessionId: "vs-live",
+            prefetchedVoiceSessionId: "vs-unused")
+
+        await manager._test_invalidatePrefetchedRealtimeSession()
+
+        #expect(manager._test_activeRealtimeVoiceSessionId() == "vs-live")
+        #expect(!manager._test_hasPrefetchedRealtimeSession())
+        #expect(closeRequestCount == 0)
+        manager._test_clearRealtimeSession()
+    }
+
+    @Test func `retries realtime voice session close three times`() async throws {
+        var attempts = 0
+
+        try await TalkModeManager._test_retryRealtimeVoiceSessionClose {
+            attempts += 1
+            if attempts < 3 {
+                throw CloseError()
+            }
+        }
+
+        #expect(attempts == 3)
     }
 
     @Test func `encodes transcript entry id as a decimal string`() throws {
@@ -458,6 +517,10 @@ struct TalkModeManagerTests {
 
         manager._test_handleRealtimeRelayStatus("Backend rejected realtime request")
         #expect(manager.watchPresentation == .verbatim("Backend rejected realtime request"))
+
+        manager._test_handleRealtimeRelayStatus("Confirmation needed")
+        #expect(manager.statusText == String(localized: "Confirmation needed"))
+        #expect(manager.watchPresentation == .localized("Confirmation needed"))
 
         manager._test_handleRealtimeRelayStatus("Reconnecting")
         #expect(manager.phase == .connecting)
