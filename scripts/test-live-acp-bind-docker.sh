@@ -242,7 +242,13 @@ WRAP
     ;;
   droid)
     if ! command -v droid >/dev/null 2>&1; then
-      run_setup_command bash -lc 'curl -fsSL --connect-timeout 10 --max-time 120 https://app.factory.ai/cli | sh'
+      # Use -S (show error) on top of -s (silent) so that curl surfaces the
+      # reason when --connect-timeout / --max-time fire. Without -S, the
+      # silent mode would swallow the timeout error and the only signal
+      # would be the non-zero exit code from the `| sh` pipeline.
+      # `set -euo pipefail` (top of this script) ensures the curl failure
+      # propagates instead of being masked by `sh` exiting 0.
+      run_setup_command bash -lc 'curl -fsSL --show-error --connect-timeout 10 --max-time 120 https://app.factory.ai/cli | sh'
       export PATH="$HOME/.local/bin:$PATH"
     fi
     droid --version
