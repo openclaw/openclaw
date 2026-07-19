@@ -743,7 +743,6 @@ export type ClaimDurableRuntimeStepInput = {
 
 export type DurableRuntimeStoreStats = {
   path: string;
-  schemaVersion: number;
   runs: number;
   events: number;
   steps: number;
