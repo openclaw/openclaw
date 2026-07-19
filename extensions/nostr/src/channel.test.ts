@@ -8,6 +8,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import { nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
@@ -203,6 +204,16 @@ describe("nostrPlugin", () => {
       const ids = nostrTestPlugin.config.listAccountIds(cfg);
       expect(ids).toContain("default");
     });
+
+    it("normalizes prefixed npub allowlist entries", () => {
+      const npub = "npub140x77qfrg4ncn27dauqjx3t83x4ummcpydzk0zdtehhszg69v7ystddknj";
+      const formatted = nostrPlugin.config.formatAllowFrom?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        allowFrom: [`nostr:${npub}`],
+      });
+
+      expect(formatted).toEqual([normalizePubkey(npub)]);
+    });
   });
 
   describe("messaging", () => {
@@ -247,6 +258,21 @@ describe("nostrPlugin", () => {
       });
 
       expect(result).toEqual({ ok: true, to: TEST_HEX_PUBLIC_KEY });
+    });
+
+    it("preserves the missing-target hint when no outbound target is supplied", () => {
+      const result = nostrPlugin.outbound?.resolveTarget?.({
+        cfg: createConfiguredNostrCfg() as OpenClawConfig,
+        mode: "explicit",
+      });
+
+      expect(result?.ok).toBe(false);
+      if (!result || result.ok) {
+        throw new Error("expected blank Nostr target to fail");
+      }
+      expect(result.error.message).toBe(
+        "Delivering to Nostr requires target <npub|hex pubkey|nostr:npub...>",
+      );
     });
   });
 

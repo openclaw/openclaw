@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/extension-shared";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { missingTargetError } from "../runtime-api.js";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -40,6 +41,21 @@ import {
   type ResolvedNostrAccount,
 } from "./types.js";
 
+const NOSTR_TARGET_HINT = "<npub|hex pubkey|nostr:npub...>";
+
+function stripNostrTargetPrefix(target: string): string {
+  return target.trim().replace(/^nostr:/i, "");
+}
+
+function normalizeNostrTarget(target: string): string {
+  const cleaned = stripNostrTargetPrefix(target);
+  try {
+    return normalizePubkey(cleaned);
+  } catch {
+    return cleaned;
+  }
+}
+
 const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount>({
   channelKey: "nostr",
   resolvePolicy: (account) => account.config.dmPolicy,
@@ -47,13 +63,7 @@ const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount
   policyPathSuffix: "dmPolicy",
   defaultPolicy: "pairing",
   approveHint: formatPairingApproveHint("nostr"),
-  normalizeEntry: (raw) => {
-    try {
-      return normalizePubkey(raw.trim().replace(/^nostr:/i, ""));
-    } catch {
-      return raw.trim();
-    }
-  },
+  normalizeEntry: normalizeNostrTarget,
 });
 
 const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccount>({
@@ -78,11 +88,7 @@ const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccou
         if (entry === "*") {
           return "*";
         }
-        try {
-          return normalizePubkey(entry);
-        } catch {
-          return entry;
-        }
+        return normalizeNostrTarget(entry);
       })
       .filter(Boolean),
 });
@@ -92,23 +98,17 @@ const nostrMessageAdapter = createChannelMessageAdapterFromOutbound({
   outbound: nostrOutboundAdapter,
 });
 
-function stripNostrTargetPrefix(target: string): string {
-  return target.trim().replace(/^nostr:/i, "");
-}
-
-function normalizeNostrTarget(target: string): string {
-  const cleaned = stripNostrTargetPrefix(target);
-  try {
-    return normalizePubkey(cleaned);
-  } catch {
-    return cleaned;
-  }
-}
-
 const nostrPluginOutboundAdapter: ChannelOutboundAdapter = {
   ...nostrOutboundAdapter,
   resolveTarget: ({ to }) => {
-    const normalized = normalizeNostrTarget(to ?? "");
+    const trimmed = to?.trim() ?? "";
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: missingTargetError("Nostr", NOSTR_TARGET_HINT),
+      };
+    }
+    const normalized = normalizeNostrTarget(trimmed);
     try {
       return { ok: true, to: normalizePubkey(normalized) };
     } catch {
@@ -164,7 +164,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
             /^[0-9a-fA-F]{64}$/.test(trimmed)
           );
         },
-        hint: "<npub|hex pubkey|nostr:npub...>",
+        hint: NOSTR_TARGET_HINT,
       },
       resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
     },
