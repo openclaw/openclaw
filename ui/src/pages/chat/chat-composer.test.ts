@@ -371,6 +371,28 @@ describe("renderChatComposer controls", () => {
     ).toBeNull();
   });
 
+  it("keeps textarea focus through a touch send so the mobile click is not consumed", () => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({ draft: "Send from mobile", onSend });
+    document.body.append(container);
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const send = button(container, t("chat.runControls.sendMessage"));
+    if (!textarea) {
+      throw new Error("expected composer textarea");
+    }
+    textarea.focus();
+    const pointerDown = new Event("pointerdown", { bubbles: true, cancelable: true });
+    Object.defineProperty(pointerDown, "pointerType", { value: "touch" });
+
+    expect(send.dispatchEvent(pointerDown)).toBe(false);
+    expect(pointerDown.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(textarea);
+
+    send.click();
+    expect(onSend).toHaveBeenCalledOnce();
+    container.remove();
+  });
+
   it("keeps voice and generation stop controls distinct when both are active", () => {
     const onAbort = vi.fn();
     const onToggleRealtimeTalk = vi.fn();

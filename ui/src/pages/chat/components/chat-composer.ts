@@ -1877,6 +1877,15 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
     }
     props.onSend();
   };
+  const preserveComposerFocusOnTouch = (event: PointerEvent) => {
+    // Mobile browsers can consume the first tap while moving focus away from
+    // the textarea and resizing the visual viewport for the software keyboard.
+    // Keeping textarea focus through pointerdown lets the subsequent click
+    // reach the primary action normally.
+    if (event.pointerType === "touch") {
+      event.preventDefault();
+    }
+  };
   const abortAction = props.canAbort
     ? html`
         <openclaw-tooltip .content=${t("chat.runControls.stop")}>
@@ -1968,6 +1977,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                   <openclaw-tooltip .content=${activeRunActionLabel}>
                     <button
                       class="chat-send-btn"
+                      @pointerdown=${preserveComposerFocusOnTouch}
                       @click=${storeDraftAndSend}
                       ?disabled=${!props.canSend || props.sending}
                       aria-label=${activeRunActionDescription}
@@ -1996,6 +2006,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
               >
                 <button
                   class="chat-send-btn"
+                  @pointerdown=${preserveComposerFocusOnTouch}
                   @click=${storeDraftAndSend}
                   ?disabled=${!props.canSend || props.sending}
                   aria-label=${props.isBusy
