@@ -86,7 +86,7 @@ export function registerClawsCli(program: Command) {
       false,
     )
     .option(
-      "--remove-referenced <kind:ref@version>",
+      "--remove-referenced <resource>",
       "Remove an exact referenced resource (repeatable)",
       collectOption,
       [],
