@@ -434,7 +434,7 @@
       }
     },
     "node_modules/@openclaw/fs-safe": {
-      "version": "0.4.2",
+      "version": "0.4.3",
       "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.3.tgz",
       "integrity": "sha512-COOPvc0yFwisi0QXA4FtKz5LLzT+1reYNNJn+598/PHYPCxo4uS8NZS4BQV62ypqxL7laW702PitCKyEXu5MpA==",
       "license": "MIT",

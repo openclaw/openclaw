@@ -83,8 +83,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.4.2
-        version: 0.4.2
+        specifier: 0.4.3
+        version: 0.4.3
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.5.0)
