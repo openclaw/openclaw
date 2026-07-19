@@ -68,6 +68,28 @@ function pathStatRevision(stat: {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
+/**
+ * QMD's own indexer normalizes every "." and ":" in a document's stem (all but
+ * the final extension) to "-" when it records that file's path in its
+ * `documents` table. An archived-session export name embeds a raw ISO
+ * timestamp with dots/colons (e.g. `<uuid>.jsonl.deleted.<ISO>.md`), so
+ * without this same normalization the artifact_path/search_path stored in
+ * `openclaw_qmd_session_artifacts` never matches QMD's indexed path and
+ * `refreshQmdSessionArtifactDocIds()`'s join on (collection, path) can never
+ * backfill a docid for it -- every archived-session hit then fails identity
+ * resolution and is dropped rather than visibility-checked. See
+ * `restoreQmdNormalizedArchiveName` in `session-transcript-hit.ts`, which
+ * already reverses this exact transform on the read side; this is the
+ * missing write-side counterpart. Only the stored mapping value is
+ * normalized here -- the on-disk exported filename is untouched.
+ */
+function normalizeQmdIndexedArtifactPath(name: string): string {
+  const ext = path.extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  const normalizedStem = stem.replace(/[.:]/g, "-");
+  return normalizedStem === stem ? name : `${normalizedStem}${ext}`;
+}
+
 export class QmdSessionExporter {
   private readonly exportedSessionState = new Map<string, ExportedSessionState>();
 
@@ -242,10 +264,11 @@ export class QmdSessionExporter {
     if (!identity?.agentId) {
       return null;
     }
+    const indexedArtifactPath = normalizeQmdIndexedArtifactPath(artifactPath);
     return {
       agentId: identity.agentId,
       archived: isSessionArchiveArtifactName(path.basename(sessionFile)),
-      artifactPath,
+      artifactPath: indexedArtifactPath,
       collection: this.config.collectionName,
       memoryKey: formatSessionTranscriptMemoryHitKey({
         agentId: identity.agentId,
@@ -253,7 +276,7 @@ export class QmdSessionExporter {
       }),
       searchPath: this.buildSearchPath(
         this.config.collectionName,
-        artifactPath,
+        indexedArtifactPath,
         path.relative(this.workspaceDir, target),
         target,
       ),
