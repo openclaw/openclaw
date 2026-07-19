@@ -21,7 +21,6 @@ import type {
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
-import type { SystemAgentAssistantTurn } from "../../system-agent/assistant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -104,6 +103,16 @@ export type RespondFn = (
 ) => void;
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
+/**
+ * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
+ * leaf contract: importing the assistant module here closes a madge cycle
+ * through the agents/config cluster.
+ */
+type SystemAgentHistoryTurn = {
+  role: "user" | "assistant";
+  text: string;
+};
+
 type GatewaySystemAgentSession = {
   engine: {
     handle: (message: string) => Promise<{
@@ -112,9 +121,9 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
-    seedHistory: (turns: readonly SystemAgentAssistantTurn[]) => void;
+    seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
-    historySince: (index: number) => SystemAgentAssistantTurn[];
+    historySince: (index: number) => SystemAgentHistoryTurn[];
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
