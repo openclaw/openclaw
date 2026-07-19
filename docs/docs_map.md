@@ -143,7 +143,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Core concepts
   - H3: Scheduled tasks (cron)
   - H3: Tasks
-  - H3: Inferred commitments
   - H3: Task Flow
   - H3: Standing orders
   - H3: Hooks
@@ -2370,13 +2369,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /concepts/commitments
 - Headings:
-  - H2: Enable commitments
-  - H2: How it works
-  - H2: Scope
-  - H2: Commitments vs reminders
-  - H2: Manage commitments
-  - H2: Privacy and cost
-  - H2: Troubleshooting
+  - H2: Existing records
   - H2: Related
 
 ## concepts/compaction.md
@@ -2644,7 +2637,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What goes where
   - H2: Import from coding assistants
   - H2: Action-sensitive memories
-  - H2: Inferred commitments
+  - H2: Retired inferred commitments
   - H2: Memory tools
   - H2: Memory search
   - H2: Memory backends
@@ -3425,7 +3418,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Skills
   - H2: Plugins
   - H3: Codex harness plugin config
-  - H2: Commitments
   - H2: Browser
   - H2: UI
   - H2: Gateway
@@ -3455,7 +3447,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Diagnostics
   - H2: Update
   - H2: ACP
-  - H2: CLI
   - H2: Wizard
   - H2: Identity
   - H2: Bridge (legacy, removed)
@@ -4916,7 +4907,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Auto-detection (default)
   - H2: Config examples
   - H3: Provider + CLI fallback (OpenAI + Whisper CLI)
-  - H3: Provider-only with scope gating
   - H3: Provider-only (Deepgram)
   - H3: Provider-only (Mistral Voxtral)
   - H3: Provider-only (SenseAudio)
