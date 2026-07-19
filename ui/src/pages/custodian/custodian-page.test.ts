@@ -332,6 +332,47 @@ describe("custodian page", () => {
     expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
+  it("warns without offering replay when a client replacement abandons a user turn", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "engine-session-before-user-turn",
+        reply: "Welcome.",
+        action: "none",
+      })
+      .mockReturnValueOnce(
+        new Promise<never>(() => {
+          // The user turn may reach the old gateway before its client is replaced.
+        }),
+      )
+      .mockResolvedValueOnce({
+        sessionId: "engine-session-after-user-turn",
+        reply: "Fresh welcome.",
+        action: "none",
+      });
+    const { context, setGatewaySnapshot } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.value = "check this system";
+    composer.dispatchEvent(new Event("input"));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForFast(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+        "The Gateway connection changed",
+      ),
+    );
+
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
+    expect(page.querySelector('[role="alert"] button')).toBeNull();
+  });
+
   it("clears stale rows and cold-starts against the new gateway after credentials change", async () => {
     const request = vi
       .fn()

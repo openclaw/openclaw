@@ -214,8 +214,8 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.resetHistory();
     this.sending = false;
     this.chatAvailable = false;
-    this.eventNudge = null;
     if (variantChanged || ownershipChanged) {
+      this.eventNudge = null;
       this.sessionStarted = false;
       this.clearConversation();
     } else if (client && clientReplaced) {
@@ -228,6 +228,11 @@ export class CustodianPage extends OpenClawLightDomElement {
       }
       this.chatAvailable = true;
       this.rotateVolatileSession(client, variant);
+      if (requestWasPending && pendingParams?.message !== undefined) {
+        // The abandoned user turn may have acted before the transport changed;
+        // keep that unknown outcome visible without retaining replayable text.
+        this.error = t("custodian.connectionChanged");
+      }
       return;
     } else if (requestWasPending) {
       this.error = t("custodian.connectionChanged");
