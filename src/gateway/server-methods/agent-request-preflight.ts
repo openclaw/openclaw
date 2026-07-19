@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
+  buildCachedAgentResultErrorDetails,
   errorShape,
   formatValidationErrors,
   validateAgentParams,
@@ -277,7 +278,24 @@ export function prepareAgentRequestPreflight(
         { cached: true, runId: cachedRunId },
       );
     } else {
-      params.respond(cached.ok, cached.payload, cached.error, { cached: true });
+      const cachedError =
+        cached.error ?? errorShape(ErrorCodes.UNAVAILABLE, `Cached agent run ${runId} failed.`);
+      // Preserve the original failure while marking its cached provenance. Recovery clients
+      // must surface this terminal result instead of treating the replay RPC as unavailable.
+      params.respond(
+        cached.ok,
+        cached.payload,
+        request.replayOnly === true && !cached.ok
+          ? {
+              ...cachedError,
+              details: buildCachedAgentResultErrorDetails({
+                runId,
+                originalDetails: cachedError.details,
+              }),
+            }
+          : cached.error,
+        { cached: true },
+      );
     }
     return undefined;
   }

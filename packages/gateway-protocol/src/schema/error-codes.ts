@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  type CachedAgentResultErrorDetails,
   type ErrorCode,
   type MissingScopeErrorDetails,
 } from "../gateway-error-details.js";
@@ -13,14 +14,23 @@ import { NonEmptyString } from "./primitives.js";
 export {
   ErrorCodes,
   GatewayErrorDetailCodes,
+  type CachedAgentResultErrorDetails,
   type ErrorCode,
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
   type MissingScopeErrorDetails,
   isMcpAppViewExpiredError,
+  readCachedAgentResultErrorDetails,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "../gateway-error-details.js";
+
+/** Cached agent-result details distinguish replayed terminal failures from RPC failures. */
+export const CachedAgentResultErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.CACHED_AGENT_RESULT),
+  runId: NonEmptyString,
+  originalDetails: Type.Optional(Type.Unknown()),
+});
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export const MissingScopeErrorDetailsSchema = closedObject({
@@ -33,8 +43,9 @@ export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
 });
 
-/** Structured details emitted by method-level authorization failures. */
+/** Structured details emitted by gateway request failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
+  CachedAgentResultErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
 ]);
@@ -49,6 +60,18 @@ export function errorShape(
     code,
     message,
     ...opts,
+  };
+}
+
+/** Builds the structured marker attached to a replay-only cached failure. */
+export function buildCachedAgentResultErrorDetails(params: {
+  runId: string;
+  originalDetails?: unknown;
+}): CachedAgentResultErrorDetails {
+  return {
+    code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
+    runId: params.runId,
+    ...(params.originalDetails === undefined ? {} : { originalDetails: params.originalDetails }),
   };
 }
 

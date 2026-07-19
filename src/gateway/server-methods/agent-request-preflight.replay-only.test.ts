@@ -44,6 +44,47 @@ describe("agent replay-only preflight", () => {
     expect(respond).toHaveBeenCalledWith(true, payload, undefined, { cached: true });
   });
 
+  it("marks cached terminal failures separately from replay request failures", () => {
+    const payload = {
+      runId: "run-recovery",
+      status: "error",
+      summary: "original provider failure",
+    };
+    const { prepared, respond } = prepareReplayOnly(
+      new Map([
+        [
+          "agent:run-recovery",
+          {
+            ts: Date.now(),
+            ok: false,
+            payload,
+            error: {
+              code: "UNAVAILABLE",
+              message: "original provider failure",
+              details: { provider: "mock" },
+            },
+          },
+        ],
+      ]),
+    );
+
+    expect(prepared).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      payload,
+      {
+        code: "UNAVAILABLE",
+        message: "original provider failure",
+        details: {
+          code: "CACHED_AGENT_RESULT",
+          runId: "run-recovery",
+          originalDetails: { provider: "mock" },
+        },
+      },
+      { cached: true },
+    );
+  });
+
   it("fails closed on a cache miss without admitting a new run", () => {
     const { prepared, respond } = prepareReplayOnly(new Map());
 

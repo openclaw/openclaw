@@ -1819,6 +1819,7 @@ describe("agentCliCommand", () => {
       const recoveredFailure = Object.assign(new Error("original provider failure"), {
         name: "GatewayClientRequestError",
         gatewayCode: "UNAVAILABLE",
+        details: { code: "CACHED_AGENT_RESULT", runId: "accepted-run" },
       });
       callGateway
         .mockImplementationOnce(async (requestValue: unknown) => {
@@ -1964,16 +1965,19 @@ describe("agentCliCommand", () => {
     }
   });
 
-  it("falls back when the replay request itself fails", async () => {
+  it.each([
+    { label: "unsupported", message: "invalid agent params", gatewayCode: "INVALID_REQUEST" },
+    { label: "unavailable", message: "gateway unavailable", gatewayCode: "UNAVAILABLE" },
+  ])("falls back when the replay request is $label", async ({ message, gatewayCode }) => {
     await withTempStore(async () => {
-      const replayUnsupported = Object.assign(new Error("invalid agent params"), {
+      const replayFailure = Object.assign(new Error(message), {
         name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
+        gatewayCode,
       });
       callGateway
         .mockRejectedValueOnce(createGatewayClosedError())
         .mockResolvedValueOnce({ runId: "idem-1", status: "ok" })
-        .mockRejectedValueOnce(replayUnsupported);
+        .mockRejectedValueOnce(replayFailure);
       mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);

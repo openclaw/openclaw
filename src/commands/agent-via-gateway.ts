@@ -8,7 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { ErrorCodes } from "../../packages/gateway-protocol/src/gateway-error-details.js";
+import { readCachedAgentResultErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -443,11 +443,13 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
-function isRecoveredGatewayAgentTerminalFailure(err: unknown): boolean {
+function isRecoveredGatewayAgentTerminalFailure(err: unknown, runId: string): boolean {
+  if (!(err instanceof Error) || err.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  // A generic Gateway error cannot prove the original run failed; only replay's cache marker can.
   return (
-    err instanceof Error &&
-    err.name === "GatewayClientRequestError" &&
-    (err as { gatewayCode?: unknown }).gatewayCode === ErrorCodes.UNAVAILABLE
+    readCachedAgentResultErrorDetails((err as { details?: unknown }).details)?.runId === runId
   );
 }
 
@@ -944,7 +946,7 @@ async function agentViaGatewayCommand(
           ? replayError
           : createAbortError("gateway agent recovery aborted");
       }
-      if (isRecoveredGatewayAgentTerminalFailure(replayError)) {
+      if (isRecoveredGatewayAgentTerminalFailure(replayError, runId)) {
         throw replayError;
       }
       throw new GatewayAgentOutcomeUnknownError({
@@ -952,6 +954,11 @@ async function agentViaGatewayCommand(
         fallbackReason,
         runId,
       });
+    }
+    if (replay.status === "error") {
+      throw new Error(
+        replay.error?.trim() || replay.summary?.trim() || `Gateway run ${runId} failed.`,
+      );
     }
     if (!isInFlightGatewayAgentResponse(replay)) {
       runtime.error?.(`Recovered terminal result for original Gateway run ${runId}.`);

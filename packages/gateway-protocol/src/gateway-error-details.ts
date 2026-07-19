@@ -21,11 +21,19 @@ export const ErrorCodes = {
 /** Closed set of canonical gateway error code strings. */
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
-/** Stable discriminants for structured method-level authorization failures. */
+/** Stable discriminants for structured gateway failures. */
 export const GatewayErrorDetailCodes = {
+  CACHED_AGENT_RESULT: "CACHED_AGENT_RESULT",
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
 } as const;
+
+/** Marks a request failure as the cached terminal result of an earlier agent run. */
+export type CachedAgentResultErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.CACHED_AGENT_RESULT;
+  runId: string;
+  originalDetails?: unknown;
+};
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export type MissingScopeErrorDetails = {
@@ -38,8 +46,11 @@ export type McpAppViewExpiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 };
 
-/** Structured details emitted by method-level authorization failures. */
-export type GatewayErrorDetails = MissingScopeErrorDetails | McpAppViewExpiredErrorDetails;
+/** Structured details emitted by gateway request failures. */
+export type GatewayErrorDetails =
+  | CachedAgentResultErrorDetails
+  | MissingScopeErrorDetails
+  | McpAppViewExpiredErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;
@@ -54,6 +65,27 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/** Reads the discriminator carried by replay-only cached agent failures. */
+export function readCachedAgentResultErrorDetails(
+  details: unknown,
+): CachedAgentResultErrorDetails | null {
+  const record = asRecord(details);
+  if (record?.code !== GatewayErrorDetailCodes.CACHED_AGENT_RESULT) {
+    return null;
+  }
+  const runId = typeof record.runId === "string" ? record.runId.trim() : "";
+  if (!runId) {
+    return null;
+  }
+  return {
+    code: GatewayErrorDetailCodes.CACHED_AGENT_RESULT,
+    runId,
+    ...(Object.hasOwn(record, "originalDetails")
+      ? { originalDetails: record.originalDetails }
+      : {}),
+  };
 }
 
 /** Reads validated missing-scope details from an untrusted protocol payload. */
