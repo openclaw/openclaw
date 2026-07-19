@@ -48,3 +48,95 @@ it("renders trusted presence avatar routes directly", async () => {
     expect(avatar.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-ada/avatar");
   });
 });
+
+type ViewerFacepileElement = HTMLElement & {
+  presencePayload: unknown;
+  selfInstanceId?: string;
+  variant: "session" | "footer";
+  updateComplete: Promise<boolean>;
+};
+
+function mountFooterFacepile() {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "footer";
+  facepile.selfInstanceId = "self-instance";
+  facepile.presencePayload = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "00-self", name: "Self User", email: "self@example.test" },
+        watchedSessions: [],
+      },
+      {
+        instanceId: "alice-1",
+        user: { id: "alice", name: "Alice", email: "alice@example.test" },
+        watchedSessions: [],
+      },
+      {
+        instanceId: "bob-1",
+        user: { id: "bob", email: "bob@example.test" },
+        watchedSessions: [],
+      },
+    ],
+  };
+  document.body.append(facepile);
+  return facepile;
+}
+
+it("opens a who's-online roster from the footer facepile", async () => {
+  const facepile = mountFooterFacepile();
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
+  });
+
+  facepile.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.click();
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    const items = [...document.querySelectorAll(".presence-roster-menu__item")];
+    // Everyone online is listed — including self, sorted first and marked.
+    expect(items.map((item) => item.getAttribute("data-viewer-id"))).toEqual([
+      "00-self",
+      "alice",
+      "bob",
+    ]);
+  });
+
+  const menu = document.querySelector(".presence-roster-menu");
+  expect(menu?.querySelector(".presence-roster-menu__title")?.textContent).toContain("3");
+  const rows = [...(menu?.querySelectorAll(".presence-roster-menu__item") ?? [])];
+  expect(rows[0]?.querySelector(".presence-roster-menu__you")?.textContent).toContain("you");
+  // Named users show the email as a subtitle; email-only users don't repeat it.
+  expect(rows[1]?.querySelector(".presence-roster-menu__email")?.textContent).toBe(
+    "alice@example.test",
+  );
+  expect(rows[2]?.querySelector(".presence-roster-menu__name")?.textContent?.trim()).toBe(
+    "bob@example.test",
+  );
+  expect(rows[2]?.querySelector(".presence-roster-menu__email")).toBeNull();
+  // Each row carries the shared avatar element.
+  expect(rows[1]?.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+});
+
+it("keeps session facepiles as plain non-interactive avatar clusters", async () => {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "session";
+  facepile.presencePayload = {
+    presence: [
+      {
+        instanceId: "alice-1",
+        user: { id: "alice", name: "Alice" },
+        watchedSessions: [],
+      },
+    ],
+  };
+  document.body.append(facepile);
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
+  });
+  expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
+});
