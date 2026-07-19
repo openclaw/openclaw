@@ -230,7 +230,7 @@ describe("Code Mode swarm host bridge", () => {
   it("keeps one invocation stable across restore and separates identical later turns", () => {
     const ctx = swarmContext();
     const code = 'agents.run("one")';
-    const restoredAssistantTurnId = JSON.parse(JSON.stringify("response-turn-1")) as string;
+    const restoredAssistantTurnId = structuredClone("response-turn-1");
     const first = testing.codeModeReplayIdForToolCall(ctx, "call_0", code, "response-turn-1");
 
     expect(testing.codeModeReplayIdForToolCall(ctx, "call_0", code, restoredAssistantTurnId)).toBe(
@@ -341,7 +341,7 @@ describe("Code Mode swarm host bridge", () => {
       globalAliasContext,
       "call_0",
       code,
-      JSON.parse(JSON.stringify("response-turn-1")) as string,
+      structuredClone("response-turn-1"),
     );
     expect(restoredReplayId).toBe(replayId);
     const bridgeBase = {
