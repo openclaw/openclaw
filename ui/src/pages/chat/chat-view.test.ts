@@ -173,31 +173,26 @@ const buildChatItemsMock = vi.hoisted(() =>
     },
   ),
 );
-const renderMessageGroupMock = vi.hoisted(() =>
-  vi.fn(
-    (
-      group: { messages: Array<{ message: unknown }> },
-      _opts?: { onAssistantAttachmentLoaded?: () => void },
-    ) => {
-      const element = document.createElement("div");
-      element.className = "chat-group";
-      element.textContent = group.messages
-        .map(({ message }) => {
-          if (typeof message === "object" && message !== null && "content" in message) {
-            const content = (message as { content?: unknown }).content;
-            if (typeof content === "string") {
-              return content;
-            }
-            return content == null ? "" : JSON.stringify(content);
+const renderMessageGroupMock = vi.fn(
+  (
+    ...[group, _opts]: Parameters<typeof chatMessage.renderMessageGroup>
+  ): ReturnType<typeof chatMessage.renderMessageGroup> => {
+    const text = group.messages
+      .map(({ message }) => {
+        if (typeof message === "object" && message !== null && "content" in message) {
+          const content = (message as { content?: unknown }).content;
+          if (typeof content === "string") {
+            return content;
           }
-          return String(message);
-        })
-        .join("\n");
-      return element;
-    },
-  ),
+          return content == null ? "" : JSON.stringify(content);
+        }
+        return String(message);
+      })
+      .join("\n");
+    return html`<div class="chat-group">${text}</div>`;
+  },
 );
-const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
+const assistantAttachmentRenderVersionMock = { value: 0 };
 
 type ChatHeaderTestState = {
   basePath?: string;
@@ -272,26 +267,22 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
 
-function renderStreamGroupMock(parts: Array<{ kind: string; text?: string }>) {
-  const group = document.createElement("div");
-  group.className = "chat-stream-run";
-  for (const part of parts) {
-    const bubble = document.createElement("div");
-    if (part.kind === "reading-indicator") {
-      bubble.className = "chat-reading-indicator";
-    } else {
-      bubble.className = "chat-stream";
-      bubble.textContent = part.text ?? "";
-    }
-    group.appendChild(bubble);
-  }
-  return group;
+function renderStreamGroupMock(
+  ...[parts, _opts]: Parameters<typeof chatMessage.renderStreamGroup>
+): ReturnType<typeof chatMessage.renderStreamGroup> {
+  return html`<div class="chat-stream-run">
+    ${parts.map((part) =>
+      part.kind === "reading-indicator"
+        ? html`<div class="chat-reading-indicator"></div>`
+        : html`<div class="chat-stream">${part.kind === "stream" ? part.text : ""}</div>`,
+    )}
+  </div>`;
 }
 
-function renderWorkGroupSummaryMock() {
-  const summary = document.createElement("div");
-  summary.className = "chat-work-group";
-  return summary;
+function renderWorkGroupSummaryMock(
+  ..._args: Parameters<typeof chatMessage.renderWorkGroupSummary>
+): ReturnType<typeof chatMessage.renderWorkGroupSummary> {
+  return html`<div class="chat-work-group"></div>`;
 }
 
 beforeEach(() => {

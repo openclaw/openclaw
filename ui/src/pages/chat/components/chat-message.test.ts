@@ -18,18 +18,23 @@ const streamingMarkdownRenderMock = vi.fn(
     `<div class="streaming-markdown">${value}</div>`,
 );
 
-function getSafeLocalStorageMock() {
+function getSafeLocalStorageMock(): Storage {
   return {
+    get length() {
+      return localStorageValues.size;
+    },
+    clear: () => localStorageValues.clear(),
     getItem: (key: string) => localStorageValues.get(key) ?? null,
+    key: (index: number) => [...localStorageValues.keys()][index] ?? null,
     removeItem: (key: string) => localStorageValues.delete(key),
     setItem: (key: string, value: string) => localStorageValues.set(key, value),
   };
 }
 
-function renderChatAvatarMock(role: string) {
-  const element = document.createElement("div");
-  element.className = `chat-avatar ${role}`;
-  return element;
+function renderChatAvatarMock(
+  ...[role]: Parameters<typeof chatAvatar.renderChatAvatar>
+): ReturnType<typeof chatAvatar.renderChatAvatar> {
+  return html`<div class="chat-avatar ${role}"></div>`;
 }
 
 function requireFirstMockArg(
@@ -561,19 +566,19 @@ describe("grouped chat rendering", () => {
 
   it("renders user markdown without code-block copy chrome", () => {
     const container = document.createElement("div");
-    const markdown = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
+    const markdownContent = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
 
     renderGroupedMessage(
       container,
       {
         role: "user",
-        content: markdown,
+        content: markdownContent,
         timestamp: 1001,
       },
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: false,
       codeBlockChrome: "none",
       fileLinks: true,
@@ -582,15 +587,15 @@ describe("grouped chat rendering", () => {
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {
     const container = document.createElement("div");
-    const markdown = "```bash\necho ok\n```";
+    const markdownContent = "```bash\necho ok\n```";
 
     renderAssistantMessage(container, {
       role: "assistant",
-      content: markdown,
+      content: markdownContent,
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
