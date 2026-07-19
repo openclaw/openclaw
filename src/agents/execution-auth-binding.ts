@@ -178,7 +178,9 @@ function decodeJwtIdentity(token: string | undefined): { subject?: string; email
     return {};
   }
   try {
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+    const claims = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(payload, "base64url")),
+    ) as {
       sub?: unknown;
       email?: unknown;
     };

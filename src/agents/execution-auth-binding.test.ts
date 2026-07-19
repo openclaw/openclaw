@@ -150,6 +150,35 @@ describe("execution auth binding fingerprints", () => {
     expect(fingerprint("access-a", "subject-1")).not.toBe(fingerprint("access-a", "subject-2"));
   });
 
+  it("ignores an id-token whose payload is not valid UTF-8", () => {
+    const corruptIdToken = `header.${Buffer.concat([
+      Buffer.from('{"sub":"subject-1'),
+      Buffer.from([0xff]),
+      Buffer.from('","email":"user@example.test"}'),
+    ]).toString("base64url")}.signature`;
+    const fingerprint = (access: string, idToken?: string) =>
+      fingerprintAuthProfileCredential({
+        profileId: "google:oauth",
+        credential: {
+          type: "oauth",
+          provider: "google",
+          access,
+          refresh: "refresh-a",
+          expires: 1,
+          ...(idToken ? { idToken } : {}),
+        },
+      });
+
+    // A corrupt id-token yields no verified identity, so the credential must
+    // bind the opaque grant (rotates with access) — not a U+FFFD-stable subject.
+    expect(fingerprint("access-a", corruptIdToken)).not.toBe(
+      fingerprint("access-b", corruptIdToken),
+    );
+    // Control: a valid id-token identity stays stable across token rotation.
+    const validIdToken = jwt({ sub: "subject-1", email: "user@example.test" });
+    expect(fingerprint("access-a", validIdToken)).toBe(fingerprint("access-b", validIdToken));
+  });
+
   it("keeps resolved credential fingerprints opaque and stable within one process", () => {
     const fingerprint = (apiKey: string) =>
       fingerprintResolvedProviderAuth({
