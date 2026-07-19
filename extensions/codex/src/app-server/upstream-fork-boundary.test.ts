@@ -28,17 +28,16 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
   });
 
-  it("returns a whole-thread boundary for the first turn", () => {
-    expect(
-      resolveCodexUpstreamForkBoundaryFromTurns({
-        turns: [turn("turn-1", [user("one")])],
-        userMessageOrdinal: 0,
-        localText: "one",
-      }),
-    ).toEqual({
-      ok: true,
-      boundary: { wholeThread: true, targetTurnId: "turn-1" },
+  it("rejects a cut at the first turn instead of copying the whole thread", () => {
+    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+      turns: [turn("turn-1", [user("one")])],
+      userMessageOrdinal: 0,
+      localText: "one",
     });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("first-message");
+    }
   });
 
   it("rejects a selected steer message", () => {

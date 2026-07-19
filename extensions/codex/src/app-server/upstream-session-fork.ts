@@ -65,9 +65,7 @@ export async function forkCodexUpstreamSession(
       // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
       const rawResponse = await control.forkThread({
         threadId: params.upstream.threadId,
-        ...("wholeThread" in resolved.boundary
-          ? {}
-          : { beforeTurnId: resolved.boundary.beforeTurnId }),
+        beforeTurnId: resolved.boundary.beforeTurnId,
         excludeTurns: true,
       });
       let response: CodexThreadForkResponse;
@@ -78,7 +76,9 @@ export async function forkCodexUpstreamSession(
           isRecord(rawResponse.thread) && typeof rawResponse.thread.id === "string"
             ? rawResponse.thread.id.trim()
             : "";
-        if (orphanThreadId) {
+        // A malformed response cannot be trusted to name a NEW thread; never archive an
+        // id that matches the source conversation.
+        if (orphanThreadId && orphanThreadId !== params.upstream.threadId) {
           await control.archiveThread(orphanThreadId).catch(() => undefined);
         }
         throw error;

@@ -5,12 +5,11 @@ import type { CodexThreadItem, CodexTurn } from "./protocol.js";
 export type CodexUpstreamForkBoundaryFailureCode =
   | "steer-message"
   | "in-progress-turn"
+  | "first-message"
   | "drift-mismatch"
   | "upstream-unavailable";
 
-export type CodexUpstreamForkBoundary =
-  | { wholeThread: true; targetTurnId: string }
-  | { beforeTurnId: string; targetTurnId: string };
+export type CodexUpstreamForkBoundary = { beforeTurnId: string; targetTurnId: string };
 
 export type CodexUpstreamForkBoundaryResult =
   | { ok: true; boundary: CodexUpstreamForkBoundary }
@@ -81,7 +80,9 @@ function localMessageText(content: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const text = content
+  // Image-only prompts canonicalize to "" on both sides; the text-equality drift
+  // guard then degrades to ordinal matching for them instead of hard-failing.
+  return content
     .flatMap((block) => {
       if (!block || typeof block !== "object" || Array.isArray(block)) {
         return [];
@@ -90,7 +91,6 @@ function localMessageText(content: unknown): string | undefined {
       return typed.type === "text" && typeof typed.text === "string" ? [typed.text] : [];
     })
     .join("");
-  return text || undefined;
 }
 
 export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
@@ -147,13 +147,16 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "The local message no longer matches the Codex thread. Refresh the session and try again.",
         );
       }
-      return {
-        ok: true,
-        boundary:
-          turnIndex === 0
-            ? { wholeThread: true, targetTurnId: turn.id }
-            : { beforeTurnId: turn.id, targetTurnId: turn.id },
-      };
+      if (turnIndex === 0) {
+        // A cut before the first turn would need a whole-thread upstream copy while the
+        // local mirror keeps an empty prefix — divergent histories. Fail closed; a fresh
+        // session covers the "start over" intent.
+        return failure(
+          "first-message",
+          "Forking before the first message of a Codex session is not supported. Start a new session instead.",
+        );
+      }
+      return { ok: true, boundary: { beforeTurnId: turn.id, targetTurnId: turn.id } };
     }
   }
   return failure(
