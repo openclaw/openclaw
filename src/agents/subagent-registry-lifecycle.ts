@@ -28,6 +28,7 @@ import {
 import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../tasks/task-completion-contract.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import { retireSessionMcpRuntimeForSessionKey } from "./agent-bundle-mcp-tools.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -69,6 +70,7 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import type {
   PendingFinalDeliveryPayload,
   RequesterSettleWakeState,
@@ -80,6 +82,8 @@ import {
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
+import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
+import { releaseSwarmRun } from "./swarm-scheduler.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -204,6 +208,7 @@ export function createSubagentRegistryLifecycleController(params: {
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  const pendingRequesterSettleWakeRearms = new Set<string>();
   const scheduledRequesterSettleWakeRuns = new Set<string>();
   const scheduledRequesterSettleWakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const terminalCompletionLocks = new Map<string, Promise<void>>();
@@ -289,6 +294,7 @@ export function createSubagentRegistryLifecycleController(params: {
       clearTimeout(timer);
     }
     scheduledRequesterSettleWakeTimers.clear();
+    pendingRequesterSettleWakeRearms.clear();
   };
 
   const runDetachedCleanupAttempt = (args: {
@@ -779,7 +785,11 @@ export function createSubagentRegistryLifecycleController(params: {
   ) => {
     const entries = runIds
       .map((runId) => params.runs.get(runId))
-      .filter((entry): entry is SubagentRunRecord => Boolean(entry?.requesterSettleWake));
+      .filter(
+        (entry): entry is SubagentRunRecord =>
+          Boolean(entry?.requesterSettleWake) &&
+          entry?.requesterSettleWake?.rearmGeneration === state.rearmGeneration,
+      );
     const previousStates = entries.map((entry) => structuredClone(entry.requesterSettleWake));
     for (const entry of entries) {
       entry.requesterSettleWake = {
@@ -799,16 +809,31 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
-  const completeRequesterSettleWakeBatch = (runIds: readonly string[]) => {
+  const completeRequesterSettleWakeBatch = (
+    runIds: readonly string[],
+    rearmGeneration?: number,
+  ) => {
     const entries = runIds
       .map((runId) => [runId, params.runs.get(runId)] as const)
-      .filter((pair): pair is readonly [string, SubagentRunRecord] =>
-        Boolean(pair[1]?.requesterSettleWake),
+      .filter(
+        (pair): pair is readonly [string, SubagentRunRecord] =>
+          Boolean(pair[1]?.requesterSettleWake) &&
+          pair[1]?.requesterSettleWake?.rearmGeneration === rearmGeneration,
       );
     const requesterSessionKeys = new Set(entries.map(([, entry]) => entry.requesterSessionKey));
-    const previousStates = entries.map(([, entry]) => structuredClone(entry.requesterSettleWake));
+    const previousStates = entries.map(([, entry]) => ({
+      requesterSettleWake: structuredClone(entry.requesterSettleWake),
+      retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
+    }));
     for (const [runId, entry] of entries) {
-      if (entry.requesterSettleWake?.retireAfterSettle === true) {
+      if (entry.requesterTurnRunId) {
+        entry.retireAfterRequesterTurn =
+          entry.retireAfterRequesterTurn === true ||
+          entry.requesterSettleWake?.retireAfterSettle === true
+            ? true
+            : undefined;
+        entry.requesterSettleWake = undefined;
+      } else if (entry.requesterSettleWake?.retireAfterSettle === true) {
         params.runs.delete(runId);
       } else {
         entry.requesterSettleWake = undefined;
@@ -818,8 +843,10 @@ export function createSubagentRegistryLifecycleController(params: {
       params.persistOrThrow();
     } catch (error) {
       entries.forEach(([runId, entry], index) => {
+        const previous = previousStates[index];
         params.runs.set(runId, entry);
-        entry.requesterSettleWake = previousStates[index];
+        entry.requesterSettleWake = previous?.requesterSettleWake;
+        entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
       });
       throw error;
     }
@@ -852,6 +879,11 @@ export function createSubagentRegistryLifecycleController(params: {
       ...(existing?.replayCount !== undefined ? { replayCount: existing.replayCount } : {}),
       ...(existing?.nextAttemptAt !== undefined ? { nextAttemptAt: existing.nextAttemptAt } : {}),
       ...(existing?.batchRunIds ? { batchRunIds: [...existing.batchRunIds] } : {}),
+      ...(existing?.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
+      ...(existing?.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
+      ...(existing?.rearmGeneration !== undefined
+        ? { rearmGeneration: existing.rearmGeneration }
+        : {}),
       ...(existing?.lastError !== undefined ? { lastError: existing.lastError } : {}),
       ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
         ? { retireAfterSettle: true }
@@ -911,6 +943,7 @@ export function createSubagentRegistryLifecycleController(params: {
   function scheduleRequesterSettleWake(runId: string, entry: SubagentRunRecord): void {
     const requesterSessionKey = entry.requesterSessionKey?.trim();
     if (
+      entry.collect ||
       !requesterSessionKey ||
       scheduledRequesterSettleWakeRuns.has(runId) ||
       scheduledRequesterSettleWakeTimers.has(runId)
@@ -940,9 +973,16 @@ export function createSubagentRegistryLifecycleController(params: {
       })
       .finally(() => {
         scheduledRequesterSettleWakeRuns.delete(runId);
+        const wasRearmedWhileRunning = pendingRequesterSettleWakeRearms.delete(runId);
         const current = params.runs.get(runId);
         if (current === entry && current.requesterSettleWake) {
-          scheduleRequesterSettleWakeRetry(runId, current);
+          if (wasRearmedWhileRunning) {
+            // A requester yield can freeze a delivered batch while this run is
+            // resolving its earlier no-wake decision. Admit that durable update now.
+            scheduleRequesterSettleWake(runId, current);
+          } else {
+            scheduleRequesterSettleWakeRetry(runId, current);
+          }
         }
       });
   }
@@ -1200,6 +1240,7 @@ export function createSubagentRegistryLifecycleController(params: {
         await retireSessionMcpRuntimeForSessionKey({
           sessionKey: cleanupParams.entry.childSessionKey,
           reason: "subagent-run-cleanup",
+          preserveActiveLeases: true,
           onError: (error, sessionId) => {
             params.warn("failed to retire subagent bundle MCP runtime", {
               error: buildSafeLifecycleErrorMeta(error),
@@ -1214,6 +1255,26 @@ export function createSubagentRegistryLifecycleController(params: {
     if (cleanupParams.provisionalKill) {
       // The provider result or bounded kill reconciliation owns terminal settle.
       // Waking here could tell the requester to finalize while the child still runs.
+      return;
+    }
+    if (cleanupParams.entry.collect) {
+      // Delete-mode session cleanup already ran before this durable bookkeeping.
+      // Preserve only the collector result tombstone for waits and group caps.
+      if (cleanupParams.cleanup === "delete") {
+        params.clearPendingLifecycleError(cleanupParams.runId);
+        runCleanupTail("context-engine cleanup", async () => {
+          await params.notifyContextEngineSubagentEnded({
+            childSessionKey: cleanupParams.entry.childSessionKey,
+            reason: "deleted",
+            agentDir: cleanupParams.entry.agentDir,
+            workspaceDir: cleanupParams.entry.workspaceDir,
+          });
+        });
+      }
+      cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
+      cleanupParams.entry.requesterSettleWake = undefined;
+      params.persist();
+      retryDeferredCompletedAnnounces(cleanupParams.runId);
       return;
     }
     if (cleanupParams.cleanup === "delete") {
@@ -1294,6 +1355,7 @@ export function createSubagentRegistryLifecycleController(params: {
     await retireSessionMcpRuntimeForSessionKey({
       sessionKey: cleanupParams.entry.childSessionKey,
       reason: cleanupParams.reason,
+      preserveActiveLeases: true,
       onError: (error, sessionId) => {
         params.warn("failed to retire subagent bundle MCP runtime", {
           error: buildSafeLifecycleErrorMeta(error),
@@ -2023,6 +2085,9 @@ export function createSubagentRegistryLifecycleController(params: {
           mutated = true;
         }
       }
+      if (updateSwarmCollectorCompletion(entry)) {
+        mutated = true;
+      }
       if (provisionalKillSnapshot) {
         // Keep the tombstone's superseded generation boundary through task
         // commit. Clearing it on the canonical registry row must not let a
@@ -2137,6 +2202,9 @@ export function createSubagentRegistryLifecycleController(params: {
       // Update only its task projection; the newer generation owns all session effects.
       await retireSupersededSession(entry);
       return;
+    }
+    if (entry.collect) {
+      releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
     }
     const isProvisionalKill = entry.killReconciliation !== undefined;
     // Record only the current, non-superseded callback with a committed outcome; the
@@ -2307,6 +2375,24 @@ export function createSubagentRegistryLifecycleController(params: {
     completeSubagentRun,
     finalizeResumedAnnounceGiveUp,
     refreshFrozenResultFromSession,
+    settleRequesterTurnAfterSessionSpawns: (args: {
+      requesterSessionKey: string;
+      requesterTurnRunId: string;
+      requesterYielded: boolean;
+      acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+    }) =>
+      settleRequesterTurnAfterSessionSpawns({
+        ...args,
+        runs: params.runs,
+        persistOrThrow: () => params.persistOrThrow(),
+        schedule: (runId, entry) => {
+          if (scheduledRequesterSettleWakeRuns.has(runId)) {
+            pendingRequesterSettleWakeRearms.add(runId);
+            return;
+          }
+          scheduleRequesterSettleWake(runId, entry);
+        },
+      }),
     resumeRequesterSettleWake: scheduleRequesterSettleWake,
     startSubagentAnnounceCleanupFlow,
   };

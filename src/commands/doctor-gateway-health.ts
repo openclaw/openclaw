@@ -92,7 +92,7 @@ export async function checkGatewayHealth(params: {
         status.degradedSecretOwners
           .map(
             (owner) =>
-              `- cold ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${redactSecretDegradationReason(owner.reason)}` +
+              `- ${owner.degradationState ?? "cold"} ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${redactSecretDegradationReason(owner.reason)}` +
               "\n  Retry: openclaw secrets reload",
           )
           .join("\n"),

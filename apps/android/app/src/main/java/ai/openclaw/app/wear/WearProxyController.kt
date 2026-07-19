@@ -132,7 +132,7 @@ internal class WearProxyController(
       )
       activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
       activeSessionKey()?.takeIf(String::isNotBlank)?.let { put("activeSessionKey", it.takeCodePoints(MAX_SESSION_KEY_CHARS)) }
-      selectedModelRef()?.takeIf(String::isNotBlank)?.let { put("selectedModelRef", it.takeCodePoints(MAX_MODEL_REF_CHARS)) }
+      canonicalModelRef(selectedModelRef())?.let { put("selectedModelRef", it) }
     }
   }
 
@@ -186,25 +186,22 @@ internal class WearProxyController(
   }
 
   private fun listModels(params: JsonObject): JsonObject {
-    params.requireOnly()
-    val selected = selectedModelRef()
-    val availableModels =
-      models().mapNotNull { model ->
-        model.ref
-          .trim()
-          .takeIf(String::isNotEmpty)
-          ?.let { ref -> ref to model }
-      }
-    val boundedModels = availableModels.take(MAX_MODEL_COUNT).toMutableList()
-    availableModels
-      .firstOrNull { (ref) -> ref == selected }
-      ?.takeIf { selectedModel -> boundedModels.none { (ref) -> ref == selectedModel.first } }
-      ?.let { selectedModel ->
-        if (boundedModels.size == MAX_MODEL_COUNT) {
-          boundedModels[boundedModels.lastIndex] = selectedModel
-        } else {
-          boundedModels += selectedModel
-        }
+    params.requireOnly("selectedModelRef")
+    val selected =
+      canonicalModelRef(params.optionalStringParam("selectedModelRef", MAX_MODEL_REF_CHARS))
+        ?: canonicalModelRef(selectedModelRef())
+    val availableModels = availableModels()
+    // The Watch picker moves one adjacent model at a time and reloads after each choice.
+    // Centering keeps both directions reachable without exceeding the message cap.
+    val selectedIndex = availableModels.indexOfFirst { (ref) -> ref == selected }
+    val boundedModels =
+      if (availableModels.size <= MAX_MODEL_COUNT || selectedIndex < 0) {
+        availableModels.take(MAX_MODEL_COUNT)
+      } else {
+        val start =
+          (selectedIndex - MAX_MODEL_COUNT / 2)
+            .coerceIn(0, availableModels.size - MAX_MODEL_COUNT)
+        availableModels.subList(start, start + MAX_MODEL_COUNT)
       }
     return buildJsonObject {
       put(
@@ -213,7 +210,7 @@ internal class WearProxyController(
           boundedModels.forEach { (ref, model) ->
             add(
               buildJsonObject {
-                put("ref", ref.takeCodePoints(MAX_MODEL_REF_CHARS))
+                put("ref", ref)
                 put("name", model.name.takeCodePoints(MAX_MODEL_NAME_CHARS))
               },
             )
@@ -226,8 +223,10 @@ internal class WearProxyController(
   private suspend fun selectModel(params: JsonObject): JsonObject {
     params.requireOnly("sessionKey", "modelRef")
     val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
-    val modelRef = params.stringParam("modelRef", MAX_MODEL_REF_CHARS)
-    if (models().none { model -> model.ref == modelRef }) {
+    val modelRef =
+      canonicalModelRef(params.stringParam("modelRef", MAX_MODEL_REF_CHARS))
+        ?: throw WearProxyInvalidRequest("Invalid modelRef")
+    if (availableModels().none { (ref) -> ref == modelRef }) {
       throw WearProxyGatewayException("not_found", "Model is no longer available")
     }
     if (!selectSessionModel(sessionKey, modelRef)) {
@@ -238,6 +237,16 @@ internal class WearProxyController(
       put("selectedModelRef", modelRef)
     }
   }
+
+  private fun availableModels(): List<Pair<String, WearProxyModel>> =
+    models()
+      .mapNotNull { model -> canonicalModelRef(model.ref)?.let { ref -> ref to model } }
+      .distinctBy { (ref) -> ref }
+
+  private fun canonicalModelRef(value: String?): String? =
+    value
+      ?.trim()
+      ?.takeIf { ref -> ref.isNotEmpty() && ref.codePointCount() <= MAX_MODEL_REF_CHARS }
 
   private suspend fun gatewayConnect(params: JsonObject): JsonObject {
     params.requireOnly()
@@ -433,7 +442,7 @@ private fun projectHistory(source: JsonObject): JsonObject =
     copyLong(source, "totalMessages")
     copyBoolean(source, "hasMore")
     ((source["sessionInfo"] as? JsonObject)?.providerQualifiedModelRef() ?: source.providerQualifiedModelRef())
-      ?.let { put("selectedModelRef", it.takeCodePoints(MAX_PROJECTED_MODEL_REF_CHARS)) }
+      ?.let { put("selectedModelRef", it) }
     val inFlight = source["inFlightRun"] as? JsonObject
     if (inFlight != null) {
       put(
@@ -462,7 +471,7 @@ private fun projectSession(
     copyBoolean(source, "pinned")
     copyBoolean(source, "unread")
     copyBoolean(source, "hasActiveRun")
-    source.providerQualifiedModelRef()?.let { put("modelRef", it.takeCodePoints(MAX_PROJECTED_MODEL_REF_CHARS)) }
+    source.providerQualifiedModelRef()?.let { put("modelRef", it) }
   }
 }
 
@@ -579,8 +588,9 @@ private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? Jso
 
 private fun JsonObject.providerQualifiedModelRef(): String? {
   val model = stringOrNull("model")?.trim()?.takeIf(String::isNotEmpty) ?: return null
-  val provider = stringOrNull("modelProvider")?.trim()?.takeIf(String::isNotEmpty) ?: return model
-  return if (model.startsWith("$provider/")) model else "$provider/$model"
+  val provider = stringOrNull("modelProvider")?.trim()?.takeIf(String::isNotEmpty)
+  val ref = if (provider == null || model.startsWith("$provider/")) model else "$provider/$model"
+  return ref.takeIf { it.codePointCount() <= MAX_PROJECTED_MODEL_REF_CHARS }
 }
 
 private fun JsonElement?.booleanPrimitiveOrNull(): Boolean? = (this as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull

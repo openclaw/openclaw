@@ -170,10 +170,12 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { method, params ->
           when (method) {
-            WearRpcMethod.ModelsList ->
+            WearRpcMethod.ModelsList -> {
+              assertEquals("openai/gpt-a", params.getValue("selectedModelRef").jsonPrimitive.content)
               json.parseToJsonElement(
                 """{"models":[{"ref":"openai/gpt-a","name":"GPT A"},{"ref":"openai/gpt-b","name":"GPT B"}]}""",
               )
+            }
             WearRpcMethod.ModelsSelect -> {
               assertEquals("agent:main:thread-7", params.getValue("sessionKey").jsonPrimitive.content)
               assertEquals("openai/gpt-b", params.getValue("modelRef").jsonPrimitive.content)
@@ -186,7 +188,7 @@ class WearGatewayRepositoryTest {
         }
       val repository = WearGatewayRepository(requester)
 
-      val models = repository.models("phone-a", capabilities)
+      val models = repository.models("phone-a", capabilities, selectedModelRef = "openai/gpt-a")
       val selected =
         repository.selectModel(
           sessionKey = "agent:main:thread-7",
@@ -196,7 +198,9 @@ class WearGatewayRepositoryTest {
         )
 
       assertEquals(listOf("openai/gpt-a", "openai/gpt-b"), models.models.map(WearModel::ref))
-      assertEquals("openai/gpt-b", selected)
+      assertEquals("openai/gpt-b", selected.selectedModelRef)
+      assertEquals(7L, selected.eventSequence)
+      assertEquals("phone-a", selected.phoneNodeId)
       assertEquals(listOf(WearRpcMethod.ModelsList, WearRpcMethod.ModelsSelect), requester.calls.map { it.first })
       assertTrue(requester.expectedNodeIds.all { it == "phone-a" })
       assertTrue(requester.requirePreferredNodes.all { it })

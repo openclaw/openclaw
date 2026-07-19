@@ -105,6 +105,11 @@ export type OpenClawConfig = {
     lastTouchedVersion?: string;
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
+    /** One-time doctor migrations already applied to this config. */
+    migrations?: {
+      /** Legacy default/per-agent model-map restrictions were preserved or confirmed unrestricted. */
+      modelPolicyAllowlist?: true;
+    };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
@@ -212,14 +217,8 @@ export type OpenClawConfig = {
       chatSendShortcut?: "enter" | "modifier-enter";
       /** Follow-up handling while a run is active; unset uses the server queue mode. */
       chatFollowUpMode?: "steer" | "queue";
-    };
-  };
-  /** Terminal UI display settings. */
-  tui?: {
-    /** Footer display settings for the terminal UI. */
-    footer?: {
-      /** Show the remote Gateway hostname in the footer for non-local URL-backed connections. */
-      showRemoteHost?: boolean;
+      /** Show live agent activity beneath running Control UI sidebar sessions. */
+      sidebarLiveActivity?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */

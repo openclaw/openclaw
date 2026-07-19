@@ -72,6 +72,13 @@ internal data class WearModelList(
   val eventStreamId: String? = null,
 )
 
+internal data class WearModelSelection(
+  val selectedModelRef: String,
+  val eventSequence: Long?,
+  val phoneNodeId: String,
+  val eventStreamId: String? = null,
+)
+
 internal data class WearChatMessage(
   val id: String?,
   val role: String,
@@ -194,12 +201,15 @@ internal class WearGatewayRepository(
   suspend fun models(
     expectedNodeId: String,
     capabilities: Set<WearProxyCapability>,
+    selectedModelRef: String? = null,
   ): WearModelList {
     capabilities.require(WearProxyCapability.ModelControls)
     val response =
       requester.request(
         WearRpcMethod.ModelsList,
-        buildJsonObject {},
+        buildJsonObject {
+          selectedModelRef?.let { put("selectedModelRef", it) }
+        },
         expectedNodeId,
         requirePreferredNode = true,
       )
@@ -220,7 +230,7 @@ internal class WearGatewayRepository(
     modelRef: String,
     phoneNodeId: String,
     capabilities: Set<WearProxyCapability>,
-  ): String {
+  ): WearModelSelection {
     capabilities.require(WearProxyCapability.ModelControls)
     val response =
       requester.request(
@@ -232,10 +242,17 @@ internal class WearGatewayRepository(
         phoneNodeId,
         requirePreferredNode = true,
       )
-    return response.payload
-      .asObject("models.select")
-      .string("selectedModelRef")
-      ?: throw WearProxyException("invalid_response", "models.select returned invalid data")
+    val selectedModelRef =
+      response.payload
+        .asObject("models.select")
+        .string("selectedModelRef")
+        ?: throw WearProxyException("invalid_response", "models.select returned invalid data")
+    return WearModelSelection(
+      selectedModelRef = selectedModelRef,
+      eventStreamId = response.eventStreamId,
+      eventSequence = response.eventSequence,
+      phoneNodeId = response.sourceNodeId,
+    )
   }
 
   suspend fun setGatewayEnabled(

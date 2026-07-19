@@ -2,114 +2,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import "./custodian-page.ts";
-
-type TestCustodianPage = HTMLElement & {
-  onboarding: boolean;
-  updateComplete: Promise<boolean>;
-};
-
-type ContextHarness = {
-  context: ApplicationContext;
-  setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-  setGatewayUrl: (gatewayUrl: string) => void;
-  setGatewayToken: (token: string) => void;
-  setGatewayBootstrapToken: (bootstrapToken: string) => void;
-  setGatewayDeviceToken: (deviceToken: string) => void;
-};
-
-function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
-  const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
-    client,
-    connected: true,
-    reconnecting: false,
-    hello: {
-      type: "hello-ok" as const,
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["openclaw.chat"] },
-    },
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const connection = {
-    gatewayUrl: "ws://gateway.test/control",
-    token: "",
-    bootstrapToken: "",
-    password: "",
-  };
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection,
-    subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  } as unknown as ApplicationGateway;
-  const context = {
-    gateway,
-    basePath: "",
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    setGatewaySnapshot: (patch) => {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-    setGatewayUrl: (gatewayUrl) => {
-      connection.gatewayUrl = gatewayUrl;
-    },
-    setGatewayToken: (token: string) => {
-      connection.token = token;
-    },
-    setGatewayBootstrapToken: (value: string) => {
-      connection.bootstrapToken = value;
-    },
-    setGatewayDeviceToken: (deviceToken: string) => {
-      snapshot = {
-        ...snapshot,
-        hello: snapshot.hello
-          ? { ...snapshot.hello, auth: { ...snapshot.hello.auth, deviceToken } }
-          : snapshot.hello,
-      };
-    },
-  };
-}
-
-async function mountPage(
-  context: ApplicationContext,
-  options: { onboarding?: boolean } = {},
-): Promise<{
-  page: TestCustodianPage;
-  provider: ApplicationContextProvider;
-}> {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
-  page.onboarding = options.onboarding ?? true;
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  return { page, provider };
-}
+import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
 describe("custodian page", () => {
   beforeEach(() => {
@@ -141,7 +36,7 @@ describe("custodian page", () => {
       .fn()
       .mockResolvedValueOnce({
         sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Welcome aboard.",
+        reply: "Welcome **aboard**.",
         action: "none",
         question,
       })
@@ -155,12 +50,16 @@ describe("custodian page", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
+    const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
+    expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
+    expect(assistantGroup.querySelector(".chat-avatar.assistant")?.textContent?.trim()).toBe("OC");
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
       "Talk to my agent",
     );
-    page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')!.click();
+    const connectOption = page.querySelectorAll<HTMLButtonElement>("[data-option-value]")[1]!;
+    connectOption.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
@@ -171,10 +70,9 @@ describe("custodian page", () => {
       welcomeVariant: "onboarding",
       message: "connect whatsapp",
     });
-    expect(page.textContent).toContain("Connect WhatsApp");
-    expect(
-      page.querySelector<HTMLButtonElement>('[data-option-value="Connect WhatsApp"]')?.disabled,
-    ).toBe(true);
+    const userGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(userGroup.textContent).toContain("Connect WhatsApp");
+    expect(connectOption.disabled).toBe(true);
   });
 
   it("keeps failed sensitive replies masked for correction and retry", async () => {
@@ -192,17 +90,17 @@ describe("custodian page", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
     const input = page.querySelector<HTMLInputElement>(
-      '.custodian__composer input[type="password"]',
+      '.agent-chat__composer-combobox input[type="password"]',
     )!;
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     await page.updateComplete;
-    expect(page.querySelector('.custodian__composer input[type="password"]')).not.toBeNull();
+    expect(input.isConnected).toBe(true);
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
@@ -422,7 +320,7 @@ describe("custodian page", () => {
     composer.value = "test-token-placeholder";
     composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
     setGatewayDeviceToken("test-token-placeholder");
@@ -456,7 +354,7 @@ describe("custodian page", () => {
     composer.value = "install everything";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("gateway timeout"),
@@ -487,7 +385,7 @@ describe("custodian page", () => {
     composer.value = sensitiveValue;
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: sensitiveValue });
@@ -554,16 +452,21 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
-    const input = page.querySelector<HTMLTextAreaElement>(".custodian__composer textarea")!;
-    input.value = "Something else";
+    const input = page.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox textarea",
+    )!;
+    input.value = "**Something** else";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
 
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "Something else" });
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "**Something** else" });
+    // Parity with the regular chat: user turns run through the same markdown pipeline.
+    const sentGroup = page.querySelector<HTMLElement>(".chat-group.user")!;
+    expect(sentGroup.querySelector("strong")?.textContent).toBe("Something");
     expect(page.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.disabled).toBe(
       true,
     );
@@ -588,7 +491,7 @@ describe("custodian page", () => {
     composer.value = "status";
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("welcomeVariant");
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "status" });

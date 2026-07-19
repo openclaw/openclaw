@@ -6,6 +6,62 @@ import Testing
 
 @MainActor
 struct TalkModeManagerTests {
+    @Test func `encodes realtime client voice session identity`() throws {
+        let params = TalkRealtimeClientCreateParams(
+            sessionKey: "agent:main:main",
+            voiceSessionId: "voice-1",
+            provider: "openai",
+            model: "gpt-realtime-2",
+            voice: "marin",
+            capabilities: ["voice-transcript"])
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+
+        #expect(object["sessionKey"] as? String == "agent:main:main")
+        #expect(object["voiceSessionId"] as? String == "voice-1")
+        #expect(object["capabilities"] as? [String] == ["voice-transcript"])
+    }
+
+    @Test func `decodes optional realtime client voice session id`() throws {
+        let session = try JSONDecoder().decode(
+            TalkRealtimeClientSession.self,
+            from: Data(
+                #"{"provider":"openai","transport":"webrtc","voiceSessionId":"voice-1","clientSecret":"secret"}"#.utf8))
+
+        #expect(session.voiceSessionId == "voice-1")
+
+        let serverOwned = try JSONDecoder().decode(
+            TalkRealtimeClientSession.self,
+            from: Data(#"{"provider":"openai","transport":"gateway-relay","clientSecret":"secret"}"#.utf8))
+        #expect(serverOwned.voiceSessionId == nil)
+    }
+
+    @Test func `encodes transcript entry id as a decimal string`() throws {
+        let params = TalkRealtimeTranscriptParams(
+            sessionKey: "agent:main:main",
+            voiceSessionId: "voice-1",
+            entryId: "1",
+            role: .assistant,
+            text: "hello",
+            timestamp: 1234)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+
+        #expect(object["entryId"] as? String == "1")
+    }
+
+    @Test func `surfaces voice confirmation id for a follow up consult`() throws {
+        let error = GatewayResponseError(
+            method: "talk.client.toolCall",
+            code: "INVALID_REQUEST",
+            message: "VOICE_CONFIRMATION_REQUIRED:confirm_123 Ask the user to confirm.",
+            details: nil)
+
+        let instruction = try #require(TalkRealtimeWebRTCSession.voiceConfirmationInstruction(from: error))
+        #expect(instruction.contains("VOICE_CONFIRMATION_REQUIRED:confirm_123"))
+        #expect(instruction.contains("confirmationId confirm_123"))
+    }
+
     @Test func `recognizes open AI maximum duration errors as terminal`() throws {
         let event = try JSONDecoder().decode(
             TalkRealtimeServerEvent.self,
@@ -648,14 +704,15 @@ struct TalkModeManagerTests {
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
-    @Test func `leaves native mode for unsupported realtime brain`() {
+    @Test(arguments: ["direct-tools", "none"])
+    func `leaves native mode for unsupported realtime brain`(brain: String) {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
                     "provider": "google",
                     "mode": "realtime",
                     "transport": "gateway-relay",
-                    "brain": "direct-tools",
+                    "brain": brain,
                 ],
             ],
         ]

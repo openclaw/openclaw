@@ -11,8 +11,10 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
+await import("../../components/viewer-facepile.ts");
+
 describe("AppSidebar update card wiring", () => {
-  it("shows OpenClaw in the default pinned routes", async () => {
+  it("shows OpenClaw in the default sidebar entries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
@@ -42,8 +44,155 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
+describe("AppSidebar viewer presence", () => {
+  it("groups identified viewers for session rows and the footer", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main", "agent:main:work"]),
+    );
+    sidebar.connected = true;
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          user: {
+            id: "00-self",
+            name: "Self User",
+            avatarUrl: "/api/users/00-self/avatar?v=1",
+          },
+          watchedSessions: ["agent:main:work"],
+        },
+        {
+          instanceId: "alice-1",
+          user: { id: "alice", name: "Alice", avatarUrl: "https://example.test/alice.png" },
+          watchedSessions: ["agent:main:work"],
+        },
+        {
+          instanceId: "alice-2",
+          user: { id: "alice", name: "Alice" },
+          watchedSessions: ["agent:main:main"],
+        },
+        {
+          instanceId: "bob-1",
+          user: { id: "bob", email: "bob@example.test" },
+          watchedSessions: ["agent:main:work"],
+        },
+        ...["carol", "dave", "erin", "frank"].map((id) => ({
+          instanceId: `${id}-1`,
+          user: { id, name: id[0]?.toUpperCase() + id.slice(1) },
+          watchedSessions: ["agent:main:work"],
+        })),
+        {
+          instanceId: "anonymous-1",
+          watchedSessions: ["agent:main:work"],
+        },
+        {
+          instanceId: "offline-1",
+          reason: "disconnect",
+          user: { id: "offline", name: "Offline User" },
+          watchedSessions: ["agent:main:work"],
+        },
+      ],
+    });
+    await sidebar.updateComplete;
+    gatewayHarness.publish({
+      selfUser: {
+        id: "00-self",
+        name: "Self User",
+        avatarUrl: "/api/users/00-self/avatar?v=1",
+      },
+    });
+    await sidebar.updateComplete;
+
+    const sessionFacepile = sidebar.querySelector<HTMLElement>(
+      '[data-session-key="agent:main:work"] openclaw-viewer-facepile',
+    );
+    const footerFacepile = sidebar.querySelector<HTMLElement>(
+      ".sidebar-footer-bar openclaw-viewer-facepile",
+    );
+    await Promise.all([
+      (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
+      (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
+    ]);
+    expect(
+      sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
+    ).toBe("6");
+    expect(
+      [...(sessionFacepile?.querySelectorAll<HTMLElement>("[data-viewer-id]") ?? [])].map(
+        (avatar) => avatar.dataset.viewerId,
+      ),
+    ).toEqual(["alice", "bob", "carol"]);
+    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
+    expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
+    expect(
+      [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
+        (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
+      ),
+    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
+
+    expect(
+      footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
+    ).toBe("6");
+    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).toBeNull();
+    expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
+
+    const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
+    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+      "Self User",
+    );
+    expect(identityChip?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
+    identityChip?.click();
+    expect(onNavigate).toHaveBeenCalledWith("profile", {
+      hash: "#settings-profile-identity",
+    });
+
+    const avatar = identityChip?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
+    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
+    gatewayHarness.gateway.updateSelfUser?.({
+      name: "Augusta Ada",
+      avatarUrl: "/api/users/00-self/avatar?v=4",
+    });
+    await sidebar.updateComplete;
+
+    // Profile mutations update gateway state directly; no presence event follows them.
+    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+      "Augusta Ada",
+    );
+    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
+
+    sidebar.connected = false;
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
+  });
+
+  it("leaves the footer identity chip absent for an unidentified connection", async () => {
+    const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
+        { instanceId: "alice", user: { id: "alice", name: "Alice" } },
+      ],
+    });
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-footer-bar")?.textContent).not.toContain("Sign in");
+  });
+});
+
 describe("AppSidebar brand actions", () => {
-  it("starts a session for the active agent from the Threads header", async () => {
+  it("starts a thread for the expanded agent from the brand action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
@@ -53,26 +202,48 @@ describe("AppSidebar brand actions", () => {
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
       gateway,
-      createSessions("research", ["agent:research:main"]),
+      createSessions("research", ["agent:research:main", "agent:research:task"]),
       "panel",
       agentsList,
     );
     const onOpenNewSession = vi.fn();
-    sidebar.connected = true;
+    sidebar.connected = false;
     sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
-    // The new-session affordance moved off the brand row onto Threads.
-    expect(sidebar.querySelector(".sidebar-brand .sidebar-new-session")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-recent-sessions__head--root")).toBeNull();
-    const button = sidebar.querySelector<HTMLButtonElement>(
+    const actions = sidebar.querySelector(".sidebar-brand__actions");
+    const brandButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__new-thread");
+    expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(
+      brandButton,
+    );
+    expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(brandButton?.disabled).toBe(true);
+
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    expect(brandButton?.disabled).toBe(false);
+    brandButton?.click();
+    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+
+    const headerButton = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
-    expect(button?.getAttribute("aria-label")).toBe("New session");
-    expect(button?.disabled).toBe(false);
+    expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
+  });
 
-    button?.click();
-    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+  it("opens the archived Sessions view from the sessions-zone footer", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:main:work"]),
+    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-view-archived")?.click();
+
+    expect(onNavigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
   });
 });
 
@@ -246,7 +417,7 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults,
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5 }],
+        sessions: [{ key: "agent:main:main", kind: "direct", label: "Main task", updatedAt: 5 }],
       },
       agentId: "main",
     });
@@ -254,6 +425,9 @@ describe("AppSidebar agent chip", () => {
 
     // No per-agent sections: the card switcher owns agent switching now, and
     // the main session lives behind the identity card instead of the list.
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
+      "Main task",
+    );
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
     expect(sidebar.querySelector(".sidebar-agent-card__menu-unread")).not.toBeNull();

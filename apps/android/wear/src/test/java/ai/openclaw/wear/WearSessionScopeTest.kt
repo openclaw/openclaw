@@ -32,6 +32,82 @@ class WearSessionScopeTest {
   }
 
   @Test
+  fun modelCatalogScopeTracksBothPhoneAndModel() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertEquals(false, wearModelCatalogScopeChanged(requested, requested.copy()))
+    assertEquals(true, wearModelCatalogScopeChanged(requested, requested.copy(phoneNodeId = "phone-b")))
+    assertEquals(true, wearModelCatalogScopeChanged(requested, requested.copy(modelRef = "openai/model-b")))
+  }
+
+  @Test
+  fun modelCatalogResultRequiresTheFullRequestedScope() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertEquals(true, wearSessionRequestIsCurrent(requested, requested.copy(), "phone-a"))
+    assertEquals(
+      false,
+      wearSessionRequestIsCurrent(requested, requested.copy(key = "agent:other"), "phone-a"),
+    )
+    assertEquals(
+      false,
+      wearSessionRequestIsCurrent(requested, requested.copy(modelRef = "openai/model-b"), "phone-a"),
+    )
+    assertEquals(false, wearSessionRequestIsCurrent(requested, requested.copy(), "phone-b"))
+    assertEquals(
+      false,
+      wearSessionRequestIsCurrent(requested, requested.copy(phoneNodeId = "phone-b"), "phone-b"),
+    )
+  }
+
+  @Test
+  fun transcriptResultPreservesNewerModelWithinTheSamePhoneSession() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertEquals(
+      true,
+      wearTranscriptRequestIsCurrent(requested, requested.copy(modelRef = "openai/model-b"), "phone-a"),
+    )
+    assertEquals(false, wearTranscriptRequestIsCurrent(requested, requested.copy(), "phone-b"))
+    assertEquals(
+      false,
+      wearTranscriptRequestIsCurrent(requested, requested.copy(phoneNodeId = "phone-b"), "phone-b"),
+    )
+  }
+
+  @Test
+  fun snapshotResponsesRequireTheSamePhoneAndEventStream() {
+    assertEquals(true, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-a", "stream-a"))
+    assertEquals(false, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-b", "stream-a"))
+    assertEquals(false, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-a", "stream-b"))
+    assertEquals(true, wearSnapshotSourcesMatch("phone-a", null, "phone-a", null))
+  }
+
+  @Test
   fun agentSwitchDropsThePreviousSessionModelAndStreamTogether() {
     val previousSession =
       WearSession(
@@ -67,7 +143,7 @@ class WearSessionScopeTest {
   }
 
   @Test
-  fun sessionSwitchMovesModelAndClearsOnlyThePreviousTranscript() {
+  fun sessionSwitchMovesModelAndClearsThePreviousCatalogAndTranscript() {
     val nextSession =
       WearSession(
         key = "agent:main:thread-2",
@@ -92,9 +168,40 @@ class WearSessionScopeTest {
     assertEquals(nextSession, switched.selectedSession)
     assertEquals("openai/new", switched.selectedModelRef)
     assertEquals("main", switched.activeAgentId)
-    assertEquals(listOf(WearModel("openai/new", "New")), switched.models)
+    assertEquals(emptyList<WearModel>(), switched.models)
     assertEquals(emptyList<WearChatMessage>(), switched.messages)
     assertNull(switched.streamText)
     assertNull(switched.activeRunId)
+  }
+
+  @Test
+  fun modelSwitchClearsTheSelectedModelScopedCatalog() {
+    val selectedSession =
+      WearSession(
+        key = "agent:main:thread-2",
+        title = "Selected",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-59",
+      )
+    val state =
+      WearUiState(
+        sessions = listOf(selectedSession),
+        selectedSession = selectedSession,
+        selectedModelRef = "openai/model-59",
+        models =
+          listOf(
+            WearModel("openai/model-0", "Model 0"),
+            WearModel("openai/model-59", "Model 59"),
+          ),
+      )
+
+    val switched = state.switchModelContext("openai/model-0")
+
+    assertEquals("openai/model-0", switched.selectedModelRef)
+    assertEquals("openai/model-0", switched.selectedSession?.modelRef)
+    assertEquals("openai/model-0", switched.sessions.single().modelRef)
+    assertEquals(emptyList<WearModel>(), switched.models)
   }
 }

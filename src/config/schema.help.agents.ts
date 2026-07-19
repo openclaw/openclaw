@@ -12,8 +12,6 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
-  "tui.footer.showRemoteHost":
-    "Show the remote Gateway hostname in the TUI footer for non-local URL-backed connections. Default: false. Loopback and embedded local connections never show a host label.",
   plugins:
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":
@@ -76,6 +74,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.list.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
   "agents.list.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
+  "agents.list.*.modelPolicy":
+    "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
+  "agents.list.*.modelPolicy.allow":
+    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and provider wildcards; empty permits any model.',
   "agents.list.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.list.*.models.*.agentRuntime.id":
@@ -124,6 +126,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
   "agents.defaults.compaction.provider":
     "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
+  "agents.defaults.compaction.thinkingLevel":
+    'Optional thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", or "ultra". It overrides the session level and is clamped to the actual compaction model/runtime; leave unset to inherit the session level. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.reserveTokens":
     "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more. When the active model context window is known, the effective reserve is capped to preserve usable prompt space.",
   "agents.defaults.compaction.keepRecentTokens":

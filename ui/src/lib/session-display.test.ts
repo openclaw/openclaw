@@ -29,7 +29,7 @@ describe("resolveSessionDisplayName", () => {
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
     expect(
       resolveSessionDisplayName("agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"),
-    ).toBe("New session");
+    ).toBe("New thread");
   });
 
   it("names unnamed work sessions after their checkout", () => {

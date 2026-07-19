@@ -1433,6 +1433,7 @@ jobs:
         env:
           GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
+          PROTOCOL_SINCE_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
           RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
           RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
@@ -1450,6 +1451,13 @@ jobs:
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
+              if [[ -n "${PROTOCOL_SINCE_BASE_SHA:-}" ]]; then
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
+              else
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+refs/heads/main:refs/remotes/origin/main"
+              fi
               pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
@@ -2220,6 +2228,9 @@ jobs:
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-plugin-sdk-api-baseline
+            group: plugin-sdk-api-baseline
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-flip-proof
             group: sqlite-session-flip-proof
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -2438,6 +2449,9 @@ jobs:
               else
                 run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
               fi
+              ;;
+            plugin-sdk-api-baseline)
+              run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check
               ;;
             sqlite-session-flip-proof)
               if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
@@ -2922,6 +2936,17 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+
+      - name: Native state schema version contract
+        run: |
+          if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
+            node scripts/check-native-state-schema-version.mjs
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            echo "[skip] native state schema version guard is not present in this historical target"
+          else
+            echo "Current CI targets must provide scripts/check-native-state-schema-version.mjs." >&2
+            exit 1
+          fi
 
       - name: Swift lint
         run: |

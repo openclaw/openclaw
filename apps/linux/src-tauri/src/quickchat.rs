@@ -1,4 +1,4 @@
-use crate::gateway_ws::{AgentsListResult, GatewayClient};
+use crate::gateway_ws::{AgentsListResult, ChatSendResult, GatewayClient};
 use crate::{tray, DesktopState};
 use serde::Serialize;
 use std::fs;
@@ -513,6 +513,7 @@ pub fn toggle_quickchat(app: &AppHandle) {
 
 fn show_quickchat(app: &AppHandle) -> Result<(), String> {
     let window = ensure_quickchat_window(app)?;
+    app.state::<GatewayClient>().resume_reconnect();
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT))
         .map_err(|error| format!("Could not reset Quick Chat size: {error}"))?;
@@ -588,7 +589,7 @@ pub async fn quickchat_send(
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
     message: String,
-) -> Result<(), String> {
+) -> Result<ChatSendResult, String> {
     require_quickchat_window(&window)?;
     let message = message.trim().to_string();
     if message.is_empty() {
