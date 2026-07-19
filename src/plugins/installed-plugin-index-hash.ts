@@ -32,30 +32,28 @@ export function safeHashFile(params: {
   required: boolean;
 }): string | undefined {
   try {
-    const stat = fs.statSync(params.filePath, { throwIfNoEntry: false });
-    if (!stat) {
-      throw new Error(`file not found: ${params.filePath}`);
-    }
-    if (!stat.isFile()) {
-      throw new Error(`not a regular file: ${params.filePath}`);
-    }
-    const hash = crypto.createHash("sha256");
-    if (stat.size <= MAX_PLUGIN_INDEX_HASH_BYTES) {
-      hash.update(fs.readFileSync(params.filePath));
-    } else {
-      // Stream large files through EOF using a fixed 64 KiB buffer.
-      const fd = fs.openSync(params.filePath, "r");
-      try {
+    // Open the fd first, then fstat + read through the same fd to avoid TOCTOU.
+    const fd = fs.openSync(params.filePath, "r");
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) {
+        throw new Error(`not a regular file: ${params.filePath}`);
+      }
+      const hash = crypto.createHash("sha256");
+      if (stat.size <= MAX_PLUGIN_INDEX_HASH_BYTES) {
+        hash.update(fs.readFileSync(fd));
+      } else {
+        // Stream large files through EOF using a fixed 64 KiB buffer.
         const buffer = Buffer.alloc(65536); // 64 KiB chunk
         let bytesRead: number;
         while ((bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
           hash.update(buffer.subarray(0, bytesRead));
         }
-      } finally {
-        fs.closeSync(fd);
       }
+      return hash.digest("hex");
+    } finally {
+      fs.closeSync(fd);
     }
-    return hash.digest("hex");
   } catch (err) {
     if (params.required) {
       params.diagnostics.push({
