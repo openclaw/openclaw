@@ -224,6 +224,7 @@ type ResolvedBoardView = {
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;
+  activeTabReadOnly: boolean;
   dock: BoardTab["chatDock"];
   reopenDock: VisibleBoardDock;
 };
@@ -401,6 +402,9 @@ class ChatPane extends OpenClawLightDomElement {
       }
     | undefined;
   private readonly lastVisibleBoardDock = new Map<string, VisibleBoardDock>();
+  private swarmBoardSnapshot: BoardSnapshot | null = null;
+  private swarmBoardSnapshotBase: BoardSnapshot | null = null;
+  private swarmBoardSnapshotRequest = 0;
   private headerRenameInitialLabel: string | null = null;
   private headerRenameInitialValue = "";
   private headerRenameSessionKey = "";
@@ -411,7 +415,11 @@ class ChatPane extends OpenClawLightDomElement {
     void new SubscriptionsController(this)
       .watch(
         () => this.resolveBoardProvider(),
-        (provider, notify) => provider.snapshot$.subscribe(notify),
+        (provider, notify) =>
+          provider.snapshot$.subscribe(() => {
+            this.refreshSwarmBoardSnapshot();
+            notify();
+          }),
       )
       .effect(
         () => this.resolveBoardProvider(),
@@ -1493,9 +1501,31 @@ class ChatPane extends OpenClawLightDomElement {
     return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
   }
 
+  private refreshSwarmBoardSnapshot(): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const request = ++this.swarmBoardSnapshotRequest;
+    const sessions = state.sessionsResult?.sessions ?? [];
+    void import("../../lib/board/swarm-dashboard.ts").then(({ withSwarmWidget }) => {
+      if (request !== this.swarmBoardSnapshotRequest) {
+        return;
+      }
+      const currentBase = this.resolveBoardProvider().snapshot$.value;
+      this.swarmBoardSnapshotBase = currentBase;
+      this.swarmBoardSnapshot = withSwarmWidget(currentBase, sessions);
+      this.requestUpdate();
+    });
+  }
+
   private resolveBoardView(): ResolvedBoardView {
     const provider = this.resolveBoardProvider();
-    const snapshot = provider.snapshot$.value;
+    const baseSnapshot = provider.snapshot$.value;
+    const snapshot =
+      this.swarmBoardSnapshotBase === baseSnapshot
+        ? (this.swarmBoardSnapshot ?? baseSnapshot)
+        : baseSnapshot;
     const hasBoard = boardExists(snapshot);
     const sessionKey = this.resolveBoardSessionKey(snapshot.sessionKey);
     const saved =
@@ -1504,8 +1534,16 @@ class ChatPane extends OpenClawLightDomElement {
     const savedTab = snapshot.tabs.some((tab) => tab.tabId === saved?.activeTabId)
       ? saved?.activeTabId
       : undefined;
-    const activeTabId = savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
+    const activeTabId =
+      savedTab ??
+      snapshot.widgets.find((candidate) => candidate.builtin === "swarm")?.tabId ??
+      snapshot.tabs[0]?.tabId ??
+      snapshot.widgets[0]?.tabId ??
+      "";
     const tab = snapshot.tabs.find((candidate) => candidate.tabId === activeTabId);
+    const activeTabReadOnly = snapshot.widgets.some(
+      (candidate) => candidate.tabId === activeTabId && candidate.readOnly === true,
+    );
     const commandDock =
       this.boardCommandDock?.sessionKey === sessionKey &&
       this.boardCommandDock.tabId === activeTabId
@@ -1522,6 +1560,7 @@ class ChatPane extends OpenClawLightDomElement {
       hasBoard,
       face: hasBoard ? (saved?.face ?? "chat") : "chat",
       activeTabId,
+      activeTabReadOnly,
       dock,
       reopenDock:
         this.lastVisibleBoardDock.get(dockKey) ?? saved?.reopenDockByTab?.[activeTabId] ?? "right",
@@ -1596,7 +1635,7 @@ class ChatPane extends OpenClawLightDomElement {
 
   private handleBoardDockChange(dock: BoardTab["chatDock"]): void {
     const board = this.resolveBoardView();
-    if (!board.activeTabId) {
+    if (!board.activeTabId || board.activeTabReadOnly) {
       return;
     }
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
@@ -2210,6 +2249,7 @@ class ChatPane extends OpenClawLightDomElement {
     state.sessionsResultAgentId = stateValue.agentId;
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
+    this.refreshSwarmBoardSnapshot();
     const selectedSession = stateValue.result?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
@@ -2694,8 +2734,11 @@ class ChatPane extends OpenClawLightDomElement {
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
         this.persistBoardSessionView({ face });
       }),
-      boardDockAction: renderBoardDockMenu(board.hasBoard, board.face, board.dock, (dock) =>
-        this.handleBoardDockChange(dock),
+      boardDockAction: renderBoardDockMenu(
+        board.hasBoard && !board.activeTabReadOnly,
+        board.face,
+        board.dock,
+        (dock) => this.handleBoardDockChange(dock),
       ),
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
@@ -3088,6 +3131,7 @@ class ChatPane extends OpenClawLightDomElement {
       board.hasBoard && board.face === "dashboard"
         ? renderBoardSessionSurface({
             snapshot: board.snapshot,
+            sessions: state.sessionsResult?.sessions ?? [],
             activeTabId: board.activeTabId,
             dock: board.dock,
             reopenDock: board.reopenDock,
