@@ -55,10 +55,6 @@ enum ChatToolDiff {
     ]
     private static let writeToolNames: Set<String> = ["write", "write_file", "create_file"]
 
-    static func parseDetailsDiff(_ diff: String) -> [ChatToolDiffLine]? {
-        self.parseDetailsDiffResult(diff)?.lines
-    }
-
     private static func parseDetailsDiffResult(_ diff: String) -> ParsedDetailsDiff? {
         guard !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 

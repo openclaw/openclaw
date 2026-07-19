@@ -5,8 +5,15 @@ import Testing
 
 @Suite("ChatToolDiff")
 struct ChatToolDiffTests {
+    private func parsedLines(_ diff: String) -> [ChatToolDiffLine]? {
+        ChatToolDiff.resolveDiff(
+            name: "edit",
+            arguments: nil,
+            details: AnyCodable(["diff": AnyCodable(diff)]))?.lines
+    }
+
     @Test func `parses numbered details diffs`() {
-        let parsed = ChatToolDiff.parseDetailsDiff(" 455 before\n-456 old\n+456 new")
+        let parsed = self.parsedLines(" 455 before\n-456 old\n+456 new")
 
         #expect(parsed == [
             ChatToolDiffLine(kind: .ctx, lineNo: 455, text: "before"),
@@ -18,7 +25,7 @@ struct ChatToolDiffTests {
     @Test func `parses skip markers`() {
         let cases = ["+1 kept\n...", "+1 kept\n...(truncated)..."]
         for diff in cases {
-            #expect(ChatToolDiff.parseDetailsDiff(diff) == [
+            #expect(self.parsedLines(diff) == [
                 ChatToolDiffLine(kind: .add, lineNo: 1, text: "kept"),
                 ChatToolDiffLine(kind: .skip, text: ""),
             ])
@@ -27,7 +34,7 @@ struct ChatToolDiffTests {
 
     @Test func `rejects malformed or unchanged details`() {
         for diff in ["raw line", " 1 context\n 2 context"] {
-            #expect(ChatToolDiff.parseDetailsDiff(diff) == nil)
+            #expect(self.parsedLines(diff) == nil)
         }
     }
 
