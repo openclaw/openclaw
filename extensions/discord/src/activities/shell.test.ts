@@ -9,19 +9,9 @@ const WIDGET_REQUEST_TIMEOUT_MS = 20_000;
 class TestElement {
   className = "";
   textContent = "";
-  title = "";
-  referrerPolicy = "";
-  src = "";
   readonly children: TestElement[] = [];
-  readonly attributes = new Map<string, string>();
-  private html = "";
-
-  get innerHTML() {
-    return this.html;
-  }
 
   set innerHTML(value: string) {
-    this.html = value;
     if (value === "") {
       this.children.length = 0;
     }
@@ -29,10 +19,6 @@ class TestElement {
 
   append(...children: TestElement[]) {
     this.children.push(...children);
-  }
-
-  setAttribute(name: string, value: string) {
-    this.attributes.set(name, value);
   }
 }
 
@@ -68,16 +54,18 @@ async function executeShellWithHungRequest(hung: HungRequest) {
     async ready() {}
   }
 
-  let nextTimeoutId = 0;
-  const timeoutCallbacks = new Map<number, () => void>();
-  const clearTimeoutMock = vi.fn((timeoutId: number) => {
-    timeoutCallbacks.delete(timeoutId);
+  let timeoutCallback: (() => void) | undefined;
+  const clearTimeoutMock = vi.fn(() => {
+    timeoutCallback = undefined;
   });
-  const setTimeoutMock = vi.fn((callback: () => void, _timeoutMs: number) => {
-    nextTimeoutId += 1;
-    timeoutCallbacks.set(nextTimeoutId, callback);
-    return nextTimeoutId;
+  const setTimeoutMock = vi.fn((callback: () => void) => {
+    timeoutCallback = callback;
+    return 1;
   });
+  const stallUntilAbort = (signal: AbortSignal | null | undefined, message: string) =>
+    new Promise<never>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new Error(message)), { once: true });
+    });
   let fetchCall = 0;
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
     fetchCall += 1;
@@ -86,22 +74,11 @@ async function executeShellWithHungRequest(hung: HungRequest) {
     }
     const signal = init?.signal;
     if (hung.phase === "fetch") {
-      return await new Promise<Response>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new Error("request aborted")), {
-          once: true,
-        });
-      });
+      return await stallUntilAbort(signal, "request aborted");
     }
-    return {
-      ok: true,
-      status: 200,
-      json: async () =>
-        await new Promise((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(new Error("body aborted")), {
-            once: true,
-          });
-        }),
-    } as Response;
+    const response = Response.json({});
+    response.json = async () => await stallUntilAbort(signal, "body aborted");
+    return response;
   });
 
   const source = DISCORD_ACTIVITY_SHELL_JS.replace(
@@ -125,8 +102,8 @@ async function executeShellWithHungRequest(hung: HungRequest) {
 
   const expectedRequestCount = hung.request === "token" ? 1 : 2;
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(expectedRequestCount));
-  expect(timeoutCallbacks.size).toBe(1);
-  timeoutCallbacks.values().next().value?.();
+  expect(timeoutCallback).toBeTypeOf("function");
+  timeoutCallback?.();
   await vi.waitFor(() => expect(readStatusHeading(app)).toBe("Gateway offline"));
   return { clearTimeoutMock, fetchMock, setTimeoutMock };
 }
