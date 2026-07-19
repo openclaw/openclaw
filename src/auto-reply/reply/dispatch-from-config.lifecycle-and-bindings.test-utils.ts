@@ -17,6 +17,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -1848,6 +1849,15 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "detached" }) satisfies ReplyPayload);
+
+    expect(
+      shouldBypassPluginOwnedBindingForCommand(
+        { ...ctx, CommandAuthorized: "false" } as unknown as Parameters<
+          typeof shouldBypassPluginOwnedBindingForCommand
+        >[0],
+        cfg,
+      ),
+    ).toBe(false);
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 

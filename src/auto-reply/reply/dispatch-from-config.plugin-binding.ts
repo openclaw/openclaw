@@ -16,6 +16,11 @@ export function shouldBypassPluginOwnedBindingForCommand(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): boolean {
+  // Command authorization is a trust boundary. Reject malformed runtime context
+  // before command-turn normalization can coerce a truthy value.
+  if (ctx.CommandAuthorized !== undefined && typeof ctx.CommandAuthorized !== "boolean") {
+    return false;
+  }
   const commandTurn = resolveCommandTurnContext(ctx);
   if (
     (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
@@ -28,7 +33,9 @@ export function shouldBypassPluginOwnedBindingForCommand(
   }
   const isAuthorizedTextCommand =
     (commandTurn.kind === "text-slash" && commandTurn.authorized) ||
-    (commandTurn.kind === "normal" && ctx.CommandAuthorized === true);
+    (commandTurn.kind === "normal" &&
+      typeof ctx.CommandAuthorized === "boolean" &&
+      ctx.CommandAuthorized);
   if (
     !isAuthorizedTextCommand ||
     !shouldHandleTextCommands({
