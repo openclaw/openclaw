@@ -650,4 +650,76 @@ describe("wrapStreamResultRepairDoubleEscapedCodeStrings", () => {
     // content is a code-like key — \n repaired
     expect(args?.content).toBe("class Foo:\n    pass");
   });
+
+  it("repairs consecutive \\n\\t structural indentation in code blocks", async () => {
+    // Models may output \n\t (literal newline + literal tab) for indented
+    // Python blocks. Both escapes must be repaired.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "test.py",
+                content: "class Foo:\\n\\tdef bar():\\n\\t\\tpass\\n\\ndef baz():\\n\\treturn 42",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const content = message.content[0]?.arguments?.content;
+    // \n\t should become real newline + real tab
+    expect(content).toContain("\n\tdef bar()");
+    expect(content).toContain("\n\t\tpass");
+    // \n\t and \n\t\t at block boundaries repaired to real newline+tab
+    expect(content).toContain("\n\tdef bar()");
+    expect(content).toContain("\n\t\tpass");
+    // No literal \t remaining (tabs were inside block indentation)
+    expect(content).not.toContain("\\t");
+  });
+
+  it("exposes repaired arguments on the final tool call result", async () => {
+    // The stream result must carry the repaired arguments so tool
+    // execution sees corrected values. Uses the result() path directly
+    // (the same path the production wrapper uses for all providers).
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "test.py",
+                content: "class Foo:\\n    def bar():\\n        pass",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    expect(args?.content).toContain("\n");
+    expect(args?.content).not.toContain("\\n");
+    expect(args?.content).toBe("class Foo:\n    def bar():\n        pass");
+  });
 });

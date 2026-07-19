@@ -74,14 +74,11 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   oldText: "newText",
 };
 
-// Pattern: colon followed by literal \n then indent — fingerprint of
-// double-escaped JSON in code blocks (issue #109478).
-// Models sometimes output \\n (JSON literal backslash-n) instead of \n
-// (JSON-escaped newline) in tool call arguments. After JSON.parse, the
-// string value contains literal \n where a real newline was intended.
-// The colon-then-indent signature is highly specific to Python block
-// structure and avoids false positives on legitimate \n usage.
-const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE = /:\s*\\n\s+\S/s;
+// Pattern: colon followed by literal \n then indent or consecutive
+// escapes (\n\t) — fingerprint of double-escaped JSON in code blocks
+// (issue #109478). Allows other escapes between \n and the first
+// non-whitespace code character so \n\t chains are detected.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE = /:\s*\\n(?:\s|\\[nrt])*\S/s;
 
 // Maps JSON escape chars to their real equivalents. Only applied at
 // fingerprint positions, preserving intentional escapes elsewhere.
@@ -91,11 +88,12 @@ const TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP: Record<string, string> = {
   t: "\t",
 };
 
-// Matches a corrupted \n, \t, or \r that sits at a structural code
-// position: after a colon (Python block) or after another literal
-// escape (blank line between blocks). Only these positions are
-// repaired; intentional escapes in string literals are preserved.
-const TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE = /((?::|\\[nrt])\s*)\\([nrt])(?=\s+\S)/gs;
+// Matches corrupted \n, \t, \r at structural code positions: after a
+// colon, semicolon, closing brace, another literal escape, or a real
+// newline (result of a previous repair). The lookahead allows
+// consecutive escapes (\n\t) so each is matched in turn.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE =
+  /((?::|;|\}|\\[nrt]|\n)\s*)\\([nrt])(?=(?:\s|\\[nrt])*\S)/gs;
 
 // Code-like tool argument keys eligible for double-escape repair (#109478).
 // Includes exec's "command" which is not in the smart-quote freeform set.
@@ -112,10 +110,29 @@ function repairDoubleEscapedCodeStrings(args: Record<string, unknown>): void {
         TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_KEYS.has(key) &&
         TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE.test(value)
       ) {
-        args[key] = value.replace(
-          TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE,
-          (_match, prefix, char) => `${prefix}${TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? char}`,
+        // Loop so consecutive escapes (\n\t, \n\n) are all replaced.
+        let repaired = value;
+        for (let i = 0; i < 8; i++) {
+          const prev = repaired;
+          repaired = repaired.replace(
+            TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE,
+            (_match, prefix, char) => `${prefix}${TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? char}`,
+          );
+          repaired = repaired.replace(
+            /\\([nrt])(?=\s*\\([nrt]))/gs,
+            (_match, char) => TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? _match,
+          );
+          if (repaired === prev) break;
+        }
+        // Final cleanup: remaining escapes preceded by a real newline
+        // (result of a prior repair) that were not matched because their
+        // prefix character was not a structural token.
+        repaired = repaired.replace(
+          /(\n)\\([nrt])/g,
+          (_match, nl) =>
+            nl + (TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[_match.slice(-1)] ?? _match.slice(-1)),
         );
+        args[key] = repaired;
       }
     } else if (value && typeof value === "object" && !Array.isArray(value)) {
       repairDoubleEscapedCodeStrings(value as Record<string, unknown>);
