@@ -1162,23 +1162,22 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 });
 
-it("rejects mutable file operand exceeding 8 MiB size cap", () => {
+it("accepts mutable file operand larger than 8 MiB using chunked hashing", () => {
   const tmp = createFixtureDir("openclaw-oversize-script-");
   const scriptPath = path.join(tmp, "huge.js");
   // Create a file just over the 8 MiB cap (8 MiB + 1 byte)
   const oversizedBytes = 8 * 1024 * 1024 + 1;
   const buf = Buffer.alloc(oversizedBytes, "x");
   fs.writeFileSync(scriptPath, buf);
-  expect(
-    resolveMutableFileOperandSnapshotSync({
-      argv: ["node", "huge.js"],
-      cwd: tmp,
-      shellCommand: null,
-    }),
-  ).toEqual({
-    ok: false,
-    message: "SYSTEM_RUN_DENIED: approval script operand is too large or not a regular file",
+  const snapshot = resolveMutableFileOperandSnapshotSync({
+    argv: ["node", "huge.js"],
+    cwd: tmp,
+    shellCommand: null,
   });
+  expect(snapshot.ok).toBe(true);
+  if (snapshot.ok && snapshot.snapshot) {
+    expect(snapshot.snapshot.sha256).toBe(sha256FileSync(scriptPath));
+  }
 });
 
 it("accepts mutable file operand exactly at 8 MiB size cap", () => {

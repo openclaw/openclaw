@@ -31,7 +31,6 @@ import {
   PNPM_OPTIONS_WITH_VALUE,
   unwrapKnownPackageManagerExecInvocation,
 } from "../infra/package-manager-exec-wrapper.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import {
   advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
@@ -270,17 +269,31 @@ function shouldPinExecutableForApproval(params: {
   return (params.wrapperChain?.length ?? 0) === 0;
 }
 
-// Cap at 8 MiB — script operands are code files, not data dumps.
-// Larger files should not be fingerprinted for approval; the operator
-// must rewrite argv to avoid the unbounded-read OOM vector.
-const MAX_APPROVAL_SCRIPT_FILE_BYTES = 8 * 1024 * 1024;
+// Hash arbitrarily large regular script operands without loading the whole
+// file into memory. This keeps the approval hot path bounded while preserving
+// the existing approval contract for large scripts.
+const APPROVAL_SCRIPT_HASH_CHUNK_BYTES = 64 * 1024;
 
 function hashFileContentsSync(filePath: string): string {
-  const { buffer } = readRegularFileSync({
-    filePath,
-    maxBytes: MAX_APPROVAL_SCRIPT_FILE_BYTES,
-  });
-  return crypto.createHash("sha256").update(buffer).digest("hex");
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error(`Not a regular file: ${filePath}`);
+    }
+    const hash = crypto.createHash("sha256");
+    const chunk = Buffer.alloc(APPROVAL_SCRIPT_HASH_CHUNK_BYTES);
+    let bytesRead: number;
+    do {
+      bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead > 0) {
+        hash.update(chunk.subarray(0, bytesRead));
+      }
+    } while (bytesRead > 0);
+    return hash.digest("hex");
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function looksLikePathToken(token: string): boolean {
