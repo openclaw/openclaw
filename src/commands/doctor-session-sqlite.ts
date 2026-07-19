@@ -342,10 +342,6 @@ function resolveFullyCoveredLegacyStorePaths(
   return covered;
 }
 
-// Legacy session store files are JSON-serialized maps of session records.
-// Most stores are under 10 MiB; cap at 50 MiB to prevent OOM on corrupted files.
-const MAX_LEGACY_SESSION_STORE_BYTES = 50 * 1024 * 1024;
-
 function readLegacySessionRecords(
   target: SessionStoreTarget,
   issues: DoctorSessionSqliteIssue[],
@@ -391,18 +387,10 @@ function readLegacySessionRecords(
       });
       return [];
     }
-    if (storeStat.size > MAX_LEGACY_SESSION_STORE_BYTES) {
-      issues.push({
-        code: "store_unreadable",
-        message: `${target.storePath}: file too large (${storeStat.size} bytes, max ${MAX_LEGACY_SESSION_STORE_BYTES})`,
-      });
-      return [];
-    }
-
     let parsed: unknown;
     try {
-      // Read at most the validated byte count through the opened descriptor
-      // so same-inode growth after fstat cannot bypass the size cap.
+      // Read at most the byte count validated by fstat through the opened
+      // descriptor so same-inode growth after validation cannot be consumed.
       const buf = Buffer.alloc(storeStat.size);
       let totalBytes = 0;
       while (totalBytes < storeStat.size) {

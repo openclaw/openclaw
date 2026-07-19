@@ -152,24 +152,6 @@ describe("runDoctorSessionSqlite", () => {
     ]);
   });
 
-  it("reports store_unreadable for an oversized legacy store", async () => {
-    const store = createLegacyStore();
-    fs.writeFileSync(store.storePath, " ".repeat(51 * 1024 * 1024), { mode: 0o600 });
-
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "inspect",
-      store: store.storePath,
-    });
-
-    expect(report.targets[0]?.issues).toEqual([
-      expect.objectContaining({
-        code: "store_unreadable",
-        message: expect.stringContaining("file too large"),
-      }),
-    ]);
-  });
-
   it("inspects SQLite-only all-agent targets without requiring a legacy store", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
     try {
