@@ -478,16 +478,19 @@ async function waitForAgentHistoryReply(
   intervalMs = 250,
 ) {
   const startedAt = Date.now();
+  let lastRetryableHistoryError: unknown;
   while (Date.now() - startedAt < timeoutMs) {
     let delayMs = intervalMs;
     let text: string | undefined;
     try {
       text = await readLatestAgentHistoryReply(env, sessionKey);
+      lastRetryableHistoryError = undefined;
     } catch (error) {
       const retryDelayMs = resolveRetryableHistoryDelayMs(error);
       if (retryDelayMs === null) {
         throw error;
       }
+      lastRetryableHistoryError = error;
       delayMs = retryDelayMs;
     }
     if (text && (await predicate(text))) {
@@ -499,7 +502,10 @@ async function waitForAgentHistoryReply(
     }
     await sleep(Math.min(delayMs, remainingMs));
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  const message = `timed out after ${timeoutMs}ms`;
+  throw lastRetryableHistoryError === undefined
+    ? new Error(message)
+    : new Error(message, { cause: lastRetryableHistoryError });
 }
 
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {

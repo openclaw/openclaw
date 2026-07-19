@@ -835,6 +835,56 @@ describe("qa suite runtime agent process helpers", () => {
     }
   });
 
+  it("preserves the final retryable history failure when the poll deadline expires", async () => {
+    const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 1,
+      details: { method: "chat.history" },
+    });
+    const wrappedError = new Error("gateway call failed", { cause: gatewayError });
+    const gatewayCall = vi.fn().mockRejectedValue(wrappedError);
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-retry-timeout",
+        () => false,
+        220,
+        50,
+      ),
+    ).rejects.toMatchObject({
+      message: "timed out after 220ms",
+      cause: wrappedError,
+    });
+    expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not attach a recovered history failure to a later predicate timeout", async () => {
+    const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 1,
+      details: { method: "chat.history" },
+    });
+    const gatewayCall = vi
+      .fn()
+      .mockRejectedValueOnce(gatewayError)
+      .mockResolvedValue({ messages: [{ role: "assistant", content: "still working" }] });
+
+    const error = await waitForAgentHistoryReply(
+      { gateway: { call: gatewayCall } } as never,
+      "session-history-recovered-timeout",
+      () => false,
+      220,
+      50,
+    ).catch((error: unknown) => error);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toHaveProperty("cause");
+    expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("does not retry transient gateway errors for a different method", async () => {
     const gatewayError = Object.assign(new Error("gateway method is rebuilding"), {
       gatewayCode: "UNAVAILABLE",
