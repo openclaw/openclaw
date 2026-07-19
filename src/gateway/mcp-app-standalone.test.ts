@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -53,11 +54,11 @@ const runtime = {
       { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
     ],
   })),
-  peekCatalog: vi.fn(() => ({
+  peekCatalog: vi.fn<SessionMcpRuntime["peekCatalog"]>(() => ({
     servers: { demo: { requestTimeoutMs: mcpRequestTimeoutMs } },
     tools: [],
   })),
-  callTool: vi.fn(async (serverName: string, toolName: string) => ({
+  callTool: vi.fn<SessionMcpRuntime["callTool"]>(async (serverName, toolName) => ({
     content: [{ type: "text", text: `${serverName}:${toolName}` }],
   })),
   listTools: vi.fn(async () => ({
