@@ -5442,6 +5442,51 @@ describe("verifySetupInference", () => {
     }
   });
 
+  it("rejects a staged credential that differs from the configured profile pin", async () => {
+    const runEmbeddedAgent = vi.fn();
+    const result = await verifySetupInferenceConfig({
+      config: {
+        auth: {
+          profiles: { "openai:old": { provider: "openai", mode: "api_key" } },
+          order: { openai: ["openai:old"] },
+        },
+        agents: { defaults: { model: "openai/gpt-5.5@openai:old" } },
+      },
+      authProfiles: [
+        {
+          profileId: "openai:new",
+          credential: {
+            type: "api_key",
+            provider: "openai",
+            key: "test-new-key",
+          },
+        },
+      ],
+      runtime,
+      deps: {
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({
+          version: 1,
+          profiles: {
+            "openai:old": {
+              type: "api_key",
+              provider: "openai",
+              key: "test-old-key",
+            },
+          },
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "auth",
+      error: "The staged credential does not match the configured auth profile.",
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("rejects a configured route that changes during its live check", async () => {
     const initialConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },

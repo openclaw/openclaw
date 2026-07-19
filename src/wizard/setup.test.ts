@@ -2184,7 +2184,7 @@ describe("runSetupWizard", () => {
         0,
         "second retry auth choice",
       ) as Parameters<ApplyAuthChoice>[0];
-      expect(secondRetry.config.models?.providers?.openai?.apiKey).toBe("test-retry-invalid-key");
+      expect(secondRetry.config.models?.providers?.openai?.apiKey).toBe("test-original-key");
       expect(select).toHaveBeenCalledTimes(3);
       expect(thirdVerification.authProfiles).toEqual([
         stagedOpenAiProfile("test-retry-still-invalid-key"),

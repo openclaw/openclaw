@@ -123,18 +123,19 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
  */
 export async function runSetupModelAuthStep(params: {
   config: OpenClawConfig;
-  stagedAuth?: Pick<SetupModelAuthCandidate, "authProfiles" | "persistAuthProfiles">;
+  stagedCandidate?: SetupModelAuthCandidate;
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir: string;
 }): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime, workspaceDir } = params;
-  let nextConfig = params.config;
+  let nextConfig = params.stagedCandidate?.config ?? params.config;
+  let replacementBaseConfig = params.config;
   let authProfiles: PreparedAuthChoiceResult["authProfiles"] =
-    params.stagedAuth?.authProfiles ?? [];
+    params.stagedCandidate?.authProfiles ?? [];
   let persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"] =
-    params.stagedAuth?.persistAuthProfiles ?? (async () => {});
+    params.stagedCandidate?.persistAuthProfiles ?? (async () => {});
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | KeepCurrentAuthChoice | undefined = opts.authChoice;
   let authStore:
@@ -171,6 +172,11 @@ export async function runSetupModelAuthStep(params: {
       break;
     }
 
+    // A new auth choice replaces the rejected candidate instead of layering onto it.
+    nextConfig = replacementBaseConfig;
+    authProfiles = [];
+    persistAuthProfiles = async () => {};
+
     if (authChoice === "custom-api-key") {
       const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
       const customResult = await promptCustomApiConfig({
@@ -180,8 +186,6 @@ export async function runSetupModelAuthStep(params: {
         secretInputMode: opts.secretInputMode,
       });
       nextConfig = customResult.config;
-      authProfiles = [];
-      persistAuthProfiles = async () => {};
       prompter.disableBackNavigation?.();
       break;
     }
@@ -250,6 +254,7 @@ export async function runSetupModelAuthStep(params: {
     persistAuthProfiles = authResult.persistAuthProfiles;
     if (authResult.retrySelection) {
       if (authChoiceFromPrompt) {
+        replacementBaseConfig = authResult.config;
         continue;
       }
       break;

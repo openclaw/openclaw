@@ -2615,17 +2615,20 @@ export async function verifySetupInferenceConfig(params: {
     }
     let plan: SetupInferenceTestPlan = builtPlan;
     if (params.authProfiles && params.authProfiles.length > 0) {
-      const selectedProfile =
-        params.authProfiles.find((profile) => profile.profileId === plan.authProfileId) ??
-        params.authProfiles.find(
-          (profile) =>
-            normalizeProviderId(profile.credential.provider) === normalizeProviderId(plan.provider),
-        );
+      const selectedProfile = plan.authProfileId
+        ? params.authProfiles.find((profile) => profile.profileId === plan.authProfileId)
+        : params.authProfiles.find(
+            (profile) =>
+              normalizeProviderId(profile.credential.provider) ===
+              normalizeProviderId(plan.provider),
+          );
       if (!selectedProfile) {
         return {
           ok: false,
           status: "auth",
-          error: "The staged credential does not belong to the configured inference provider.",
+          error: plan.authProfileId
+            ? "The staged credential does not match the configured auth profile."
+            : "The staged credential does not belong to the configured inference provider.",
         };
       }
       const stagedAgentDir = path.join(tempDir, "agent");

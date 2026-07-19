@@ -116,8 +116,8 @@ async function offerLiveModelVerification(params: {
 
     // Attempts N>1 share the same gate and staged credentials until the user replaces them.
     candidate = await runSetupModelAuthStep({
-      config: candidate.config,
-      stagedAuth: candidate,
+      config: params.config,
+      stagedCandidate: candidate,
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
