@@ -14,6 +14,7 @@ import {
   measureSessionPhysicalDiskUsage,
   pruneSessionTranscriptArchivesToHighWater,
   type SessionDiskBudgetSweepResult,
+  type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
 import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -305,7 +306,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
   });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(resolved);
-  let usage = await runExclusiveSqliteSessionWrite(resolved, async () => {
+  let usage: SessionPhysicalDiskUsage = await runExclusiveSqliteSessionWrite(resolved, async () => {
     reclaimSqliteFreePages(database);
     return await measureSessionPhysicalDiskUsage(params.storePath);
   });

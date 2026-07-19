@@ -419,6 +419,18 @@ export function collectProjectedReferencedSqliteSessionIds(params: {
   for (const sessionId of collectReferencedSqliteSessionIdsFromStore(params.projectedStore)) {
     sessionIds.add(sessionId);
   }
+  // Routes protect their target session unless the cleanup removes that key's
+  // route in the same pass; mirroring the post-cleanup state here keeps the
+  // plan from writing archives for sessions the delete stage will retain.
+  const routeRows = executeSqliteQuerySync(
+    params.database.db,
+    db.selectFrom("session_routes").select(["session_id", "session_key"]),
+  ).rows;
+  for (const row of routeRows) {
+    if (!excludedSessionKeys.has(row.session_key)) {
+      sessionIds.add(row.session_id);
+    }
+  }
   return sessionIds;
 }
 

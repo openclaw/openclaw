@@ -322,7 +322,9 @@ describe("kickSessionHistoryDiskBudgetMaintenance", () => {
     });
     // Give the fire-and-forget pass a tick to settle; an under-budget store
     // must leave every session untouched.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
