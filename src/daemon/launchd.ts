@@ -566,6 +566,62 @@ function resolveGuiDomain(): string {
   return `gui/${process.getuid()}`;
 }
 
+async function readMacConsoleUid(): Promise<number | null> {
+  const stat = await execFileUtf8("stat", ["-f", "%u", "/dev/console"]);
+  if (stat.code !== 0) {
+    return null;
+  }
+  const uid = parseStrictPositiveInteger(stat.stdout);
+  return uid && uid !== 0 ? uid : null;
+}
+
+async function resolveLaunchdDomainCandidates(
+  env: Record<string, string | undefined>,
+): Promise<string[]> {
+  const domains: string[] = [];
+  const explicitDomain = env.OPENCLAW_LAUNCHD_DOMAIN?.trim();
+  if (explicitDomain) {
+    domains.push(explicitDomain);
+  }
+  const explicitUid = parseStrictPositiveInteger(env.OPENCLAW_LAUNCHD_UID);
+  if (explicitUid) {
+    domains.push(`gui/${explicitUid}`);
+  }
+  const consoleUid = await readMacConsoleUid();
+  if (consoleUid) {
+    domains.push(`gui/${consoleUid}`);
+  }
+  domains.push(resolveGuiDomain(), "gui/501");
+  return Array.from(new Set(domains));
+}
+
+type LaunchdRestartTarget = {
+  domain: string;
+  serviceTarget: string;
+  loaded: boolean;
+};
+
+async function resolveLaunchdRestartTarget(params: {
+  env: Record<string, string | undefined>;
+  label: string;
+}): Promise<LaunchdRestartTarget> {
+  const domains = await resolveLaunchdDomainCandidates(params.env);
+  for (const domain of domains) {
+    const serviceTarget = `${domain}/${params.label}`;
+    const probe = await execLaunchctl(["print", serviceTarget]);
+    if (probe.code === 0) {
+      return { domain, serviceTarget, loaded: true };
+    }
+    if (!isLaunchctlNotLoaded(probe) && !isUnsupportedGuiDomain(probe.stderr || probe.stdout)) {
+      throw new Error(
+        `launchctl print ${sanitizeForLog(serviceTarget)} failed: ${formatLaunchctlResultDetail(probe)}`,
+      );
+    }
+  }
+  const domain = domains[0] ?? resolveGuiDomain();
+  return { domain, serviceTarget: `${domain}/${params.label}`, loaded: false };
+}
+
 function throwBootstrapGuiSessionError(params: {
   detail: string;
   domain: string;
@@ -1302,10 +1358,10 @@ export async function restartLaunchAgent({
   onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
-  const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
-  const serviceTarget = `${domain}/${label}`;
+  let domain = resolveGuiDomain();
+  let serviceTarget = `${domain}/${label}`;
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
   // Restart requests issued from inside the managed gateway process tree need a
@@ -1331,6 +1387,10 @@ export async function restartLaunchAgent({
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
   }
+
+  const restartTarget = await resolveLaunchdRestartTarget({ env: serviceEnv, label });
+  domain = restartTarget.domain;
+  serviceTarget = restartTarget.serviceTarget;
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
@@ -1379,21 +1439,25 @@ export async function restartLaunchAgent({
     return { outcome: "completed" };
   }
 
-  const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
-  if (start.code === 0) {
-    reportMutation("kickstart");
-    writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
-    return { outcome: "completed" };
-  }
+  const start = restartTarget.loaded
+    ? await execLaunchctl(["kickstart", "-k", serviceTarget])
+    : { stdout: "", stderr: "LaunchAgent is not loaded", code: 1 };
+  if (restartTarget.loaded) {
+    if (start.code === 0) {
+      reportMutation("kickstart");
+      writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
+      return { outcome: "completed" };
+    }
 
-  if (!isLaunchctlNotLoaded(start)) {
-    await ensureLaunchAgentLoadedAfterFailure({
-      domain,
-      serviceTarget,
-      plistPath,
-      onMutation: reportMutation,
-    });
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    if (!isLaunchctlNotLoaded(start)) {
+      await ensureLaunchAgentLoadedAfterFailure({
+        domain,
+        serviceTarget,
+        plistPath,
+        onMutation: reportMutation,
+      });
+      throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    }
   }
 
   // If the service was previously booted out, re-register the rewritten plist and retry.
