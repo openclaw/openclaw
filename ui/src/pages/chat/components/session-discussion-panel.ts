@@ -28,6 +28,18 @@ function resolveDiscussionUrl(value: string | undefined): string | null {
   }
 }
 
+// The frame runs with allow-scripts + allow-same-origin (cookies must flow for
+// the discussion app's session). A same-origin src would therefore inherit THIS
+// app's origin and could reach the parent DOM and gateway credentials — reject
+// it; cross-origin same-site hosts (the supported topology) pass.
+function resolveDiscussionEmbedUrl(value: string | undefined): string | null {
+  const resolved = resolveDiscussionUrl(value);
+  if (!resolved) {
+    return null;
+  }
+  return new URL(resolved).origin === window.location.origin ? null : resolved;
+}
+
 class SessionDiscussionPanel extends OpenClawLightDomElement {
   @property() sessionKey = "";
   @property({ attribute: false }) loadInfo: SessionDiscussionInfoLoader | null = null;
@@ -110,7 +122,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   // gets an opaque origin, the discussion app's session cookie is never sent,
   // and the embed is stuck on its sign-in card.
   private renderOpen(info: SessionDiscussionInfo): TemplateResult {
-    const embedUrl = resolveDiscussionUrl(info.embedUrl);
+    const embedUrl = resolveDiscussionEmbedUrl(info.embedUrl);
     const openUrl = resolveDiscussionUrl(info.openUrl);
     return html`
       <div class="session-discussion__open">

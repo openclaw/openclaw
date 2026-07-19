@@ -2352,6 +2352,12 @@ class ChatPane extends OpenClawLightDomElement {
     state.connected = snapshot.connected;
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (sourceChanged && state.sidebarContent?.kind === "session-discussion") {
+      // A reconnect may point at a different gateway/provider; an open panel
+      // would keep rendering the previous provider's URL. Close it — the
+      // re-probe below restores the action for the new source.
+      state.handleCloseSidebar();
+    }
     if (sourceChanged && snapshot.connected && state.sessionKey) {
       // Reconnects clear the probed states above; re-probe the active session
       // so the Discussion action reappears without a manual session switch.
