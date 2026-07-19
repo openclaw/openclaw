@@ -361,12 +361,20 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
 
+  // Resolve every linked email concurrently so the request waits one timeout
+  // budget total, not one per email — a Gravatar outage otherwise stalls the
+  // held connection for 5s × linked-email-count. Hit selection still walks the
+  // results in email order, so the primary email keeps precedence.
+  const results = await Promise.all(
+    hashes.map((hash) =>
+      resolveGravatar(hash, {
+        fetchImpl: opts.fetchImpl ?? globalThis.fetch,
+        nowMs: opts.nowMs ?? Date.now,
+      }),
+    ),
+  );
   let transientFailure = false;
-  for (const hash of hashes) {
-    const result = await resolveGravatar(hash, {
-      fetchImpl: opts.fetchImpl ?? globalThis.fetch,
-      nowMs: opts.nowMs ?? Date.now,
-    });
+  for (const result of results) {
     if (result.kind === "hit") {
       sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
       return true;

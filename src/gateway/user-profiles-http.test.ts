@@ -273,6 +273,72 @@ describe("profile avatar HTTP endpoint", () => {
     expect(second.response.statusCode).toBe(404);
   });
 
+  it("serves the primary email's Gravatar when several linked emails resolve", async () => {
+    const profileId = "profile-multi-email-primary";
+    const primaryHash = emailHash("primary@example.com");
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({
+      id: profileId,
+      emails: ["primary@example.com", "secondary@example.com"],
+      hasAvatar: false,
+    });
+    // Both emails have a Gravatar; the first (primary) must win regardless of
+    // which concurrent lookup settles first.
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.includes(primaryHash)
+        ? new Response(new Uint8Array([1, 1, 1]), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          })
+        : new Response(new Uint8Array([2, 2, 2]), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          }),
+    );
+    const res = response();
+
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      res.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 1, 1]));
+  });
+
+  it("falls through to a later linked email when the primary has no Gravatar", async () => {
+    const profileId = "profile-multi-email-fallthrough";
+    const primaryHash = emailHash("primary-miss@example.com");
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({
+      id: profileId,
+      emails: ["primary-miss@example.com", "secondary-hit@example.com"],
+      hasAvatar: false,
+    });
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.includes(primaryHash)
+        ? new Response(null, { status: 404 })
+        : new Response(new Uint8Array([2, 2, 2]), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          }),
+    );
+    const res = response();
+
+    await handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      res.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    // Both lookups run concurrently under one timeout budget, so an unreachable
+    // primary never serializes the request; the secondary hit is still served.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
+  });
+
   it("cancels a chunked Gravatar response as soon as it exceeds the byte cap", async () => {
     const profileId = "profile-gravatar-oversized";
     getProfileAvatar.mockReturnValue(undefined);
