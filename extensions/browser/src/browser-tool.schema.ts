@@ -65,19 +65,34 @@ const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 const TAB_REFERENCE_DESCRIPTION =
   "Tab reference. Prefer suggestedTargetId, tabId, or label from tabs output; raw CDP targetId and unique raw prefixes remain supported for compatibility.";
 
+const BROWSER_ACT_KIND_DESCRIPTION =
+  "Action kind. batch runs nested actions[] in one call (see stopOnError). scrollIntoView scrolls a snapshot ref into view. click/clickCoords/type/press/hover/drag/select/fill/resize/wait/evaluate/close perform the named action; most require a snapshot ref.";
+const BROWSER_ACT_ACTIONS_DESCRIPTION =
+  "Nested actions for kind=batch; each entry is an act request with its own kind and fields.";
+const BROWSER_ACT_STOP_ON_ERROR_DESCRIPTION =
+  "kind=batch: stop on first error (default) or continue through all actions.";
+const BROWSER_DOUBLE_CLICK_DESCRIPTION =
+  "kind=click or clickCoords: perform a double click instead of a single click.";
+const BROWSER_LABELS_DESCRIPTION =
+  "action=snapshot or screenshot: overlay role refs on the captured image and return an annotations[] array with each ref's bounding box (Playwright-backed profiles only).";
+
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
 // The discriminator (kind) determines which properties are relevant; runtime validates.
 const BrowserActSchema = Type.Object({
-  kind: stringEnum(BROWSER_ACT_KINDS),
+  kind: stringEnum(BROWSER_ACT_KINDS, { description: BROWSER_ACT_KIND_DESCRIPTION }),
   // Common fields
   targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
   ref: Type.Optional(Type.String()),
   // batch - permissive children keep the provider schema flat; runtime validates each action.
-  actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
-  stopOnError: Type.Optional(Type.Boolean()),
+  actions: Type.Optional(
+    Type.Array(Type.Object({}, { additionalProperties: true }), {
+      description: BROWSER_ACT_ACTIONS_DESCRIPTION,
+    }),
+  ),
+  stopOnError: Type.Optional(Type.Boolean({ description: BROWSER_ACT_STOP_ON_ERROR_DESCRIPTION })),
   // click
-  doubleClick: Type.Optional(Type.Boolean()),
+  doubleClick: Type.Optional(Type.Boolean({ description: BROWSER_DOUBLE_CLICK_DESCRIPTION })),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
   x: optionalFiniteNumberSchema(),
@@ -137,7 +152,7 @@ export const BrowserToolSchema = Type.Object({
   depth: optionalNonNegativeIntegerSchema(),
   selector: Type.Optional(Type.String()),
   frame: Type.Optional(Type.String()),
-  labels: Type.Optional(Type.Boolean()),
+  labels: Type.Optional(Type.Boolean({ description: BROWSER_LABELS_DESCRIPTION })),
   urls: Type.Optional(Type.Boolean()),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
@@ -152,10 +167,14 @@ export const BrowserToolSchema = Type.Object({
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
   // Legacy flattened act params (preferred: request={...})
-  kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
-  actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
-  stopOnError: Type.Optional(Type.Boolean()),
-  doubleClick: Type.Optional(Type.Boolean()),
+  kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS, { description: BROWSER_ACT_KIND_DESCRIPTION })),
+  actions: Type.Optional(
+    Type.Array(Type.Object({}, { additionalProperties: true }), {
+      description: BROWSER_ACT_ACTIONS_DESCRIPTION,
+    }),
+  ),
+  stopOnError: Type.Optional(Type.Boolean({ description: BROWSER_ACT_STOP_ON_ERROR_DESCRIPTION })),
+  doubleClick: Type.Optional(Type.Boolean({ description: BROWSER_DOUBLE_CLICK_DESCRIPTION })),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
   x: optionalFiniteNumberSchema(),

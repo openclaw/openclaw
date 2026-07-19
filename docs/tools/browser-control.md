@@ -343,6 +343,28 @@ Ref behavior:
   Playwright's `aria-ref` selector. Run a fresh snapshot on the same tab when
   that happens.
 
+## Act kinds and batch
+
+`action=act` (CLI: the `click`, `type`, `hover`, `scrollintoview`, `drag`,
+`select`, `fill`, `press`, `wait`, `evaluate`, `resize`, and `click-coords`
+subcommands) selects a `kind` and usually requires a `ref` from `snapshot`. Two
+kinds are not surfaced as their own CLI subcommands and are easiest to reach
+through the agent tool or `act`:
+
+- `kind="batch"` runs an array of nested actions in one call. Each entry in
+  `actions[]` is an act request with its own `kind` and fields. `stopOnError`
+  defaults to `true` (stop on first error); set `stopOnError=false` to continue
+  through all actions. Use batch to combine open/wait/snapshot/act/screenshot
+  into a single replayable plan and reduce round trips. `batch` is not supported
+  on `profile="user"` and other existing-session (chrome-mcp) profiles; send
+  actions individually there.
+- `kind="scrollIntoView"` scrolls a snapshot ref into view before a follow-up
+  action (CLI: `openclaw browser scrollintoview <ref>`).
+
+For double clicks, pass `doubleClick: true` on `act:click` (CLI:
+`openclaw browser click <ref> --double`); `doubleClick` is also accepted on
+`act:clickCoords` (CLI: `openclaw browser click-coords <x> <y> --double`).
+
 ## Wait power-ups
 
 You can wait on more than just time/text:
