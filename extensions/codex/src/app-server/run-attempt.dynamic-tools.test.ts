@@ -10,7 +10,6 @@ import {
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolStartedDiagnostic,
@@ -20,7 +19,6 @@ import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-executio
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
-  createCodexRuntimePlanFixture,
   createParams,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
@@ -243,93 +241,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       },
     ]);
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
-  });
-
-  it("coalesces duplicate in-flight app-server dynamic tool requests without dropping observer hooks", async () => {
-    const harness = createStartedThreadHarness();
-    const echoTool = createRuntimeDynamicTool("echo");
-    type EchoToolResult = Awaited<ReturnType<typeof echoTool.execute>>;
-    let resolveTool!: () => void;
-    const toolResult = new Promise<EchoToolResult>((resolve) => {
-      resolveTool = () => {
-        resolve({
-          content: [{ type: "text", text: "tool output" }],
-          details: {},
-        });
-      };
-    });
-    const execute = vi.fn<typeof echoTool.execute>(() => toolResult);
-    dynamicToolBuildState.openClawCodingToolsFactory = () => [
-      {
-        ...echoTool,
-        execute,
-      },
-    ];
-    const params = createParams(
-      path.join(tempDir, "session-coalesced-tool.jsonl"),
-      path.join(tempDir, "workspace-coalesced-tool"),
-    );
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.onAgentToolResult = vi.fn();
-    const allocateToolOutcomeOrdinal = vi.fn((toolCallId) => (toolCallId === "call-1" ? 11 : 12));
-    params.allocateToolOutcomeOrdinal = allocateToolOutcomeOrdinal;
-    params.onToolOutcome = vi.fn();
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const first = harness.handleServerRequest({
-      id: "request-tool-1",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "echo",
-        arguments: { topic: "AGENTS.md", mode: "full" },
-      },
-    });
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
-    const second = harness.handleServerRequest({
-      id: "request-tool-2",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-2",
-        namespace: null,
-        tool: "echo",
-        arguments: { mode: "full", topic: "AGENTS.md" },
-      },
-    });
-    resolveTool();
-
-    const [firstResponse, secondResponse] = await Promise.all([first, second]);
-
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(allocateToolOutcomeOrdinal).toHaveBeenCalledWith("call-2");
-    expect(firstResponse).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "tool output" }],
-    });
-    expect(secondResponse).toEqual(firstResponse);
-    expect(params.onAgentToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "echo",
-        isError: false,
-      }),
-    );
-    expect(params.onToolOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "echo",
-        toolCallOrdinal: 11,
-      }),
-    );
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
   });
 
   it("clears dynamic tool diagnostics after successful terminal responses", async () => {

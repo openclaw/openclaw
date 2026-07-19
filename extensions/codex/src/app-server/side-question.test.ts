@@ -1350,82 +1350,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
   });
 
-  it("coalesces duplicate in-flight side-thread dynamic tool requests", async () => {
-    const client = createFakeClient();
-    let firstResponse: unknown;
-    let secondResponse: unknown;
-    let resolveTool: (() => void) | undefined;
-    toolExecuteMock.mockImplementation(
-      async () =>
-        new Promise((resolve) => {
-          resolveTool = () =>
-            resolve({
-              content: [{ type: "text", text: "tool output" }],
-            });
-        }),
-    );
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            const first = client.handleRequest({
-              id: 42,
-              method: "item/tool/call",
-              params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
-                callId: "tool-1",
-                tool: "wiki_status",
-                arguments: { topic: "AGENTS.md", mode: "full" },
-              },
-            });
-            await vi.waitFor(() => expect(toolExecuteMock).toHaveBeenCalledTimes(1));
-            const second = client.handleRequest({
-              id: 43,
-              method: "item/tool/call",
-              params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
-                callId: "tool-2",
-                tool: "wiki_status",
-                arguments: { mode: "full", topic: "AGENTS.md" },
-              },
-            });
-            expect(toolExecuteMock).toHaveBeenCalledTimes(1);
-            resolveTool?.();
-            firstResponse = await first;
-            secondResponse = await second;
-            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
-          })();
-        }, 0);
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-
-    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
-      text: "Tool answer.",
-    });
-
-    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
-    expect(firstResponse).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "tool output" }],
-    });
-    expect(secondResponse).toEqual(firstResponse);
-  });
-
   it("installs native hook relay config for opted-in side threads", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
@@ -2304,7 +2228,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
     const client = createFakeClient();
-    let toolResponse: unknown;
+    let toolResponses: unknown[] = [];
     client.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
         return threadResult("side-thread");
@@ -2315,7 +2239,7 @@ describe("runCodexAppServerSideQuestion", () => {
       if (method === "turn/start") {
         setTimeout(() => {
           void (async () => {
-            toolResponse = await client.handleRequest({
+            const request = {
               id: 42,
               method: "item/tool/call",
               params: {
@@ -2325,7 +2249,16 @@ describe("runCodexAppServerSideQuestion", () => {
                 tool: "wiki_status",
                 arguments: { topic: "AGENTS.md" },
               },
-            });
+            };
+            toolResponses = await Promise.all([
+              client.handleRequest(request),
+              client.handleRequest({ ...request, id: 43 }),
+              client.handleRequest({
+                ...request,
+                id: 44,
+                params: { ...request.params, callId: "tool-2" },
+              }),
+            ]);
             client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
             client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
           })();
@@ -2343,15 +2276,26 @@ describe("runCodexAppServerSideQuestion", () => {
 
     expect(result).toEqual({ text: "Tool answer." });
     const [toolCallId, toolArguments, toolSignal, toolOptions] = mockCall(toolExecuteMock);
-    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+    expect(toolExecuteMock).toHaveBeenCalledTimes(2);
+    expect(toolExecuteMock.mock.calls.map(([callId]) => callId)).toEqual(["tool-1", "tool-2"]);
     expect(toolCallId).toBe("tool-1");
     expect(toolArguments).toEqual({ topic: "AGENTS.md" });
     expect(toolSignal).toBeInstanceOf(AbortSignal);
     expect(toolOptions).toBeUndefined();
-    expect(toolResponse).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "tool output" }],
-    });
+    expect(toolResponses).toEqual([
+      {
+        success: true,
+        contentItems: [{ type: "inputText", text: "tool output" }],
+      },
+      {
+        success: true,
+        contentItems: [{ type: "inputText", text: "tool output" }],
+      },
+      {
+        success: true,
+        contentItems: [{ type: "inputText", text: "tool output" }],
+      },
+    ]);
   });
 
   it("omits computer control from side threads without a compaction owner", async () => {

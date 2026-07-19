@@ -45,7 +45,6 @@ import {
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import {
-  createCodexDynamicToolInFlightCoalescer,
   handleDynamicToolCallWithTimeout,
   resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
@@ -90,6 +89,7 @@ import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabi
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
+import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import {
@@ -427,7 +427,9 @@ export async function runCodexAppServerSideQuestion(
         : {}),
       config: params.cfg,
     });
-    const dynamicToolInFlightCoalescer = createCodexDynamicToolInFlightCoalescer();
+    // App-server can replay a pending request after a connection rebind. The
+    // Codex call id is the protocol identity; distinct ids stay independent.
+    const dynamicToolExecutions = createCodexDynamicToolExecutionRegistry();
     const registerRequestHandler = (targetClient: CodexAppServerClient) =>
       targetClient.addRequestHandler(async (request) => {
         if (!childThreadId || !turnId) {
@@ -473,6 +475,14 @@ export async function runCodexAppServerSideQuestion(
         if (!call || call.threadId !== childThreadId || call.turnId !== turnId) {
           return undefined;
         }
+        const replayedExecution = dynamicToolExecutions.get(call);
+        if (replayedExecution) {
+          const response = await replayedExecution;
+          return {
+            contentItems: response.contentItems,
+            success: response.success,
+          } as JsonValue;
+        }
         const timeoutMs = resolveDynamicToolCallTimeoutMs({
           call,
           config: params.cfg,
@@ -487,7 +497,7 @@ export async function runCodexAppServerSideQuestion(
         };
         emitDynamicToolStartedDiagnostic(diagnosticContext);
         try {
-          const response = await dynamicToolInFlightCoalescer.run(call, () =>
+          const { execution } = dynamicToolExecutions.claim(call, () =>
             handleDynamicToolCallWithTimeout({
               call,
               toolBridge,
@@ -496,6 +506,7 @@ export async function runCodexAppServerSideQuestion(
               observeToolTerminal: sideRunParams.observeToolTerminal,
             }),
           );
+          const response = await execution;
           emitDynamicToolTerminalDiagnostic({
             ...diagnosticContext,
             response,
