@@ -41,7 +41,7 @@ const CRON_FLAT_SCHEDULE_KEYS = [
 ] as const;
 const CRON_FLAT_PACING_KEYS = ["pacingMin", "pacingMax"] as const;
 const CRON_FLAT_TRIGGER_KEYS = ["triggerScript", "triggerOnce"] as const;
-export type CronFlatFieldGroup = "scalar" | "schedule" | "payload" | "pacing" | "trigger";
+type CronFlatFieldGroup = "scalar" | "schedule" | "payload" | "pacing" | "trigger";
 
 const CRON_FLAT_FIELD_GROUPS: ReadonlyMap<string, CronFlatFieldGroup> = new Map([
   ...CRON_FLAT_SCHEDULE_KEYS.map((key) => [key, "schedule"] as const),
@@ -82,7 +82,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   ...CRON_FLAT_TRIGGER_KEYS,
 ]);
 
-export function cronFlatFieldGroup(key: string): CronFlatFieldGroup | undefined {
+function cronFlatFieldGroup(key: string): CronFlatFieldGroup | undefined {
   if (!CRON_RECOVERABLE_OBJECT_KEYS.has(key)) {
     return undefined;
   }
@@ -446,7 +446,7 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   const consumedKeys: string[] = [];
   let found = false;
   for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
+    if (cronFlatFieldGroup(key) !== undefined && params[key] !== undefined) {
       value[key] = params[key];
       // Keep raw kind visible so on-exit retains error precedence over command/cwd.
       if (key !== "kind") {

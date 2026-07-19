@@ -3,7 +3,7 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { cronFlatFieldGroup, recoverCronObjectFromFlatParams } from "./cron-tool-canonicalize.js";
+import { recoverCronObjectFromFlatParams } from "./cron-tool-canonicalize.js";
 import { createCronTool } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
@@ -190,10 +190,6 @@ describe("createCronToolSchema", () => {
       expect({ field, found: recoverCronObjectFromFlatParams({ [field]: true }).found }).toEqual({
         field,
         found: true,
-      });
-      expect({ field, group: cronFlatFieldGroup(field) }).toEqual({
-        field,
-        group: expect.stringMatching(/^(scalar|schedule|payload|pacing|trigger)$/),
       });
     }
   });
