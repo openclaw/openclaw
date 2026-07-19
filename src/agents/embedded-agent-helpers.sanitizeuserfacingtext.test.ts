@@ -67,11 +67,11 @@ describe("sanitizeUserFacingText", () => {
   });
 
   it.each([
-    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+    "Context overflow: the conversation has grown too large after auto-compaction was exhausted. Use /reset (or /new) to start a fresh session. To prevent this, limit command output (e.g. use --tail with kubectl, or pipe through head), or switch to a model with a larger context window.",
     "Request size exceeds model context window",
   ])("sanitizes direct context-overflow error: %s", (text) => {
     expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
-      "Context overflow: prompt too large for the model.",
+      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
     );
   });
 
@@ -79,7 +79,7 @@ describe("sanitizeUserFacingText", () => {
     const text =
       'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}';
     expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
-      "Context overflow: prompt too large for the model.",
+      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
     );
   });
 
@@ -151,7 +151,7 @@ describe("sanitizeUserFacingText", () => {
     const raw =
       '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
-      "Context overflow: prompt too large for the model.",
+      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
     );
   });
 
@@ -159,7 +159,7 @@ describe("sanitizeUserFacingText", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
-      "Context overflow: prompt too large for the model.",
+      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
     );
   });
 

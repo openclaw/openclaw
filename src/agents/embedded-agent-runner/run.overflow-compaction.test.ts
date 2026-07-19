@@ -3644,6 +3644,8 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     expect(result.payloads?.[0]?.text).toContain("/reset");
     expect(result.payloads?.[0]?.text).toContain("/new");
+    // After compaction exhaustion, /compact must NOT be recommended.
+    expect(result.payloads?.[0]?.text).not.toContain("/compact");
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.meta.livenessState).toBe("blocked");
     expect(result.meta.finalAssistantVisibleText).toBe(result.payloads?.[0]?.text);

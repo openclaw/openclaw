@@ -1057,7 +1057,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
@@ -1077,7 +1082,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+      },
     ]);
   });
 
@@ -1098,7 +1106,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+      },
     ]);
   });
 
@@ -1130,7 +1141,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+      },
     ]);
   });
 
@@ -1148,7 +1162,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
@@ -1168,7 +1187,10 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+      },
     ]);
     expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
   });
@@ -1188,7 +1210,10 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result[0]).not.toHaveProperty("phase");
     expect(result[0]?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
+      {
+        type: "text",
+        text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+      },
     ]);
     expect(result[0]).not.toHaveProperty("text");
   });
@@ -1248,7 +1273,12 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(result).toEqual([
         {
           role: "assistant",
-          content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+          content: [
+            {
+              type: "text",
+              text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+            },
+          ],
           stopReason: "error",
           timestamp: 1,
         },
@@ -1274,7 +1304,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
@@ -1300,7 +1335,12 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(result).toEqual([
         {
           role: "assistant",
-          content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+          content: [
+            {
+              type: "text",
+              text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+            },
+          ],
           stopReason: "error",
           timestamp: 1,
         },
@@ -1343,7 +1383,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        content: [
+          {
+            type: "text",
+            text: "The agent run failed before producing a reply. If the session is stuck, use /new to start a fresh session. Check the gateway logs for details about the failure.",
+          },
+        ],
         stopReason: "error",
         timestamp: 1,
       },
@@ -1402,6 +1447,33 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result[0]).not.toHaveProperty("errorBody");
     expect(result[0]).not.toHaveProperty("errorMessage");
     expect(JSON.stringify(result)).not.toContain("private upstream");
+  });
+
+  it("uses a cause-neutral generic fallback for non-overflow assistant errors", () => {
+    // STREAM_ERROR_FALLBACK_TEXT triggers the generic fallback path without
+    // being overflow-specific — this exercises the cause-neutral requirement.
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        errorMessage: "Connection closed unexpectedly.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      {
+        type: "text",
+        text:
+          "The agent run failed before producing a reply. " +
+          "If the session is stuck, use /new to start a fresh session. " +
+          "Check the gateway logs for details about the failure.",
+      },
+    ]);
+    // Must not assume overflow — the fallback covers all error types.
+    expect(JSON.stringify(result)).not.toContain("overflow");
+    expect(JSON.stringify(result)).not.toContain("/compact");
   });
 
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {

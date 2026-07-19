@@ -423,8 +423,10 @@ export async function recoverEmbeddedRunOverflow(input: {
   }
   const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
   const userText =
-    "Context overflow: prompt too large for the model. " +
-    "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+    "Context overflow: the conversation has grown too large after auto-compaction was exhausted. " +
+    "Use /reset (or /new) to start a fresh session. " +
+    "To prevent this, limit command output (e.g. use --tail with kubectl, or pipe through head), " +
+    "or switch to a model with a larger context window.";
   log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
