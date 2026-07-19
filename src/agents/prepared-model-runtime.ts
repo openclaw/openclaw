@@ -43,6 +43,7 @@ let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 
 const owners = new Map<string, PreparedModelRuntimeOwner>();
 const agentBuildCompletions = new Map<string, Promise<void>>();
+const standaloneActivationTails = new Map<string, Promise<void>>();
 let gatewayLifecycleActive = false;
 let refreshTail: Promise<void> = Promise.resolve();
 let refreshRequestEpoch = 0;
@@ -182,8 +183,32 @@ export async function publishPreparedModelRuntimeSnapshot(
 export async function activateStandalonePreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
+  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const key = ownerKey(input);
+  const previous = standaloneActivationTails.get(key) ?? Promise.resolve();
+  // One writer per owner key prevents conflicting config activations from alternately
+  // superseding each other's generation while preserving each caller's requested snapshot.
+  const activation = previous.then(
+    async () => await activateStandalonePreparedModelRuntimeNow(input),
+  );
+  const tail = activation.then(
+    () => undefined,
+    () => undefined,
+  );
+  standaloneActivationTails.set(key, tail);
+  try {
+    return await activation;
+  } finally {
+    if (standaloneActivationTails.get(key) === tail) {
+      standaloneActivationTails.delete(key);
+    }
+  }
+}
+
+async function activateStandalonePreparedModelRuntimeNow(
+  input: PreparedModelRuntimeInput,
+): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
-    const input = normalizePreparedModelRuntimeInput(rawInput);
     const overlapsConfiguredOwner = [...owners.values()].some(
       (owner) =>
         owner.provenance === "configured" &&
@@ -666,6 +691,7 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   pendingModelRuntimeReplacement = undefined;
   owners.clear();
   agentBuildCompletions.clear();
+  standaloneActivationTails.clear();
   gatewayLifecycleActive = false;
   refreshTail = Promise.resolve();
   refreshRequestEpoch = 0;

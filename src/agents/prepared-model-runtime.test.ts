@@ -568,6 +568,39 @@ describe("prepared model runtime snapshots", () => {
     expect(first).not.toBe(second);
   });
 
+  it("serializes conflicting standalone activations for one owner", async () => {
+    const agentDir = "/tmp/prepared-model-runtime-concurrent-standalone";
+    const firstConfig = {};
+    const secondConfig = {};
+    let finishFirstBuild!: () => void;
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(
+      async () =>
+        await new Promise<{ agentDir: string; wrote: boolean }>((resolve) => {
+          finishFirstBuild = () => resolve({ agentDir, wrote: false });
+        }),
+    );
+
+    const firstActivation = activateStandalonePreparedModelRuntime({
+      config: firstConfig,
+      agentDir,
+    });
+    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce());
+    const secondActivation = activateStandalonePreparedModelRuntime({
+      config: secondConfig,
+      agentDir,
+    });
+
+    await Promise.resolve();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    finishFirstBuild();
+
+    const [first, second] = await Promise.all([firstActivation, secondActivation]);
+    expect(first?.config).toBe(firstConfig);
+    expect(second?.config).toBe(secondConfig);
+    expect(first).not.toBe(second);
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+  });
+
   it("does not discover a missing owner from a request lookup", async () => {
     await expect(
       prepareModelRuntimeSnapshot({
