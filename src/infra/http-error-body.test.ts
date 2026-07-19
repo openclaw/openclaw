@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockWarn } = vi.hoisted(() => ({
   mockWarn: vi.fn(),
@@ -19,10 +19,10 @@ function bodyLessResponse(
   if (options.contentLength !== undefined && options.contentLength !== null) {
     headers.set("content-length", String(options.contentLength));
   }
-  let resolveText: ((value: string) => void) | undefined;
+  let _resolveText: ((value: string) => void) | undefined;
   const textPromise = options.delayedText
     ? new Promise<string>((resolve) => {
-        resolveText = resolve;
+        _resolveText = resolve;
       })
     : Promise.resolve(text);
   return {
