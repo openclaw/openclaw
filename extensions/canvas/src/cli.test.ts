@@ -1,6 +1,10 @@
 // Canvas tests cover cli plugin behavior.
+import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { MAX_A2UI_JSONL_FILE_BYTES } from "./a2ui-jsonl-file.js";
 import {
   createDefaultCanvasCliDependencies,
   registerNodesCanvasCommands,
@@ -290,5 +294,29 @@ describe("canvas CLI", () => {
       }),
     ).rejects.toThrow(`${flag} must be a number.`);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized A2UI JSONL files before invoking the node", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-cli-"));
+    try {
+      const filePath = path.join(tempRoot, "oversized.jsonl");
+      await writeFile(filePath, "");
+      await truncate(filePath, MAX_A2UI_JSONL_FILE_BYTES + 1);
+      const program = new Command();
+      program.exitOverride();
+      const nodes = program.command("nodes");
+      const { deps } = createCanvasCliDeps();
+      registerNodesCanvasCommands(nodes, deps);
+
+      await expect(
+        program.parseAsync(
+          ["nodes", "canvas", "a2ui", "push", "--node", "ios-node", "--jsonl", filePath],
+          { from: "user" },
+        ),
+      ).rejects.toThrow(`A2UI JSONL file exceeds ${MAX_A2UI_JSONL_FILE_BYTES} bytes`);
+      expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
