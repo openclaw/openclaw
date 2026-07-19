@@ -67,7 +67,7 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
 
 describe("discoverAuthStorage", () => {
   it("converts runtime auth profiles into agent discovery credentials", () => {
-    const credentials = resolveAgentCredentialMapFromStore({
+    const resolved = resolveAgentCredentialMapFromStore({
       version: 1,
       profiles: {
         "openrouter:default": {
@@ -144,7 +144,7 @@ describe("discoverAuthStorage", () => {
       },
     });
 
-    expect(credentials.openai).toEqual({
+    expect(resolved.openai).toEqual({
       type: "oauth",
       access: "fake",
       refresh: "sample",
@@ -153,7 +153,7 @@ describe("discoverAuthStorage", () => {
   });
 
   it("uses canonical mode and expiry ordering instead of profile insertion order", () => {
-    const credentials = resolveAgentCredentialMapFromStore({
+    const resolved = resolveAgentCredentialMapFromStore({
       version: 1,
       profiles: {
         "openai:key": {
@@ -178,7 +178,7 @@ describe("discoverAuthStorage", () => {
       },
     });
 
-    expect(credentials.openai).toEqual({
+    expect(resolved.openai).toEqual({
       type: "oauth",
       access: "fake",
       refresh: "sample",
