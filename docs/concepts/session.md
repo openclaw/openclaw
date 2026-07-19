@@ -71,7 +71,7 @@ Verify your setup with `openclaw security audit`.
 ## Remember across conversations
 
 Separate transcripts control each conversation's local history. For a personal
-or fully trusted agent, `memorySearch.rememberAcrossConversations: true`
+or fully trusted agent, `memory.search.rememberAcrossConversations: true`
 adds an optional retrieval step across that agent's other private
 conversations; it does not combine their transcripts.
 

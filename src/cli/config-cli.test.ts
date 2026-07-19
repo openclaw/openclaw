@@ -2280,9 +2280,9 @@ describe("config cli", () => {
       fs.writeFileSync(
         pathname,
         JSON.stringify([
-          { path: "agents.defaults.memorySearch.enabled", value: true },
-          { path: "agents.defaults.memorySearch.provider", value: "gemini" },
-          { path: "agents.defaults.memorySearch.sources", value: ["memory"] },
+          { path: "memory.search.enabled", value: true },
+          { path: "memory.search.provider", value: "gemini" },
+          { path: "memory.search.sources", value: ["memory"] },
         ]),
         "utf8",
       );
@@ -2296,7 +2296,7 @@ describe("config cli", () => {
       const written = firstWrittenConfig();
       expect(written.agents?.defaults?.models).toEqual(resolved.agents?.defaults?.models);
       expect(written.agents?.defaults?.model).toEqual(resolved.agents?.defaults?.model);
-      expect(written.agents?.defaults?.memorySearch).toEqual({
+      expect(written.memory?.search).toEqual({
         enabled: true,
         provider: "gemini",
         sources: ["memory"],

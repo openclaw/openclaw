@@ -2102,7 +2102,7 @@ describe("doctor health contributions", () => {
       expect.objectContaining({
         checkId: "core/doctor/memory-search",
         severity: "warning",
-        path: "agents.defaults.memorySearch.provider",
+        path: "memory.search.provider",
         message: 'Memory search provider is set to "openai" but no API key was found.',
         fixHint: expect.stringContaining("OPENAI_API_KEY"),
       }),

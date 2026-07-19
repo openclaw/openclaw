@@ -750,7 +750,7 @@ describe("QmdMemoryManager", () => {
       ...cfg,
       agents: {
         ...cfg.agents,
-        list: [{ id: "main", memorySearch: { rememberAcrossConversations: true } }],
+        list: [{ id: "main", memory: { search: { rememberAcrossConversations: true } } }],
       },
       memory: {
         backend: "qmd",
@@ -884,14 +884,18 @@ describe("QmdMemoryManager", () => {
     const sourceCfg = params?.cfg ?? cfg;
     const cfgToUse: OpenClawConfig = {
       ...sourceCfg,
+      memory: {
+        ...sourceCfg.memory,
+        search: {
+          rememberAcrossConversations: false,
+          ...sourceCfg.memory?.search,
+        },
+      },
+
       agents: {
         ...sourceCfg.agents,
         defaults: {
           ...sourceCfg.agents?.defaults,
-          memorySearch: {
-            rememberAcrossConversations: false,
-            ...sourceCfg.agents?.defaults?.memorySearch,
-          },
         },
       },
     };
@@ -955,13 +959,6 @@ describe("QmdMemoryManager", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            rememberAcrossConversations: false,
-            store: { vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
@@ -971,6 +968,14 @@ describe("QmdMemoryManager", () => {
           includeDefaultMemory: false,
           update: { interval: "0s", debounceMs: 60_000, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          rememberAcrossConversations: false,
+          store: { vector: { enabled: false } },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
         },
       },
     } as OpenClawConfig;
@@ -1043,12 +1048,6 @@ describe("QmdMemoryManager", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: true, onSearch: false },
-          },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
@@ -1058,6 +1057,13 @@ describe("QmdMemoryManager", () => {
           includeDefaultMemory: false,
           update: { interval: "0s", debounceMs: 0, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: false, onSessionStart: true, onSearch: false },
         },
       },
     } as OpenClawConfig;
@@ -1087,12 +1093,6 @@ describe("QmdMemoryManager", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: true, onSearch: false },
-          },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
@@ -1102,6 +1102,13 @@ describe("QmdMemoryManager", () => {
           includeDefaultMemory: false,
           update: { interval: "0s", debounceMs: 0, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: false, onSessionStart: true, onSearch: false },
         },
       },
     } as OpenClawConfig;
@@ -1142,12 +1149,6 @@ describe("QmdMemoryManager", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            sync: { watch: true, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
@@ -1157,6 +1158,13 @@ describe("QmdMemoryManager", () => {
           includeDefaultMemory: false,
           update: { interval: "0s", debounceMs: 0, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: true, onSessionStart: false, onSearch: false },
         },
       },
     } as OpenClawConfig;
@@ -1210,12 +1218,6 @@ describe("QmdMemoryManager", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            sync: { watch: true, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
@@ -1229,6 +1231,13 @@ describe("QmdMemoryManager", () => {
             pattern: "**/*.md",
             name: path.basename(root),
           })),
+        },
+
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: true, onSessionStart: false, onSearch: false },
         },
       },
     } as OpenClawConfig;
@@ -1257,12 +1266,6 @@ describe("QmdMemoryManager", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            sync: { watch: true, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
@@ -1275,6 +1278,13 @@ describe("QmdMemoryManager", () => {
             { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
             { path: nestedRoot, pattern: "**/*.md", name: "build" },
           ],
+        },
+
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: true, onSessionStart: false, onSearch: false },
         },
       },
     } as OpenClawConfig;
@@ -1295,12 +1305,6 @@ describe("QmdMemoryManager", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            sync: { watch: true, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
       },
@@ -1310,6 +1314,13 @@ describe("QmdMemoryManager", () => {
           includeDefaultMemory: false,
           update: { interval: "0s", debounceMs: 0, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: true, onSessionStart: false, onSearch: false },
         },
       },
     } as OpenClawConfig;
@@ -1474,10 +1485,6 @@ describe("QmdMemoryManager", () => {
         defaults: {
           ...cfg.agents?.defaults,
           workspace: workspaceDir,
-          memorySearch: {
-            ...cfg.agents?.defaults?.memorySearch,
-            sync: { watch: false, onSessionStart: true, onSearch: true },
-          },
         },
       },
       memory: {
@@ -1487,6 +1494,11 @@ describe("QmdMemoryManager", () => {
           searchMode: "search",
           update: { interval: "0s", debounceMs: 60_000, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+
+        search: {
+          ...cfg.memory?.search,
+          sync: { watch: false, onSessionStart: true, onSearch: true },
         },
       },
     } as OpenClawConfig;
@@ -6602,7 +6614,7 @@ describe("QmdMemoryManager", () => {
       ...cfg,
       agents: {
         ...cfg.agents,
-        list: [{ id: "main", memorySearch: { rememberAcrossConversations: true } }],
+        list: [{ id: "main", memory: { search: { rememberAcrossConversations: true } } }],
       },
       memory: {
         backend: "qmd",

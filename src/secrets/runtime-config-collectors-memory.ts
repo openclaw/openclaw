@@ -17,14 +17,9 @@ export function collectAgentMemorySearchAssignments(params: {
   context: ResolverContext;
 }): void {
   const agents = params.config.agents as Record<string, unknown> | undefined;
-  if (!isRecord(agents)) {
-    return;
-  }
-  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsMemorySearch = isRecord(defaultsConfig?.memorySearch)
-    ? defaultsConfig.memorySearch
-    : undefined;
-  const list = Array.isArray(agents.list) ? agents.list : [];
+  const memory = params.config.memory as Record<string, unknown> | undefined;
+  const defaultsMemorySearch = isRecord(memory?.search) ? memory.search : undefined;
+  const list = Array.isArray(agents?.list) ? agents.list : [];
   const defaultRemote = isRecord(defaultsMemorySearch?.remote)
     ? defaultsMemorySearch.remote
     : undefined;
@@ -32,7 +27,8 @@ export function collectAgentMemorySearchAssignments(params: {
   let defaultApiKeyAssignmentCollected = false;
   const collectedDefaultHeaderKeys = new Set<string>();
   const collectForAgent = (rawAgent: Record<string, unknown> | undefined, index?: number) => {
-    const memorySearch = isRecord(rawAgent?.memorySearch) ? rawAgent.memorySearch : undefined;
+    const agentMemory = isRecord(rawAgent?.memory) ? rawAgent.memory : undefined;
+    const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
     const remote = isRecord(memorySearch?.remote) ? memorySearch.remote : undefined;
     const agentId = normalizeAgentId(
       typeof rawAgent?.id === "string" ? rawAgent.id : DEFAULT_AGENT_ID,
@@ -58,8 +54,8 @@ export function collectAgentMemorySearchAssignments(params: {
       collectRuntimeSecretInputAssignment({
         value: apiKeyTarget.apiKey,
         path: hasApiKeyOverride
-          ? `agents.list.${index}.memorySearch.remote.apiKey`
-          : "agents.defaults.memorySearch.remote.apiKey",
+          ? `agents.list.${index}.memory.search.remote.apiKey`
+          : "memory.search.remote.apiKey",
         expected: "string",
         defaults: params.defaults,
         context: params.context,
@@ -84,8 +80,8 @@ export function collectAgentMemorySearchAssignments(params: {
       collectRuntimeSecretInputAssignment({
         value: headerValue,
         path: overrideHeaders
-          ? `agents.list.${index}.memorySearch.remote.headers.${headerKey}`
-          : `agents.defaults.memorySearch.remote.headers.${headerKey}`,
+          ? `agents.list.${index}.memory.search.remote.headers.${headerKey}`
+          : `memory.search.remote.headers.${headerKey}`,
         expected: "string",
         defaults: params.defaults,
         context: params.context,
@@ -115,7 +111,7 @@ export function collectAgentMemorySearchAssignments(params: {
   if (defaultRemote && !defaultApiKeyAssignmentCollected) {
     collectRuntimeSecretInputAssignment({
       value: defaultRemote.apiKey,
-      path: "agents.defaults.memorySearch.remote.apiKey",
+      path: "memory.search.remote.apiKey",
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -132,7 +128,7 @@ export function collectAgentMemorySearchAssignments(params: {
     }
     collectRuntimeSecretInputAssignment({
       value: headerValue,
-      path: `agents.defaults.memorySearch.remote.headers.${headerKey}`,
+      path: `memory.search.remote.headers.${headerKey}`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,

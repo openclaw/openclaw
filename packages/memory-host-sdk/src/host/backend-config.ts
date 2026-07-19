@@ -454,8 +454,8 @@ export function resolveMemoryBackendConfig(params: {
   );
   const mergedExtraPaths = normalizeStringEntries(
     [
-      ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
-      ...(agentEntry?.memorySearch?.extraPaths ?? []),
+      ...(params.cfg.memory?.search?.extraPaths ?? []),
+      ...(agentEntry?.memory?.search?.extraPaths ?? []),
     ].filter((value): value is string => typeof value === "string"),
   );
   const dedupedExtraPaths = uniqueStrings(mergedExtraPaths);
@@ -463,8 +463,8 @@ export function resolveMemoryBackendConfig(params: {
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );
   const mergedExtraCollections = [
-    ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
-    ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
+    ...(params.cfg.memory?.search?.qmd?.extraCollections ?? []),
+    ...(agentEntry?.memory?.search?.qmd?.extraCollections ?? []),
   ].filter(
     (value): value is MemoryQmdIndexPath =>
       value !== null && typeof value === "object" && typeof value.path === "string",

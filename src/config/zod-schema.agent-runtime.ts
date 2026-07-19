@@ -979,7 +979,12 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     skills: z.array(z.string()).optional(),
-    memorySearch: MemorySearchSchema,
+    memory: z
+      .object({
+        search: MemorySearchSchema,
+      })
+      .strict()
+      .optional(),
     humanDelay: HumanDelaySchema.optional(),
     tts: TtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,

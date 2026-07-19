@@ -684,7 +684,7 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
     return [];
   }
   const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
-  const defaultsBlock = config.agents?.defaults?.memorySearch;
+  const defaultsBlock = config.memory?.search;
   const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
   const addEffectiveProviders = (override: Record<string, unknown> | undefined) => {
     for (const { configuredId, source } of resolveEffectiveMemoryEmbeddingProviderEntries(
@@ -709,7 +709,8 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
     return [...byConfiguredIdAndSource.values()];
   }
   for (const agent of agentEntries) {
-    addEffectiveProviders(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
+    const memory = isRecord(agent.memory) ? agent.memory : undefined;
+    addEffectiveProviders(isRecord(memory?.search) ? memory.search : undefined);
   }
   return [...byConfiguredIdAndSource.values()];
 }

@@ -3,6 +3,7 @@
  * Builtin memory stays core-owned; qmd settings describe the external QMD integration.
  */
 import type { SessionSendPolicyConfig } from "./types.base.js";
+import type { MemorySearchConfig } from "./types.tools.js";
 
 /** Memory backend family selected for retrieval and session memory features. */
 export type MemoryBackend = "builtin" | "qmd";
@@ -17,6 +18,8 @@ export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
+  /** Shared embedding/search defaults. Per-agent overrides live under agents.list[].memory.search. */
+  search?: MemorySearchConfig;
   qmd?: MemoryQmdConfig;
 };
 

@@ -486,10 +486,10 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
         plugins: {
           slots: { memory: "memory-lancedb-pro" },
         },
+        memory: { search: { enabled: false } },
+
         agents: {
-          defaults: {
-            memorySearch: { enabled: false },
-          },
+          defaults: {},
         },
       },
       agentStatus: { defaultId: "main" },

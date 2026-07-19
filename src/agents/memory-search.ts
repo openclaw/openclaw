@@ -478,8 +478,8 @@ export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const resolved = mergeConfig(cfg, defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
@@ -500,12 +500,12 @@ export function resolveMemorySearchConfig(
       (!multimodalProvider && getEmbeddingProvider(resolved.provider, cfg)))
   ) {
     throw new Error(
-      "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
+      "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
     );
   }
   if (multimodalActive && resolved.fallback !== "none") {
     throw new Error(
-      'agents.*.memorySearch.multimodal does not support memorySearch.fallback. Set fallback to "none".',
+      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
     );
   }
   return resolved;
@@ -515,8 +515,8 @@ export function resolveMemorySearchSyncConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchSyncConfig | null {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   if (!enabled) {
     return null;

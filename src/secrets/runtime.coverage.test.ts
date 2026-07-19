@@ -583,7 +583,7 @@ function applyConfigForOpenClawTarget(
       addCoveragePluginLoadPath(config, pluginId);
     }
   }
-  if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
+  if (entry.id === "memory.search.remote.apiKey") {
     setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
   }
   if (entry.id === "gateway.auth.password") {

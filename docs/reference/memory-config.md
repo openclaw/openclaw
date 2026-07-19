@@ -29,11 +29,11 @@ This page lists every configuration knob for OpenClaw memory search. For concept
   </Card>
 </CardGroup>
 
-All memory search settings live under `agents.defaults.memorySearch` in `openclaw.json` (or a per-agent `agents.list[].memorySearch` override) unless noted otherwise.
+All shared memory settings live under top-level `memory` in `openclaw.json`. Search defaults use `memory.search`; per-agent search overrides use `agents.list[].memory.search`.
 
 <Note>
 For the recommended personal-agent workflow, use
-`memorySearch.rememberAcrossConversations`. Advanced Active Memory targeting,
+`memory.search.rememberAcrossConversations`. Advanced Active Memory targeting,
 model, prompt, and latency controls live under `plugins.entries.active-memory`.
 
 See [Active Memory](/concepts/active-memory) for both activation paths,
@@ -57,8 +57,10 @@ cross-conversation transcript recall:
     list: [
       {
         id: "personal",
-        memorySearch: {
-          rememberAcrossConversations: true,
+        memory: {
+          search: {
+            rememberAcrossConversations: true,
+          },
         },
       },
     ],
@@ -66,7 +68,7 @@ cross-conversation transcript recall:
 }
 ```
 
-The value follows normal `agents.defaults.memorySearch` inheritance with a
+The value follows normal `memory.search` inheritance with a
 per-agent override. When unset, it defaults on only if global
 `session.dmScope` is unset or `"main"` and no binding has a `session.dmScope`
 override. Any configured DM isolation defaults it off. An explicit `true` or
@@ -125,7 +127,7 @@ When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
 
-Explicit non-local providers fail closed. If you set `memorySearch.provider` to
+Explicit non-local providers fail closed. If you set `memory.search.provider` to
 a concrete remote-backed provider such as Bedrock, DeepInfra, Gemini, GitHub
 Copilot, LM Studio, Mistral, Ollama, OpenAI, Voyage, or an OpenAI-compatible
 custom provider, and that provider is unavailable at runtime, `memory_search`
@@ -135,7 +137,7 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### Custom provider ids
 
-`memorySearch.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+`memory.search.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
 
 ```json5
 {
@@ -149,12 +151,10 @@ provider/auth configuration, switch to a reachable provider, or set
       },
     },
   },
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "ollama-5080",
-        model: "qwen3-embedding:0.6b",
-      },
+  memory: {
+    search: {
+      provider: "ollama-5080",
+      model: "qwen3-embedding:0.6b",
     },
   },
 }
@@ -198,15 +198,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai-compatible",
-        model: "text-embedding-3-small",
-        remote: {
-          baseUrl: "https://api.example.com/v1/",
-          apiKey: "YOUR_KEY",
-        },
+  memory: {
+    search: {
+      provider: "openai-compatible",
+      model: "text-embedding-3-small",
+      remote: {
+        baseUrl: "https://api.example.com/v1/",
+        apiKey: "YOUR_KEY",
       },
     },
   },
@@ -241,18 +239,16 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai-compatible",
-            remote: {
-              baseUrl: "https://embeddings.example/v1",
-              apiKey: "${EMBEDDINGS_API_KEY}",
-            },
-            model: "asymmetric-embedder",
-            queryInputType: "query",
-            documentInputType: "passage",
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          remote: {
+            baseUrl: "https://embeddings.example/v1",
+            apiKey: "${EMBEDDINGS_API_KEY}",
           },
+          model: "asymmetric-embedder",
+          queryInputType: "query",
+          documentInputType: "passage",
         },
       },
     }
@@ -268,12 +264,10 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-            model: "amazon.titan-embed-text-v2:0",
-          },
+      memory: {
+        search: {
+          provider: "bedrock",
+          model: "amazon.titan-embed-text-v2:0",
         },
       },
     }
@@ -301,7 +295,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     Throughput-suffixed variants (e.g., `amazon.titan-embed-text-v1:2:8k`) and region-prefixed inference profile IDs (e.g., `us.amazon.titan-embed-text-v2:0`) inherit the base model's configuration.
 
-    **Region:** resolved in this order: the `memorySearch.remote.baseUrl` override, the `models.providers.amazon-bedrock.baseUrl` config, `AWS_REGION`, `AWS_DEFAULT_REGION`, then a default of `us-east-1`.
+    **Region:** resolved in this order: the `memory.search.remote.baseUrl` override, the `models.providers.amazon-bedrock.baseUrl` config, `AWS_REGION`, `AWS_DEFAULT_REGION`, then a default of `us-east-1`.
 
     **Authentication:** OpenClaw checks for `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` or `AWS_BEARER_TOKEN_BEDROCK` first, then falls through to the standard AWS SDK default credential provider chain:
 
@@ -365,7 +359,7 @@ Unset uses the provider default: 600 seconds for local/self-hosted providers suc
 
 ## Indexing behavior
 
-All under `memorySearch.sync` unless noted:
+All under `memory.search.sync` unless noted:
 
 | Key                            | Type      | Default | Description                                                           |
 | ------------------------------ | --------- | ------- | --------------------------------------------------------------------- |
@@ -378,14 +372,14 @@ All under `memorySearch.sync` unless noted:
 
 ## Hybrid search config
 
-All under `memorySearch.query`:
+All under `memory.search.query`:
 
 | Key          | Type     | Default | Description                               |
 | ------------ | -------- | ------- | ----------------------------------------- |
 | `maxResults` | `number` | `6`     | Max memory hits returned before injection |
 | `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
 
-And under `memorySearch.query.hybrid`:
+And under `memory.search.query.hybrid`:
 
 | Key       | Type      | Default | Description                        |
 | --------- | --------- | ------- | ---------------------------------- |
@@ -411,16 +405,14 @@ And under `memorySearch.query.hybrid`:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        query: {
-          maxResults: 6,
-          minScore: 0.35,
-          hybrid: {
-            mmr: { enabled: true },
-            temporalDecay: { enabled: true },
-          },
+  memory: {
+    search: {
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          mmr: { enabled: true },
+          temporalDecay: { enabled: true },
         },
       },
     },
@@ -438,11 +430,9 @@ And under `memorySearch.query.hybrid`:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        extraPaths: ["../team-docs", "/srv/shared-notes"],
-      },
+  memory: {
+    search: {
+      extraPaths: ["../team-docs", "/srv/shared-notes"],
     },
   },
 }
@@ -450,7 +440,7 @@ And under `memorySearch.query.hybrid`:
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for `.md` files. Symlink handling depends on the active backend: the builtin engine skips symlinks, while QMD follows the underlying QMD scanner behavior.
 
-For agent-scoped cross-agent transcript search, use `agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape, but they are merged per agent and can preserve explicit shared names when the path points outside the current workspace. If the same resolved path appears in both `memory.qmd.paths` and `memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
+For agent-scoped cross-agent transcript search, use `agents.list[].memory.search.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape, but they are merged per agent and can preserve explicit shared names when the path points outside the current workspace. If the same resolved path appears in both `memory.qmd.paths` and `memory.search.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
 
 ---
 
@@ -527,8 +517,8 @@ recall is also required and agent-to-agent policy allows it).
 separate runtime-only authorization limited to same-agent private
 transcripts during the bounded Active Memory pass.
 
-The examples below place these settings under `agents.defaults`. You can also
-apply equivalent `memorySearch` settings in a per-agent override when only one
+The examples below place these settings under top-level `memory.search`. You can also
+apply equivalent settings in a per-agent `memory.search` override when only one
 agent should index and search session transcripts.
 
 For same-agent gateway-to-DM recall:
@@ -537,12 +527,10 @@ For same-agent gateway-to-DM recall:
   <Tab title="Builtin backend">
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            experimental: { sessionMemory: true },
-            sources: ["memory", "sessions"],
-          },
+      memory: {
+        search: {
+          experimental: { sessionMemory: true },
+          sources: ["memory", "sessions"],
         },
       },
       tools: {
@@ -554,16 +542,12 @@ For same-agent gateway-to-DM recall:
   <Tab title="QMD backend">
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            experimental: { sessionMemory: true },
-            sources: ["memory", "sessions"],
-          },
-        },
-      },
       memory: {
         backend: "qmd",
+        search: {
+          experimental: { sessionMemory: true },
+          sources: ["memory", "sessions"],
+        },
         qmd: {
           sessions: { enabled: true },
         },
@@ -576,7 +560,7 @@ For same-agent gateway-to-DM recall:
   </Tab>
 </Tabs>
 
-When using QMD, `agents.defaults.memorySearch.experimental.sessionMemory` and
+When using QMD, `memory.search.experimental.sessionMemory` and
 `sources: ["sessions"]` do not by themselves export transcripts into QMD. Set
 `memory.qmd.sessions.enabled: true` as well. The higher-level
 `rememberAcrossConversations: true` setting is the exception: it implies the
@@ -730,7 +714,7 @@ When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for e
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `agents.defaults.memorySearch`.
+Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 

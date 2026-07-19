@@ -189,6 +189,17 @@ export function buildQaGatewayConfig(params: {
       : {};
 
   return {
+    memory: {
+      backend: "builtin",
+      search: {
+        ...mockMemorySearch,
+        sync: {
+          watch: true,
+          onSessionStart: true,
+          onSearch: true,
+        },
+      },
+    },
     plugins: {
       allow: allowedPlugins,
       slots: {
@@ -224,14 +235,6 @@ export function buildQaGatewayConfig(params: {
             }
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
-        memorySearch: {
-          ...mockMemorySearch,
-          sync: {
-            watch: true,
-            onSessionStart: true,
-            onSearch: true,
-          },
-        },
         models: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
@@ -263,9 +266,6 @@ export function buildQaGatewayConfig(params: {
           },
         },
       ],
-    },
-    memory: {
-      backend: "builtin",
     },
     tools: {
       // The parity scenarios are code-agent contracts: they must always expose

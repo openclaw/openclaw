@@ -185,19 +185,17 @@ OpenClaw can use OpenAI, or an OpenAI-compatible embedding endpoint, for
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-        model: "text-embedding-3-small",
-      },
+  memory: {
+    search: {
+      provider: "openai",
+      model: "text-embedding-3-small",
     },
   },
 }
 ```
 
 For OpenAI-compatible endpoints that require asymmetric embedding labels, set
-`queryInputType` and `documentInputType` under `memorySearch`. OpenClaw
+`queryInputType` and `documentInputType` under `memory.search`. OpenClaw
 forwards these as provider-specific `input_type` request fields: query
 embeddings use `queryInputType`; indexed memory chunks and batch indexing use
 `documentInputType`. See the

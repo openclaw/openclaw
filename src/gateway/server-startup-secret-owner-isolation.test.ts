@@ -358,14 +358,16 @@ describe("Gateway startup SecretRef owner isolation", () => {
     await withEnvAsync({ MISSING_MEMORY_KEY: undefined }, async () => {
       await writeConfig({
         ...baseConfig(),
-        agents: {
-          defaults: {
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_KEY" },
-              },
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_KEY" },
             },
           },
+        },
+
+        agents: {
+          defaults: {},
         },
       });
 

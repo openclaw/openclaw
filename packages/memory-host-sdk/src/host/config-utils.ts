@@ -110,6 +110,7 @@ export type MemoryQmdConfig = {
 type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
+  search?: MemorySearchConfig;
   qmd?: MemoryQmdConfig;
 };
 
@@ -143,7 +144,9 @@ type AgentConfig = {
   id?: string;
   default?: boolean;
   workspace?: string;
-  memorySearch?: MemorySearchConfig;
+  memory?: {
+    search?: MemorySearchConfig;
+  };
   contextLimits?: AgentContextLimitsConfig;
 };
 
@@ -152,7 +155,6 @@ export type OpenClawConfig = {
   agents?: {
     defaults?: {
       workspace?: string;
-      memorySearch?: MemorySearchConfig;
       contextLimits?: AgentContextLimitsConfig;
     };
     list?: AgentConfig[];
@@ -175,8 +177,8 @@ export type OpenClawConfig = {
 };
 
 export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const explicit = overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations;
   if (explicit !== undefined) {
     return explicit;
@@ -359,8 +361,8 @@ export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): { enabled: boolean; rememberAcrossConversations: boolean; extraPaths: string[] } | null {
-  const defaults = cfg.agents?.defaults?.memorySearch;
-  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   if (!enabled) {
     return null;

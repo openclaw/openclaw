@@ -51,17 +51,18 @@ function collectConfiguredMemoryEmbeddingProviderIds(config: OpenClawConfig): Re
       providerIds.add(ownerId);
     }
   };
-  const defaults = config.agents?.defaults?.memorySearch;
+  const defaults = config.memory?.search;
   if (defaults?.enabled !== false) {
     add(defaults?.provider);
     add(defaults?.fallback);
   }
   for (const agent of config.agents?.list ?? []) {
-    if (agent.memorySearch?.enabled === false) {
+    const override = agent.memory?.search;
+    if (override?.enabled === false) {
       continue;
     }
-    add(agent.memorySearch?.provider ?? defaults?.provider);
-    add(agent.memorySearch?.fallback ?? defaults?.fallback);
+    add(override?.provider ?? defaults?.provider);
+    add(override?.fallback ?? defaults?.fallback);
   }
   return providerIds;
 }

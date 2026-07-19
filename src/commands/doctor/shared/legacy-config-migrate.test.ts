@@ -168,18 +168,18 @@ describe("legacy memory search config migrate", () => {
     });
 
     expect((res.config as Record<string, unknown> | undefined)?.memorySearch).toBeUndefined();
-    expect(res.config?.agents?.defaults?.memorySearch?.store).toEqual({
+    expect(res.config?.memory?.search?.store).toEqual({
       fts: { tokenizer: "trigram" },
       vector: { enabled: false },
     });
-    expect(res.config?.agents?.list?.[0]?.memorySearch?.store).toEqual({
+    expect(res.config?.agents?.list?.[0]?.memory?.search?.store).toEqual({
       vector: { enabled: true },
     });
     expect(res.changes).toContain(
-      "Removed agents.defaults.memorySearch.store.path; memory indexes now use each agent database.",
+      "Removed memory.search.store.path; memory indexes now use each agent database.",
     );
     expect(res.changes).toContain(
-      "Removed agents.list[0].memorySearch.store.path; memory indexes now use each agent database.",
+      "Removed agents.list[0].memory.search.store.path; memory indexes now use each agent database.",
     );
   });
 
@@ -922,7 +922,7 @@ describe("legacy memory search config migrate", () => {
     );
   });
 
-  it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
+  it("rewrites top-level legacy auto provider after moving memorySearch into memory.search", () => {
     const raw = {
       memorySearch: {
         provider: "auto",
@@ -937,14 +937,14 @@ describe("legacy memory search config migrate", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       provider: "openai",
       model: "text-embedding-3-small",
     });
     expect(res.config).not.toHaveProperty("memorySearch");
     expect(res.changes).toEqual([
-      "Moved memorySearch → agents.defaults.memorySearch.",
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+      "Moved legacy memorySearch defaults → memory.search.",
+      'Moved memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 
@@ -974,18 +974,22 @@ describe("legacy memory search config migrate", () => {
     };
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
-      "agents.defaults.memorySearch.provider",
+      "agents.defaults.memorySearch",
+      "agents.list",
       "agents.list",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch?.provider).toBe("openai");
-    expect(res.config?.agents?.list?.[0]?.memorySearch?.provider).toBe("openai");
-    expect(res.config?.agents?.list?.[1]?.memorySearch?.provider).toBe("openai-compatible");
+    expect(res.config?.memory?.search?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[0]?.memory?.search?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[1]?.memory?.search?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
-      'Moved agents.list.0.memorySearch.provider from legacy "auto" to "openai".',
+      "Moved legacy memorySearch defaults → memory.search.",
+      "Moved agents.list.0.memorySearch → agents.list.0.memory.search.",
+      "Moved agents.list.1.memorySearch → agents.list.1.memory.search.",
+      'Moved memory.search.provider from legacy "auto" to "openai".',
+      'Moved agents.list.0.memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 });
@@ -1738,7 +1742,6 @@ describe("legacy migrate audio transcription", () => {
     ]);
     expect(res.config?.tools?.media).toEqual({
       models: [{ command: "existing", type: "cli", capabilities: ["audio"] }],
-      audio: { preferredModel: "cli:existing" },
     });
   });
 
@@ -4166,15 +4169,15 @@ describe("legacy flat memory search field migrate", () => {
     );
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       enabled: true,
       query: { maxResults: 5 },
     });
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
-        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-        "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
+        "Moved memory.search.chunkSize → memory.search.chunking.tokens.",
+        "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
+        "Moved memory.search.maxResults → memory.search.query.maxResults.",
         "Removed retired runtime tuning knobs; built-in defaults now apply.",
       ]),
     );
@@ -4199,16 +4202,16 @@ describe("legacy flat memory search field migrate", () => {
     });
 
     expect(res.config).not.toHaveProperty("memorySearch");
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       enabled: true,
       query: { maxResults: 9 },
     });
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-        "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
-        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-        "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
+        "Moved legacy memorySearch defaults → memory.search.",
+        "Removed memory.search.chunkSize (memory.search.chunking.tokens already set).",
+        "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
+        "Removed memory.search.maxResults (memory.search.query.maxResults already set).",
         "Removed retired runtime tuning knobs; built-in defaults now apply.",
       ]),
     );
@@ -4224,8 +4227,8 @@ describe("legacy flat memory search field migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.list?.[0]?.memorySearch).toBeUndefined();
-    expect(res.config?.agents?.list?.[1]?.memorySearch).toEqual({
+    expect(res.config?.agents?.list?.[0]?.memory?.search).toBeUndefined();
+    expect(res.config?.agents?.list?.[1]?.memory?.search).toEqual({
       query: { maxResults: 10 },
     });
     expect(res.changes).toContain(
@@ -4245,9 +4248,11 @@ describe("legacy flat memory search field migrate", () => {
       },
     };
 
-    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "" })]);
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({ path: "agents.defaults.memorySearch" }),
+    ]);
     const res = migrateLegacyConfigForTest(raw);
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       query: { maxResults: 5 },
     });
     expect(res.changes).toContain(

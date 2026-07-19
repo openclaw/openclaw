@@ -386,33 +386,36 @@ describe("memory index", () => {
     };
   }): TestCfg {
     return {
+      memory: {
+        search: {
+          ...(params.provider !== undefined ? { provider: params.provider } : {}),
+          model: params.model ?? "mock-embed",
+          fallback: params.fallback,
+          outputDimensionality: params.outputDimensionality,
+          store: { vector: { enabled: params.vectorEnabled ?? false } },
+          sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
+          remote: params.batchEnabled
+            ? {
+                nonBatchConcurrency: 1,
+                batch: { enabled: true, pollIntervalMs: 0, timeoutMinutes: 1 },
+              }
+            : undefined,
+          query: {
+            minScore: params.minScore ?? 0,
+            hybrid: params.hybrid ?? { enabled: false },
+          },
+          cache: params.cacheEnabled ? { enabled: true } : undefined,
+          extraPaths: params.extraPaths,
+          multimodal: params.multimodal,
+          sources: params.sources,
+          rememberAcrossConversations: params.rememberAcrossConversations ?? false,
+          experimental: { sessionMemory: params.sessionMemory ?? false },
+        },
+      },
+
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            ...(params.provider !== undefined ? { provider: params.provider } : {}),
-            model: params.model ?? "mock-embed",
-            fallback: params.fallback,
-            outputDimensionality: params.outputDimensionality,
-            store: { vector: { enabled: params.vectorEnabled ?? false } },
-            sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
-            remote: params.batchEnabled
-              ? {
-                  nonBatchConcurrency: 1,
-                  batch: { enabled: true, pollIntervalMs: 0, timeoutMinutes: 1 },
-                }
-              : undefined,
-            query: {
-              minScore: params.minScore ?? 0,
-              hybrid: params.hybrid ?? { enabled: false },
-            },
-            cache: params.cacheEnabled ? { enabled: true } : undefined,
-            extraPaths: params.extraPaths,
-            multimodal: params.multimodal,
-            sources: params.sources,
-            rememberAcrossConversations: params.rememberAcrossConversations ?? false,
-            experimental: { sessionMemory: params.sessionMemory ?? false },
-          },
         },
         list: [{ id: "main", default: true }],
       },

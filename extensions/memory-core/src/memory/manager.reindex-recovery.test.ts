@@ -62,20 +62,22 @@ describe("memory manager reindex recovery", () => {
     sources?: Array<"memory" | "sessions">;
   }): OpenClawConfig {
     return {
-      memory: { backend: "builtin" },
+      memory: {
+        backend: "builtin",
+        search: {
+          provider: params.provider ?? "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+          remote: { nonBatchConcurrency: 1 },
+          cache: { enabled: false },
+          sources: params.sources,
+          experimental: { sessionMemory: params.sources?.includes("sessions") ?? false },
+        },
+      },
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: params.provider ?? "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            remote: { nonBatchConcurrency: 1 },
-            cache: { enabled: false },
-            sources: params.sources,
-            experimental: { sessionMemory: params.sources?.includes("sessions") ?? false },
-          },
         },
         list: [{ id: "main", default: true }],
       },

@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { z } from "zod";
 import { base64UrlDecode, normalizeEd25519PublicKeyBase64Url } from "../infra/ed25519-signature.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
+import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import { NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -164,6 +165,7 @@ export const MemorySchema = z
   .strictObject({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    search: MemorySearchSchema,
     qmd: MemoryQmdSchema.optional(),
   })
   .optional();

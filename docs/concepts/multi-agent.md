@@ -161,26 +161,23 @@ filtering, migration, and trust-boundary details.
 
 ## Cross-agent QMD memory search
 
-To let one agent search another agent's QMD session transcripts, add extra collections under `agents.list[].memorySearch.qmd.extraCollections`. Use `agents.defaults.memorySearch.qmd.extraCollections` when every agent should share the same collections.
+To let one agent search another agent's QMD session transcripts, add extra collections under `agents.list[].memory.search.qmd.extraCollections`. Use `memory.search.qmd.extraCollections` when every agent should share the same collections.
 
 ```json5
 {
   agents: {
     defaults: {
       workspace: "~/workspaces/main",
-      memorySearch: {
-        qmd: {
-          extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
-        },
-      },
     },
     list: [
       {
         id: "main",
         workspace: "~/workspaces/main",
-        memorySearch: {
-          qmd: {
-            extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+        memory: {
+          search: {
+            qmd: {
+              extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+            },
           },
         },
       },
@@ -189,6 +186,11 @@ To let one agent search another agent's QMD session transcripts, add extra colle
   },
   memory: {
     backend: "qmd",
+    search: {
+      qmd: {
+        extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
+      },
+    },
     qmd: { includeDefaultMemory: false },
   },
 }

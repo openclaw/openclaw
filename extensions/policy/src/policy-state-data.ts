@@ -146,21 +146,20 @@ function pushMemorySessionTranscriptIndexing(
     });
   }
 
-  const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
-  const defaultsMemorySearch = isRecord(defaults.memorySearch) ? defaults.memorySearch : {};
+  const defaultsMemorySearch = isRecord(memory.search) ? memory.search : {};
   const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
   if (defaultSessionMemory !== undefined) {
     entries.push({
       id: "agents-defaults-memory-session-transcripts",
       kind: "memorySessionTranscriptIndexing",
-      source: "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+      source: "oc://openclaw.config/memory/search/experimental/sessionMemory",
       scope: "global",
       value: defaultSessionMemory,
       explicit: true,
     });
   }
 
+  const agents = isRecord(cfg.agents) ? cfg.agents : {};
   if (!Array.isArray(agents.list)) {
     return;
   }
@@ -173,7 +172,8 @@ function pushMemorySessionTranscriptIndexing(
       readString(rawAgent.name) ??
       readString(rawAgent.slug) ??
       `agent-${index}`;
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
+    const agentMemory = isRecord(rawAgent.memory) ? rawAgent.memory : undefined;
+    const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
     const agentSessionMemory =
       memorySearch === undefined
         ? defaultSessionMemory
@@ -186,8 +186,8 @@ function pushMemorySessionTranscriptIndexing(
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
       source: explicit
-        ? `oc://openclaw.config/agents/list/#${index}/memorySearch/experimental/sessionMemory`
-        : "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+        ? `oc://openclaw.config/agents/list/#${index}/memory/search/experimental/sessionMemory`
+        : "oc://openclaw.config/memory/search/experimental/sessionMemory",
       scope: "agent",
       agentId: normalizeAgentId(agentId),
       value: agentSessionMemory,
@@ -340,7 +340,17 @@ function isSecretInputPath(path: readonly string[]): boolean {
     matchesConfigPath(path, ["models", "providers", "*", "headers", "*"]) ||
     isConfiguredProviderRequestSecretPath(path, ["models", "providers", "*"]) ||
     isMediaConfiguredProviderRequestSecretPath(path) ||
-    matchesConfigPath(path, ["agents", "defaults", "memorySearch", "remote", "headers", "*"]) ||
+    matchesConfigPath(path, ["memory", "search", "remote", "headers", "*"]) ||
+    matchesConfigPath(path, [
+      "agents",
+      "list",
+      "#",
+      "memory",
+      "search",
+      "remote",
+      "headers",
+      "*",
+    ]) ||
     matchesConfigPath(path, ["diagnostics", "otel", "headers", "*"])
   );
 }

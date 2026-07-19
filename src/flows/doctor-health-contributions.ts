@@ -1252,12 +1252,12 @@ function inferMemorySearchFindingPath(message: string): string {
     return "memory.backend";
   }
   if (message.includes("OpenAI-compatible embeddings endpoint")) {
-    return "agents.defaults.memorySearch.remote.baseUrl";
+    return "memory.search.remote.baseUrl";
   }
   if (message.includes("OpenAI-compatible embedding model")) {
-    return "agents.defaults.memorySearch.model";
+    return "memory.search.model";
   }
-  return "agents.defaults.memorySearch.provider";
+  return "memory.search.provider";
 }
 
 async function collectMemorySearchHealthFindings(

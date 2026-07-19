@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryQmdUpdateConfig } from "../config/types.memory.js";
+import type { MemorySearchConfig } from "../config/types.tools.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 
 const { getMemorySearchManagerMock, resolveMemorySearchConfigMock } = vi.hoisted(() => ({
@@ -33,10 +34,11 @@ import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 function createQmdConfig(
   agents: OpenClawConfig["agents"],
   update: MemoryQmdUpdateConfig = { startup: "immediate" },
+  search?: MemorySearchConfig,
 ): OpenClawConfig {
   return {
     agents,
-    memory: { backend: "qmd", qmd: { update } },
+    memory: { backend: "qmd", search, qmd: { update } },
   } as OpenClawConfig;
 }
 
@@ -105,8 +107,7 @@ describe("startGatewayMemoryBackend", () => {
     resolveMemorySearchConfigMock.mockReset();
     resolveMemorySearchConfigMock.mockImplementation((cfg: OpenClawConfig, agentId: string) => {
       const agent = cfg.agents?.list?.find((entry) => entry.id === agentId);
-      const enabled =
-        agent?.memorySearch?.enabled ?? cfg.agents?.defaults?.memorySearch?.enabled ?? true;
+      const enabled = agent?.memory?.search?.enabled ?? cfg.memory?.search?.enabled ?? true;
       return enabled ? {} : null;
     });
   });
@@ -138,7 +139,7 @@ describe("startGatewayMemoryBackend", () => {
       {
         list: [
           { id: "ops", default: true },
-          { id: "main", memorySearch: { enabled: true } },
+          { id: "main", memory: { search: { enabled: true } } },
           { id: "lazy" },
         ],
       },
@@ -158,10 +159,11 @@ describe("startGatewayMemoryBackend", () => {
   it("initializes all qmd agents when memory search is explicitly enabled in defaults", async () => {
     const cfg = createQmdConfig(
       {
-        defaults: { memorySearch: { enabled: true } },
+        defaults: {},
         list: [{ id: "ops", default: true }, { id: "main" }],
       },
       { startup: "immediate", interval: "0s", embedInterval: "0s" },
+      { enabled: true },
     );
 
     const log = await startQmdBackendWithManager(cfg);
@@ -178,7 +180,7 @@ describe("startGatewayMemoryBackend", () => {
       {
         list: [
           { id: "main", default: true },
-          { id: "ops", memorySearch: { enabled: true } },
+          { id: "ops", memory: { search: { enabled: true } } },
         ],
       },
       { startup: "immediate", interval: "0s", embedInterval: "0s" },
@@ -199,10 +201,11 @@ describe("startGatewayMemoryBackend", () => {
   it("skips an unavailable memory owner and initializes healthy agents", async () => {
     const cfg = createQmdConfig(
       {
-        defaults: { memorySearch: { enabled: true } },
+        defaults: {},
         list: [{ id: "cold", default: true }, { id: "healthy" }],
       },
       { startup: "immediate", interval: "0s", embedInterval: "0s" },
+      { enabled: true },
     );
     resolveMemorySearchConfigMock.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
       if (agentId === "cold") {
@@ -210,7 +213,7 @@ describe("startGatewayMemoryBackend", () => {
           ownerKind: "capability",
           ownerId: "memory-provider:cold",
           state: "unavailable",
-          paths: ["agents.defaults.memorySearch.remote.apiKey"],
+          paths: ["memory.search.remote.apiKey"],
           refKeys: ["env:default:MISSING_MEMORY_KEY"],
           reason: "secret reference was not found",
         });
@@ -230,13 +233,14 @@ describe("startGatewayMemoryBackend", () => {
   it("skips agents with memory search disabled", async () => {
     const cfg = createQmdConfig(
       {
-        defaults: { memorySearch: { enabled: true } },
+        defaults: {},
         list: [
           { id: "main", default: true },
-          { id: "ops", memorySearch: { enabled: false } },
+          { id: "ops", memory: { search: { enabled: false } } },
         ],
       },
       { startup: "immediate", interval: "0s", embedInterval: "0s" },
+      { enabled: true },
     );
 
     const log = await startQmdBackendWithManager(cfg);

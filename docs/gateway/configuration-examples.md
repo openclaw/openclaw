@@ -280,14 +280,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         prompt: "HEARTBEAT",
         ackMaxChars: 300,
       },
-      memorySearch: {
-        provider: "gemini",
-        model: "gemini-embedding-001",
-        remote: {
-          apiKey: "${GEMINI_API_KEY}",
-        },
-        extraPaths: ["../team-docs", "/srv/shared-notes"],
-      },
       sandbox: {
         mode: "non-main",
         scope: "session", // preferred over legacy perSession: true
@@ -329,6 +321,17 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         thinkingDefault: "off",
       },
     ],
+  },
+
+  memory: {
+    search: {
+      provider: "gemini",
+      model: "gemini-embedding-001",
+      remote: {
+        apiKey: "${GEMINI_API_KEY}",
+      },
+      extraPaths: ["../team-docs", "/srv/shared-notes"],
+    },
   },
 
   tools: {

@@ -304,13 +304,14 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
+      memory: {
+        search: { experimental: { sessionMemory: true }, sources: ["memory", "sessions"] },
+      },
       agents: {
-        defaults: {
-          memorySearch: { experimental: { sessionMemory: true }, sources: ["memory", "sessions"] },
-        },
+        defaults: {},
         list: [
           { id: "sebby" },
-          { id: "buddy", memorySearch: { experimental: { sessionMemory: false } } },
+          { id: "buddy", memory: { search: { experimental: { sessionMemory: false } } } },
         ],
       },
     } as unknown as OpenClawConfig;
@@ -334,7 +335,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/data-handling-session-transcript-memory-enabled",
-        ocPath: "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+        ocPath: "oc://openclaw.config/memory/search/experimental/sessionMemory",
         requirement:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
       }),
@@ -345,10 +346,8 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
-      agents: {
-        defaults: {
-          memorySearch: { experimental: { sessionMemory: true }, sources: ["sessions"] },
-        },
+      memory: {
+        search: { experimental: { sessionMemory: true }, sources: ["sessions"] },
       },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -371,7 +370,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/data-handling-session-transcript-memory-enabled",
-        ocPath: "oc://openclaw.config/agents/defaults/memorySearch/experimental/sessionMemory",
+        ocPath: "oc://openclaw.config/memory/search/experimental/sessionMemory",
         requirement:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
       }),
@@ -382,14 +381,12 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
-      memory: { qmd: { sessions: { enabled: true } } },
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: false,
-            experimental: { sessionMemory: true },
-            sources: ["sessions"],
-          },
+      memory: {
+        qmd: { sessions: { enabled: true } },
+        search: {
+          enabled: false,
+          experimental: { sessionMemory: true },
+          sources: ["sessions"],
         },
       },
     } as unknown as OpenClawConfig;

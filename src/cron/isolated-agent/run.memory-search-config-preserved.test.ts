@@ -27,18 +27,19 @@ describe("buildCronAgentDefaultsConfig memory search preservation", () => {
       },
     } satisfies MemorySearchConfig;
     const agentDefaults = buildCronAgentDefaultsConfig({
-      defaults: { memorySearch: defaultMemorySearch },
-      agentConfigOverride: { memorySearch: agentMemorySearch },
+      defaults: {},
+      agentConfigOverride: { memory: { search: agentMemorySearch } },
     });
     const runCfg: OpenClawConfig = {
       plugins: { enabled: false },
       agents: {
         defaults: agentDefaults,
-        list: [{ id: "main", default: true, memorySearch: agentMemorySearch }],
+        list: [{ id: "main", default: true, memory: { search: agentMemorySearch } }],
       },
+      memory: { search: defaultMemorySearch },
     };
 
-    expect(agentDefaults.memorySearch).toEqual(defaultMemorySearch);
+    expect(agentDefaults).not.toHaveProperty("memory");
     expect(resolveMemorySearchConfig(runCfg, "main")).toMatchObject({
       provider: "openai",
       model: "text-embedding-3-large",

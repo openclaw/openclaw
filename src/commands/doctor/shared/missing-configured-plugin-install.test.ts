@@ -1118,12 +1118,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        agents: {
-          defaults: {
-            memorySearch: {
-              provider: "local",
-            },
+        memory: {
+          search: {
+            provider: "local",
           },
+        },
+
+        agents: {
+          defaults: {},
         },
       },
       env: {},

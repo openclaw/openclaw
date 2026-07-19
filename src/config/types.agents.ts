@@ -121,7 +121,10 @@ export type AgentConfig = {
   experimental?: AgentDefaultsConfig["experimental"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
-  memorySearch?: MemorySearchConfig;
+  /** Per-agent overrides for the shared top-level memory configuration. */
+  memory?: {
+    search?: MemorySearchConfig;
+  };
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent TTS overrides, deep-merged over messages.tts. */

@@ -273,10 +273,12 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         list: [
           {
             id: "main",
-            memorySearch: {
-              enabled: false,
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "AGENT_MEMORY_API_KEY" },
+            memory: {
+              search: {
+                enabled: false,
+                remote: {
+                  apiKey: { source: "env", provider: "default", id: "AGENT_MEMORY_API_KEY" },
+                },
               },
             },
           },
@@ -287,13 +289,13 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "status",
-      targetIds: new Set(["agents.list[].memorySearch.remote.apiKey"]),
+      targetIds: new Set(["agents.list[].memory.search.remote.apiKey"]),
     });
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(result.resolvedConfig).toEqual(config);
     expect(result.diagnostics).toEqual([
-      "agents.list.0.memorySearch.remote.apiKey: agent or memorySearch override is disabled.",
+      "agents.list.0.memory.search.remote.apiKey: agent or memorySearch override is disabled.",
     ]);
   });
 
@@ -1158,7 +1160,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [],
       diagnostics: ["memory search ref inactive"],
-      inactiveRefPaths: ["agents.list.0.memorySearch.remote.apiKey"],
+      inactiveRefPaths: ["agents.list.0.memory.search.remote.apiKey"],
     });
 
     const config = {
@@ -1166,9 +1168,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         list: [
           {
             id: "main",
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+            memory: {
+              search: {
+                remote: {
+                  apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+                },
               },
             },
           },
@@ -1179,10 +1183,10 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "memory status",
-      targetIds: new Set(["agents.list[].memorySearch.remote.apiKey"]),
+      targetIds: new Set(["agents.list[].memory.search.remote.apiKey"]),
     });
 
-    expect(result.resolvedConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+    expect(result.resolvedConfig.agents?.list?.[0]?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_MEMORY_API_KEY",

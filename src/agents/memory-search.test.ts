@@ -100,12 +100,14 @@ describe("memory search config", () => {
 
   function configWithDefaultProvider(provider: string): OpenClawConfig {
     return asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider,
-          },
+      memory: {
+        search: {
+          provider,
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
   }
@@ -132,20 +134,24 @@ describe("memory search config", () => {
 
   function configWithRemoteDefaults(remote: Record<string, unknown>) {
     return asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote,
-          },
+      memory: {
+        search: {
+          provider: "openai",
+          remote,
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [
           {
             id: "main",
             default: true,
-            memorySearch: {
-              remote: {
-                baseUrl: "https://agent.example/v1",
+            memory: {
+              search: {
+                remote: {
+                  baseUrl: "https://agent.example/v1",
+                },
               },
             },
           },
@@ -178,15 +184,15 @@ describe("memory search config", () => {
 
   it("returns null when disabled", () => {
     const cfg = asConfig({
+      memory: { search: { enabled: true } },
+
       agents: {
-        defaults: {
-          memorySearch: { enabled: true },
-        },
+        defaults: {},
         list: [
           {
             id: "main",
             default: true,
-            memorySearch: { enabled: false },
+            memory: { search: { enabled: false } },
           },
         ],
       },
@@ -206,7 +212,7 @@ describe("memory search config", () => {
         ownerKind: "capability",
         ownerId: runtimeMemorySecretOwnerId("cold"),
         state: "unavailable",
-        paths: ["agents.defaults.memorySearch.remote.apiKey"],
+        paths: ["memory.search.remote.apiKey"],
         refKeys: ["env:default:MISSING_MEMORY_KEY"],
         reason: "secret reference was not found",
       },
@@ -218,15 +224,15 @@ describe("memory search config", () => {
 
   it("returns null sync config when disabled", () => {
     const cfg = asConfig({
+      memory: { search: { enabled: true } },
+
       agents: {
-        defaults: {
-          memorySearch: { enabled: true },
-        },
+        defaults: {},
         list: [
           {
             id: "main",
             default: true,
-            memorySearch: { enabled: false },
+            memory: { search: { enabled: false } },
           },
         ],
       },
@@ -260,7 +266,9 @@ describe("memory search config", () => {
       name: "explicit false with main scope",
       cfg: {
         session: { dmScope: "main" },
-        agents: { defaults: { memorySearch: { rememberAcrossConversations: false } } },
+        memory: { search: { rememberAcrossConversations: false } },
+
+        agents: { defaults: {} },
       },
       expected: false,
     },
@@ -268,7 +276,9 @@ describe("memory search config", () => {
       name: "explicit true with per-peer scope",
       cfg: {
         session: { dmScope: "per-peer" },
-        agents: { defaults: { memorySearch: { rememberAcrossConversations: true } } },
+        memory: { search: { rememberAcrossConversations: true } },
+
+        agents: { defaults: {} },
       },
       expected: true,
     },
@@ -303,7 +313,7 @@ describe("memory search config", () => {
         list: [
           {
             id: "personal",
-            memorySearch: { rememberAcrossConversations: true },
+            memory: { search: { rememberAcrossConversations: true } },
           },
         ],
       },
@@ -323,9 +333,11 @@ describe("memory search config", () => {
         list: [
           {
             id: "personal",
-            memorySearch: {
-              rememberAcrossConversations: true,
-              sources: ["sessions"],
+            memory: {
+              search: {
+                rememberAcrossConversations: true,
+                sources: ["sessions"],
+              },
             },
           },
         ],
@@ -340,14 +352,14 @@ describe("memory search config", () => {
 
   it("lets a per-agent false override a default true", () => {
     const cfg = asConfig({
+      memory: { search: { rememberAcrossConversations: true } },
+
       agents: {
-        defaults: {
-          memorySearch: { rememberAcrossConversations: true },
-        },
+        defaults: {},
         list: [
           {
             id: "shared",
-            memorySearch: { rememberAcrossConversations: false },
+            memory: { search: { rememberAcrossConversations: false } },
           },
         ],
       },
@@ -362,12 +374,14 @@ describe("memory search config", () => {
 
   it("defaults provider to openai when unspecified", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: true,
-          },
+      memory: {
+        search: {
+          enabled: true,
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -415,8 +429,10 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(
       asConfig({
         plugins: { enabled: true },
+        memory: { search: { provider: "none", fallback: "deepinfra" } },
+
         agents: {
-          defaults: { memorySearch: { provider: "none", fallback: "deepinfra" } },
+          defaults: {},
         },
       }),
       "main",
@@ -429,13 +445,15 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(
       asConfig({
         plugins: { enabled: true },
-        agents: {
-          defaults: {
-            memorySearch: {
-              provider: "none",
-              multimodal: { enabled: true, modalities: ["image"] },
-            },
+        memory: {
+          search: {
+            provider: "none",
+            multimodal: { enabled: true, modalities: ["image"] },
           },
+        },
+
+        agents: {
+          defaults: {},
         },
       }),
       "main",
@@ -458,12 +476,14 @@ describe("memory search config", () => {
           },
         },
       },
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama-5080",
-          },
+      memory: {
+        search: {
+          provider: "ollama-5080",
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -477,22 +497,24 @@ describe("memory search config", () => {
   it("resolves sync config without consulting embedding providers", () => {
     clearMemoryEmbeddingProviders();
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            sync: {
-              onSessionStart: false,
-              onSearch: true,
-              watch: false,
-              sessions: {
-                deltaBytes: 321,
-                deltaMessages: 7,
-                postCompactionForce: false,
-              },
+      memory: {
+        search: {
+          provider: "openai",
+          sync: {
+            onSessionStart: false,
+            onSearch: true,
+            watch: false,
+            sessions: {
+              deltaBytes: 321,
+              deltaMessages: 7,
+              postCompactionForce: false,
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -513,15 +535,17 @@ describe("memory search config", () => {
 
   it("uses configured embeddingBatchTimeoutSeconds when set", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            sync: {
-              embeddingBatchTimeoutSeconds: 600,
-            },
+      memory: {
+        search: {
+          provider: "openai",
+          sync: {
+            embeddingBatchTimeoutSeconds: 600,
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -530,29 +554,33 @@ describe("memory search config", () => {
 
   it("merges defaults and overrides", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            store: {
-              vector: {
-                enabled: false,
-                extensionPath: "/opt/sqlite-vec.dylib",
-              },
+      memory: {
+        search: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          store: {
+            vector: {
+              enabled: false,
+              extensionPath: "/opt/sqlite-vec.dylib",
             },
-            query: { maxResults: 4, minScore: 0.2 },
           },
+          query: { maxResults: 4, minScore: 0.2 },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [
           {
             id: "main",
             default: true,
-            memorySearch: {
-              query: { maxResults: 8 },
-              store: {
-                vector: {
-                  enabled: true,
+            memory: {
+              search: {
+                query: { maxResults: 8 },
+                store: {
+                  vector: {
+                    enabled: true,
+                  },
                 },
               },
             },
@@ -571,18 +599,22 @@ describe("memory search config", () => {
 
   it("merges extra memory paths from defaults and overrides", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            extraPaths: ["/shared/notes", " docs "],
-          },
+      memory: {
+        search: {
+          extraPaths: ["/shared/notes", " docs "],
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [
           {
             id: "main",
             default: true,
-            memorySearch: {
-              extraPaths: ["/shared/notes", "../team-notes"],
+            memory: {
+              search: {
+                extraPaths: ["/shared/notes", "../team-notes"],
+              },
             },
           },
         ],
@@ -594,18 +626,20 @@ describe("memory search config", () => {
 
   it("normalizes multimodal settings", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "gemini",
-            model: "gemini-embedding-2-preview",
-            multimodal: {
-              enabled: true,
-              modalities: ["all"],
-              maxFileBytes: 8192,
-            },
+      memory: {
+        search: {
+          provider: "gemini",
+          model: "gemini-embedding-2-preview",
+          multimodal: {
+            enabled: true,
+            modalities: ["all"],
+            maxFileBytes: 8192,
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -618,17 +652,19 @@ describe("memory search config", () => {
 
   it("keeps an explicit empty multimodal modalities list empty", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "gemini",
-            model: "gemini-embedding-2-preview",
-            multimodal: {
-              enabled: true,
-              modalities: [],
-            },
+      memory: {
+        search: {
+          provider: "gemini",
+          model: "gemini-embedding-2-preview",
+          multimodal: {
+            enabled: true,
+            modalities: [],
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -638,18 +674,20 @@ describe("memory search config", () => {
 
   it("does not enforce multimodal provider validation when no modalities are active", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            fallback: "openai",
-            multimodal: {
-              enabled: true,
-              modalities: [],
-            },
+      memory: {
+        search: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          fallback: "openai",
+          multimodal: {
+            enabled: true,
+            modalities: [],
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -658,36 +696,40 @@ describe("memory search config", () => {
 
   it("rejects multimodal memory on unsupported providers", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            multimodal: { enabled: true, modalities: ["image"] },
-          },
+      memory: {
+        search: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          multimodal: { enabled: true, modalities: ["image"] },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
-      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+      /memory\.search\.multimodal requires a provider adapter that supports multimodal embeddings/,
     );
   });
 
   it("rejects multimodal memory on generic OpenAI-compatible providers", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai-compatible",
-            model: "text-embedding-bge-m3",
-            remote: { baseUrl: "http://127.0.0.1:1234/v1" },
-            multimodal: { enabled: true, modalities: ["image"] },
-          },
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          model: "text-embedding-bge-m3",
+          remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+          multimodal: { enabled: true, modalities: ["image"] },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
-      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+      /memory\.search\.multimodal requires a provider adapter that supports multimodal embeddings/,
     );
   });
 
@@ -701,18 +743,20 @@ describe("memory search config", () => {
           },
         },
       },
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "localEmbeddings",
-            model: "text-embedding-bge-m3",
-            multimodal: { enabled: true, modalities: ["image"] },
-          },
+      memory: {
+        search: {
+          provider: "localEmbeddings",
+          model: "text-embedding-bge-m3",
+          multimodal: { enabled: true, modalities: ["image"] },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
-      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+      /memory\.search\.multimodal requires a provider adapter that supports multimodal embeddings/,
     );
   });
 
@@ -720,14 +764,16 @@ describe("memory search config", () => {
     clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders({ includeGemini: false });
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "gemini",
-            model: "gemini-embedding-2-preview",
-            multimodal: { enabled: true, modalities: ["image"] },
-          },
+      memory: {
+        search: {
+          provider: "gemini",
+          model: "gemini-embedding-2-preview",
+          multimodal: { enabled: true, modalities: ["image"] },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -741,19 +787,21 @@ describe("memory search config", () => {
 
   it("rejects multimodal memory when fallback is configured", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "gemini",
-            model: "gemini-embedding-2-preview",
-            fallback: "openai",
-            multimodal: { enabled: true, modalities: ["image"] },
-          },
+      memory: {
+        search: {
+          provider: "gemini",
+          model: "gemini-embedding-2-preview",
+          fallback: "openai",
+          multimodal: { enabled: true, modalities: ["image"] },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
-      /memorySearch\.multimodal does not support memorySearch\.fallback/,
+      /memory\.search\.multimodal does not support memory\.search\.fallback/,
     );
   });
 
@@ -765,18 +813,20 @@ describe("memory search config", () => {
 
   it("normalizes remote batch timer config once before provider adapters receive it", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: {
-              batch: {
-                pollIntervalMs: Number.MAX_SAFE_INTEGER,
-                timeoutMinutes: Number.MAX_SAFE_INTEGER,
-              },
+      memory: {
+        search: {
+          provider: "openai",
+          remote: {
+            batch: {
+              pollIntervalMs: Number.MAX_SAFE_INTEGER,
+              timeoutMinutes: Number.MAX_SAFE_INTEGER,
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -788,17 +838,19 @@ describe("memory search config", () => {
 
   it("keeps the default remote batch poll delay for zero intervals", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: {
-              batch: {
-                pollIntervalMs: 0,
-              },
+      memory: {
+        search: {
+          provider: "openai",
+          remote: {
+            batch: {
+              pollIntervalMs: 0,
             },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -842,20 +894,24 @@ describe("memory search config", () => {
 
   it("merges memory search input_type overrides", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            inputType: "passage",
-            queryInputType: "query",
-          },
+      memory: {
+        search: {
+          provider: "openai",
+          inputType: "passage",
+          queryInputType: "query",
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [
           {
             id: "main",
             default: true,
-            memorySearch: {
-              documentInputType: "document",
+            memory: {
+              search: {
+                documentInputType: "document",
+              },
             },
           },
         ],
@@ -869,12 +925,14 @@ describe("memory search config", () => {
 
   it("defaults session delta thresholds", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-          },
+      memory: {
+        search: {
+          provider: "openai",
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -924,20 +982,24 @@ describe("memory search config", () => {
 
   it("gates session sources behind experimental flag", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            sources: ["memory", "sessions"],
-          },
+      memory: {
+        search: {
+          provider: "openai",
+          sources: ["memory", "sessions"],
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [
           {
             id: "main",
             default: true,
-            memorySearch: {
-              rememberAcrossConversations: false,
-              experimental: { sessionMemory: false },
+            memory: {
+              search: {
+                rememberAcrossConversations: false,
+                experimental: { sessionMemory: false },
+              },
             },
           },
         ],
@@ -949,14 +1011,16 @@ describe("memory search config", () => {
 
   it("allows session sources when experimental flag is enabled", () => {
     const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            sources: ["memory", "sessions"],
-            experimental: { sessionMemory: true },
-          },
+      memory: {
+        search: {
+          provider: "openai",
+          sources: ["memory", "sessions"],
+          experimental: { sessionMemory: true },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");

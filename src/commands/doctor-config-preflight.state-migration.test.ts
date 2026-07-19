@@ -905,15 +905,17 @@ describe("runDoctorConfigPreflight state migration", () => {
     const parsedConfig = { $include: "memory-search.json" };
     const resolvedConfig = {
       cron: { webhook: "https://example.invalid/cron-finished" },
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: "/custom/memory-{agentId}.sqlite",
-              vector: { enabled: false },
-            },
+      memory: {
+        search: {
+          store: {
+            path: "/custom/memory-{agentId}.sqlite",
+            vector: { enabled: false },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main" }],
       },
     };
@@ -925,9 +927,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       parsed: parsedConfig,
       legacyIssues: [
         {
-          path: "agents.defaults.memorySearch.store.path",
+          path: "memory.search.store.path",
           message:
-            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+            "memory.search.store.path is legacy; memory indexes now live in each agent database.",
         },
       ],
       warnings: [],
@@ -942,14 +944,15 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
         cron: expect.objectContaining({ webhook: "https://example.invalid/cron-finished" }),
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: {
-              store: {
-                vector: { enabled: false },
-              },
+        memory: expect.objectContaining({
+          search: expect.objectContaining({
+            store: {
+              vector: { enabled: false },
             },
           }),
+        }),
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({}),
           list: [{ id: "main" }],
         }),
       }),
@@ -957,14 +960,15 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: {
-              store: {
-                vector: { enabled: false },
-              },
+        memory: expect.objectContaining({
+          search: expect.objectContaining({
+            store: {
+              vector: { enabled: false },
             },
           }),
+        }),
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({}),
           list: [{ id: "main" }],
         }),
       }),
@@ -978,15 +982,17 @@ describe("runDoctorConfigPreflight state migration", () => {
   it("keeps plugin state migrations for partially valid legacy config repairs", async () => {
     const resolvedConfig = {
       gateway: { mode: "local", port: "not-a-port" },
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: "/custom/memory-{agentId}.sqlite",
-              vector: { enabled: false },
-            },
+      memory: {
+        search: {
+          store: {
+            path: "/custom/memory-{agentId}.sqlite",
+            vector: { enabled: false },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main" }],
       },
     };
@@ -998,9 +1004,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       parsed: resolvedConfig,
       legacyIssues: [
         {
-          path: "agents.defaults.memorySearch.store.path",
+          path: "memory.search.store.path",
           message:
-            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+            "memory.search.store.path is legacy; memory indexes now live in each agent database.",
         },
       ],
       warnings: [],

@@ -48,7 +48,7 @@ Anthropic has confirmed that Claude CLI reuse (including `claude -p`) is a sanct
 
 - **Auth profiles**: per-agent, stored in `auth-profiles.json`.
 - **Environment variables**: for example `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`.
-- **Config**: `models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`, `plugins.entries.firecrawl.config.webFetch.apiKey`, `agents.defaults.memorySearch.*`, `talk.providers.*.apiKey`.
+- **Config**: `models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`, `plugins.entries.firecrawl.config.webFetch.apiKey`, `memory.search.*`, `talk.providers.*.apiKey`.
 - **Skills**: `skills.entries.<name>.apiKey`, which may export the key to the skill process env.
 
 ## Features that can spend keys
@@ -71,7 +71,7 @@ See [Image generation](/tools/image-generation) and [Video generation](/tools/vi
 
 ### Memory embeddings and semantic search
 
-Semantic memory search uses embedding APIs when `agents.defaults.memorySearch.provider` names a remote adapter (for example `openai`, `gemini`, `voyage`, `mistral`, `deepinfra`, `github-copilot`, `amazon-bedrock`). `memorySearch.provider = "lmstudio"` or `"ollama"` runs against a local/self-hosted server and typically has no hosted billing. `memorySearch.provider = "local"` keeps everything on-device with no API usage. An optional `memorySearch.fallback` provider can cover local-embedding failures.
+Semantic memory search uses embedding APIs when `memory.search.provider` names a remote adapter (for example `openai`, `gemini`, `voyage`, `mistral`, `deepinfra`, `github-copilot`, `amazon-bedrock`). `memory.search.provider = "lmstudio"` or `"ollama"` runs against a local/self-hosted server and typically has no hosted billing. `memory.search.provider = "local"` keeps everything on-device with no API usage. An optional `memory.search.fallback` provider can cover local-embedding failures.
 
 See [Memory](/concepts/memory).
 

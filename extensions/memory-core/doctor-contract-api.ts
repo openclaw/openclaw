@@ -678,31 +678,23 @@ function readAgentMemorySearch(
 ): Record<string, unknown> | undefined {
   const agents = asRecord(asRecord(config)?.agents);
   const entries = Array.isArray(agents?.list) ? agents.list : [];
-  return asRecord(
-    entries
-      .map(asRecord)
-      .find(
-        (entry) =>
-          normalizeAgentId(typeof entry?.id === "string" ? entry.id : undefined) === agentId,
-      )?.memorySearch,
-  );
+  const entry = entries
+    .map(asRecord)
+    .find(
+      (candidate) =>
+        normalizeAgentId(typeof candidate?.id === "string" ? candidate.id : undefined) === agentId,
+    );
+  return asRecord(asRecord(entry?.memory)?.search);
 }
 
 function readDefaultMemorySearch(config: unknown): Record<string, unknown> | undefined {
-  const agents = asRecord(asRecord(config)?.agents);
-  return asRecord(asRecord(agents?.defaults)?.memorySearch);
-}
-
-function readTopLevelMemorySearch(config: unknown): Record<string, unknown> | undefined {
-  return asRecord(asRecord(config)?.memorySearch);
+  return asRecord(asRecord(asRecord(config)?.memory)?.search);
 }
 
 function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): string | undefined {
   const defaultVector = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.vector);
   const agentVector = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.vector);
-  const topLevelVector = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.vector);
-  const raw =
-    agentVector?.extensionPath ?? defaultVector?.extensionPath ?? topLevelVector?.extensionPath;
+  const raw = agentVector?.extensionPath ?? defaultVector?.extensionPath;
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
@@ -712,8 +704,7 @@ function readMemorySearchVectorEnabled(config: unknown, agentId: string): boolea
   }
   const defaultVector = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.vector);
   const agentVector = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.vector);
-  const topLevelVector = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.vector);
-  const raw = agentVector?.enabled ?? defaultVector?.enabled ?? topLevelVector?.enabled;
+  const raw = agentVector?.enabled ?? defaultVector?.enabled;
   return typeof raw === "boolean" ? raw : true;
 }
 

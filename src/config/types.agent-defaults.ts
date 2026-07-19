@@ -12,7 +12,6 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
-import type { MemorySearchConfig } from "./types.tools.js";
 
 /** Workspace bootstrap-file injection policy for agent system prompts. */
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
@@ -329,8 +328,6 @@ export type AgentDefaultsConfig = {
      */
     executionContract?: EmbeddedAgentExecutionContract;
   };
-  /** Vector memory search configuration (per-agent overrides supported). */
-  memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: AgentThinkingLevel;
   /** Default verbose level when no /verbose directive is present. */

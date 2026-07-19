@@ -95,8 +95,8 @@ describe("target registry pattern helpers", () => {
     const root = {
       agents: {
         list: [
-          { memorySearch: { remote: { apiKey: "a" } } },
-          { memorySearch: { remote: { apiKey: "b" } } },
+          { memory: { search: { remote: { apiKey: "a" } } } },
+          { memory: { search: { remote: { apiKey: "b" } } } },
         ],
       },
       talk: {
@@ -109,7 +109,7 @@ describe("target registry pattern helpers", () => {
 
     const arrayMatches = expandPathTokens(
       root,
-      compilePattern("agents.list[].memorySearch.remote.apiKey").pathTokens,
+      compilePattern("agents.list[].memory.search.remote.apiKey").pathTokens,
     );
     expect(
       arrayMatches.map((entry) => ({
@@ -119,12 +119,12 @@ describe("target registry pattern helpers", () => {
       })),
     ).toEqual([
       {
-        segments: "agents.list.0.memorySearch.remote.apiKey",
+        segments: "agents.list.0.memory.search.remote.apiKey",
         captures: ["0"],
         value: "a",
       },
       {
-        segments: "agents.list.1.memorySearch.remote.apiKey",
+        segments: "agents.list.1.memory.search.remote.apiKey",
         captures: ["1"],
         value: "b",
       },

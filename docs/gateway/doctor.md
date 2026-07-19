@@ -296,7 +296,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     | `agents.defaults/list[].embeddedPi`                                                              | `embeddedAgent`                                                              |
     | `agents.defaults/list[].sandbox.perSession`                                                      | `sandbox.scope`                                                              |
     | `agents.defaults.llm`                                                                             | removed (use `models.providers.<id>.timeoutSeconds` for slow model/provider timeouts, kept below the agent/run timeout ceiling) |
-    | top-level `memorySearch`                                                                         | `agents.defaults.memorySearch`                                              |
+    | top-level `memorySearch`, `agents.defaults.memorySearch`                                         | `memory.search`                                                             |
+    | `agents.list[].memorySearch`                                                                     | `agents.list[].memory.search`                                               |
     | `memorySearch.provider: "auto"`                                                                  | `"openai"`                                                                    |
     | `memorySearch.store.path` (any level)                                                            | removed (memory indexes live in each agent database)                       |
     | top-level `heartbeat`                                                                            | `agents.defaults.heartbeat` / `channels.defaults.heartbeat`                 |

@@ -365,7 +365,7 @@ vi.mock("../config/legacy.js", () => {
         addIssue(
           issues,
           ["memorySearch"],
-          'memorySearch is legacy; use agents.defaults.memorySearch. Run "openclaw doctor --fix".',
+          'memorySearch is legacy; use memory.search. Run "openclaw doctor --fix".',
         );
       }
       const gateway = asRecord(root.gateway);

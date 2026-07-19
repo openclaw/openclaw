@@ -40,7 +40,7 @@ scheduled sweeps never seem to run, the managed dreaming cron depends on the
 default agent's heartbeat firing to trigger reconciliation. See
 [Dreaming](/concepts/dreaming) for scheduling details.
 
-Status also lists any extra search paths from `agents.defaults.memorySearch.extraPaths`.
+Status also lists any extra search paths from `memory.search.extraPaths`.
 
 ## `memory index`
 
