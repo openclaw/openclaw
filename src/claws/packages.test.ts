@@ -38,6 +38,7 @@ function plan(
       mcpServerActions: 0,
       cronJobActions: 0,
       blockedActions: 0,
+      capabilityEscalations: 0,
     },
     actions: packages.map((pkg) => ({
       kind: "package",
@@ -70,6 +71,8 @@ const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
   return {
     ok: true as const,
     pluginId,
+    targetDir: "/tmp/plugin",
+    extensions: [],
     clawhub: { integrity: pluginIntegrity },
   };
 });
