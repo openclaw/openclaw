@@ -772,6 +772,7 @@ export async function loadCompactHooksHarness(): Promise<{
     getApiKeyForModel: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
+    providerHasPluginSyntheticAuthHook: () => false,
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
     resolveModelAuthMode: vi.fn(() => "env"),
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
