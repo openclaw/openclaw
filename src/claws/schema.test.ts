@@ -434,7 +434,12 @@ describe("readClawManifestFile", () => {
     );
   });
 
-  it("returns diagnostics when CLAW.md aliases cannot be resolved", async () => {
+  it.each([
+    ["anchor", "agent: &agent { id: triage }"],
+    ["alias", "agent: { id: &id triage, name: *id }"],
+    ["merge key", "agent: { <<: { id: triage } }"],
+    ["explicit tag", "agent: { id: !!str triage }"],
+  ])("rejects CLAW.md YAML %s", async (_label, declaration) => {
     const root = tempDirs.make("openclaw-claw-markdown-alias-");
     const path = join(root, "CLAW.md");
     await writeFile(
@@ -442,12 +447,11 @@ describe("readClawManifestFile", () => {
       [
         "---",
         "schemaVersion: 1",
-        "agent: *agent",
+        declaration,
         "workspace: {}",
         "packages: []",
         "mcpServers: {}",
         "cronJobs: []",
-        "anchor: &agent { id: triage }",
         "---",
       ].join("\n"),
       "utf8",
@@ -457,8 +461,36 @@ describe("readClawManifestFile", () => {
 
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "invalid_claw_frontmatter" }),
+      expect.objectContaining({ code: "unsupported_claw_yaml_feature" }),
     );
+  });
+
+  it("hashes original CLAW.md bytes rather than decoded text", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-original-bytes-");
+    const path = join(root, "CLAW.md");
+    const frontmatter = Buffer.from(
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent: { id: triage }",
+        "workspace: {}",
+        "packages: []",
+        "mcpServers: {}",
+        "cronJobs: []",
+        "---",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x80])]));
+    const first = await readClawManifestFile(path);
+    await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x81])]));
+    const second = await readClawManifestFile(path);
+
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) {
+      throw new Error("expected CLAW.md bodies to parse");
+    }
+    expect(second.source.integrity).not.toBe(first.source.integrity);
   });
 
   it("synthesizes explicit development identity for a standalone manifest", async () => {
