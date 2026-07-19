@@ -95,11 +95,6 @@ function resolveProviderDiscoveryFilter(params: {
   providerIds?: readonly string[];
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
-  const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
-  if (testRaw) {
-    const ids = normalizeStringEntries(testRaw.split(","));
-    return ids.length > 0 ? uniqueStrings(ids) : undefined;
-  }
   const scopedProviderIds = params.providerIds
     ? normalizeStringEntries([...params.providerIds])
     : undefined;

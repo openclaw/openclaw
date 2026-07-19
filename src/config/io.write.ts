@@ -1,6 +1,7 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { isVerbose } from "../global-state.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -254,16 +255,16 @@ export async function writeConfigFileFromContext(
     gatewayModeAfter,
   });
 
-  const shouldLogInVitest = (name: string) => deps.env.VITEST !== "true" || deps.env[name] === "1";
+  const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";
   const logConfigOverwrite = () => {
     if (
       !snapshot.exists ||
       options.skipOutputLogs ||
-      !shouldLogInVitest("OPENCLAW_TEST_CONFIG_OVERWRITE_LOG")
+      (isVitestRuntimeEnv(deps.env) && !readTestLogFlag("OPENCLAW_TEST_CONFIG_OVERWRITE_LOG"))
     ) {
       return;
     }
-    const testLog = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
+    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_OVERWRITE_LOG");
     if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !testLog) {
       return;
     }
@@ -280,13 +281,11 @@ export async function writeConfigFileFromContext(
     if (
       suspiciousReasons.length === 0 ||
       options.skipOutputLogs ||
-      !shouldLogInVitest("OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG")
+      (isVitestRuntimeEnv(deps.env) && deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG !== "1")
     ) {
       return;
     }
-    const testLog = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
-    const showMissingMeta =
-      isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || testLog;
+    const showMissingMeta = isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1";
     const visibleReasons = showMissingMeta
       ? suspiciousReasons
       : suspiciousReasons.filter((reason) => reason !== "missing-meta-before-write");

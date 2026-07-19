@@ -119,6 +119,13 @@ export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolea
   );
 }
 
+/** Enables the shared fast-test shortcuts only inside a detected test runtime. */
+export function isFastTestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  const isTestRuntime =
+    isVitestRuntimeEnv(env) || (env !== process.env && isVitestRuntimeEnv(process.env));
+  return isTestRuntime && env.OPENCLAW_TEST_FAST === "1";
+}
+
 /** Applies process-wide env normalization before runtime configuration is read. */
 export function normalizeEnv(): void {
   normalizeZaiEnv(process.env);

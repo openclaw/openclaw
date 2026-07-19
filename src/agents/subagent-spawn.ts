@@ -21,6 +21,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
@@ -784,7 +785,7 @@ async function waitForProvisionalSessionDeletion(
       return;
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -841,7 +842,7 @@ async function terminateAcceptedCollectorRun(params: {
       }
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -1827,10 +1828,7 @@ export async function spawnSubagentDirect(
             } catch {
               // The child is stopped; retry only the durable terminal write.
               await new Promise<void>((resolve) => {
-                const timer = setTimeout(
-                  resolve,
-                  process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000,
-                );
+                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
                 timer.unref?.();
               });
             }
