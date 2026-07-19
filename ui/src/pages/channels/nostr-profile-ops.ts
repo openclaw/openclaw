@@ -2,6 +2,8 @@
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
 
+const NOSTR_PROFILE_TIMEOUT_MS = 15_000;
+
 export function parseValidationErrors(details: unknown): Record<string, string> {
   if (!Array.isArray(details)) {
     return {};
@@ -40,6 +42,7 @@ export async function putNostrProfile(params: {
       ...params.headers,
     },
     body: JSON.stringify(params.values),
+    signal: AbortSignal.timeout(NOSTR_PROFILE_TIMEOUT_MS),
   });
   const data = (await response.json().catch(() => null)) as {
     ok?: boolean;
@@ -61,6 +64,7 @@ export async function importNostrProfile(params: {
       ...params.headers,
     },
     body: JSON.stringify({ autoMerge: true }),
+    signal: AbortSignal.timeout(NOSTR_PROFILE_TIMEOUT_MS),
   });
   const data = (await response.json().catch(() => null)) as {
     ok?: boolean;
