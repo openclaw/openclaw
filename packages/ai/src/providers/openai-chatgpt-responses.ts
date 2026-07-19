@@ -84,6 +84,13 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reac
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
+// `globalThis.WebSocket` (standard WebSocket API) does not support the
+// `ws`-library `handshakeTimeout` option.  Use setTimeout to enforce a
+// connection-phase deadline so a TCP socket that accepts but never completes
+// the HTTP upgrade does not leave the connect promise pending indefinitely.
+// Matches the 30s handshakeTimeout used by Discord, Signal, QQBot, etc.
+const WEBSOCKET_CONNECT_HANDSHAKE_MS = 30_000;
+
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
   "completed",
   "incomplete",
@@ -1044,6 +1051,7 @@ async function connectWebSocket(
   return new Promise<WebSocketLike>((resolve, reject) => {
     let settled = false;
     let socket: WebSocketLike;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
 
     try {
       socket = new WebSocketCtor(url, { headers: wsHeaders });
@@ -1051,6 +1059,22 @@ async function connectWebSocket(
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
     }
+
+    // 30s handshake timeout guards against an indefinite hang when the
+    // remote accepts TCP but never completes the HTTP upgrade.
+    connectTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      socket.close(1000, "handshake_timeout");
+      reject(
+        new Error(
+          `WebSocket connection to OpenAI Responses API timed out after ${WEBSOCKET_CONNECT_HANDSHAKE_MS}ms`,
+        ),
+      );
+    }, WEBSOCKET_CONNECT_HANDSHAKE_MS);
 
     const onOpen: WebSocketListener = () => {
       if (settled) {
@@ -1089,6 +1113,10 @@ async function connectWebSocket(
     };
 
     const cleanup = () => {
+      if (connectTimer !== undefined) {
+        clearTimeout(connectTimer);
+        connectTimer = undefined;
+      }
       socket.removeEventListener("open", onOpen);
       socket.removeEventListener("error", onError);
       socket.removeEventListener("close", onClose);
