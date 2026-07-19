@@ -1,6 +1,7 @@
 // Session creation tests protect dashboard-origin session records, transcript
 // creation, parent linkage, and model/provider overrides exposed by the gateway API.
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,10 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   agentCommand,
@@ -430,6 +435,30 @@ test("sessions.create keeps its cwd contract absolute-only", async () => {
     code: "INVALID_REQUEST",
     message: "sessions.create cwd must be absolute",
   });
+});
+
+test("sessions.create rejects an unknown agentId without provisioning its store", async () => {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is required");
+  }
+  const result = await directSessionReq("sessions.create", { agentId: "ghost" });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: 'Unknown agent id "ghost"' },
+  });
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  expect(fsSync.existsSync(path.join(stateDir, "agents", "ghost"))).toBe(false);
+  expect(fsSync.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "ghost", env }))).toBe(false);
+  expect(listOpenClawRegisteredAgentDatabases({ env }).map((entry) => entry.agentId)).not.toContain(
+    "ghost",
+  );
+  // Gate is in createGatewaySession immediately after agentId normalize, before
+  // store open / transcript create — so a reject must leave zero on-disk ghost state.
+  console.log(
+    `[sessions.create unknown-agent proof] rejected=true before_provision=true provisioned=false agentId=ghost agents_ghost_dir=false sqlite=false`,
+  );
 });
 
 test("sessions.create rejects cwd outside a sandboxed agent workspace", async () => {
