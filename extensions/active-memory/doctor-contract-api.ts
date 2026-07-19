@@ -49,7 +49,10 @@ async function readLegacyFileSafely(filePath: string): Promise<string> {
   return await fs.readFile(filePath, "utf8");
 }
 
-async function readLegacyToggleEntries(filePath: string): Promise<ActiveMemoryToggleEntry[]> {
+async function readLegacyToggleEntries(
+  filePath: string,
+  warnings: string[],
+): Promise<ActiveMemoryToggleEntry[]> {
   try {
     const parsed = JSON.parse(await readLegacyFileSafely(filePath)) as unknown;
     if (!parsed || typeof parsed !== "object") {
@@ -71,7 +74,13 @@ async function readLegacyToggleEntries(filePath: string): Promise<ActiveMemoryTo
       entries.push({ sessionKey, disabled: true, updatedAt });
     }
     return entries;
-  } catch {
+  } catch (err) {
+    // ENOENT and invalid JSON are expected when there is no legacy state.
+    // Oversized files are reported as a warning so the user knows their
+    // existing state was not migrated.
+    if (err instanceof Error && err.message.includes("file too large")) {
+      warnings.push(err.message);
+    }
     return [];
   }
 }
@@ -83,8 +92,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Active Memory session toggles",
     async detectLegacyState(params) {
       const filePath = resolveToggleStatePath(params.stateDir);
-      const entries = await readLegacyToggleEntries(filePath);
+      const warnings: string[] = [];
+      const entries = await readLegacyToggleEntries(filePath, warnings);
       if (entries.length === 0) {
+        if (warnings.length > 0) {
+          return { preview: warnings };
+        }
         return null;
       }
       return {
@@ -97,7 +110,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = resolveToggleStatePath(params.stateDir);
-      const entries = await readLegacyToggleEntries(filePath);
+      const entries = await readLegacyToggleEntries(filePath, warnings);
       if (entries.length === 0) {
         return { changes, warnings };
       }

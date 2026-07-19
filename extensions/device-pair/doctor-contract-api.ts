@@ -36,12 +36,21 @@ async function readLegacyNotifyFileSafely(filePath: string): Promise<string> {
   return await fs.readFile(filePath, "utf8");
 }
 
-async function readLegacyNotifyState(filePath: string): Promise<LegacyNotifyStateFile | null> {
+async function readLegacyNotifyState(
+  filePath: string,
+  warnings: string[],
+): Promise<LegacyNotifyStateFile | null> {
   try {
     return normalizeLegacyNotifyState(
       JSON.parse(await readLegacyNotifyFileSafely(filePath)) as unknown,
     );
-  } catch {
+  } catch (err) {
+    // ENOENT is expected when there is no legacy state to migrate.
+    // Oversized files are reported as a warning so the user knows their
+    // existing state was not migrated.
+    if (err instanceof Error && err.message.includes("file too large")) {
+      warnings.push(err.message);
+    }
     return null;
   }
 }
@@ -52,8 +61,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Device Pair notify subscribers",
     async detectLegacyState(params) {
       const filePath = resolveLegacyNotifyStatePath(params.stateDir);
-      const state = await readLegacyNotifyState(filePath);
+      const warnings: string[] = [];
+      const state = await readLegacyNotifyState(filePath, warnings);
       if (!state || state.subscribers.length === 0) {
+        if (warnings.length > 0) {
+          return { preview: warnings };
+        }
         return null;
       }
       return {
@@ -66,7 +79,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = resolveLegacyNotifyStatePath(params.stateDir);
-      const state = await readLegacyNotifyState(filePath);
+      const state = await readLegacyNotifyState(filePath, warnings);
       if (!state || state.subscribers.length === 0) {
         return { changes, warnings };
       }

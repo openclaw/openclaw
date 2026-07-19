@@ -437,8 +437,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         let legacy: ReefIdentityBinding | ReefSetupSession | undefined;
         try {
           legacy = source.parse(JSON.parse(await readLegacyReefFileSafely(filePath)) as unknown);
-        } catch {
-          // The structural validation below owns the fail-closed warning.
+        } catch (err) {
+          // The structural validation below owns the fail-closed warning, but
+          // oversized-file errors get a descriptive message instead of "invalid JSON".
+          if (err instanceof Error && err.message.includes("file too large")) {
+            warnings.push(err.message);
+          }
         }
         if (!legacy) {
           warnings.push(`Failed importing ${source.label}: invalid JSON; left source in place`);
