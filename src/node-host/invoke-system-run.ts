@@ -61,7 +61,7 @@ import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
   revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
+  resolveMutableFileOperandSnapshot,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
 import type {
@@ -879,11 +879,11 @@ async function revalidateSystemRunApprovedPathBindings(
   }
   if (
     phase.approvalPlan?.mutableFileOperand &&
-    !revalidateApprovedMutableFileOperand({
+    !(await revalidateApprovedMutableFileOperand({
       snapshot: phase.approvalPlan.mutableFileOperand,
       argv: phase.argv,
       cwd: phase.cwd,
-    })
+    }))
   ) {
     logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
     await sendSystemRunDenied(opts, phase.execution, {
@@ -903,7 +903,7 @@ async function executeSystemRunPhase(
     return;
   }
   const expectedMutableFileOperand = phase.approvalPlan
-    ? resolveMutableFileOperandSnapshotSync({
+    ? await resolveMutableFileOperandSnapshot({
         argv: phase.argv,
         cwd: phase.cwd,
         shellCommand: phase.shellPayload,

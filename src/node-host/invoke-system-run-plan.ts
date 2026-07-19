@@ -272,27 +272,22 @@ function shouldPinExecutableForApproval(params: {
 // Hash arbitrarily large regular script operands without loading the whole
 // file into memory. This keeps the approval hot path bounded while preserving
 // the existing approval contract for large scripts.
-const APPROVAL_SCRIPT_HASH_CHUNK_BYTES = 64 * 1024;
-
-function hashFileContentsSync(filePath: string): string {
-  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+async function hashFileContents(filePath: string): Promise<string> {
+  const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
-    const stat = fs.fstatSync(fd);
+    const stat = await handle.stat();
     if (!stat.isFile()) {
       throw new Error(`Not a regular file: ${filePath}`);
     }
     const hash = crypto.createHash("sha256");
-    const chunk = Buffer.alloc(APPROVAL_SCRIPT_HASH_CHUNK_BYTES);
-    let bytesRead: number;
-    do {
-      bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
-      if (bytesRead > 0) {
-        hash.update(chunk.subarray(0, bytesRead));
-      }
-    } while (bytesRead > 0);
-    return hash.digest("hex");
+    const stream = handle.createReadStream();
+    return await new Promise<string>((resolve, reject) => {
+      stream.on("data", (chunk: Buffer) => hash.update(chunk));
+      stream.on("end", () => resolve(hash.digest("hex")));
+      stream.on("error", reject);
+    });
   } finally {
-    fs.closeSync(fd);
+    await handle.close().catch(() => {});
   }
 }
 
@@ -752,12 +747,15 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
   return genericIndex === null ? null : unwrapped.baseIndex + genericIndex;
 }
 
-function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | undefined): boolean {
+async function shellPayloadNeedsStableBinding(
+  shellCommand: string,
+  cwd: string | undefined,
+): Promise<boolean> {
   const argv = splitShellArgs(shellCommand);
   if (!argv || argv.length === 0) {
     return false;
   }
-  const snapshot = resolveMutableFileOperandSnapshotSync({
+  const snapshot = await resolveMutableFileOperandSnapshot({
     argv,
     cwd,
     shellCommand: null,
@@ -782,19 +780,19 @@ function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | unde
   return isLikelyScriptLikePathSync(resolvedPath);
 }
 
-function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
+async function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   argv: string[];
   shellCommand: string | null;
   cwd: string | undefined;
-}): boolean {
+}): Promise<boolean> {
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
   if (unwrapped.opaqueMultiplexerSeen) {
     return true;
   }
   if (params.shellCommand !== null) {
-    return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
+    return await shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
   }
-  if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
+  if (await pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
     return true;
   }
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
@@ -807,7 +805,10 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   return isMutableScriptRunner(executable);
 }
 
-function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | undefined): boolean {
+async function pnpmDlxInvocationNeedsFailClosedBinding(
+  argv: string[],
+  cwd: string | undefined,
+): Promise<boolean> {
   if (normalizePackageManagerExecToken(argv[0] ?? "") !== "pnpm") {
     return false;
   }
@@ -849,7 +850,10 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
   return false;
 }
 
-function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefined): boolean {
+async function pnpmDlxTailNeedsFailClosedBinding(
+  argv: string[],
+  cwd: string | undefined,
+): Promise<boolean> {
   let idx = 0;
   while (idx < argv.length) {
     const token = readTrimmedArgToken(argv, idx);
@@ -886,8 +890,11 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefin
   return true;
 }
 
-function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined): boolean {
-  const snapshot = resolveMutableFileOperandSnapshotSync({
+async function pnpmDlxTailMayNeedStableBinding(
+  argv: string[],
+  cwd: string | undefined,
+): Promise<boolean> {
+  const snapshot = await resolveMutableFileOperandSnapshot({
     argv,
     cwd,
     shellCommand: null,
@@ -896,15 +903,17 @@ function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined
 }
 
 /** Captures file identity for a mutable script operand that approval is bound to. */
-export function resolveMutableFileOperandSnapshotSync(params: {
+export async function resolveMutableFileOperandSnapshot(params: {
   argv: string[];
   cwd: string | undefined;
   shellCommand: string | null;
-}): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | { ok: false; message: string } {
+}): Promise<
+  { ok: true; snapshot: SystemRunApprovalFileOperand | null } | { ok: false; message: string }
+> {
   const argvIndex = resolveMutableFileOperandIndex(params.argv, params.cwd);
   if (argvIndex === null) {
     if (
-      requiresStableInterpreterApprovalBindingWithShellCommand({
+      await requiresStableInterpreterApprovalBindingWithShellCommand({
         argv: params.argv,
         shellCommand: params.shellCommand,
         cwd: params.cwd,
@@ -944,7 +953,7 @@ export function resolveMutableFileOperandSnapshotSync(params: {
   }
   let sha256: string;
   try {
-    sha256 = hashFileContentsSync(realPath);
+    sha256 = await hashFileContents(realPath);
   } catch {
     return {
       ok: false,
@@ -1029,11 +1038,11 @@ export function revalidateApprovedCwdSnapshot(params: { snapshot: ApprovedCwdSna
   return sameFileIdentity(params.snapshot.stat, current.snapshot.stat);
 }
 
-export function revalidateApprovedMutableFileOperand(params: {
+export async function revalidateApprovedMutableFileOperand(params: {
   snapshot: SystemRunApprovalFileOperand;
   argv: string[];
   cwd: string | undefined;
-}): boolean {
+}): Promise<boolean> {
   const operand = params.argv[params.snapshot.argvIndex]?.trim();
   if (!operand) {
     return false;
@@ -1049,7 +1058,7 @@ export function revalidateApprovedMutableFileOperand(params: {
     return false;
   }
   try {
-    return hashFileContentsSync(realPath) === params.snapshot.sha256;
+    return (await hashFileContents(realPath)) === params.snapshot.sha256;
   } catch {
     return false;
   }
@@ -1149,13 +1158,13 @@ export function hardenApprovedExecutionPaths(params: {
   };
 }
 
-export function buildSystemRunApprovalPlan(params: {
+export async function buildSystemRunApprovalPlan(params: {
   command?: unknown;
   rawCommand?: unknown;
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
-}): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
+}): Promise<{ ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string }> {
   const command = resolveSystemRunCommandRequest({
     command: params.command,
     rawCommand: params.rawCommand,
@@ -1186,7 +1195,7 @@ export function buildSystemRunApprovalPlan(params: {
     command.previewText?.trim() && command.previewText.trim() !== commandText
       ? command.previewText.trim()
       : null;
-  const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
+  const mutableFileOperand = await resolveMutableFileOperandSnapshot({
     argv: hardening.argv,
     cwd: hardening.cwd,
     shellCommand: command.shellPayload,

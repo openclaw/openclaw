@@ -730,7 +730,7 @@ async function dispatchInvoke(
         decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
         frame.nodeId,
       );
-      const prepared = buildSystemRunApprovalPlan(params);
+      const prepared = await buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;

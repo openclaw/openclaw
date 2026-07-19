@@ -46,7 +46,7 @@ type MockedSendInvokeResult = Mock<HandleSystemRunInvokeOptions["sendInvokeResul
 type MockedSendExecFinishedEvent = Mock<HandleSystemRunInvokeOptions["sendExecFinishedEvent"]>;
 type MockedSendNodeEvent = Mock<HandleSystemRunInvokeOptions["sendNodeEvent"]>;
 
-describe("handleSystemRunInvoke mac app exec host routing", () => {
+describe("handleSystemRunInvoke mac app exec host routing", async () => {
   let sharedFixtureRoot = "";
   let sharedOpenClawHome = "";
   let sharedRuntimeBinDir = "";
@@ -112,12 +112,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return executablePath;
   }
 
-  function createStrictInlineEvalApprovalPlan(prefix: string): SystemRunApprovalPlan {
+  async function createStrictInlineEvalApprovalPlan(
+    prefix: string,
+  ): Promise<SystemRunApprovalPlan> {
     const tempDir = createFixtureDir(prefix);
     const executablePath = createTempExecutable({ dir: tempDir, name: "gawk" });
     const scriptPath = path.join(tempDir, "library.awk");
     fs.writeFileSync(scriptPath, "{ print }\n");
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: [executablePath, "-f", scriptPath, '--source=BEGIN{print "safe"}'],
       sessionKey: "agent:main:main",
     });
@@ -565,7 +567,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     let systemRunPlan = params.systemRunPlan;
     if (forwardsDelayedApproval && params.prepareDelayedApprovalPlan !== false) {
       if (!systemRunPlan) {
-        const prepared = buildSystemRunApprovalPlan({
+        const prepared = await buildSystemRunApprovalPlan({
           command,
           rawCommand: params.rawCommand,
           cwd: params.cwd,
@@ -691,7 +693,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }));
       const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
       const runCommand = vi.fn(async () => createLocalRunResult("auto-reviewed"));
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: [executablePath],
         cwd: tmp,
       });
@@ -811,7 +813,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         risk: "low",
       }));
       const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: [executablePath, "config", "set", "security.audit.suppressions", "[]"],
         cwd: tmp,
       });
@@ -857,7 +859,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         risk: "medium",
       }));
       const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: [executablePath],
         cwd: tmp,
       });
@@ -1337,7 +1339,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       ]) {
         const { cwd, message } = testCase.setup();
-        const prepared = buildSystemRunApprovalPlan({
+        const prepared = await buildSystemRunApprovalPlan({
           command: ["./run.sh"],
           cwd,
         });
@@ -1386,7 +1388,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
     fs.chmodSync(script, 0o755);
     const canonicalCwd = fs.realpathSync(tmp);
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["./run.sh"],
       cwd: tmp,
       sessionKey: "agent:main:main",
@@ -1435,7 +1437,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       if (process.platform !== "win32") {
         fs.chmodSync(fixture.scriptPath, 0o755);
       }
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: fixture.command,
         cwd: tmp,
       });
@@ -1513,7 +1515,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.scriptPath, 0o755);
     }
-    const prepared = buildSystemRunApprovalPlan({ command: fixture.command, cwd: tmp });
+    const prepared = await buildSystemRunApprovalPlan({ command: fixture.command, cwd: tmp });
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       throw new Error("unreachable");
@@ -1551,7 +1553,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         const tmp = createFixtureDir("openclaw-approval-tsx-script-drift-");
         const fixture = createRuntimeScriptOperandFixture({ tmp, runtime: "tsx" });
         fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-        const prepared = buildSystemRunApprovalPlan({
+        const prepared = await buildSystemRunApprovalPlan({
           command: fixture.command,
           cwd: tmp,
         });
@@ -1583,7 +1585,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           runtime: "tsx",
         });
         fs.writeFileSync(missingBindingFixture.scriptPath, missingBindingFixture.initialBody);
-        const missingBindingPrepared = buildSystemRunApprovalPlan({
+        const missingBindingPrepared = await buildSystemRunApprovalPlan({
           command: missingBindingFixture.command,
           cwd: missingBindingTmp,
         });
@@ -2155,7 +2157,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("treats authenticated auto-review provenance as marker-only one-shot authority", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2200,7 +2202,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("rejects forwarded auto-review when current ask policy tightens to always", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2245,7 +2247,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("rejects forwarded auto-review when persisted security tightens to allowlist", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2293,7 +2295,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("rejects forwarded auto-review when persisted ask tightens from off to on-miss", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2341,7 +2343,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("rejects forwarded auto-review when current security policy tightens to deny", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2383,7 +2385,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it("does not let forwarded auto-review authorize security audit suppression edits", async () => {
     const tmp = createFixtureDir("openclaw-forwarded-auto-review-suppression-");
     const executablePath = createTempExecutable({ dir: tmp, name: "openclaw" });
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: [executablePath, "config", "set", "security.audit.suppressions", "[]"],
       cwd: tmp,
       sessionKey: "agent:main:main",
@@ -2420,7 +2422,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("preserves exact-plan forwarded auto-review for strict inline eval", async () => {
-    const plan = createStrictInlineEvalApprovalPlan("openclaw-forwarded-inline-");
+    const plan = await createStrictInlineEvalApprovalPlan("openclaw-forwarded-inline-");
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
     try {
       await withTempApprovalsHome({
@@ -2486,7 +2488,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("revalidates timeout fallback against the current askFallback policy", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2577,7 +2579,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("requires a prepared policy snapshot for forwarded delayed approval", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2610,7 +2612,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         defaults: { security: "full", ask: "always", askFallback: "deny" },
       },
       run: async () => {
-        const prepared = buildSystemRunApprovalPlan({
+        const prepared = await buildSystemRunApprovalPlan({
           command: ["echo", "ok"],
           sessionKey: "agent:main:main",
         });
@@ -2653,7 +2655,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         defaults: { security: "full", ask: "off", askFallback: "deny" },
       },
       run: async () => {
-        const prepared = buildSystemRunApprovalPlan({
+        const prepared = await buildSystemRunApprovalPlan({
           command: ["echo", "ok"],
           sessionKey: "agent:main:main",
         });
@@ -2700,7 +2702,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       },
       run: async () => {
-        const prepared = buildSystemRunApprovalPlan({
+        const prepared = await buildSystemRunApprovalPlan({
           command: ["echo", "ok"],
           agentId: "main",
           sessionKey: "agent:main:main",
@@ -2772,7 +2774,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("applies marker-only full timeout fallback without another prompt", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2812,7 +2814,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     "permits a durable exact-command approval under allowlist timeout fallback",
     async () => {
       const tempDir = createFixtureDir("openclaw-fallback-durable-");
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: ["/bin/sh", "-c", "/bin/ls"],
         cwd: tempDir,
         sessionKey: "agent:main:main",
@@ -2867,7 +2869,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     "rejects allowlist timeout fallback when its durable source is removed before commit",
     async () => {
       const tempDir = createFixtureDir("openclaw-fallback-durable-revoked-");
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: ["/bin/sh", "-c", "/bin/ls"],
         cwd: tempDir,
         sessionKey: "agent:main:main",
@@ -2929,7 +2931,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it("preserves source-only fallback across the authenticated Mac app bridge", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -2965,7 +2967,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("preserves marker-only auto-review across the authenticated Mac app bridge", async () => {
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
       sessionKey: "agent:main:main",
     });
@@ -3003,7 +3005,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("does not let timeout fallback satisfy strict inline review", async () => {
-    const plan = createStrictInlineEvalApprovalPlan("openclaw-fallback-inline-");
+    const plan = await createStrictInlineEvalApprovalPlan("openclaw-fallback-inline-");
     setRuntimeConfigSnapshot({ tools: { exec: { strictInlineEval: true } } });
     try {
       await withTempApprovalsHome({
@@ -3035,7 +3037,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it("does not let timeout fallback authorize security audit suppression edits", async () => {
     const tmp = createFixtureDir("openclaw-timeout-fallback-suppression-");
     const executablePath = createTempExecutable({ dir: tmp, name: "openclaw" });
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: [executablePath, "config", "set", "security.audit.suppressions", "[]"],
       cwd: tmp,
       sessionKey: "agent:main:main",
@@ -3072,7 +3074,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it("keeps audit suppression edits approval-gated under allowlist fallback from full/off", async () => {
     const tmp = createFixtureDir("openclaw-timeout-fallback-full-off-suppression-");
     const executablePath = createTempExecutable({ dir: tmp, name: "openclaw" });
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: [executablePath, "config", "set", "security.audit.suppressions", "[]"],
       cwd: tmp,
       sessionKey: "agent:main:main",
@@ -3144,7 +3146,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             dir: tempDir,
             name: "python3.13",
           });
-          const prepared = buildSystemRunApprovalPlan({
+          const prepared = await buildSystemRunApprovalPlan({
             command: [executablePath, "-c", "print('hi')"],
           });
 
@@ -3237,7 +3239,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           });
           const makefilePath = path.join(tempDir, "Makefile");
           fs.writeFileSync(makefilePath, "all:\n\t@echo inline-eval-ok\n");
-          const prepared = buildSystemRunApprovalPlan({
+          const prepared = await buildSystemRunApprovalPlan({
             command: [executablePath, "-f", makefilePath],
             cwd: tempDir,
           });
@@ -3371,7 +3373,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const commandName = "check_mail.cmd";
       const command = ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c", `${commandName} --limit 5`];
       const ordinaryPattern = "*";
-      const prepared = buildSystemRunApprovalPlan({ command, cwd: tempDir });
+      const prepared = await buildSystemRunApprovalPlan({ command, cwd: tempDir });
       expect(prepared.ok).toBe(true);
       if (!prepared.ok) {
         throw new Error("unreachable");
@@ -3450,7 +3452,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
 
     const tempDir = createFixtureDir("openclaw-shell-wrapper-allow-");
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["/bin/sh", "-c", "/bin/ls"],
       cwd: tempDir,
     });
@@ -3502,7 +3504,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
 
     const tempDir = createFixtureDir("openclaw-shell-wrapper-redundant-grant-");
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["/bin/sh", "-c", "cd ."],
       cwd: tempDir,
     });
@@ -3568,7 +3570,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
 
     const tempDir = createFixtureDir("openclaw-shell-wrapper-revoked-");
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["/bin/sh", "-c", "/bin/ls"],
       cwd: tempDir,
     });
