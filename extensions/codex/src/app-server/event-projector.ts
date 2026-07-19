@@ -103,6 +103,10 @@ export class CodexAppServerEventProjector {
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
+  // An OpenClaw-initiated terminal-release interrupt closed the turn after the
+  // reply was already delivered; killed in-flight tool calls are expected there
+  // and must not surface as a prompt failure that demotes the delivered reply.
+  private terminalReleaseInterruptClosed = false;
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
   private responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   private completedCompactionCount = 0;
@@ -329,7 +333,10 @@ export class CodexAppServerEventProjector {
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
         recordPromptError:
-          legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
+          legacyFailClosed &&
+          !hasDeliverableAssistantOnCompletedTurn &&
+          !this.aborted &&
+          !this.terminalReleaseInterruptClosed,
       });
     if (synthesizedMissingToolResultError) {
       this.synthesizedMissingToolResultError = synthesizedMissingToolResultError;
@@ -480,6 +487,10 @@ export class CodexAppServerEventProjector {
   markAborted(): void {
     this.aborted = true;
     this.responseUsage = undefined;
+  }
+
+  markTerminalReleaseInterruptClosed(): void {
+    this.terminalReleaseInterruptClosed = true;
   }
 
   isCompacting(): boolean {

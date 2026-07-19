@@ -202,6 +202,14 @@ export function createCodexAttemptNotificationController(
         ) {
           projector.markAborted();
         }
+        if (
+          completedTurn?.status === "interrupted" &&
+          state.terminalReleaseAwaitingTurnCompletion?.interruptRequested === true
+        ) {
+          // The reply was already delivered; tool calls the deadline interrupt
+          // killed in flight must not become a prompt error on the attempt.
+          projector.markTerminalReleaseInterruptClosed();
+        }
         if (!state.timedOut && !runAbortController.signal.aborted) {
           await steeringQueue?.flushPending();
         }
