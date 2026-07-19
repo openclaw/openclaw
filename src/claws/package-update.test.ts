@@ -108,6 +108,7 @@ const addPlan: ClawAddPlan = {
     mcpServerActions: 0,
     cronJobActions: 0,
     blockedActions: 0,
+    capabilityEscalations: 0,
   },
   actions: manifest.packages.map((pkg) => ({
     kind: "package",
@@ -122,6 +123,7 @@ const addPlan: ClawAddPlan = {
     },
     blocked: false,
   })),
+  capabilityChanges: [],
   blockers: [],
   diagnostics: [],
   readiness: { ready: true, requirements: [] },
