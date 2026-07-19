@@ -1,4 +1,4 @@
-// Applies the agent, workspace, and managed-file slice of a consented Claw add plan.
+// Applies the package, agent, workspace, and managed-file slices of a consented Claw add plan.
 import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
@@ -8,14 +8,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import { ClawPackageInstallError, installClawPackages } from "./packages.js";
 import {
   deleteClawInstallRecord,
   persistClawInstallRecord,
   updateClawInstallRecordStatus,
   type ClawInstallStatus,
   type PersistedClawInstall,
+  type PersistedClawPackageRef,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
 import {
@@ -34,6 +37,8 @@ type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   deleteRecord?: typeof deleteClawInstallRecord;
   updateRecord?: typeof updateClawInstallRecordStatus;
   createWorkspaceFiles?: typeof createClawWorkspaceFiles;
+  runtime?: RuntimeEnv;
+  installPackages?: typeof installClawPackages;
   nowMs?: number;
 };
 type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
@@ -60,6 +65,7 @@ type ClawAddResult = {
   workspaceCreated: boolean;
   configCommitted: boolean;
   workspaceFiles: PersistedClawWorkspaceFile[];
+  packages: PersistedClawPackageRef[];
   installRecord?: PersistedClawInstall;
   error?: {
     code: string;
@@ -70,7 +76,7 @@ type ClawAddResult = {
 
 function hasUnsupportedMutationActions(plan: ClawAddPlan): boolean {
   return plan.actions.some(
-    (action) => !["agent", "workspace", "workspaceFile"].includes(action.kind),
+    (action) => !["agent", "workspace", "workspaceFile", "package"].includes(action.kind),
   );
 }
 
@@ -126,6 +132,39 @@ function assertWorkspacePathUnchanged(workspace: string): void {
   }
 }
 
+function partialResult(params: {
+  plan: ClawAddPlan;
+  installRecord: PersistedClawInstall;
+  workspaceCreated: boolean;
+  configCommitted: boolean;
+  workspaceFiles?: PersistedClawWorkspaceFile[];
+  packages?: PersistedClawPackageRef[];
+  installStatus?: ClawInstallStatus;
+  error: ClawAddResult["error"];
+  nowMs?: number;
+}): ClawAddResult {
+  return {
+    schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+    stability: CLAW_OUTPUT_STABILITY,
+    dryRun: false,
+    mutationAllowed: true,
+    planIntegrity: params.plan.planIntegrity,
+    status: "partial",
+    claw: params.plan.claw,
+    agent: params.plan.agent,
+    workspaceCreated: params.workspaceCreated,
+    configCommitted: params.configCommitted,
+    workspaceFiles: params.workspaceFiles ?? [],
+    packages: params.packages ?? [],
+    installRecord: {
+      ...params.installRecord,
+      status: params.installStatus ?? "partial",
+      updatedAtMs: params.nowMs ?? Date.now(),
+    },
+    error: params.error,
+  };
+}
+
 export async function applyClawAddPlan(
   plan: ClawAddPlan,
   options: ClawAddApplyOptions = {},
@@ -136,7 +175,7 @@ export async function applyClawAddPlan(
   if (hasUnsupportedMutationActions(plan)) {
     throw new ClawAddMutationError(
       "unsupported_components",
-      "This build can add agent settings and workspace files; declared packages, MCP servers, or cron jobs require later lifecycle slices.",
+      "This build can add agent settings, workspace files, and declared packages; MCP servers and cron jobs require later lifecycle slices.",
     );
   }
   if (options.consentPlanIntegrity !== plan.planIntegrity) {
@@ -153,6 +192,9 @@ export async function applyClawAddPlan(
   } catch (error) {
     throw new ClawAddMutationError("provenance_failed", (error as Error).message);
   }
+
+  const installPackages = options.installPackages ?? installClawPackages;
+  let packages: PersistedClawPackageRef[] = [];
 
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
   const workspacePhaseRecorded = statusAtLeast(installRecord.status, "workspace_ready");
@@ -198,11 +240,19 @@ export async function applyClawAddPlan(
       await mkdir(workspace);
       workspaceCreated = true;
     } catch (error) {
-      clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
-      throw new ClawAddMutationError(
-        "workspace_collision",
-        `Could not create new workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
-      );
+      markInstallStatus(plan.agent.finalId, "partial", ["pending", "partial"], options);
+      return partialResult({
+        plan,
+        installRecord,
+        workspaceCreated: false,
+        configCommitted: false,
+        packages,
+        error: {
+          code: "workspace_collision",
+          message: `Could not create new workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+        },
+        nowMs: options.nowMs,
+      });
     }
 
     try {
@@ -257,7 +307,7 @@ export async function applyClawAddPlan(
         }
         throw new ClawAddMutationError(
           "agent_id_collision",
-          `Agent ${JSON.stringify(plan.agent.finalId)} was created after planning.`,
+          "Agent " + JSON.stringify(plan.agent.finalId) + " was created after planning.",
         );
       }
       if (
@@ -266,7 +316,7 @@ export async function applyClawAddPlan(
       ) {
         throw new ClawAddMutationError(
           "workspace_collision",
-          `Workspace ${JSON.stringify(workspace)} is already assigned to an agent.`,
+          "Workspace " + JSON.stringify(workspace) + " is already assigned to an agent.",
         );
       }
       const nextConfig: OpenClawConfig = {
@@ -286,15 +336,30 @@ export async function applyClawAddPlan(
       options,
     );
   } catch (error) {
+    let installStatus: ClawInstallStatus = "workspace_ready";
     if (!configCommitted) {
       const removedWorkspace = await rmdir(workspace)
         .then(() => true)
         .catch(() => false);
       if (removedWorkspace) {
-        clearUnownedInstallRecord(plan.agent.finalId, ["workspace_ready", "partial"], options);
+        workspaceCreated = false;
+        installStatus = "partial";
+        markInstallStatus(plan.agent.finalId, "partial", ["workspace_ready", "partial"], options);
       }
     }
-    throw error;
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted,
+      packages,
+      installStatus,
+      error: {
+        code: error instanceof ClawAddMutationError ? error.code : "config_commit_failed",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      nowMs: options.nowMs,
+    });
   }
 
   const createFiles = options.createWorkspaceFiles ?? createClawWorkspaceFiles;
@@ -330,6 +395,7 @@ export async function applyClawAddPlan(
       workspaceCreated,
       configCommitted,
       workspaceFiles: workspaceError.createdFiles,
+      packages,
       installRecord: {
         ...installRecord,
         status: "config_committed",
@@ -341,6 +407,32 @@ export async function applyClawAddPlan(
         diagnostics: workspaceError.diagnostics,
       },
     };
+  }
+
+  try {
+    // Package mutation is last: skills now have their workspace, and a package
+    // failure cannot leave a later workspace/configuration step unapplied.
+    packages = await installPackages(plan, options);
+  } catch (error) {
+    const packageError =
+      error instanceof ClawPackageInstallError
+        ? error
+        : new ClawPackageInstallError(
+            "package_install_failed",
+            error instanceof Error ? error.message : String(error),
+            packages,
+          );
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted,
+      workspaceFiles,
+      packages: packageError.installedPackages,
+      installStatus: "config_committed",
+      error: { code: packageError.code, message: packageError.message },
+      nowMs: options.nowMs,
+    });
   }
 
   try {
@@ -356,6 +448,7 @@ export async function applyClawAddPlan(
       agent: plan.agent,
       workspaceCreated,
       configCommitted,
+      packages,
       workspaceFiles,
       installRecord: {
         ...installRecord,
@@ -364,19 +457,14 @@ export async function applyClawAddPlan(
       },
     };
   } catch (error) {
-    return {
-      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      dryRun: false,
-      mutationAllowed: true,
-      planIntegrity: plan.planIntegrity,
-      status: "partial",
-      claw: plan.claw,
-      agent: plan.agent,
+    return partialResult({
+      plan,
+      installRecord,
       workspaceCreated,
       configCommitted,
       workspaceFiles,
+      packages,
       error: { code: "provenance_failed", message: (error as Error).message },
-    };
+    });
   }
 }
