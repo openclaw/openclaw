@@ -5,6 +5,7 @@ import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../node-host/with-timeout.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import {
   listAgentIds,
@@ -15,16 +16,46 @@ import {
 } from "./agent-scope.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { buildPreparedModelCatalogSnapshot, type ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import type {
-  PreparedModelRuntimeInput,
-  PreparedModelRuntimeSnapshot,
-  PreparedModelRuntimeStores,
-} from "./prepared-model-runtime.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
-import { AuthStorage } from "./sessions/index.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
+import type { ModelRegistry } from "./sessions/model-registry.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
+
+export type PreparedModelRuntimeSnapshot = Readonly<{
+  agentId?: string;
+  agentDir: string;
+  inheritedAuthDir?: string;
+  workspaceDir?: string;
+  config: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+  modelCatalog: ModelCatalogSnapshot;
+  createStores: () => PreparedModelRuntimeStores;
+}>;
+
+export type PreparedModelRuntimeStores = {
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+};
+
+export type PreparedModelRuntimeInput = {
+  agentId?: string;
+  agentDir: string;
+  inheritedAuthDir?: string;
+  workspaceDir?: string;
+  preserveWorkspaceDirOnRefresh?: boolean;
+  readOnly?: boolean;
+  skipCredentials?: boolean;
+  env?: NodeJS.ProcessEnv;
+  config: OpenClawConfig;
+};
+
+export type PreparedModelRuntimeLease = Readonly<{
+  snapshot: PreparedModelRuntimeSnapshot;
+  release: () => void;
+}>;
 
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;

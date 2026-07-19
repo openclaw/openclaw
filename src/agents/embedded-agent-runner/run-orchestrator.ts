@@ -258,7 +258,9 @@ async function runEmbeddedAgentInternal(
         ensureRuntimePluginsLoaded({
           config: preparedModelRuntime.config,
           workspaceDir: resolvedWorkspace,
-          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+          ...(params.allowGatewaySubagentBinding !== undefined
+            ? { allowGatewaySubagentBinding: params.allowGatewaySubagentBinding }
+            : {}),
         });
         startupStages.mark("runtime-plugins");
         notifyExecutionPhase("runtime_plugins");

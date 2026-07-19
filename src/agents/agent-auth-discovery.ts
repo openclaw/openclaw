@@ -93,5 +93,3 @@ export function resolveAgentCredentialsForDiscovery(
   }
   return credentials;
 }
-
-export { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";

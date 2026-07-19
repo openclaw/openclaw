@@ -1,9 +1,16 @@
 // Shared media-understanding types for attachments, provider hooks, request
 // auth, decisions, and structured extraction inputs.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+/** Agent-owned runtime handle carried opaquely through media provider requests. */
+export type MediaPreparedModelRuntime = Readonly<{
+  agentDir: string;
+  workspaceDir?: string;
+  config: OpenClawConfig;
+  createStores: () => unknown;
+}>;
 
 type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
 
@@ -152,7 +159,7 @@ export type ImageDescriptionRequest = {
   agentId?: string;
   agentDir: string;
   workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
   model: string;
   provider: string;
@@ -177,7 +184,7 @@ export type ImagesDescriptionRequest = {
   agentId?: string;
   agentDir: string;
   workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
 };
 

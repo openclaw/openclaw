@@ -1,9 +1,7 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -21,52 +19,27 @@ import {
   startSerializedSnapshotBuild,
   toError,
   type PreparedModelRuntimeOwner,
+  type PreparedModelRuntimeInput,
+  type PreparedModelRuntimeLease,
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeReplacementGateId,
+  type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
-import type { AuthStorage, ModelRegistry } from "./sessions/index.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
 } from "./prepared-model-runtime.owner.js";
 export type { PreparedModelRuntimeReplacementGateId } from "./prepared-model-runtime.owner.js";
+export type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimeSnapshot,
+  PreparedModelRuntimeStores,
+} from "./prepared-model-runtime.owner.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 30_000;
 let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
-
-export type PreparedModelRuntimeSnapshot = Readonly<{
-  agentId?: string;
-  agentDir: string;
-  inheritedAuthDir?: string;
-  workspaceDir?: string;
-  config: OpenClawConfig;
-  metadataSnapshot: PluginMetadataSnapshot;
-  modelCatalog: ModelCatalogSnapshot;
-  createStores: () => PreparedModelRuntimeStores;
-}>;
-
-export type PreparedModelRuntimeStores = {
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
-};
-
-export type PreparedModelRuntimeInput = {
-  agentId?: string;
-  agentDir: string;
-  inheritedAuthDir?: string;
-  workspaceDir?: string;
-  preserveWorkspaceDirOnRefresh?: boolean;
-  readOnly?: boolean;
-  skipCredentials?: boolean;
-  env?: NodeJS.ProcessEnv;
-  config: OpenClawConfig;
-};
-
-export type PreparedModelRuntimeLease = Readonly<{
-  snapshot: PreparedModelRuntimeSnapshot;
-  release: () => void;
-}>;
 
 const owners = new Map<string, PreparedModelRuntimeOwner>();
 const agentBuildCompletions = new Map<string, Promise<void>>();

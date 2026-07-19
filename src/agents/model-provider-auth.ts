@@ -49,7 +49,6 @@ import {
   type ProviderAuthWarmSnapshot,
 } from "./model-provider-auth-state.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 type ProviderAuthWarmWorkerResult =
@@ -408,6 +407,9 @@ export async function buildCurrentProviderAuthStateSnapshot(
       return { agents: [] };
     }
     const agentDir = resolveAgentDir(cfg, agentId);
+    // Worker warmup is the only path that may need to construct a read-only catalog generation.
+    // Keep the lifecycle graph out of foreground provider-auth module initialization.
+    const { loadPreparedModelCatalogOwnerSnapshot } = await import("./prepared-model-catalog.js");
     const preparedOwner = await loadPreparedModelCatalogOwnerSnapshot({
       config: cfg,
       agentId,

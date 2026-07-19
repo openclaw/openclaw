@@ -296,7 +296,7 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
 }
 
 /** Builds the canonical source freshness fingerprint for generated model catalogs. */
-export async function buildModelsJsonSourceFingerprint(
+async function buildModelsJsonSourceFingerprint(
   config?: OpenClawConfig,
   agentDirOverride?: string,
   options: {
@@ -354,7 +354,7 @@ async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise
 }
 
 /** Ensures models.json and plugin catalog sidecars are current for an agent. */
-export async function prepareOpenClawModelsJsonSource(
+async function prepareOpenClawModelsJsonSource(
   config?: OpenClawConfig,
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},

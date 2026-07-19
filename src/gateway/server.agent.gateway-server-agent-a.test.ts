@@ -98,6 +98,7 @@ async function runMainAgentDeliveryWithSession(params: {
 async function setGatewayModelCatalogForTest(
   models: typeof agentDiscoveryMock.models,
 ): Promise<void> {
+  testState.sessionStorePath = gatewaySuite.sessionStorePath;
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = models;
   await resetPreparedModelCatalogForTest();

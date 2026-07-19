@@ -165,7 +165,7 @@ async function buildChatStartupMetadataResult(params: {
       agentId: params.agentId,
       params: { view: "configured" },
       preloadedCatalog: {
-        agentId: resolveDefaultAgentId(params.cfg),
+        agentId: params.agentId,
         snapshot: params.modelCatalog,
       },
       ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
