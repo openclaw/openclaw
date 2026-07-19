@@ -3,7 +3,7 @@
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
 import fs from "node:fs";
-import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { readRegularFileSync } from "../../infra/regular-file.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import {
   resolveAuthStatePath,
@@ -34,8 +34,11 @@ const MAX_AUTH_PROFILE_JSON_BYTES = 10 * 1024 * 1024;
 
 function readJsonFile(pathname: string): unknown {
   try {
+    // Auth stores may be symlinks to regular files (dotfile managers); the
+    // previous readFileSync followed them. Resolve first so the bounded read
+    // keeps that contract while still rejecting non-regular targets.
     const { buffer } = readRegularFileSync({
-      filePath: pathname,
+      filePath: fs.realpathSync(pathname),
       maxBytes: MAX_AUTH_PROFILE_JSON_BYTES,
     });
     return JSON.parse(buffer.toString("utf8")) as unknown;
