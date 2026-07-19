@@ -340,6 +340,27 @@ describe("managed npm generation-dir loader precedence", () => {
     });
   });
 
+  it("excludes a doctor-retired legacy-root package when recovering without authority", async () => {
+    const stateDir = makeStateDir();
+    const retiredPackageDir = writeManagedLegacy(stateDir, "3.0.0");
+    const recoveredPackageDir = writeManagedGeneration({
+      stateDir,
+      version: "1.0.0",
+      generationKey: "discord-after-retired-legacy",
+    });
+    await markRetainedManagedNpmInstall({
+      packageDir: retiredPackageDir,
+      pluginId: PLUGIN_ID,
+      reason: "test-retired-legacy-root-package",
+    });
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.discord, {
+      installPath: recoveredPackageDir,
+      resolvedVersion: "1.0.0",
+    });
+  });
+
   it("does not repoint an intentional custom npm install outside the managed root", async () => {
     const stateDir = makeStateDir();
     // A managed generation with a higher version exists on disk...
