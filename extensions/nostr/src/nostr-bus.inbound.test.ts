@@ -208,8 +208,7 @@ describe("startNostrBus inbound guards", () => {
   it("reports successful relay connections through onConnect", async () => {
     const onConnect = vi.fn();
     const bus = await startTestNostrBus({
-      privateKey: TEST_HEX_PRIVATE_KEY,
-      relays: ["wss://relay.example"],
+      ...buildResolvedNostrAccount({ relays: ["wss://relay.example"] }),
       onMessage: vi.fn(async () => {}),
       onConnect,
       onMetric: () => {},
