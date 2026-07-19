@@ -947,6 +947,7 @@ public struct PresenceEntry: Codable, Sendable {
     public let roles: [String]?
     public let scopes: [String]?
     public let instanceid: String?
+    public let user: [String: AnyCodable]?
 
     public init(
         host: String? = nil,
@@ -964,7 +965,8 @@ public struct PresenceEntry: Codable, Sendable {
         deviceid: String? = nil,
         roles: [String]? = nil,
         scopes: [String]? = nil,
-        instanceid: String? = nil)
+        instanceid: String? = nil,
+        user: [String: AnyCodable]? = nil)
     {
         self.host = host
         self.ip = ip
@@ -982,6 +984,7 @@ public struct PresenceEntry: Codable, Sendable {
         self.roles = roles
         self.scopes = scopes
         self.instanceid = instanceid
+        self.user = user
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1001,6 +1004,7 @@ public struct PresenceEntry: Codable, Sendable {
         case roles
         case scopes
         case instanceid = "instanceId"
+        case user
     }
 }
 
