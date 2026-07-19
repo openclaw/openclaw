@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import nodePath from "node:path";
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
@@ -1147,13 +1148,17 @@ export function startGatewayConfigReloader(opts: {
     }
     const usePolling = resolveChokidarUsePolling(degradedToPolling);
     const next = chokidar.watch([...watchedPaths], {
+      depth: 0,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling,
     });
     // A file event proves this watcher recovered. Reset only here so plugin
     // metadata refreshes and consecutive watcher errors cannot refill the budget.
-    const scheduleFromWatcherEvent = () => {
+    const scheduleFromWatcherEvent = (eventPath: string) => {
+      if (!watchedPaths.has(nodePath.normalize(eventPath))) {
+        return;
+      }
       watcherRecreateRetries = 0;
       scheduleExternalRefresh();
     };

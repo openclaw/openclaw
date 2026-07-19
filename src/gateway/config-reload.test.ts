@@ -573,8 +573,9 @@ describe("buildGatewayReloadPlan", () => {
   });
 });
 
-type WatcherHandler = () => void;
+type WatcherHandler = (value?: unknown) => void;
 type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
+const WATCHER_PATH_EVENTS = new Set<WatcherEvent>(["add", "change", "unlink"]);
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
@@ -587,9 +588,11 @@ function createWatcherMock(effectiveUsePolling?: boolean) {
       handlers.set(event, existing);
       return this;
     },
-    emit(event: WatcherEvent) {
+    emit(event: WatcherEvent, value?: unknown) {
+      const eventValue =
+        value ?? (WATCHER_PATH_EVENTS.has(event) ? "/tmp/openclaw.json" : undefined);
       for (const handler of handlers.get(event) ?? []) {
-        handler();
+        handler(eventValue);
       }
     },
     close: vi.fn(async () => {}),
@@ -1058,6 +1061,35 @@ describe("startGatewayConfigReloader", () => {
       ["/tmp/openclaw.json", acceptedIncludePath, secondCandidatePath],
       expect.objectContaining({ ignoreInitial: true }),
     );
+    await harness.reloader.stop();
+  });
+
+  it("does not recurse into or reload for children of a rejected include directory", async () => {
+    const rejectedIncludeDir = "/tmp/rejected-include";
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        valid: false,
+        hash: "invalid-directory-hash",
+        includedPaths: [rejectedIncludeDir],
+        issues: [{ path: "", message: "Include path is not a regular file" }],
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludedPaths: [rejectedIncludeDir],
+    });
+
+    expect(chokidar.watch).toHaveBeenCalledWith(
+      ["/tmp/openclaw.json", rejectedIncludeDir],
+      expect.objectContaining({ depth: 0 }),
+    );
+
+    harness.watcher.emit("change", nodePath.join(rejectedIncludeDir, "session.json"));
+    await vi.runAllTimersAsync();
+    expect(readSnapshot).not.toHaveBeenCalled();
+
+    harness.watcher.emit("change", rejectedIncludeDir);
+    await vi.runAllTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledOnce();
     await harness.reloader.stop();
   });
 
