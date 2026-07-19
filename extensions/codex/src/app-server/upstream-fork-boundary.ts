@@ -2,13 +2,13 @@ import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
 
-export type CodexUpstreamForkBoundaryFailureCode =
+type CodexUpstreamForkBoundaryFailureCode =
   | "steer-message"
   | "in-progress-turn"
   | "drift-mismatch"
   | "upstream-unavailable";
 
-export type CodexUpstreamForkBoundary = {
+type CodexUpstreamForkBoundary = {
   beforeTurnId: string;
   targetTurnId: string;
   /** Baseline for the forked thread: the last retained turn (null when the cut is
@@ -17,7 +17,7 @@ export type CodexUpstreamForkBoundary = {
   retainedMarker: { turnId: string | null; userMessageCount: number };
 };
 
-export type CodexUpstreamForkBoundaryResult =
+type CodexUpstreamForkBoundaryResult =
   | { ok: true; boundary: CodexUpstreamForkBoundary; editorText?: string }
   | { ok: false; code: CodexUpstreamForkBoundaryFailureCode; message: string };
 
@@ -82,10 +82,11 @@ function isHiddenNestedReviewTurn(previous: CodexTurn | undefined, turn: CodexTu
     return false;
   }
   const userMessages = turn.items.filter((item) => item.type === "userMessage");
-  return (
-    userMessages.length === 2 &&
-    JSON.stringify(asInputs(userMessages[0])) === JSON.stringify(asInputs(userMessages[1]))
-  );
+  const [firstUserMessage, secondUserMessage] = userMessages;
+  if (!firstUserMessage || !secondUserMessage || userMessages.length !== 2) {
+    return false;
+  }
+  return JSON.stringify(asInputs(firstUserMessage)) === JSON.stringify(asInputs(secondUserMessage));
 }
 
 function localMessageText(content: unknown): string | undefined {
@@ -111,7 +112,7 @@ function localMessageText(content: unknown): string | undefined {
   return texts.join("");
 }
 
-export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
+function resolveCodexUpstreamForkBoundaryFromTurns(params: {
   turns: readonly CodexTurn[];
   userMessageOrdinal: number;
   /** Canonical text for every visible local user message through the target ordinal;
@@ -279,7 +280,9 @@ export async function resolveCodexUpstreamForkBoundary(params: {
     }
     const localPrefixTexts = visibleUserEntries
       .slice(0, userMessageOrdinal + 1)
-      .map((entry) => localMessageText(entry.message.content));
+      .map((entry) =>
+        localMessageText("content" in entry.message ? entry.message.content : undefined),
+      );
     const turns = await listCodexUpstreamTurns(params.control, params.threadId);
     const resolved = resolveCodexUpstreamForkBoundaryFromTurns({
       turns,

@@ -1,7 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import type { CodexTurn } from "./protocol.js";
+import type { CodexThreadForkParams, CodexTurn } from "./protocol.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 
 const boundaryMocks = vi.hoisted(() => ({
@@ -49,12 +49,23 @@ function turn(id: string, text: string): CodexTurn {
     status: "completed",
     items: [
       {
+        aggregatedOutput: null,
+        changes: [],
+        command: null,
+        cwd: null,
         id: `${id}-user`,
-        type: "userMessage",
+        name: null,
+        query: null,
+        server: null,
+        status: null,
+        text: "",
+        title: null,
+        tool: null,
         content: [{ type: "text", text, textElements: [] }],
+        type: "userMessage",
       },
     ],
-  } as CodexTurn;
+  };
 }
 
 function forkResponse(threadId = "thread-forked") {
@@ -102,7 +113,9 @@ function forkParams() {
   };
 }
 
-function forkControl(forkThread = vi.fn(async () => forkResponse())) {
+type ForkThreadStub = (params: CodexThreadForkParams) => Promise<unknown>;
+
+function forkControl(forkThread: ForkThreadStub = vi.fn(async () => forkResponse())) {
   const archiveThread = vi.fn(async () => undefined);
   const control = {
     archiveThread,
@@ -140,6 +153,7 @@ describe("forkCodexUpstreamSession", () => {
       return true;
     });
     const runtime = createPluginRuntimeMock();
+    const createSessionEntry = vi.mocked(runtime.agent.session.createSessionEntry);
 
     const result = await forkCodexUpstreamSession(forkParams(), {
       bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
@@ -174,9 +188,7 @@ describe("forkCodexUpstreamSession", () => {
         initialEntry: expect.objectContaining({ agentHarnessId: "codex-custom" }),
       }),
     );
-    expect(runtime.agent.session.createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty(
-      "recoverMatchingInitialEntry",
-    );
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("recoverMatchingInitialEntry");
     expect(events).toEqual(["link", "bind"]);
     expect(result).toEqual({
       status: "created",

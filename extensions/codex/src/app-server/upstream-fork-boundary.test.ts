@@ -1,9 +1,15 @@
+import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
-import {
-  resolveCodexUpstreamForkBoundary,
-  resolveCodexUpstreamForkBoundaryFromTurns,
-} from "./upstream-fork-boundary.js";
+import { resolveCodexUpstreamForkBoundary } from "./upstream-fork-boundary.js";
+
+const transcriptMocks = vi.hoisted(() => ({
+  readVisibleEntries: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  readVisibleSessionTranscriptMessageEntries: transcriptMocks.readVisibleEntries,
+}));
 
 function item(type: string, overrides: Record<string, unknown> = {}): CodexThreadItem {
   return { id: `${type}-item`, type, ...overrides } as CodexThreadItem;
@@ -17,9 +23,41 @@ function turn(id: string, items: CodexThreadItem[], overrides: Partial<CodexTurn
   return { id, status: "completed", items, ...overrides };
 }
 
+async function resolveFromTurns(params: {
+  turns: readonly CodexTurn[];
+  userMessageOrdinal: number;
+  localPrefixTexts: readonly (string | undefined)[];
+}) {
+  const entries: SessionTranscriptMessageEntry[] = params.localPrefixTexts.map((text, index) => ({
+    entryId: `entry-${index}`,
+    parentId: index > 0 ? `entry-${index - 1}` : null,
+    seq: index,
+    role: "user",
+    message: {
+      role: "user",
+      content: text ?? [{ type: "image", data: "", mimeType: "image/png" }],
+      timestamp: index,
+    },
+  }));
+  transcriptMocks.readVisibleEntries.mockResolvedValue(entries);
+  const result = await resolveCodexUpstreamForkBoundary({
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main:upstream",
+    storePath: "/tmp/does-not-matter",
+    entryId: `entry-${params.userMessageOrdinal}`,
+    threadId: "thread-1",
+    control: {
+      readThread: vi.fn(async () => ({ id: "thread-1" })),
+      listTurnPage: vi.fn(async () => ({ data: [...params.turns] })),
+    } as unknown as Parameters<typeof resolveCodexUpstreamForkBoundary>[0]["control"],
+  });
+  return result.ok ? { ok: true as const, boundary: result.boundary } : result;
+}
+
 describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
-  it("maps the local user ordinal to the upstream turn", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("maps the local user ordinal to the upstream turn", async () => {
+    const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("two")])],
       userMessageOrdinal: 1,
       localPrefixTexts: ["one", "two"],
@@ -35,8 +73,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
   });
 
-  it("cuts before the first turn with an empty retained baseline", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("cuts before the first turn with an empty retained baseline", async () => {
+    const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("one")])],
       userMessageOrdinal: 0,
       localPrefixTexts: ["one"],
@@ -51,8 +89,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
   });
 
-  it("rejects a selected steer message", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("rejects a selected steer message", async () => {
+    const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("one"), user("steer")])],
       userMessageOrdinal: 1,
       localPrefixTexts: ["one", "steer"],
@@ -61,8 +99,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     expect(result).toMatchObject({ ok: false, code: "steer-message" });
   });
 
-  it("skips prompts inside review spans", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("skips prompts inside review spans", async () => {
+    const result = await resolveFromTurns({
       turns: [
         turn("turn-review", [
           item("enteredReviewMode"),
@@ -85,8 +123,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
   });
 
-  it("rejects an in-progress target turn", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("rejects an in-progress target turn", async () => {
+    const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("one")], { status: "inProgress" })],
       userMessageOrdinal: 0,
       localPrefixTexts: ["one"],
@@ -95,8 +133,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     expect(result).toMatchObject({ ok: false, code: "in-progress-turn" });
   });
 
-  it("rejects local and upstream text drift", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("rejects local and upstream text drift", async () => {
+    const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("persisted")])],
       userMessageOrdinal: 0,
       localPrefixTexts: ["local mirror"],
@@ -105,8 +143,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 
-  it("rejects equal targets over divergent prefixes", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("rejects equal targets over divergent prefixes", async () => {
+    const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("upstream-old")]), turn("turn-2", [user("target")])],
       userMessageOrdinal: 1,
       localPrefixTexts: ["local-old", "target"],
@@ -115,8 +153,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 
-  it("rejects upstream messages carrying semantic non-text inputs", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("rejects upstream messages carrying semantic non-text inputs", async () => {
+    const result = await resolveFromTurns({
       turns: [
         turn("turn-1", [
           item("userMessage", {
@@ -135,8 +173,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 
-  it("rejects prefixes whose content identity cannot be verified", () => {
-    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+  it("rejects prefixes whose content identity cannot be verified", async () => {
+    const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("target")])],
       userMessageOrdinal: 1,
       localPrefixTexts: [undefined, "target"],
