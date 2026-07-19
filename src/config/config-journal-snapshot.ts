@@ -18,7 +18,7 @@ type ConfigSnapshotAuditRecord = {
   fingerprintedAuthoredConfig: unknown;
 };
 
-export type ConfigAuditStoreContext = {
+type ConfigAuditStoreContext = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 };
@@ -120,7 +120,7 @@ function openConfigSnapshotStore(env: NodeJS.ProcessEnv) {
   });
 }
 
-export function resolveConfigAuditStoreContext(
+function resolveConfigAuditStoreContext(
   params?: ConfigAuditStoreContext,
 ): ResolvedConfigAuditStoreContext {
   return {
