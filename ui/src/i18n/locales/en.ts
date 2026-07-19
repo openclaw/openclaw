@@ -2219,6 +2219,11 @@ export const en: TranslationMap = {
       },
     },
   },
+  presence: {
+    rosterLabel: "Show who's online",
+    rosterTitle: "Online",
+    you: "you",
+  },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
     loading: "Diving for stats…",
