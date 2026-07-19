@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 
 // Verifies that typed script declarations expose every runtime value export.
 import { execFileSync } from "node:child_process";
@@ -11,6 +11,7 @@ const SCRIPT_SOURCE_RE = /^scripts\/.+\.mjs$/u;
 const SCRIPT_DECLARATION_RE = /^scripts\/.+\.d\.mts$/u;
 const TYPED_SOURCE_RE = /\.(?:[cm]?ts|tsx)$/u;
 const SKIPPED_DIRS = new Set([".artifacts", ".git", ".worktrees", "dist", "node_modules"]);
+const CHECK_SCRIPT_DECLS_GIT_TIMEOUT_MS = 30_000;
 
 function normalizePath(value) {
   return value.split(path.sep).join("/").replace(/^\.\//u, "");
@@ -22,6 +23,8 @@ function listFilesFromGit(root) {
       cwd: root,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
+      timeout: CHECK_SCRIPT_DECLS_GIT_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     })
       .split("\0")
       .map(normalizePath)
@@ -37,6 +40,8 @@ function listUntrackedFilesFromGit(root) {
       cwd: root,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
+      timeout: CHECK_SCRIPT_DECLS_GIT_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     })
       .split("\0")
       .map(normalizePath)
@@ -97,7 +102,13 @@ function listTypedMjsImporters(root, files, fsImpl, explicitFiles) {
         ":(glob)**/*.mts",
         ":(glob)**/*.cts",
       ],
-      { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+      {
+        cwd: root,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: CHECK_SCRIPT_DECLS_GIT_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      },
     )
       .split("\0")
       .map(normalizePath)
@@ -695,3 +706,4 @@ function main() {
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   main();
 }
+
