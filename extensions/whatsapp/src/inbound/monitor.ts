@@ -1933,7 +1933,7 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
-  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming(options.cfg);
+  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming();
   const recentMessageKeys: WhatsAppBaileysMessageCache = options.recentMessageKeys ?? new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache =
     options.baileysGroupMetaCache ?? new Map();

@@ -427,7 +427,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-  "src/plugins/contracts/plugin-sdk-index.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
   "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -718,6 +717,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     ".github/actions/setup-node-env/sticky-importers.sh",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
+    ".github/actions/setup-node-env/verify-importers.mjs",
     ["test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
@@ -1287,6 +1290,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
+  [
+    "scripts/lib/local-heavy-check-runtime.d.mts",
+    ["test/scripts/local-heavy-check-runtime.test.ts"],
+  ],
   ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
   ["scripts/lib/kova-report-gate.mjs", ["test/scripts/kova-report-gate.test.ts"]],
   ["scripts/lib/kova-report-publish-files.mjs", ["test/scripts/kova-report-publish-files.test.ts"]],
@@ -1527,6 +1534,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-oxlint-shards.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/run-lint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-with-env.mjs", ["test/scripts/run-with-env.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
   [
@@ -4616,12 +4624,15 @@ function sanitizeVitestCachePathSegment(value) {
 
 export function applyParallelVitestCachePaths(specs, params = {}) {
   const baseEnv = params.env ?? process.env;
-  if (baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
-    return specs;
-  }
   const cwd = params.cwd ?? process.cwd();
+  const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
+  // CI publishes a persistent cache root, not a writer-safe leaf. Every
+  // concurrent Vitest process still needs its own live directory below it.
+  const cacheRoot =
+    configuredCacheRoot ?? path.join(cwd, "node_modules", ".experimental-vitest-cache");
   return specs.map((spec, index) => {
-    if (spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+    const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+    if (specCachePath && specCachePath !== configuredCacheRoot) {
       return spec;
     }
     const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
@@ -4629,12 +4640,7 @@ export function applyParallelVitestCachePaths(specs, params = {}) {
       ...spec,
       env: {
         ...spec.env,
-        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-          cwd,
-          "node_modules",
-          ".experimental-vitest-cache",
-          cacheSegment,
-        ),
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
       },
     };
   });

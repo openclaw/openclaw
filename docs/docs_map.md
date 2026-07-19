@@ -17,6 +17,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Boundaries
   - H2: Manifests
   - H2: Runtime Selection
+  - H2: Model Runtime Generations
   - H2: Related
 
 ## announcements/bluebubbles-imessage.md
@@ -1828,6 +1829,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What OpenClaw shows
   - H2: Examples
   - H2: Operations and approval
+  - H3: Change history
   - H3: Switching to masked channel setup
   - H2: Setup bootstrap
   - H2: AI conversation
@@ -2492,7 +2494,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Home
   - H2: What flows into the main session
   - H2: Memory across resets and conversations
-  - H2: A rolling session, not an immortal one
+  - H2: A rolling session with durable history
   - H2: When you want isolation instead
   - H2: Related
 
@@ -3288,7 +3290,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.promptOverlays
   - H3: agents.defaults.heartbeat
   - H3: agents.defaults.compaction
-  - H3: agents.defaults.runRetries
   - H3: agents.defaults.contextPruning
   - H3: Block streaming
   - H3: Typing indicators
@@ -3419,7 +3420,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Supported credential surface
   - H3: Secret providers config
   - H2: Auth storage
-  - H3: auth.cooldowns
   - H2: Audit
   - H2: Logging
   - H2: Diagnostics
@@ -3430,10 +3430,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Identity
   - H2: Bridge (legacy, removed)
   - H2: Cron
-  - H3: cron.retry
   - H3: cron.failureAlert
   - H3: cron.failureDestination
-  - H2: Worktrees
   - H2: Media model template variables
   - H2: Config includes ($include)
   - H2: Related
@@ -3664,7 +3662,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: When to use this endpoint
   - H2: Agent-first model contract
   - H2: Session behavior
-  - H2: Request limits (config)
+  - H2: Request limits
   - H2: Chat tool contract
   - H3: Supported request fields
   - H3: Unsupported variants
@@ -3690,7 +3688,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tools (client-side function tools)
   - H2: Images (inputimage)
   - H2: Files (inputfile)
-  - H2: File + image limits (config)
+  - H2: File + image limits
   - H2: Streaming (SSE)
   - H2: Usage
   - H2: Errors
@@ -5601,7 +5599,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Public capability model
   - H3: External compatibility stance
   - H3: Plugin shapes
-  - H3: Legacy hooks
   - H3: Compatibility signals
   - H2: Architecture overview
   - H3: Plugin metadata snapshot and lookup table
@@ -5888,6 +5885,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
+  - H3: Sender-aware policy in one file
   - H3: Exec environment hook
   - H3: Tool result persistence
   - H2: Prompt and model hooks
@@ -7435,6 +7433,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Durable ingress monitors
   - H2: Adapter
+  - H2: Outbound echo suppression
   - H2: Plain-text sanitization
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
@@ -7500,8 +7499,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces
+  - H3: Process-global API-provider publication
   - H3: Private testing barrel
-  - H2: Active deprecations
+  - H2: Migration reference
   - H2: Talk and realtime voice migration
   - H2: Removal timeline
   - H2: Suppressing the warnings temporarily
@@ -7578,8 +7578,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-subpaths
 - Headings:
   - H2: Plugin entry
-  - H3: Deprecated compatibility and test helpers
-  - H3: Reserved bundled plugin helper subpaths
+  - H3: Compatibility and private-local helpers
+  - H3: Bundled plugin helper subpaths
   - H2: Related
 
 ## plugins/sdk-testing.md
@@ -9767,6 +9767,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Enable Code Mode
   - H3: What the model does
   - H3: Verify the active surface
+  - H2: Use Swarm for agent fan-out
   - H2: Technical tour
   - H2: Runtime status
   - H2: Scope
@@ -10420,6 +10421,22 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Liveness and recovery
   - H2: Stopping
   - H2: Limitations
+  - H2: Related
+
+## tools/swarm.md
+
+- Route: /tools/swarm
+- Headings:
+  - H2: Enable Swarm
+  - H2: Requirements
+  - H2: Write a Swarm script
+  - H3: Fan out in parallel with structured results
+  - H3: Loop on a decision gate
+  - H3: Process the first child that finishes
+  - H2: How collector children behave
+  - H2: Observe a Swarm
+  - H2: Use Swarm from other harnesses
+  - H2: Limits and roadmap
   - H2: Related
 
 ## tools/tavily.md

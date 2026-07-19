@@ -181,6 +181,72 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
     }
   });
 
+  it("renders the gateway avatar route in the profile preview", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const avatarRequests: string[] = [];
+    // The gateway serves the avatar (uploaded first, Gravatar fallback second)
+    // behind its own same-origin route; the Control UI renders only that route,
+    // so the preview never requests gravatar.com directly — the Control UI CSP
+    // (img-src 'self') would block it.
+    await page.route("**/api/users/profile-1/avatar*", async (route) => {
+      avatarRequests.push(route.request().url());
+      await route.fulfill({
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
+        contentType: "image/svg+xml",
+        status: 200,
+      });
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "usage.cost": usageCostResponse,
+        "sessions.usage": sessionsUsageResponse,
+        "users.self": {
+          profile: {
+            id: "profile-1",
+            displayName: "Test Person",
+            avatarMime: null,
+            mergedInto: null,
+            createdAt: 1,
+            updatedAt: 2,
+            emails: ["test@example.com"],
+            hasAvatar: false,
+          },
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      expect(response?.status()).toBe(200);
+      const connect = await gateway.waitForRequest("connect");
+      const instanceId = (connect.params as { client?: { instanceId?: string } } | undefined)
+        ?.client?.instanceId;
+      expect(instanceId).toBeTruthy();
+      await gateway.emitGatewayEvent("presence", {
+        presence: [
+          {
+            instanceId,
+            user: { id: "profile-1", email: "test@example.com", name: "Test Person" },
+          },
+        ],
+      });
+
+      const profileAvatar = page.locator("#settings-profile-identity openclaw-viewer-avatar img");
+      await profileAvatar.waitFor({ timeout: 10_000 });
+      // profile-page derives the src from userProfileAvatarUrl(id, updatedAt);
+      // the gateway origin may absolutize it, so match the canonical path suffix.
+      expect(await profileAvatar.getAttribute("src")).toMatch(
+        /\/api\/users\/profile-1\/avatar\?v=2$/u,
+      );
+      await expect
+        .poll(() => avatarRequests.some((url) => url.includes("/api/users/profile-1/avatar")))
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps the loading note while a cold usage cache is still rebuilding", async () => {
     const context = await browser.newContext();
     const page = await context.newPage();

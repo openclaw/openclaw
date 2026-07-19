@@ -234,10 +234,8 @@ export type PluginManifestRecord = {
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
-  providerAuthEnvVars?: Record<string, string[]>;
   providerUsageAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
-  channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
@@ -586,10 +584,8 @@ function buildRecord(params: {
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
-    providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerUsageAuthEnvVars: params.manifest.providerUsageAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
-    channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     activation: params.manifest.activation,
     setup: params.manifest.setup,
@@ -699,39 +695,6 @@ function buildBundleRecord(params: {
   };
 }
 
-function pushProviderAuthEnvVarsCompatDiagnostic(params: {
-  record: PluginManifestRecord;
-  diagnostics: PluginDiagnostic[];
-}): void {
-  if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
-    return;
-  }
-  const setupProviderEnvVars = new Map(
-    (params.record.setup?.providers ?? []).map(
-      (provider) => [provider.id, new Set(provider.envVars ?? [])] as const,
-    ),
-  );
-  const providerIds = Object.entries(params.record.providerAuthEnvVars)
-    .filter(([providerId, envVars]) => {
-      if (!providerId.trim() || envVars.length === 0) {
-        return false;
-      }
-      const mirroredEnvVars = setupProviderEnvVars.get(providerId);
-      return !mirroredEnvVars || envVars.some((envVar) => !mirroredEnvVars.has(envVar));
-    })
-    .map(([providerId]) => providerId)
-    .toSorted((left, right) => left.localeCompare(right));
-  if (providerIds.length === 0) {
-    return;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    pluginId: sanitizeForLog(params.record.id),
-    source: sanitizeForLog(params.record.manifestPath),
-    message: `providerAuthEnvVars is deprecated compatibility metadata for provider env-var lookup; mirror ${providerIds.map(sanitizeForLog).join(", ")} env vars to setup.providers[].envVars before the deprecation window closes`,
-  });
-}
-
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -776,7 +739,6 @@ function pushManifestCompatibilityDiagnostics(params: {
   diagnostics: PluginDiagnostic[];
   normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
 }): void {
-  pushProviderAuthEnvVarsCompatDiagnostic(params);
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
@@ -1257,5 +1219,22 @@ export function loadPluginManifestRegistry(
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
   const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
+}
+
+/** Load manifest metadata from the bundled/source plugin tree without consulting operator state. */
+export function loadBundledPluginManifestRegistry(
+  params: { env?: NodeJS.ProcessEnv } = {},
+): PluginManifestRegistry {
+  const env = params.env ?? process.env;
+  const installRecords: Record<string, PluginInstallRecord> = {};
+  return loadPluginManifestRegistry({
+    env,
+    installRecords,
+    discovery: discoverOpenClawPlugins({
+      env,
+      installRecords,
+      rootScope: "bundled",
+    }),
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

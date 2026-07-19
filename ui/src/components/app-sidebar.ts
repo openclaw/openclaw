@@ -9,6 +9,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -42,9 +43,13 @@ const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platfo
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 let lobsterPetModuleLoad: Promise<unknown> | null = null;
+let viewerFacepileModuleLoad: Promise<unknown> | null = null;
 
-function scheduleLobsterPetLoad() {
-  if (lobsterPetModuleLoad || customElements.get("openclaw-lobster-pet")) {
+function scheduleSidebarChromeLoad() {
+  if (
+    (lobsterPetModuleLoad || customElements.get("openclaw-lobster-pet")) &&
+    (viewerFacepileModuleLoad || customElements.get("openclaw-viewer-facepile"))
+  ) {
     return;
   }
   const start = () => {
@@ -52,10 +57,18 @@ function scheduleLobsterPetLoad() {
     // cache and retry when connectivity returns. The sidebar mounts once per
     // page, so without this a transient failure would disable the pet for the
     // whole session; a deploy-pruned chunk stays off until reload, by design.
-    lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
-      lobsterPetModuleLoad = null;
-      window.addEventListener("online", () => start(), { once: true });
-    });
+    if (!customElements.get("openclaw-lobster-pet")) {
+      lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
+        lobsterPetModuleLoad = null;
+        window.addEventListener("online", () => start(), { once: true });
+      });
+    }
+    if (!customElements.get("openclaw-viewer-facepile")) {
+      viewerFacepileModuleLoad ??= import("./viewer-facepile.ts").catch(() => {
+        viewerFacepileModuleLoad = null;
+        window.addEventListener("online", () => start(), { once: true });
+      });
+    }
   };
   if ("requestIdleCallback" in window) {
     requestIdleCallback(() => start(), { timeout: 3000 });
@@ -90,7 +103,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     this.syncOfflineIndicator();
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
-    scheduleLobsterPetLoad();
+    scheduleSidebarChromeLoad();
   }
 
   override disconnectedCallback() {
@@ -283,6 +296,14 @@ class AppSidebar extends AppSidebarSessionListElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
+    const selfUser = this.connected
+      ? resolveCurrentSelfUser({
+          snapshotUser: this.context?.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.presenceInstanceId,
+        })
+      : null;
+    const selfLabel = selfUser?.name ?? selfUser?.email ?? selfUser?.id;
     return html`
       <div class="sidebar-footer-bar">
         <span class="sidebar-brand__logo-slot sidebar-footer-bar__logo">
@@ -294,6 +315,27 @@ class AppSidebar extends AppSidebarSessionListElement {
           />
           <openclaw-lobster-logo-standin .visit=${this.logoVisit}></openclaw-lobster-logo-standin>
         </span>
+        ${selfUser && selfLabel
+          ? html`<button
+              type="button"
+              class="sidebar-footer-bar__identity"
+              title=${selfLabel}
+              aria-label=${t("profilePage.identity.openSettings", { name: selfLabel })}
+              @click=${() => this.onNavigate?.("profile", { hash: "#settings-profile-identity" })}
+            >
+              <openclaw-viewer-avatar
+                .user=${{ ...selfUser, watchedSessions: [] }}
+                variant="footer"
+              ></openclaw-viewer-avatar>
+              <span class="sidebar-footer-bar__identity-name">${selfLabel}</span>
+            </button>`
+          : nothing}
+        <openclaw-viewer-facepile
+          .presencePayload=${this.presencePayload}
+          .selfInstanceId=${this.presenceInstanceId}
+          .maxVisible=${5}
+          variant="footer"
+        ></openclaw-viewer-facepile>
         <openclaw-sidebar-build-chip
           .basePath=${this.basePath}
           .gatewayVersion=${this.gatewayVersion}

@@ -475,7 +475,7 @@ describe("update.run restart scheduling", () => {
     mockGlobalInstallSurface();
 
     const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload({}, { gateway: { reload: { deferralTimeoutMs: 60_000 } } }),
+      captureUpdateRunPayload({}, {}),
     );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
@@ -483,7 +483,7 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/tmp/openclaw",
-        restartDrainTimeoutMs: 60_000,
+        restartDrainTimeoutMs: 300_000,
         restartDelayMs: 2000,
         handoffId: expect.any(String),
         supervisor: "launchd",
@@ -533,19 +533,6 @@ describe("update.run restart scheduling", () => {
           reason: "managed-service-handoff-started",
         }),
       }),
-    );
-  });
-
-  it("preserves an indefinite restart drain for managed updates", async () => {
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
-
-    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload({}, { gateway: { reload: { deferralTimeoutMs: 0 } } }),
-    );
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({ restartDrainTimeoutMs: undefined }),
     );
   });
 

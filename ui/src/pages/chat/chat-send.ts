@@ -121,6 +121,7 @@ export type ChatHost = ChatInputHistoryState &
     chatRunId: string | null;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
+    chatRunError?: { summary: string } | null;
     lastError?: string | null;
     chatError?: string | null;
     hello: GatewayHelloOk | null;
@@ -2174,6 +2175,8 @@ export async function handleSendChat(
   if (messageOverride != null && opts?.confirmReset && !confirmChatResetCommand(message)) {
     return;
   }
+
+  host.chatRunError = null;
 
   if (shouldInterpretChatCommands) {
     // Natural words such as "wait" and "exit" are stop aliases only while a

@@ -225,6 +225,10 @@ const loadSessionCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/session-catalog.js"),
   (module) => module.sessionCatalogHandlers,
 );
+const loadSessionDiscussionHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-discussion.js"),
+  (module) => module.sessionDiscussionHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -288,6 +292,10 @@ const loadWebHandlers = lazyHandlerModule(
 const loadSystemAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/system-agent.js"),
   (module) => module.systemAgentHandlers,
+);
+const loadSystemChangesHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-changes.js"),
+  (module) => module.systemChangesHandlers,
 );
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
@@ -362,6 +370,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["logs.tail"],
     loadHandlers: loadLogsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["openclaw.changes.list"],
+    loadHandlers: loadSystemChangesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -555,6 +567,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "openclaw.chat",
+      "openclaw.chat.history",
       "openclaw.approval.list",
       "openclaw.setup.detect",
       "openclaw.setup.verify",
@@ -666,6 +679,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.catalog.archive",
     ],
     loadHandlers: loadSessionCatalogHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["session.discussion.info", "session.discussion.open"],
+    loadHandlers: loadSessionDiscussionHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
