@@ -83,6 +83,18 @@ describe("stripBootEchoFromOutboundText", () => {
     expect(stripBootEchoFromOutboundText(outbound, bootPrompt)).toBe("");
   });
 
+  it("preserves boundary-expanded windows that meet the minimum echo length", () => {
+    // Regression: when a surrogate pair at the 80-char boundary causes
+    // sliceUtf16Safe to expand the window, the result (longer than minLen)
+    // must still be usable for echo detection — not discarded.
+    const prefix = "A".repeat(79);
+    const emoji = "\u{1F600}"; // 😀 — 2 UTF-16 code units
+    const bootPrompt = prefix + emoji + "A".repeat(40); // 121 code units
+    // Outbound contains the full 80+ contiguous substring starting at 0
+    const outbound = prefix + emoji + "A".repeat(20); // 101 code units
+    expect(stripBootEchoFromOutboundText(outbound, bootPrompt)).toBe("");
+  });
+
   it("handles outbound text ending at a low-surrogate boundary", () => {
     // Terminal low-surrogate regression: the last window in the haystack
     // should not crash or produce false positives when it ends at a
