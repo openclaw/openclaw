@@ -86,4 +86,36 @@ describe("session-memory transcript extraction", () => {
       "assistant: Answer [REMOVED_SPECIAL_TOKEN]",
     );
   });
+
+  it("returns a single-line transcript without a trailing newline", async () => {
+    const transcriptPath = await writeTranscript(message("user", "hello"));
+
+    await expect(getRecentSessionContentWithResetFallback(transcriptPath)).resolves.toBe(
+      "user: hello",
+    );
+  });
+
+  it("reads only a bounded tail from oversized transcripts and keeps recent events", async () => {
+    const transcriptPath = await writeTranscript(
+      [
+        message("user", `early-marker ${"x".repeat(51 * 1024 * 1024)}`),
+        message("user", "recent tail marker"),
+        message("assistant", "recent tail answer"),
+      ].join("\n"),
+    );
+
+    const memoryContent = await getRecentSessionContentWithResetFallback(transcriptPath);
+
+    expect(memoryContent).toContain("user: recent tail marker");
+    expect(memoryContent).toContain("assistant: recent tail answer");
+    expect(memoryContent).not.toContain("early-marker");
+    expect(memoryContent?.length).toBeLessThan(1024);
+  });
+
+  it("returns null for non-regular transcript paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-memory-transcript-"));
+    tempRoots.push(root);
+
+    await expect(getRecentSessionContentWithResetFallback(root)).resolves.toBeNull();
+  });
 });

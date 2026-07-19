@@ -1,4 +1,3 @@
-import { statSync } from "node:fs";
 // Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -135,22 +134,46 @@ export function getRecentSessionContentFromEvents(
 }
 
 // Session transcript files contain agent-user conversation content.
-// Most transcripts are under 1 MiB; cap at 50 MiB to prevent OOM on
+// Most transcripts are under 1 MiB; cap reads at 50 MiB to prevent OOM on
 // extremely long sessions or corrupted files.
 const MAX_SESSION_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
 
-/** Read a session transcript file with size pre-check. */
+/**
+ * Read a session transcript through one file descriptor, bounding the read to
+ * the trailing MAX_SESSION_TRANSCRIPT_BYTES. Only recent events are consumed,
+ * so an oversized transcript still yields its latest messages instead of
+ * failing, and concurrent growth or replacement after open cannot bypass the
+ * bound.
+ */
 async function readSessionTranscriptSafely(filePath: string): Promise<string> {
-  const stat = statSync(filePath);
-  if (!stat.isFile()) {
-    throw new Error(`not a regular file: ${filePath}`);
+  const handle = await fs.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${filePath}`);
+    }
+    const start = Math.max(0, stat.size - MAX_SESSION_TRANSCRIPT_BYTES);
+    const length = Math.min(stat.size, MAX_SESSION_TRANSCRIPT_BYTES);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const { bytesRead } = await handle.read(buffer, offset, length - offset, start + offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    const tail = buffer.subarray(0, offset).toString("utf-8");
+    if (start === 0) {
+      return tail;
+    }
+    // A truncated tail can start mid-line; drop the partial first line so
+    // JSONL parsing resumes at an event boundary.
+    const firstNewline = tail.indexOf("\n");
+    return firstNewline === -1 ? "" : tail.slice(firstNewline + 1);
+  } finally {
+    await handle.close();
   }
-  if (stat.size > MAX_SESSION_TRANSCRIPT_BYTES) {
-    throw new Error(
-      `session transcript too large: ${filePath} is ${stat.size} bytes (max ${MAX_SESSION_TRANSCRIPT_BYTES})`,
-    );
-  }
-  return await fs.readFile(filePath, "utf-8");
 }
 
 async function getRecentSessionContent(
