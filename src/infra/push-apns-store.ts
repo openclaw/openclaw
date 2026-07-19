@@ -638,6 +638,51 @@ export async function loadApnsRegistrations(
   });
 }
 
+/** Clears the then-current registration and leaves a durable successor tombstone. */
+export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
+  const normalizedNodeId = normalizeApnsNodeId(nodeId);
+  if (!normalizedNodeId) {
+    return false;
+  }
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
+    const currentRow = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("apns_registrations")
+        .select("updated_at_ms")
+        .where("node_id", "=", normalizedNodeId),
+    );
+    const tombstone = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("apns_registration_tombstones")
+        .select("deleted_at_ms")
+        .where("node_id", "=", normalizedNodeId),
+    );
+    const previousVersions = [currentRow?.updated_at_ms, tombstone?.deleted_at_ms].filter(
+      (version): version is number => version !== undefined,
+    );
+    const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions);
+    // Pairing removal owns all registrations for this node id. Tombstone even
+    // an empty row so a retired source cannot restore ownership after removal.
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .insertInto("apns_registration_tombstones")
+        .values({ node_id: normalizedNodeId, deleted_at_ms: deletedAtMs })
+        .onConflict((conflict) =>
+          conflict.column("node_id").doUpdateSet({ deleted_at_ms: deletedAtMs }),
+        ),
+    );
+    executeSqliteQuerySync(
+      db,
+      stateDb.deleteFrom("apns_registrations").where("node_id", "=", normalizedNodeId),
+    );
+    return currentRow !== undefined;
+  }, apnsStateDatabaseOptions(baseDir));
+}
+
 /** Clears a registration only if storage still contains the caller's observed value. */
 export async function clearApnsRegistrationIfCurrent(params: {
   nodeId: string;

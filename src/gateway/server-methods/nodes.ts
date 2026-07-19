@@ -43,6 +43,7 @@ import {
   renamePairedNode,
 } from "../../infra/node-pairing.js";
 import {
+  clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   sendApnsAlert,
@@ -535,7 +536,6 @@ async function removePairedDeviceBackedNode(params: {
       status: "removed";
       nodeId: string;
       disconnectDeviceId: string;
-      apnsRegistration: Awaited<ReturnType<typeof loadApnsRegistration>>;
     }
   | { status: "denied"; message: string }
   | { status: "unknown" }
@@ -577,12 +577,6 @@ async function removePairedDeviceBackedNode(params: {
     return { status: "denied", message: "node pairing removal denied" };
   }
 
-  const observedRegistration = await loadApnsRegistration(nodeId).catch((err: unknown) => {
-    params.context.logGateway.warn(
-      `node pairing removal could not read APNs registration node=${nodeId}: ${formatErrorMessage(err)}`,
-    );
-    return null;
-  });
   const removed = await removePairedDeviceRole({ deviceId: nodeId, role: "node" });
   if (!removed) {
     return { status: "unknown" };
@@ -600,11 +594,15 @@ async function removePairedDeviceBackedNode(params: {
     role: "node",
     reason: "device-pair-removed",
   });
+  await clearApnsRegistration(removed.deviceId).catch((err: unknown) => {
+    params.context.logGateway.warn(
+      `node pairing removal could not clear APNs registration node=${removed.deviceId}: ${formatErrorMessage(err)}`,
+    );
+  });
   return {
     status: "removed",
     nodeId: removed.deviceId,
     disconnectDeviceId: removed.deviceId,
-    apnsRegistration: observedRegistration,
   };
 }
 
@@ -1268,16 +1266,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
       try {
         clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
-        if (deviceBacked.apnsRegistration) {
-          await clearApnsRegistrationIfCurrent({
-            nodeId: deviceBacked.nodeId,
-            registration: deviceBacked.apnsRegistration,
-          }).catch((err: unknown) => {
-            context.logGateway.warn(
-              `node pairing removal could not clear APNs registration node=${deviceBacked.nodeId}: ${formatErrorMessage(err)}`,
-            );
-          });
-        }
         broadcastRemovedNodePairing({ nodeId: deviceBacked.nodeId, context });
         respond(true, { nodeId: deviceBacked.nodeId }, undefined);
       } finally {

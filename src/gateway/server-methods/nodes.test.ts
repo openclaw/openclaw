@@ -251,6 +251,39 @@ describe("nodeHandlers node.pair.remove", () => {
     await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
   });
 
+  it("clears an APNs registration replaced during node-role removal", async () => {
+    const state = await createState("node-remove-apns-registration-race");
+    const nodeId = "ios-node-registration-race";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await registerApnsRegistration({
+      nodeId,
+      transport: "direct",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+    });
+
+    const { context, opts } = createOptions({ nodeId });
+    let replacementWrite: Promise<unknown> | undefined;
+    context.invalidateClientsForDevice.mockImplementation(() => {
+      replacementWrite = registerApnsRegistration({
+        nodeId,
+        transport: "direct",
+        token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+      });
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
+    await replacementWrite;
+
+    await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
+  });
+
   it("removes Android device-backed node rows from the paired-device store", async () => {
     const state = await createState("node-remove-android-device-backed");
     const nodeId = "android-node-1";

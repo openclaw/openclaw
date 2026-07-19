@@ -29,10 +29,7 @@ import {
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  clearApnsRegistrationIfCurrent,
-  loadApnsRegistration,
-} from "../../infra/push-apns.js";
+import { clearApnsRegistration } from "../../infra/push-apns.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -482,13 +479,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const apnsNodeId = authz.normalizedTargetDeviceId;
-    const observedRegistration = await loadApnsRegistration(apnsNodeId).catch((err: unknown) => {
-      context.logGateway.warn(
-        `device pairing removal could not read APNs registration device=${apnsNodeId}: ${formatErrorMessage(err)}`,
-      );
-      return null;
-    });
     const removed = await removePairedDevice(deviceId);
     if (!removed) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
@@ -500,16 +490,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.invalidateClientsForDevice?.(removed.deviceId, {
       reason: "device-pair-removed",
     });
-    if (observedRegistration) {
-      await clearApnsRegistrationIfCurrent({
-        nodeId: removed.deviceId,
-        registration: observedRegistration,
-      }).catch((err: unknown) => {
-        context.logGateway.warn(
-          `device pairing removal could not clear APNs registration device=${removed.deviceId}: ${formatErrorMessage(err)}`,
-        );
-      });
-    }
+    await clearApnsRegistration(removed.deviceId).catch((err: unknown) => {
+      context.logGateway.warn(
+        `device pairing removal could not clear APNs registration device=${removed.deviceId}: ${formatErrorMessage(err)}`,
+      );
+    });
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",

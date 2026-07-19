@@ -40,6 +40,7 @@ import {
 } from "./push-apns.relay.js";
 
 export {
+  clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,

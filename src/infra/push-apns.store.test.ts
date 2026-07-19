@@ -11,6 +11,7 @@ import {
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
+  clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
@@ -242,6 +243,31 @@ describe("push APNs registration store", () => {
       }),
     ).resolves.toBe(false);
     await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(replacement);
+  });
+
+  it("clears the current registration without relying on a pre-removal snapshot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-11T00:00:00Z"));
+    const baseDir = await makeTempDir();
+    const stale = await registerDirectApnsRegistration({ nodeId: "ios-node-race", baseDir });
+    const replacement = await registerDirectApnsRegistration({
+      nodeId: "ios-node-race",
+      token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+      baseDir,
+    });
+
+    expect(replacement.updatedAtMs).toBe(stale.updatedAtMs + 1);
+    await expect(clearApnsRegistration("ios-node-race", baseDir)).resolves.toBe(true);
+    await expect(loadApnsRegistration("ios-node-race", baseDir)).resolves.toBeNull();
+
+    const database = openOpenClawStateDatabase({ env: databaseEnv(baseDir) });
+    expect(
+      database.db
+        .prepare(
+          "SELECT node_id, deleted_at_ms FROM apns_registration_tombstones WHERE node_id = ?",
+        )
+        .get("ios-node-race"),
+    ).toEqual({ node_id: "ios-node-race", deleted_at_ms: replacement.updatedAtMs + 1 });
   });
 
   it("rejects invalid direct and relay inputs", async () => {

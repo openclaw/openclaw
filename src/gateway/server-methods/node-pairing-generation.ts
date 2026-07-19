@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   getPairedDevice,
   listApprovedPairedDeviceRoles,
@@ -13,10 +14,25 @@ function resolveNodePairingGeneration(device: PairedDevice | null): NodePairingG
   if (!device || !listApprovedPairedDeviceRoles(device).includes("node")) {
     return null;
   }
-  const nodeApprovedAtMs = device.nodeSurface?.approvedAtMs ?? device.approvedAtMs;
+  const nodeToken = device.tokens?.node;
+  const nodeSurface = device.nodeSurface;
+  // Only node-owned identity participates here. Device-wide approval time also
+  // changes for unrelated operator upgrades and would invalidate valid node work.
+  const key = createHash("sha256")
+    .update(
+      [
+        device.publicKey,
+        device.createdAtMs,
+        nodeToken?.token ?? "",
+        nodeToken?.revokedAtMs ?? "",
+        nodeSurface?.createdAtMs ?? "",
+        nodeSurface?.approvedAtMs ?? "",
+      ].join("\0"),
+    )
+    .digest("hex");
   return {
     nodeId: device.deviceId,
-    key: [device.publicKey, device.createdAtMs, device.approvedAtMs, nodeApprovedAtMs].join("\0"),
+    key,
   };
 }
 

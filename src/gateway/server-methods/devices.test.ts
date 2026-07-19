@@ -15,11 +15,10 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const {
   approveDevicePairingMock,
-  clearApnsRegistrationIfCurrentMock,
+  clearApnsRegistrationMock,
   getPairedDeviceMock,
   getPendingDevicePairingMock,
   listDevicePairingMock,
-  loadApnsRegistrationMock,
   removePairedDeviceMock,
   rejectDevicePairingMock,
   revokeDeviceTokenMock,
@@ -27,11 +26,10 @@ const {
   updatePairedDeviceMetadataMock,
 } = vi.hoisted(() => ({
   approveDevicePairingMock: vi.fn(),
-  clearApnsRegistrationIfCurrentMock: vi.fn(),
+  clearApnsRegistrationMock: vi.fn(),
   getPairedDeviceMock: vi.fn(),
   getPendingDevicePairingMock: vi.fn(),
   listDevicePairingMock: vi.fn(),
-  loadApnsRegistrationMock: vi.fn(),
   removePairedDeviceMock: vi.fn(),
   rejectDevicePairingMock: vi.fn(),
   revokeDeviceTokenMock: vi.fn(),
@@ -58,8 +56,7 @@ vi.mock("../../infra/device-pairing.js", async () => {
 });
 
 vi.mock("../../infra/push-apns.js", () => ({
-  clearApnsRegistrationIfCurrent: clearApnsRegistrationIfCurrentMock,
-  loadApnsRegistration: loadApnsRegistrationMock,
+  clearApnsRegistration: clearApnsRegistrationMock,
 }));
 
 function createClient(
@@ -165,28 +162,18 @@ describe("deviceHandlers", () => {
     nodeWakeById.clear();
     nodeWakeNudgeById.clear();
     vi.clearAllMocks();
-    loadApnsRegistrationMock.mockResolvedValue(null);
-    clearApnsRegistrationIfCurrentMock.mockResolvedValue(false);
+    clearApnsRegistrationMock.mockResolvedValue(false);
   });
 
   it("clears and invalidates node runtime state after removing a full device pairing", async () => {
     const nodeId = "disconnected-node-device";
-    const registration = {
-      nodeId,
-      transport: "direct" as const,
-      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox" as const,
-      updatedAtMs: 123,
-    };
-    loadApnsRegistrationMock.mockResolvedValue(registration);
     removePairedDeviceMock.mockResolvedValue({ deviceId: nodeId });
     nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
     nodeWakeNudgeById.set(nodeId, Date.now());
     enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
     const opts = createOptions("device.pair.remove", { deviceId: nodeId });
-    clearApnsRegistrationIfCurrentMock.mockImplementation(async () => {
+    clearApnsRegistrationMock.mockImplementation(async () => {
       expect(wakeLifecycle.aborted).toBe(true);
       expect(opts.context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
         reason: "device-pair-removed",
@@ -213,22 +200,10 @@ describe("deviceHandlers", () => {
       commands: [],
       permissions: undefined,
     });
-    expect(clearApnsRegistrationIfCurrentMock).toHaveBeenCalledWith({
-      nodeId,
-      registration,
-    });
+    expect(clearApnsRegistrationMock).toHaveBeenCalledWith(nodeId);
   });
 
   it("disconnects active clients after removing a paired device", async () => {
-    const registration = {
-      nodeId: "device-1",
-      transport: "direct" as const,
-      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox" as const,
-      updatedAtMs: 123,
-    };
-    loadApnsRegistrationMock.mockResolvedValue(registration);
     removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1", removedAtMs: 123 });
     const opts = createOptions("device.pair.remove", { deviceId: " device-1 " });
 
@@ -239,17 +214,34 @@ describe("deviceHandlers", () => {
     await Promise.resolve();
 
     expect(removePairedDeviceMock).toHaveBeenCalledWith(" device-1 ");
-    expect(loadApnsRegistrationMock).toHaveBeenCalledWith("device-1");
-    expect(clearApnsRegistrationIfCurrentMock).toHaveBeenCalledWith({
-      nodeId: "device-1",
-      registration,
-    });
+    expect(clearApnsRegistrationMock).toHaveBeenCalledWith("device-1");
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1");
     expect(opts.respond).toHaveBeenCalledWith(
       true,
       { deviceId: "device-1", removedAtMs: 123 },
       undefined,
     );
+  });
+
+  it("clears a registration replaced while device removal is in flight", async () => {
+    let storedRegistration = "registration-a";
+    removePairedDeviceMock.mockImplementation(async () => {
+      storedRegistration = "registration-b";
+      return { deviceId: "device-1", removedAtMs: 123 };
+    });
+    clearApnsRegistrationMock.mockImplementation(async () => {
+      storedRegistration = "";
+      return true;
+    });
+    const opts = createOptions("device.pair.remove", { deviceId: "device-1" });
+
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
+
+    expect(storedRegistration).toBe("");
+    expect(clearApnsRegistrationMock).toHaveBeenCalledWith("device-1");
   });
 
   it("invalidates affected clients synchronously before responding to device.pair.remove", async () => {
