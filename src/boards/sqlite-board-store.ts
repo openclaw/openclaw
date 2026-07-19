@@ -57,7 +57,7 @@ const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
 // Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
 // no board tables until the first write. Reads must treat that as "no boards",
 // not "no such table".
-function boardTablesPresent(database: OpenClawAgentDatabase): boolean {
+function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
   if (ensuredBoardDatabases.has(database.db)) {
     return true;
   }
