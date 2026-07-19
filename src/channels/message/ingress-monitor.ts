@@ -122,7 +122,8 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
   onError?: (error: unknown) => void;
   onActivityChange?: (active: boolean) => void;
   createStoppedError?: () => Error;
-  admissionMode?: "until-stopped" | "while-running";
+  /** Durable-after-stop preserves append-only admission for handlers selected before unregister. */
+  admissionMode?: "until-stopped" | "while-running" | "durable-after-stop";
 };
 
 /**
@@ -498,7 +499,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       admitOptions?: { receivedAt?: number; facts?: ChannelIngressMonitorFacts },
     ) => {
       if (
-        stopped ||
+        (stopped && options.admissionMode !== "durable-after-stop") ||
         (options.admissionMode === "while-running" && !running) ||
         options.abortSignal?.aborted
       ) {

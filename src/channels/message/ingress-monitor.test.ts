@@ -40,6 +40,7 @@ function createMonitor(
   abortSignal?: AbortSignal,
   pollIntervalMs = 10,
   retryBaseMs = 1_000,
+  admissionMode?: "durable-after-stop",
 ) {
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
@@ -54,6 +55,7 @@ function createMonitor(
     deliver,
     pollIntervalMs,
     retention: { pruneIntervalMs: 60_000 },
+    ...(admissionMode ? { admissionMode } : {}),
     drain: {
       adoptionStallTimeoutMs: 5_000,
       retryPolicy: { baseMs: retryBaseMs, maxMs: retryBaseMs },
@@ -133,7 +135,6 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
     });
   });
-
   it("rechecks identity against a derived lane for legacy rows", async () => {
     await withQueue(async (queue) => {
       await queue.enqueue("event-derived", {
@@ -169,7 +170,6 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
     });
   });
-
   it("drains a newly admitted unrelated lane while another delivery is active", async () => {
     await withQueue(async (queue) => {
       let releaseFirst: (() => void) | undefined;
@@ -440,6 +440,34 @@ describe("channel ingress monitor", () => {
 
       expect(deferredSignal?.aborted).toBe(true);
       await expect(queue.listClaims()).resolves.toHaveLength(1);
+    });
+  });
+  it("keeps append-only admission available after stop when explicitly requested", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn();
+      const retired = createMonitor(
+        queue,
+        deliver,
+        undefined,
+        undefined,
+        undefined,
+        10,
+        1_000,
+        "durable-after-stop",
+      );
+      retired.start();
+      await retired.stop();
+
+      await expect(
+        retired.admit({ id: "event-late", lane: "a", text: "after unregister" }),
+      ).resolves.toMatchObject({ kind: "durable" });
+      expect(deliver).not.toHaveBeenCalled();
+
+      const recovered = createMonitor(queue, deliver);
+      recovered.start();
+      await recovered.waitForIdle();
+      expect(deliver).toHaveBeenCalledOnce();
+      await recovered.stop();
     });
   });
 });
