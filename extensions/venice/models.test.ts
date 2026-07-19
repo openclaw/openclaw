@@ -183,6 +183,33 @@ describe("venice-models", () => {
     expect(llama?.maxTokens).toBe(2048);
   });
 
+  it("uses the live context window for catalog models", async () => {
+    stubVeniceModelsFetch([
+      {
+        id: "qwen3-vl-235b-a22b",
+        availableContextTokens: 128_000,
+      },
+    ]);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
+    const qwen = models.find((model) => model.id === "qwen3-vl-235b-a22b");
+    expect(qwen?.contextWindow).toBe(128_000);
+  });
+
+  it("bounds a catalog maxTokens value to a smaller live context", async () => {
+    stubVeniceModelsFetch([
+      {
+        id: "qwen3-coder-480b-a35b-instruct-turbo",
+        availableContextTokens: 32_000,
+      },
+    ]);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
+    const qwen = models.find((model) => model.id === "qwen3-coder-480b-a35b-instruct-turbo");
+    expect(qwen?.contextWindow).toBe(32_000);
+    expect(qwen?.maxTokens).toBe(32_000);
+  });
+
   it("retains catalog maxTokens when the API omits maxCompletionTokens", async () => {
     stubVeniceModelsFetch([
       {
