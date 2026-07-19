@@ -1364,6 +1364,7 @@
                   "tools/code-execution",
                   "tools/code-mode",
                   "tools/diffs",
+                  "tools/screen",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",

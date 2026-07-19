@@ -2459,6 +2459,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /concepts/experimental-features
 - Headings:
   - H2: Currently documented flags
+  - H2: Control UI Labs
   - H2: Local model lean mode
   - H3: Why these tools
   - H3: When to turn it on
@@ -10165,6 +10166,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Channel behavior
   - H2: Reaction level
+  - H2: Related
+
+## tools/screen.md
+
+- Route: /tools/screen
+- Headings:
+  - H2: Actions
+  - H2: Routing and security
   - H2: Related
 
 ## tools/searxng-search.md
