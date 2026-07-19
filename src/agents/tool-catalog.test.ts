@@ -52,6 +52,7 @@ describe("tool-catalog", () => {
       "spawn_task",
       "dismiss_task",
       "screen",
+      "dashboard",
       "terminal",
       "cron",
       "get_goal",
