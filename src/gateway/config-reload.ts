@@ -162,10 +162,13 @@ export function startGatewayConfigReloader(opts: {
   initialCompareConfig?: OpenClawConfig;
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
+  initialIncludedPaths?: readonly string[];
   initialSnapshotValid: boolean;
   initialSnapshotIssues: ConfigFileSnapshot["issues"];
   /** Keeps watcher-heavy tests immediate without reopening config-level debounce tuning. */
   testDebounceMs?: number;
+  /** Per-instance test hook for synchronizing filesystem edits with watcher startup. */
+  onWatcherReady?: () => void;
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
@@ -809,6 +812,9 @@ export function startGatewayConfigReloader(opts: {
         updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
       }
     });
+    if (snapshot?.valid) {
+      await acceptWatchedPaths(snapshot.includedPaths ?? []);
+    }
   };
 
   const promoteAcceptedInProcessWrite = async (persistedHash: string) => {
@@ -818,6 +824,7 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
+      await acceptWatchedPaths(snapshot.includedPaths ?? []);
       await promoteAcceptedSnapshot(snapshot, "in-process-write");
     } catch (err) {
       opts.log.warn(`config reload in-process last-known-good promotion failed: ${String(err)}`);
@@ -888,6 +895,7 @@ export function startGatewayConfigReloader(opts: {
         await appliedRevision.flush(currentConfig);
         return;
       }
+      await observeCandidateWatchedPaths(snapshot.includedPaths ?? []);
       const observedRawHash = snapshot.hash ?? null;
       const previousObservedRawHash = lastObservedRawHash;
       const newObservedRawHash = observedRawHash !== previousObservedRawHash;
@@ -938,6 +946,7 @@ export function startGatewayConfigReloader(opts: {
           }
           throw err;
         }
+        await acceptWatchedPaths(snapshot.includedPaths ?? []);
         return;
       }
       if (watcherIntentCandidate === intentCandidate) {
@@ -983,6 +992,7 @@ export function startGatewayConfigReloader(opts: {
                 updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
               }
             });
+            await acceptWatchedPaths(snapshot.includedPaths ?? []);
             return;
           }
           await acceptCurrentRuntimeEcho(transactionEpoch, snapshot);
@@ -1047,6 +1057,7 @@ export function startGatewayConfigReloader(opts: {
         );
         await promoteAcceptedSnapshot(snapshot, "valid-config");
       });
+      await acceptWatchedPaths(snapshot.includedPaths ?? []);
     } catch (err) {
       if (isGatewayConfigReloadSupersededError(err)) {
         opts.log.info(`config reload superseded: ${String(err)}`);
@@ -1121,6 +1132,9 @@ export function startGatewayConfigReloader(opts: {
     }) ?? (() => {});
 
   let watcher: ReturnType<typeof chokidar.watch> | null = null;
+  const acceptedIncludedPaths = new Set(opts.initialIncludedPaths ?? []);
+  let candidateIncludedPaths = new Set<string>();
+  const watchedPaths = new Set([opts.watchPath, ...acceptedIncludedPaths]);
   let watcherRecreateRetries = 0;
   let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
   let hotReloadStatus: GatewayHotReloadStatus = "active";
@@ -1132,7 +1146,7 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     const usePolling = resolveChokidarUsePolling(degradedToPolling);
-    const next = chokidar.watch(opts.watchPath, {
+    const next = chokidar.watch([...watchedPaths], {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling,
@@ -1149,15 +1163,16 @@ export function startGatewayConfigReloader(opts: {
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
-    if (reconcileAfterReady) {
-      next.on("ready", () => {
+    next.on("ready", () => {
+      opts.onWatcherReady?.();
+      if (reconcileAfterReady) {
         // Replacement watchers suppress their initial add event. Reconcile only after the
         // scan completes, and ignore a watcher that failed again before reaching ready.
         if (!stopped && watcher === next) {
           scheduleExternalRefresh();
         }
-      });
-    }
+      }
+    });
     watcher = next;
     watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
@@ -1207,6 +1222,50 @@ export function startGatewayConfigReloader(opts: {
       watcherRecreateTimer = null;
       createWatcher(true);
     }, backoff);
+  };
+
+  const reconcileWatchedPaths = async (includedPaths: readonly string[]) => {
+    const nextPaths = new Set([opts.watchPath, ...includedPaths]);
+    const additions = [...nextPaths].filter((candidate) => !watchedPaths.has(candidate));
+    const removals = [...watchedPaths].filter((candidate) => !nextPaths.has(candidate));
+    if (additions.length === 0 && removals.length === 0) {
+      return;
+    }
+
+    watchedPaths.clear();
+    for (const candidate of nextPaths) {
+      watchedPaths.add(candidate);
+    }
+    const activeWatcher = watcher;
+    if (!activeWatcher) {
+      return;
+    }
+    try {
+      await activeWatcher.close();
+    } catch (err) {
+      handleWatcherError(activeWatcher, err);
+      return;
+    }
+    if (stopped || watcher !== activeWatcher) {
+      return;
+    }
+    watcher = null;
+    watcherUsesPolling = false;
+    createWatcher(true);
+  };
+
+  const observeCandidateWatchedPaths = async (includedPaths: readonly string[]) => {
+    candidateIncludedPaths = new Set(includedPaths);
+    await reconcileWatchedPaths([...acceptedIncludedPaths, ...candidateIncludedPaths]);
+  };
+
+  const acceptWatchedPaths = async (includedPaths: readonly string[]) => {
+    acceptedIncludedPaths.clear();
+    for (const candidate of includedPaths) {
+      acceptedIncludedPaths.add(candidate);
+    }
+    candidateIncludedPaths.clear();
+    await reconcileWatchedPaths([...acceptedIncludedPaths]);
   };
 
   createWatcher();

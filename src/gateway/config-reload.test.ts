@@ -1,5 +1,8 @@
 // Gateway config reload tests cover changed-path detection, reload planning,
 // plugin registry refresh, skill snapshot invalidation, and watcher behavior.
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -10,6 +13,7 @@ import type {
   ConfigWriteNotification,
   OpenClawConfig,
 } from "../config/config.js";
+import { createConfigIO } from "../config/io.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -574,7 +578,7 @@ type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
-  return {
+  const watcher = {
     effectiveUsePolling,
     options: { usePolling: false },
     on(event: WatcherEvent, handler: WatcherHandler) {
@@ -590,6 +594,7 @@ function createWatcherMock(effectiveUsePolling?: boolean) {
     },
     close: vi.fn(async () => {}),
   };
+  return watcher;
 }
 
 function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
@@ -600,6 +605,7 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
   const runtimeConfig = partial.runtimeConfig ?? partial.config ?? {};
   return {
     path: "/tmp/openclaw.json",
+    includedPaths: [],
     exists: true,
     raw: "{}",
     parsed: {},
@@ -656,6 +662,7 @@ function createReloaderHarness(
     initialCompareConfig?: OpenClawConfig;
     initialSnapshotRawHash?: string | null;
     initialAuthoredConfig?: unknown;
+    initialIncludedPaths?: readonly string[];
     initialSnapshotValid?: boolean;
     initialSnapshotIssues?: ConfigFileSnapshot["issues"];
     prepareConfigCandidate?: (params: {
@@ -770,6 +777,7 @@ function createReloaderHarness(
         ? "initial-raw-hash"
         : options.initialSnapshotRawHash,
     initialAuthoredConfig: options.initialAuthoredConfig ?? initialConfig,
+    initialIncludedPaths: options.initialIncludedPaths,
     initialSnapshotValid: options.initialSnapshotValid ?? true,
     initialSnapshotIssues: options.initialSnapshotIssues ?? [],
     ...(options.prepareConfigCandidate
@@ -836,6 +844,81 @@ function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, Ope
   return [call[0], call[1]];
 }
 
+describe("startGatewayConfigReloader include files", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reloads when an included config file changes", async () => {
+    const rootDir = await realpath(
+      await mkdtemp(nodePath.join(tmpdir(), "openclaw-config-reload-")),
+    );
+    const configPath = nodePath.join(rootDir, "openclaw.json5");
+    const includePath = nodePath.join(rootDir, "hooks.json5");
+    const includeLinkPath = nodePath.join(rootDir, "hooks-link.json5");
+    const nestedIncludePath = nodePath.join(rootDir, "hooks-enabled.json5");
+    await writeFile(
+      configPath,
+      `${JSON.stringify({ gateway: { reload: { mode: "hot" } }, hooks: { $include: "./hooks-link.json5" } }, null, 2)}\n`,
+    );
+    await writeFile(
+      includePath,
+      `${JSON.stringify({ $include: "./hooks-enabled.json5" }, null, 2)}\n`,
+    );
+    await writeFile(nestedIncludePath, `${JSON.stringify({ enabled: true }, null, 2)}\n`);
+    await symlink(includePath, includeLinkPath);
+    const configIo = createConfigIO({
+      configPath,
+      env: {},
+      homedir: () => rootDir,
+      observe: false,
+      pluginValidation: "skip",
+      logger: { error: vi.fn(), warn: vi.fn() },
+    });
+    const initialSnapshot = await configIo.readConfigFileSnapshot();
+    const onHotReload = vi.fn(async () => {});
+    let signalWatcherReady!: () => void;
+    const watcherReady = new Promise<void>((resolve) => {
+      signalWatcherReady = resolve;
+    });
+    const reloader = startGatewayConfigReloader({
+      initialConfig: initialSnapshot.config,
+      initialCompareConfig: initialSnapshot.sourceConfig,
+      initialSnapshotRawHash: initialSnapshot.hash ?? null,
+      initialAuthoredConfig: initialSnapshot.parsed,
+      initialIncludedPaths: initialSnapshot.includedPaths,
+      initialSnapshotValid: initialSnapshot.valid,
+      initialSnapshotIssues: initialSnapshot.issues,
+      testDebounceMs: 0,
+      onWatcherReady: signalWatcherReady,
+      readSnapshot: async () => await configIo.readConfigFileSnapshot(),
+      initialPluginInstallRecords: {},
+      readPluginInstallRecords: async () => ({}),
+      onNoopConfigCommit: async () => {},
+      onHotReload,
+      onRestart: vi.fn(),
+      log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      watchPath: configPath,
+    });
+
+    try {
+      expect(initialSnapshot.includedPaths).toEqual(
+        [
+          includeLinkPath,
+          await realpath(includePath),
+          await realpath(nestedIncludePath),
+        ].toSorted(),
+      );
+      await watcherReady;
+      await writeFile(nestedIncludePath, `${JSON.stringify({ enabled: false }, null, 2)}\n`);
+      await vi.waitFor(() => expect(onHotReload).toHaveBeenCalledOnce(), { timeout: 5000 });
+    } finally {
+      await reloader.stop();
+      await rm(rootDir, { force: true, recursive: true });
+    }
+  });
+});
+
 function getOnlyPromoteSnapshotCall(promoteSnapshot: {
   mock: { calls: Array<readonly [ConfigFileSnapshot, string]> };
 }): readonly [ConfigFileSnapshot, string] {
@@ -857,6 +940,93 @@ describe("startGatewayConfigReloader", () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("watches resolved includes and reconciles them after an accepted reload", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: {}, port: 18789 },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: {}, port: 18790 },
+    };
+    const initialIncludePath = "/tmp/initial.json5";
+    const retainedIncludePath = "/tmp/retained.json5";
+    const addedIncludePath = "/tmp/added.json5";
+    const harness = createReloaderHarness(
+      vi.fn(async () =>
+        makeSnapshot({
+          config: nextConfig,
+          parsed: nextConfig,
+          hash: "next-raw-hash",
+          includedPaths: [retainedIncludePath, addedIncludePath],
+        }),
+      ),
+      {
+        initialConfig,
+        initialIncludedPaths: [initialIncludePath, retainedIncludePath],
+      },
+    );
+
+    expect(chokidar.watch).toHaveBeenCalledWith(
+      ["/tmp/openclaw.json", initialIncludePath, retainedIncludePath],
+      expect.objectContaining({ ignoreInitial: true }),
+    );
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    // Candidate discovery adds the new include before acceptance; acceptance
+    // then retires the old include in a second readiness-reconciled watcher.
+    expect(harness.watcher.close).toHaveBeenCalledTimes(2);
+    expect(chokidar.watch).toHaveBeenLastCalledWith(
+      ["/tmp/openclaw.json", retainedIncludePath, addedIncludePath],
+      expect.objectContaining({ ignoreInitial: true }),
+    );
+    await harness.reloader.stop();
+  });
+
+  it("retains accepted include watches while replacing a rejected candidate set", async () => {
+    const acceptedIncludePath = "/tmp/accepted.json5";
+    const firstCandidatePath = "/tmp/first-invalid.json5";
+    const secondCandidatePath = "/tmp/second-invalid.json5";
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          valid: false,
+          hash: "first-invalid-hash",
+          includedPaths: [firstCandidatePath],
+          issues: [{ path: "hooks.enabled", message: "Expected boolean" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          valid: false,
+          hash: "second-invalid-hash",
+          includedPaths: [secondCandidatePath],
+          issues: [{ path: "hooks.enabled", message: "Expected boolean" }],
+        }),
+      );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludedPaths: [acceptedIncludePath],
+    });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+    expect(harness.watcher.close).toHaveBeenCalledOnce();
+    expect(chokidar.watch).toHaveBeenLastCalledWith(
+      ["/tmp/openclaw.json", acceptedIncludePath, firstCandidatePath],
+      expect.objectContaining({ ignoreInitial: true }),
+    );
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+    expect(harness.watcher.close).toHaveBeenCalledTimes(2);
+    expect(chokidar.watch).toHaveBeenLastCalledWith(
+      ["/tmp/openclaw.json", acceptedIncludePath, secondCandidatePath],
+      expect.objectContaining({ ignoreInitial: true }),
+    );
+    await harness.reloader.stop();
   });
 
   it("journals valid external watcher edits and advances the snapshot slot", async () => {

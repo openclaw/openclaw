@@ -41,6 +41,17 @@ type InternalReadOptions = {
   ) => boolean | Promise<boolean>;
 };
 
+function listResolvedIncludePaths(includeFileTargetsForWrite: Record<string, string>): string[] {
+  return [
+    ...new Set(
+      Object.entries(includeFileTargetsForWrite).flatMap(([lexicalPath, canonicalPath]) => [
+        lexicalPath,
+        canonicalPath,
+      ]),
+    ),
+  ].toSorted();
+}
+
 export async function readConfigFileSnapshotInternal(
   context: ConfigIoContext,
   options: InternalReadOptions = {},
@@ -90,6 +101,7 @@ export async function readConfigFileSnapshotInternal(
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           path: configPath,
+          includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
           exists: true,
           raw,
           parsed: {},
@@ -126,6 +138,7 @@ export async function readConfigFileSnapshotInternal(
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           path: configPath,
+          includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
           exists: true,
           raw,
           parsed: effectiveParsed,
@@ -182,6 +195,7 @@ export async function readConfigFileSnapshotInternal(
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           path: configPath,
+          includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
           exists: true,
           raw: snapshotRaw,
           parsed: snapshotParsed,
@@ -256,6 +270,7 @@ export async function readConfigFileSnapshotInternal(
         {
           snapshot: createConfigFileSnapshot({
             path: configPath,
+            includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
             exists: true,
             raw: snapshotRaw,
             parsed: snapshotParsed,
@@ -296,6 +311,7 @@ export async function readConfigFileSnapshotInternal(
     return await finalizeReadConfigSnapshotInternalResult(deps, {
       snapshot: createConfigFileSnapshot({
         path: configPath,
+        includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
         exists: true,
         raw: fallbackRaw,
         parsed: fallbackParsed,
