@@ -1491,6 +1491,49 @@ describe("agent request events", () => {
     expectSuspendReady("receipt-delivery-ready");
   });
 
+  it("does not launch agent work when pairing changes during model lookup", async () => {
+    const modelCatalog =
+      createDeferred<Awaited<ReturnType<NodeEventContext["loadGatewayModelCatalog"]>>>();
+    const ctx = buildCtx();
+    ctx.loadGatewayModelCatalog = vi.fn(() => modelCatalog.promise);
+    let connectionCurrent = true;
+    const isConnectionCurrent = vi.fn(async () => connectionCurrent);
+
+    const request = handleNodeEvent(
+      ctx,
+      "node-revoked-during-model-lookup",
+      {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({
+          message: "describe this image",
+          sessionKey: "agent:main:revoked-during-model-lookup",
+          attachments: [{ type: "image", mimeType: "image/png", content: "AAAA" }],
+          deliver: true,
+          receipt: true,
+          channel: "telegram",
+          to: "123",
+        }),
+      },
+      { isConnectionCurrent },
+    );
+
+    await waitForFast(() => expect(ctx.loadGatewayModelCatalog).toHaveBeenCalledTimes(1));
+    connectionCurrent = false;
+    modelCatalog.resolve([]);
+
+    await expect(request).resolves.toEqual({
+      ok: true,
+      event: "agent.request",
+      handled: false,
+      reason: "pairing_changed",
+    });
+    expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
+    expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["wrong owner", { agentHarnessId: "other", modelSelectionLocked: true }],
     ["missing session id", { agentHarnessId: "codex", modelSelectionLocked: true, sessionId: "" }],

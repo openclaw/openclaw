@@ -2102,9 +2102,29 @@ export const nodeHandlers: GatewayRequestHandlers = {
           ? JSON.stringify(p.payload)
           : null;
     await respondUnavailableOnThrow(respond, async () => {
-      const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeSession = context.nodeRegistry.get(nodeId);
+      const eventConnId = client?.connId;
+      const eventPairingGeneration = nodeSession?.pairingGeneration;
+      const isEventConnectionCurrent = async (): Promise<boolean> => {
+        if (!eventConnId || !eventPairingGeneration) {
+          return false;
+        }
+        const before = resolveDispatchableNodeSession(
+          context.nodeRegistry.getForPairingGeneration(nodeId, eventPairingGeneration),
+        );
+        if (!before || before.connId !== eventConnId) {
+          return false;
+        }
+        if (!(await context.nodeRegistry.isConnectionCurrentPairingGeneration(eventConnId))) {
+          return false;
+        }
+        const after = resolveDispatchableNodeSession(
+          context.nodeRegistry.getForPairingGeneration(nodeId, eventPairingGeneration),
+        );
+        return after?.connId === eventConnId;
+      };
+      const { handleNodeEvent } = await import("../server-node-events.js");
       const apnsGeneration =
         p.event === "push.apns.register" ? await captureNodePairingGeneration(nodeId) : null;
       const presenceAllowed =
@@ -2120,7 +2140,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             subscriptionNodeId !== nodeId ||
             !subscriptionConnId ||
             subscriptionConnId !== client?.connId ||
-            !(await context.nodeRegistry.isConnectionCurrentPairingGeneration(subscriptionConnId))
+            !(await isEventConnectionCurrent())
           ) {
             return;
           }
@@ -2131,7 +2151,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             subscriptionNodeId !== nodeId ||
             !subscriptionConnId ||
             subscriptionConnId !== client?.connId ||
-            !(await context.nodeRegistry.isConnectionCurrentPairingGeneration(subscriptionConnId))
+            !(await isEventConnectionCurrent())
           ) {
             return;
           }
@@ -2179,6 +2199,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           connId: client?.connId,
           deviceId: client?.connect?.device?.id,
           presenceAllowed,
+          isConnectionCurrent: isEventConnectionCurrent,
           resolveApnsRegistrationGeneration: async () => {
             if (!apnsGeneration || !client?.connId) {
               return null;
@@ -2199,6 +2220,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
           },
         },
       );
+      if (result?.reason === "pairing_changed") {
+        respondPairingChanged(respond);
+        return;
+      }
       respond(true, result ?? { ok: true }, undefined);
     });
   },
