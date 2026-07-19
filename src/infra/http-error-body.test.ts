@@ -12,25 +12,19 @@ import { readResponseBodySnippet } from "./http-error-body.js";
 
 function bodyLessResponse(
   text: string,
-  options: { contentLength?: number | null; delayedText?: boolean } = {},
+  options: { contentLength?: number | null } = {},
 ): Response {
   const encoder = new TextEncoder();
   const headers = new Headers();
   if (options.contentLength !== undefined && options.contentLength !== null) {
     headers.set("content-length", String(options.contentLength));
   }
-  let _resolveText: ((value: string) => void) | undefined;
-  const textPromise = options.delayedText
-    ? new Promise<string>((resolve) => {
-        _resolveText = resolve;
-      })
-    : Promise.resolve(text);
   return {
     body: null,
     headers,
-    text: async () => textPromise,
+    text: async () => text,
     arrayBuffer: async () => encoder.encode(text).buffer as ArrayBuffer,
-  } as unknown as Response & { _resolveText?: (value: string) => void };
+  } as unknown as Response;
 }
 describe("readResponseBodySnippet", () => {
   it("returns full text when under both limits (body-less path)", async () => {
