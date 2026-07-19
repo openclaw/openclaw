@@ -17,7 +17,7 @@ const MOONSHOT_FIXED_SAMPLING_FIELDS = [
   "presence_penalty",
   "frequency_penalty",
 ] as const;
-const llmRuntimeLoader = createLazyImportLoader(() => import("openclaw/plugin-sdk/llm"));
+const llmRuntimeLoader = createLazyImportLoader(() => import("../../../plugin-sdk/llm.js"));
 type MoonshotK27CodeModel = (typeof MOONSHOT_K2_7_CODE_MODEL_IDS)[number];
 type MoonshotAlwaysThinkingModel = MoonshotK27CodeModel | "kimi-k3";
 

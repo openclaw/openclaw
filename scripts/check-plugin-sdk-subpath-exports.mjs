@@ -14,7 +14,6 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = resolveSourceRoots(repoRoot, ["src", "extensions", "scripts", "test"]);
-const coreRelativeOnlyPrivateSubpaths = new Set(["keyed-async-queue"]);
 
 function readPackageExports() {
   const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
@@ -50,6 +49,24 @@ function parsePluginSdkSubpath(specifier) {
   return subpath || null;
 }
 
+function isRuntimeModuleReference(node) {
+  // With verbatimModuleSyntax, inline `type` specifiers emit an empty import/export and still
+  // resolve the module. Only declaration-level `import type` and `export type` are erased.
+  if (ts.isImportDeclaration(node)) {
+    return !node.importClause?.isTypeOnly;
+  }
+  if (ts.isExportDeclaration(node)) {
+    return !node.isTypeOnly;
+  }
+  if (ts.isImportTypeNode(node)) {
+    return false;
+  }
+  if (ts.isImportEqualsDeclaration(node)) {
+    return !node.isTypeOnly;
+  }
+  return true;
+}
+
 function compareEntries(left, right) {
   return (
     left.file.localeCompare(right.file) ||
@@ -64,6 +81,12 @@ async function collectViolations() {
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
   const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
+  const coreRuntimeFiles = new Set(
+    await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), {
+      includeTests: false,
+      extraTestSuffixes: [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"],
+    }),
+  );
   const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true })).toSorted(
     (left, right) =>
       normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
@@ -74,21 +97,21 @@ async function collectViolations() {
     const sourceText = readFileSync(filePath, "utf8");
     const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
 
-    function push(kind, specifierNode, specifier) {
+    function push(kind, node, specifierNode, specifier) {
       const subpath = parsePluginSdkSubpath(specifier);
       if (!subpath) {
         return;
       }
       if (privateLocalOnlySubpaths.has(subpath)) {
         const repoPath = normalizeRepoPath(repoRoot, filePath);
-        if (repoPath.startsWith("src/") && coreRelativeOnlyPrivateSubpaths.has(subpath)) {
+        if (coreRuntimeFiles.has(filePath) && isRuntimeModuleReference(node)) {
           violations.push({
             file: repoPath,
             line: toLine(sourceFile, specifierNode),
             kind,
             specifier,
             subpath,
-            reason: "private core helper must use a relative import",
+            reason: "private runtime helper used by core must use a relative import",
           });
         }
         return;
@@ -115,8 +138,8 @@ async function collectViolations() {
       });
     }
 
-    visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
-      push(kind, specifierNode, specifier);
+    visitModuleSpecifiers(ts, sourceFile, ({ kind, node, specifier, specifierNode }) => {
+      push(kind, node, specifierNode, specifier);
     });
   }
 
