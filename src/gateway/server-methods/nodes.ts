@@ -87,6 +87,11 @@ import {
   pendingNodeActionsById,
   type PendingNodeAction,
 } from "./node-runtime-state.js";
+import {
+  captureNodePairingGeneration,
+  isNodePairingGenerationCurrent,
+  type NodePairingGeneration,
+} from "./node-pairing-generation.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
   captureNodeWakeLifecycle,
@@ -358,10 +363,40 @@ function shouldQueueAsPendingForegroundAction(params: {
   return code === "NODE_BACKGROUND_UNAVAILABLE" || message.includes("BACKGROUND_UNAVAILABLE");
 }
 
-function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeAction[] {
+function respondPairingChanged(respond: RespondFn) {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed while invocation was active", {
+      retryable: true,
+      details: { code: "PAIRING_CHANGED" },
+    }),
+  );
+}
+
+async function isNodePairingWorkCurrent(params: {
+  nodeId: string;
+  generation: NodePairingGeneration;
+  lifecycle: NodeWakeLifecycle;
+}): Promise<boolean> {
+  return (
+    isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle) &&
+    (await isNodePairingGenerationCurrent(params.generation))
+  );
+}
+
+function prunePendingNodeActions(
+  nodeId: string,
+  nowMs: number,
+  pairingGeneration?: string,
+): PendingNodeAction[] {
   const queue = pendingNodeActionsById.get(nodeId) ?? [];
   const minTimestampMs = nowMs - nodeInvokePolicy.pendingActionTtlMs;
-  const live = queue.filter((entry) => entry.enqueuedAtMs >= minTimestampMs);
+  const live = queue.filter(
+    (entry) =>
+      entry.enqueuedAtMs >= minTimestampMs &&
+      (!pairingGeneration || entry.pairingGeneration === pairingGeneration),
+  );
   if (live.length === 0) {
     pendingNodeActionsById.delete(nodeId);
     return [];
@@ -475,7 +510,12 @@ async function removePairedDeviceBackedNode(params: {
     "disconnectClientsForDevice" | "invalidateClientsForDevice" | "logGateway"
   >;
 }): Promise<
-  | { status: "removed"; nodeId: string; disconnectDeviceId: string }
+  | {
+      status: "removed";
+      nodeId: string;
+      disconnectDeviceId: string;
+      apnsRegistration: Awaited<ReturnType<typeof loadApnsRegistration>>;
+    }
   | { status: "denied"; message: string }
   | { status: "unknown" }
 > {
@@ -516,6 +556,12 @@ async function removePairedDeviceBackedNode(params: {
     return { status: "denied", message: "node pairing removal denied" };
   }
 
+  const observedRegistration = await loadApnsRegistration(nodeId).catch((err: unknown) => {
+    params.context.logGateway.warn(
+      `node pairing removal could not read APNs registration node=${nodeId}: ${formatErrorMessage(err)}`,
+    );
+    return null;
+  });
   const removed = await removePairedDeviceRole({ deviceId: nodeId, role: "node" });
   if (!removed) {
     return { status: "unknown" };
@@ -533,17 +579,23 @@ async function removePairedDeviceBackedNode(params: {
     role: "node",
     reason: "device-pair-removed",
   });
-  return { status: "removed", nodeId: removed.deviceId, disconnectDeviceId: removed.deviceId };
+  return {
+    status: "removed",
+    nodeId: removed.deviceId,
+    disconnectDeviceId: removed.deviceId,
+    apnsRegistration: observedRegistration,
+  };
 }
 
 function enqueuePendingNodeAction(params: {
   nodeId: string;
+  pairingGeneration: string;
   command: string;
   paramsJSON?: string;
   idempotencyKey: string;
 }): PendingNodeAction {
   const nowMs = Date.now();
-  const queue = prunePendingNodeActions(params.nodeId, nowMs);
+  const queue = prunePendingNodeActions(params.nodeId, nowMs, params.pairingGeneration);
   const existing = queue.find((entry) => entry.idempotencyKey === params.idempotencyKey);
   if (existing) {
     // Keep retries idempotent so callers do not create duplicate foreground
@@ -553,6 +605,7 @@ function enqueuePendingNodeAction(params: {
   const entry: PendingNodeAction = {
     id: randomUUID(),
     nodeId: params.nodeId,
+    pairingGeneration: params.pairingGeneration,
     command: params.command,
     paramsJSON: params.paramsJSON,
     idempotencyKey: params.idempotencyKey,
@@ -566,8 +619,8 @@ function enqueuePendingNodeAction(params: {
   return entry;
 }
 
-function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
-  return prunePendingNodeActions(nodeId, Date.now());
+function listPendingNodeActions(nodeId: string, pairingGeneration?: string): PendingNodeAction[] {
+  return prunePendingNodeActions(nodeId, Date.now(), pairingGeneration);
 }
 
 function refreshConnectedNodeSurfaceCaches(params: {
@@ -601,10 +654,11 @@ function refreshConnectedNodeSurfaceCaches(params: {
 
 function resolveAllowedPendingNodeActions(params: {
   nodeId: string;
+  pairingGeneration: string;
   client: { connect?: ConnectParams | null } | null;
   cfg: OpenClawConfig;
 }): PendingNodeAction[] {
-  const pending = listPendingNodeActions(params.nodeId);
+  const pending = listPendingNodeActions(params.nodeId, params.pairingGeneration);
   if (pending.length === 0) {
     return pending;
   }
@@ -636,11 +690,15 @@ function resolveAllowedPendingNodeActions(params: {
   return allowed;
 }
 
-function ackPendingNodeActions(nodeId: string, ids: string[]): PendingNodeAction[] {
+function ackPendingNodeActions(
+  nodeId: string,
+  ids: string[],
+  pairingGeneration: string,
+): PendingNodeAction[] {
   if (ids.length === 0) {
-    return listPendingNodeActions(nodeId);
+    return listPendingNodeActions(nodeId, pairingGeneration);
   }
-  const pending = prunePendingNodeActions(nodeId, Date.now());
+  const pending = prunePendingNodeActions(nodeId, Date.now(), pairingGeneration);
   const idSet = new Set(ids);
   const remaining = pending.filter((entry) => !idSet.has(entry.id));
   if (remaining.length === 0) {
@@ -1197,6 +1255,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
       try {
         clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
+        if (deviceBacked.apnsRegistration) {
+          await clearApnsRegistrationIfCurrent({
+            nodeId: deviceBacked.nodeId,
+            registration: deviceBacked.apnsRegistration,
+          }).catch((err: unknown) => {
+            context.logGateway.warn(
+              `node pairing removal could not clear APNs registration node=${deviceBacked.nodeId}: ${formatErrorMessage(err)}`,
+            );
+          });
+        }
         broadcastRemovedNodePairing({ nodeId: deviceBacked.nodeId, context });
         respond(true, { nodeId: deviceBacked.nodeId }, undefined);
       } finally {
@@ -1400,24 +1468,32 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const pending = resolveAllowedPendingNodeActions({
-      nodeId: trimmedNodeId,
-      client,
-      cfg: context.getRuntimeConfig(),
-    });
-    respond(
-      true,
-      {
+    await respondUnavailableOnThrow(respond, async () => {
+      const generation = await captureNodePairingGeneration(trimmedNodeId);
+      if (!generation) {
+        respondPairingChanged(respond);
+        return;
+      }
+      const pending = resolveAllowedPendingNodeActions({
         nodeId: trimmedNodeId,
-        actions: pending.map((entry) => ({
-          id: entry.id,
-          command: entry.command,
-          paramsJSON: entry.paramsJSON ?? null,
-          enqueuedAtMs: entry.enqueuedAtMs,
-        })),
-      },
-      undefined,
-    );
+        pairingGeneration: generation.key,
+        client,
+        cfg: context.getRuntimeConfig(),
+      });
+      respond(
+        true,
+        {
+          nodeId: trimmedNodeId,
+          actions: pending.map((entry) => ({
+            id: entry.id,
+            command: entry.command,
+            paramsJSON: entry.paramsJSON ?? null,
+            enqueuedAtMs: entry.enqueuedAtMs,
+          })),
+        },
+        undefined,
+      );
+    });
   },
   "node.pending.ack": async ({ params, respond, client }) => {
     if (!validateNodePendingAckParams(params)) {
@@ -1434,17 +1510,24 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
-    const ackIds = normalizeUniqueTrimmedStringList(params.ids);
-    const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
-    respond(
-      true,
-      {
-        nodeId: trimmedNodeId,
-        ackedIds: ackIds,
-        remainingCount: remaining.length,
-      },
-      undefined,
-    );
+    await respondUnavailableOnThrow(respond, async () => {
+      const generation = await captureNodePairingGeneration(trimmedNodeId);
+      if (!generation) {
+        respondPairingChanged(respond);
+        return;
+      }
+      const ackIds = normalizeUniqueTrimmedStringList(params.ids);
+      const remaining = ackPendingNodeActions(trimmedNodeId, ackIds, generation.key);
+      respond(
+        true,
+        {
+          nodeId: trimmedNodeId,
+          ackedIds: ackIds,
+          remainingCount: remaining.length,
+        },
+        undefined,
+      );
+    });
   },
   "node.invoke": async ({ params, respond, context, client, req }) => {
     if (!validateNodeInvokeParams(params)) {
@@ -1517,15 +1600,27 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const cfg = context.getRuntimeConfig();
-      let nodeSession = context.nodeRegistry.get(nodeId);
-      if (!nodeSession) {
-        const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
-        const getCurrentWakeSession = () =>
-          isNodeWakeLifecycleCurrent(nodeId, wakeLifecycle)
-            ? context.nodeRegistry.get(nodeId)
-            : undefined;
-        try {
+      const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+      try {
+        const generation = await captureNodePairingGeneration(nodeId);
+        if (!generation) {
+          respondPairingChanged(respond);
+          return;
+        }
+        const continuePairingWork = async (): Promise<boolean> => {
+          if (await isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle })) {
+            return true;
+          }
+          respondPairingChanged(respond);
+          return false;
+        };
+        if (!(await continuePairingWork())) {
+          return;
+        }
+
+        const cfg = context.getRuntimeConfig();
+        let nodeSession = context.nodeRegistry.get(nodeId);
+        if (!nodeSession) {
           const wakeReqId = req.id;
           const wakeFlowStartedAtMs = Date.now();
           context.logGateway.info(
@@ -1554,7 +1649,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
                 `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
             );
           }
-          nodeSession = getCurrentWakeSession();
+          if (!(await continuePairingWork())) {
+            return;
+          }
+          nodeSession = context.nodeRegistry.get(nodeId);
           if (!nodeSession && wake.available) {
             const retryWake = await maybeWakeNodeWithApns(nodeId, {
               force: true,
@@ -1582,14 +1680,23 @@ export const nodeHandlers: GatewayRequestHandlers = {
                   `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
               );
             }
-            nodeSession = getCurrentWakeSession();
+            if (!(await continuePairingWork())) {
+              return;
+            }
+            nodeSession = context.nodeRegistry.get(nodeId);
           }
           if (!nodeSession) {
+            if (!(await continuePairingWork())) {
+              return;
+            }
             const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
             const nudge = await maybeSendNodeWakeNudge(nodeId, {
               cfg,
               lifecycle: wakeLifecycle,
             });
+            if (!(await continuePairingWork())) {
+              return;
+            }
             context.logGateway.info(
               `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
                 `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
@@ -1613,94 +1720,234 @@ export const nodeHandlers: GatewayRequestHandlers = {
           context.logGateway.info(
             `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
           );
-        } finally {
-          releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
         }
-      }
-      // A reload may revoke authority for an in-flight request, but it must not
-      // retroactively grant one that was denied when admitted before node wake.
-      for (const authorizationCfg of [cfg, context.getRuntimeConfig()]) {
-        const allowlist = resolveNodeCommandAllowlist(authorizationCfg, {
-          ...nodeSession,
-          approvedCommands: nodeSession.commands,
-        });
-        const allowed = isNodeCommandAllowed({
-          command,
-          declaredCommands: nodeSession.commands,
-          allowlist,
-        });
-        if (!allowed.ok) {
-          const hint = buildNodeCommandRejectionHint(
-            allowed.reason,
+        if (!(await continuePairingWork())) {
+          return;
+        }
+        // A reload may revoke authority for an in-flight request, but it must not
+        // retroactively grant one that was denied when admitted before node wake.
+        for (const authorizationCfg of [cfg, context.getRuntimeConfig()]) {
+          const allowlist = resolveNodeCommandAllowlist(authorizationCfg, {
+            ...nodeSession,
+            approvedCommands: nodeSession.commands,
+          });
+          const allowed = isNodeCommandAllowed({
             command,
-            nodeSession,
-            authorizationCfg,
-          );
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-              details: { reason: allowed.reason, command },
-            }),
-          );
-          return;
+            declaredCommands: nodeSession.commands,
+            allowlist,
+          });
+          if (!allowed.ok) {
+            const hint = buildNodeCommandRejectionHint(
+              allowed.reason,
+              command,
+              nodeSession,
+              authorizationCfg,
+            );
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, hint, {
+                details: { reason: allowed.reason, command },
+              }),
+            );
+            return;
+          }
         }
-      }
 
-      const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
-        nodeId,
-        command,
-        rawParams: p.params,
-        client,
-        execApprovalManager: context.execApprovalManager,
-      });
-      if (!forwardedParams.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
-            details: forwardedParams.details ?? null,
-          }),
-        );
-        return;
-      }
-      const policyResult = await applyPluginNodeInvokePolicy({
-        context,
-        client,
-        nodeSession,
-        command,
-        params: forwardedParams.params,
-        turnSource: {
-          channel: p.turnSourceChannel,
-          to: p.turnSourceTo,
-          accountId: p.turnSourceAccountId,
-          threadId: p.turnSourceThreadId,
-        },
-        timeoutMs: p.timeoutMs,
-        idempotencyKey: p.idempotencyKey,
-      });
-      if (policyResult) {
-        // Plugin policies can satisfy an invocation without crossing the raw
-        // node command channel; still emit mirrored Talk events for UI state.
-        if (!policyResult.ok) {
-          const errorCode = policyResult.unavailable
-            ? ErrorCodes.UNAVAILABLE
-            : ErrorCodes.INVALID_REQUEST;
+        const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
+          nodeId,
+          command,
+          rawParams: p.params,
+          client,
+          execApprovalManager: context.execApprovalManager,
+        });
+        if (!forwardedParams.ok) {
           respond(
             false,
             undefined,
-            errorShape(errorCode, policyResult.message, {
-              details: {
-                ...policyResult.details,
-                ...(policyResult.code ? { code: policyResult.code } : {}),
-              },
+            errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
+              details: forwardedParams.details ?? null,
             }),
           );
           return;
         }
-        const payload = policyResult.payloadJSON
-          ? safeParseJson(policyResult.payloadJSON)
-          : policyResult.payload;
+        if (!(await continuePairingWork())) {
+          return;
+        }
+        const policyResult = await applyPluginNodeInvokePolicy({
+          context,
+          client,
+          nodeSession,
+          command,
+          params: forwardedParams.params,
+          turnSource: {
+            channel: p.turnSourceChannel,
+            to: p.turnSourceTo,
+            accountId: p.turnSourceAccountId,
+            threadId: p.turnSourceThreadId,
+          },
+          timeoutMs: p.timeoutMs,
+          idempotencyKey: p.idempotencyKey,
+          isInvocationCurrent: () =>
+            isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
+        });
+        if (!(await continuePairingWork())) {
+          return;
+        }
+        if (policyResult) {
+          // Plugin policies can satisfy an invocation without crossing the raw
+          // node command channel; still emit mirrored Talk events for UI state.
+          if (!policyResult.ok) {
+            const errorCode = policyResult.unavailable
+              ? ErrorCodes.UNAVAILABLE
+              : ErrorCodes.INVALID_REQUEST;
+            respond(
+              false,
+              undefined,
+              errorShape(errorCode, policyResult.message, {
+                details: {
+                  ...policyResult.details,
+                  ...(policyResult.code ? { code: policyResult.code } : {}),
+                },
+              }),
+            );
+            return;
+          }
+          const payload = policyResult.payloadJSON
+            ? safeParseJson(policyResult.payloadJSON)
+            : policyResult.payload;
+          emitTalkPttNodeEvent({
+            context,
+            nodeId,
+            command,
+            payload,
+          });
+          respond(
+            true,
+            {
+              ok: true,
+              nodeId,
+              command,
+              payload: policyResult.payload,
+              payloadJSON: policyResult.payloadJSON ?? null,
+            },
+            undefined,
+          );
+          return;
+        }
+        const dispatchSession = context.nodeRegistry.get(nodeId);
+        if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
+              retryable: true,
+              details: { code: "ROUTE_CHANGED" },
+            }),
+          );
+          return;
+        }
+        const dispatchCfg = context.getRuntimeConfig();
+        const dispatchAllowlist = resolveNodeCommandAllowlist(dispatchCfg, {
+          ...dispatchSession,
+          approvedCommands: dispatchSession.commands,
+        });
+        const dispatchAllowed = isNodeCommandAllowed({
+          command,
+          declaredCommands: dispatchSession.commands,
+          allowlist: dispatchAllowlist,
+        });
+        if (!dispatchAllowed.ok) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              buildNodeCommandRejectionHint(
+                dispatchAllowed.reason,
+                command,
+                dispatchSession,
+                dispatchCfg,
+              ),
+              { details: { reason: dispatchAllowed.reason, command } },
+            ),
+          );
+          return;
+        }
+        const res = await context.nodeRegistry.invoke({
+          nodeId,
+          expectedConnId: nodeSession.connId,
+          command,
+          params: forwardedParams.params,
+          timeoutMs: p.timeoutMs,
+          idempotencyKey: p.idempotencyKey,
+          ...(sessionKey ? { sessionKey } : {}),
+        });
+        if (!(await continuePairingWork())) {
+          return;
+        }
+        if (!res.ok) {
+          if (
+            shouldQueueAsPendingForegroundAction({
+              platform: nodeSession.platform,
+              command,
+              error: res.error,
+            })
+          ) {
+            // Foreground-only iOS commands become pullable pending actions instead
+            // of failing permanently while the device is locked/backgrounded.
+            const paramsJSON = toPendingParamsJSON(forwardedParams.params);
+            const queued = enqueuePendingNodeAction({
+              nodeId,
+              pairingGeneration: generation.key,
+              command,
+              paramsJSON,
+              idempotencyKey: p.idempotencyKey,
+            });
+            const wake = await maybeWakeNodeWithApns(nodeId, {
+              cfg,
+              lifecycle: wakeLifecycle,
+            });
+            if (!(await continuePairingWork())) {
+              return;
+            }
+            context.logGateway.info(
+              `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
+                `queuedId=${queued.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
+            );
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.UNAVAILABLE,
+                "node command queued until iOS returns to foreground",
+                {
+                  retryable: true,
+                  details: {
+                    code: "QUEUED_UNTIL_FOREGROUND",
+                    queuedActionId: queued.id,
+                    nodeId,
+                    command,
+                    wake: {
+                      path: wake.path,
+                      available: wake.available,
+                      throttled: wake.throttled,
+                      apnsStatus: wake.apnsStatus,
+                      apnsReason: wake.apnsReason,
+                    },
+                    nodeError: res.error ?? null,
+                  },
+                },
+              ),
+            );
+            return;
+          }
+          if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+            return;
+          }
+          return;
+        }
+        const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
         emitTalkPttNodeEvent({
           context,
           nodeId,
@@ -1713,133 +1960,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
             ok: true,
             nodeId,
             command,
-            payload: policyResult.payload,
-            payloadJSON: policyResult.payloadJSON ?? null,
+            payload,
+            payloadJSON: res.payloadJSON ?? null,
           },
           undefined,
         );
-        return;
+      } finally {
+        releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
       }
-      const dispatchSession = context.nodeRegistry.get(nodeId);
-      if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
-            retryable: true,
-            details: { code: "ROUTE_CHANGED" },
-          }),
-        );
-        return;
-      }
-      const dispatchCfg = context.getRuntimeConfig();
-      const dispatchAllowlist = resolveNodeCommandAllowlist(dispatchCfg, {
-        ...dispatchSession,
-        approvedCommands: dispatchSession.commands,
-      });
-      const dispatchAllowed = isNodeCommandAllowed({
-        command,
-        declaredCommands: dispatchSession.commands,
-        allowlist: dispatchAllowlist,
-      });
-      if (!dispatchAllowed.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            buildNodeCommandRejectionHint(
-              dispatchAllowed.reason,
-              command,
-              dispatchSession,
-              dispatchCfg,
-            ),
-            { details: { reason: dispatchAllowed.reason, command } },
-          ),
-        );
-        return;
-      }
-      const res = await context.nodeRegistry.invoke({
-        nodeId,
-        expectedConnId: nodeSession.connId,
-        command,
-        params: forwardedParams.params,
-        timeoutMs: p.timeoutMs,
-        idempotencyKey: p.idempotencyKey,
-        ...(sessionKey ? { sessionKey } : {}),
-      });
-      if (!res.ok) {
-        if (
-          shouldQueueAsPendingForegroundAction({
-            platform: nodeSession.platform,
-            command,
-            error: res.error,
-          })
-        ) {
-          // Foreground-only iOS commands become pullable pending actions instead
-          // of failing permanently while the device is locked/backgrounded.
-          const paramsJSON = toPendingParamsJSON(forwardedParams.params);
-          const queued = enqueuePendingNodeAction({
-            nodeId,
-            command,
-            paramsJSON,
-            idempotencyKey: p.idempotencyKey,
-          });
-          const wake = await maybeWakeNodeWithApns(nodeId, { cfg });
-          context.logGateway.info(
-            `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
-              `queuedId=${queued.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
-          );
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "node command queued until iOS returns to foreground",
-              {
-                retryable: true,
-                details: {
-                  code: "QUEUED_UNTIL_FOREGROUND",
-                  queuedActionId: queued.id,
-                  nodeId,
-                  command,
-                  wake: {
-                    path: wake.path,
-                    available: wake.available,
-                    throttled: wake.throttled,
-                    apnsStatus: wake.apnsStatus,
-                    apnsReason: wake.apnsReason,
-                  },
-                  nodeError: res.error ?? null,
-                },
-              },
-            ),
-          );
-          return;
-        }
-        if (!respondUnavailableOnNodeInvokeError(respond, res)) {
-          return;
-        }
-        return;
-      }
-      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
-      emitTalkPttNodeEvent({
-        context,
-        nodeId,
-        command,
-        payload,
-      });
-      respond(
-        true,
-        {
-          ok: true,
-          nodeId,
-          command,
-          payload,
-          payloadJSON: res.payloadJSON ?? null,
-        },
-        undefined,
-      );
     });
   },
   "node.invoke.progress": handleNodeInvokeProgress,

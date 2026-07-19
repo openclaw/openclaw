@@ -47,6 +47,25 @@ describe("node pending work", () => {
     expect(clearNodePendingWork("node-removed")).toBe(false);
   });
 
+  it("does not drain explicit work from a replaced pairing generation", () => {
+    enqueueNodePendingWork({
+      nodeId: "node-replaced",
+      type: "location.request",
+      pairingGeneration: "generation-1",
+    });
+
+    const drained = drainNodePendingWork("node-replaced", {
+      pairingGeneration: "generation-2",
+    });
+
+    expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
+    expect(
+      drainNodePendingWork("node-replaced", { pairingGeneration: "generation-1" }).items.map(
+        (item) => item.id,
+      ),
+    ).toEqual(["baseline-status"]);
+  });
+
   it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {
     enqueueNodePendingWork({ nodeId: "node-3", type: "location.request" });
 

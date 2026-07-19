@@ -31,7 +31,9 @@ type MockNodeConfig = {
 };
 
 const mocks = vi.hoisted(() => ({
+  captureNodePairingGeneration: vi.fn(),
   getRuntimeConfig: vi.fn(() => ({})),
+  isNodePairingGenerationCurrent: vi.fn(),
   resolveNodeCommandAllowlist: vi.fn<(cfg: MockNodeConfig) => Set<string>>(() => new Set()),
   isNodeCommandAllowed: vi.fn<
     (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
@@ -55,6 +57,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+}));
+
+vi.mock("./node-pairing-generation.js", () => ({
+  captureNodePairingGeneration: mocks.captureNodePairingGeneration,
+  isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
 
 vi.mock("../node-command-policy.js", () => ({
@@ -653,6 +660,10 @@ describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
     nodeWakeById.clear();
     nodeWakeNudgeById.clear();
+    mocks.captureNodePairingGeneration.mockReset().mockImplementation(async (nodeId: string) => ({
+      nodeId,
+      key: `generation:${nodeId}:1`,
+    }));
     mocks.getRuntimeConfig.mockClear();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
@@ -663,6 +674,7 @@ describe("node.invoke APNs wake path", () => {
     mocks.isForegroundRestrictedPluginNodeCommand.mockImplementation((command: string) =>
       command.startsWith("canvas."),
     );
+    mocks.isNodePairingGenerationCurrent.mockReset().mockResolvedValue(true);
     mocks.sanitizeNodeInvokeParamsForForwarding.mockClear();
     mocks.sanitizeNodeInvokeParamsForForwarding.mockImplementation(
       ({ rawParams }: { rawParams: unknown }) => ({ ok: true, params: rawParams }),
@@ -1312,6 +1324,29 @@ describe("node.invoke APNs wake path", () => {
     expect(mocks.clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
   });
 
+  it("rejects an invoke admitted after pairing removal without waking or dispatching", async () => {
+    const nodeId = "ios-node-removed-before-invoke";
+    mocks.captureNodePairingGeneration.mockResolvedValueOnce(null);
+    const nodeRegistry = createMissingNodeRegistry();
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-removed-before-invoke" },
+    });
+
+    expect(mocks.loadApnsRegistration).not.toHaveBeenCalled();
+    expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        message: "node pairing changed while invocation was active",
+        details: { code: "PAIRING_CHANGED" },
+      },
+    ]);
+  });
+
   it("forces one retry wake when the first wake still fails to reconnect", async () => {
     vi.useFakeTimers();
     mockDirectWakeConfig("ios-node-throttle");
@@ -1361,13 +1396,18 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe("node not connected");
+    expect(call[2]).toMatchObject({
+      message: "node pairing changed while invocation was active",
+      details: { code: "PAIRING_CHANGED" },
+    });
   });
 
-  it("does not dispatch an invalidated invoke to a replacement pairing", async () => {
+  it("does not dispatch an admitted invoke after the pairing generation is replaced", async () => {
     vi.useFakeTimers();
     const nodeId = "ios-node-replacement-after-remove";
     mockDirectWakeConfig(nodeId);
+    let pairingCurrent = true;
+    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
     const replacementSession: TestNodeSession = {
       nodeId,
       connId: "replacement-conn",
@@ -1387,7 +1427,7 @@ describe("node.invoke APNs wake path", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
 
-    invalidateNodeWakeState(nodeId);
+    pairingCurrent = false;
     replacementConnected = true;
     await vi.advanceTimersByTimeAsync(20_000);
     const respond = await invokePromise;
@@ -1395,7 +1435,51 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
-    expect(call[2]?.message).toBe("node not connected");
+    expect(call[2]).toMatchObject({
+      message: "node pairing changed while invocation was active",
+      details: { code: "PAIRING_CHANGED" },
+    });
+  });
+
+  it("does not queue foreground work when pairing changes during node dispatch", async () => {
+    const nodeId = "ios-node-replaced-during-dispatch";
+    let pairingCurrent = true;
+    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+    nodeRegistry.invoke.mockImplementation(async () => {
+      pairingCurrent = false;
+      return {
+        ok: false,
+        error: {
+          code: "NODE_BACKGROUND_UNAVAILABLE",
+          message: "NODE_BACKGROUND_UNAVAILABLE: canvas commands require foreground",
+        },
+      };
+    });
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        idempotencyKey: "idem-replaced-during-dispatch",
+      },
+    });
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expect(mocks.loadApnsRegistration).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        message: "node pairing changed while invocation was active",
+        details: { code: "PAIRING_CHANGED" },
+      },
+    ]);
   });
 
   it("keeps a foreground-recovery wake alive across an ordinary disconnect cleanup", async () => {
@@ -1580,6 +1664,36 @@ describe("node.invoke APNs wake path", () => {
       nodeId: "ios-node-policy",
       actions: [],
     });
+  });
+
+  it("drops queued foreground actions from a replaced pairing generation", async () => {
+    const nodeId = "ios-node-replaced-before-pull";
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        idempotencyKey: "idem-replaced-before-pull",
+      },
+    });
+    mocks.captureNodePairingGeneration.mockResolvedValue({
+      nodeId,
+      key: `generation:${nodeId}:2`,
+    });
+
+    const pullRespond = await pullPending(nodeId, ["canvas.navigate"]);
+    expectRecordFields(
+      requireRespondPayload(firstRespondCall(pullRespond), "replacement pull response"),
+      "replacement pull payload",
+      { nodeId, actions: [] },
+    );
   });
 
   it("dedupes queued foreground actions by idempotency key", async () => {

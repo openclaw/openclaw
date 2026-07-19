@@ -7,9 +7,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nodePendingHandlers } from "./nodes-pending.js";
 
 const mocks = vi.hoisted(() => ({
+  captureNodePairingGeneration: vi.fn(),
   captureNodeWakeLifecycle: vi.fn(),
   drainNodePendingWork: vi.fn(),
   enqueueNodePendingWork: vi.fn(),
+  isNodePairingGenerationCurrent: vi.fn(),
+  isNodeWakeLifecycleCurrent: vi.fn(),
   maybeWakeNodeWithApns: vi.fn(),
   maybeSendNodeWakeNudge: vi.fn(),
   releaseNodeWakeLifecycle: vi.fn(),
@@ -21,10 +24,16 @@ vi.mock("../node-pending-work.js", () => ({
   enqueueNodePendingWork: mocks.enqueueNodePendingWork,
 }));
 
+vi.mock("./node-pairing-generation.js", () => ({
+  captureNodePairingGeneration: mocks.captureNodePairingGeneration,
+  isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
+}));
+
 vi.mock("./nodes.js", () => ({
   NODE_WAKE_RECONNECT_WAIT_MS: 3_000,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS: 12_000,
   captureNodeWakeLifecycle: mocks.captureNodeWakeLifecycle,
+  isNodeWakeLifecycleCurrent: mocks.isNodeWakeLifecycleCurrent,
   maybeWakeNodeWithApns: mocks.maybeWakeNodeWithApns,
   maybeSendNodeWakeNudge: mocks.maybeSendNodeWakeNudge,
   releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,
@@ -61,9 +70,17 @@ function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined
 
 describe("node.pending handlers", () => {
   beforeEach(() => {
+    mocks.captureNodePairingGeneration.mockReset().mockImplementation(async (nodeId: string) => ({
+      nodeId,
+      key: `generation:${nodeId}:1`,
+    }));
     mocks.captureNodeWakeLifecycle.mockReset();
     mocks.drainNodePendingWork.mockReset();
     mocks.enqueueNodePendingWork.mockReset();
+    mocks.isNodePairingGenerationCurrent.mockReset().mockResolvedValue(true);
+    mocks.isNodeWakeLifecycleCurrent
+      .mockReset()
+      .mockImplementation((_nodeId: string, lifecycle: AbortSignal) => !lifecycle.aborted);
     mocks.maybeWakeNodeWithApns.mockReset();
     mocks.maybeSendNodeWakeNudge.mockReset();
     mocks.releaseNodeWakeLifecycle.mockReset();
@@ -93,6 +110,7 @@ describe("node.pending handlers", () => {
     expect(mocks.drainNodePendingWork).toHaveBeenCalledWith("ios-node-1", {
       maxItems: 3,
       includeDefaultStatus: true,
+      pairingGeneration: "generation:ios-node-1:1",
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -181,6 +199,7 @@ describe("node.pending handlers", () => {
       type: "location.request",
       priority: "high",
       expiresInMs: undefined,
+      pairingGeneration: "generation:ios-node-2:1",
     });
     expect(context.nodeRegistry.get).toHaveBeenCalledWith("ios-node-2");
     expect(context.nodeRegistry.get).not.toHaveBeenCalledWith(" ios-node-2 ");
@@ -207,7 +226,7 @@ describe("node.pending handlers", () => {
     expect(call?.[2]).toBeUndefined();
   });
 
-  it("keeps one lifecycle across an invalidated retry and nudge", async () => {
+  it("returns unavailable when pairing removal invalidates an enqueued item", async () => {
     const lifecycleController = new AbortController();
     const wakeLifecycle = lifecycleController.signal;
     mocks.captureNodeWakeLifecycle.mockReturnValue(wakeLifecycle);
@@ -263,7 +282,7 @@ describe("node.pending handlers", () => {
     });
 
     expect(mocks.captureNodeWakeLifecycle).toHaveBeenCalledWith("ios-node-invalidated");
-    expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledTimes(2);
+    expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledTimes(1);
     for (const call of mocks.maybeWakeNodeWithApns.mock.calls) {
       expect(call[0]).toBe("ios-node-invalidated");
       expect(call[1]).toMatchObject({ lifecycle: wakeLifecycle });
@@ -274,18 +293,16 @@ describe("node.pending handlers", () => {
       timeoutMs: 3_000,
       lifecycle: wakeLifecycle,
     });
-    expect(mocks.maybeSendNodeWakeNudge).toHaveBeenCalledWith("ios-node-invalidated", {
-      cfg: {},
-      lifecycle: wakeLifecycle,
-    });
+    expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
     expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith(
       "ios-node-invalidated",
       wakeLifecycle,
     );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ nodeId: "ios-node-invalidated", wakeTriggered: true }),
-      undefined,
-    );
+    const call = respondCall(respond);
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]).toMatchObject({
+      message: "node pairing changed while pending work was active",
+      details: { code: "PAIRING_CHANGED" },
+    });
   });
 });

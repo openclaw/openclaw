@@ -307,6 +307,29 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("rejects plugin transport dispatch after invocation ownership changes", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      isInvocationCurrent: async () => false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PAIRING_CHANGED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("overrides plugin dispatch claims with the actual pre-dispatch state", async () => {
     setDangerousDemoCommandRegistry([
       createDemoPolicy(async () => ({

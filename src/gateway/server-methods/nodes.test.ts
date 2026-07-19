@@ -13,6 +13,10 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
+import {
+  loadApnsRegistration,
+  registerApnsRegistration,
+} from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import {
   createOpenClawTestState,
@@ -218,6 +222,13 @@ describe("nodeHandlers node.pair.remove", () => {
     const state = await createState("node-remove-clears-wake-state");
     const nodeId = "disconnected-ios-node";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await registerApnsRegistration({
+      nodeId,
+      transport: "direct",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+    });
     nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
     nodeWakeNudgeById.set(nodeId, Date.now());
     enqueueNodePendingWork({ nodeId, type: "location.request" });
@@ -237,6 +248,7 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual([
       "baseline-status",
     ]);
+    await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
   });
 
   it("removes Android device-backed node rows from the paired-device store", async () => {

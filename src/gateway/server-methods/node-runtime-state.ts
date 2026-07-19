@@ -7,6 +7,7 @@ import type { GatewayRequestContext } from "./shared-types.js";
 export type PendingNodeAction = {
   id: string;
   nodeId: string;
+  pairingGeneration: string;
   command: string;
   paramsJSON?: string;
   idempotencyKey: string;

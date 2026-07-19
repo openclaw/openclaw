@@ -28,6 +28,11 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  clearApnsRegistrationIfCurrent,
+  loadApnsRegistration,
+} from "../../infra/push-apns.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -477,12 +482,34 @@ export const deviceHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const apnsNodeId = authz.normalizedTargetDeviceId;
+    const observedRegistration = await loadApnsRegistration(apnsNodeId).catch((err: unknown) => {
+      context.logGateway.warn(
+        `device pairing removal could not read APNs registration device=${apnsNodeId}: ${formatErrorMessage(err)}`,
+      );
+      return null;
+    });
     const removed = await removePairedDevice(deviceId);
     if (!removed) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
       return;
     }
     clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
+    // Invalidate authenticated sessions before APNs cleanup can yield so no
+    // pipelined request continues under the removed pairing.
+    context.invalidateClientsForDevice?.(removed.deviceId, {
+      reason: "device-pair-removed",
+    });
+    if (observedRegistration) {
+      await clearApnsRegistrationIfCurrent({
+        nodeId: removed.deviceId,
+        registration: observedRegistration,
+      }).catch((err: unknown) => {
+        context.logGateway.warn(
+          `device pairing removal could not clear APNs registration device=${removed.deviceId}: ${formatErrorMessage(err)}`,
+        );
+      });
+    }
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",
@@ -490,13 +517,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       authz,
       targetDeviceId: removed.deviceId,
       controlId: "device.pair.remove",
-    });
-    // Mark affected clients invalid *before* responding so any RPCs already
-    // pipelined into their WS socket buffer are rejected at the per-request
-    // dispatch check, closing the race between queueMicrotask-scheduled
-    // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(removed.deviceId, {
-      reason: "device-pair-removed",
     });
     respond(true, removed, undefined);
     queueMicrotask(() => {

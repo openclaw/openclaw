@@ -219,6 +219,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   };
   timeoutMs?: number;
   idempotencyKey?: string;
+  isInvocationCurrent?: () => boolean | Promise<boolean>;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
@@ -247,6 +248,13 @@ export async function applyPluginNodeInvokePolicy(params: {
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
     // Policies invoke the real node through this narrowed transport wrapper so
     // they can retry/override params without getting direct registry access.
+    if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
+      };
+    }
     const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
     if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
       return {

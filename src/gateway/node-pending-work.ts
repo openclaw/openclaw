@@ -30,12 +30,14 @@ type NodePendingWorkItem = {
 type NodePendingWorkState = {
   revision: number;
   itemsById: Map<string, NodePendingWorkItem>;
+  pairingGeneration?: string;
 };
 
 type DrainOptions = {
   maxItems?: number;
   includeDefaultStatus?: boolean;
   nowMs?: number;
+  pairingGeneration?: string;
 };
 
 type DrainResult = {
@@ -58,12 +60,17 @@ const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
 
 const stateByNodeId = new Map<string, NodePendingWorkState>();
 
-function getOrCreateState(nodeId: string): NodePendingWorkState {
+function getOrCreateState(nodeId: string, pairingGeneration?: string): NodePendingWorkState {
   let state = stateByNodeId.get(nodeId);
+  if (state && pairingGeneration && state.pairingGeneration !== pairingGeneration) {
+    stateByNodeId.delete(nodeId);
+    state = undefined;
+  }
   if (!state) {
     state = {
       revision: 0,
       itemsById: new Map(),
+      ...(pairingGeneration ? { pairingGeneration } : {}),
     };
     stateByNodeId.set(nodeId, state);
   }
@@ -136,6 +143,7 @@ export function enqueueNodePendingWork(params: {
   priority?: NodePendingWorkPriority;
   expiresInMs?: number;
   payload?: Record<string, unknown>;
+  pairingGeneration?: string;
 }): { revision: number; item: NodePendingWorkItem; deduped: boolean } {
   const nodeId = params.nodeId.trim();
   if (!nodeId) {
@@ -143,7 +151,7 @@ export function enqueueNodePendingWork(params: {
   }
   const rawNowMs = Date.now();
   const nowMs = resolveDateTimestampMs(rawNowMs);
-  const state = getOrCreateState(nodeId);
+  const state = getOrCreateState(nodeId, params.pairingGeneration);
   pruneExpired(state, nowMs);
   // Keep one outstanding item per type so repeated status/location requests
   // collapse until the node has a chance to drain them.
@@ -180,7 +188,11 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     return { revision: 0, items: [], hasMore: false };
   }
   const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
-  const state = stateByNodeId.get(normalizedNodeId);
+  let state = stateByNodeId.get(normalizedNodeId);
+  if (state && opts.pairingGeneration && state.pairingGeneration !== opts.pairingGeneration) {
+    stateByNodeId.delete(normalizedNodeId);
+    state = undefined;
+  }
   if (state) {
     pruneExpired(state, nowMs);
     pruneStateIfEmpty(normalizedNodeId, state);
