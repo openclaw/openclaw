@@ -491,8 +491,11 @@ export function resolveDynamicToolCallTimeoutMs(params: {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
   if (params.call.tool === "agents_wait") {
+    // Collector waits default to the full swarm budget, but an operator's
+    // configured per-tool timeout still wins over that default.
     return clampDynamicToolTimeoutMs(
       readDynamicToolCallTimeoutMs(params.call.arguments) ??
+        readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
         CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS,
     );
   }
