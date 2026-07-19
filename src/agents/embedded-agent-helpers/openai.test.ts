@@ -48,27 +48,69 @@ function toolResultId(message: AgentMessage): string {
 }
 
 describe("normalizeOpenAIResponsesToolCallIds", () => {
-  it("assigns distinct call ids to repeated native Kimi tool calls that share a callId", () => {
-    // Native Kimi ids pair a stable `functions.<tool>:<index>` callId with a
-    // unique `fc_tmp_*` itemId. The same tool called at the same index across
-    // turns (e.g. `gateway` called first every time) previously collided
-    // because only the callId half was hashed, producing identical `call_*`
-    // ids and breaking Responses replay with dangling_tool_call.
+  it("derives a stable id from the complete native pairing", () => {
+    const rawId = "functions.gateway:0|fc_tmp_kegospxl46";
+    const first = normalizeOpenAIResponsesToolCallIds([buildAssistantToolCall(rawId)]);
+    const second = normalizeOpenAIResponsesToolCallIds([buildAssistantToolCall(rawId)]);
+
+    expect(toolCallId(first[0])).toBe(
+      "call_functions_gateway_0_fc_tmp_kegospxl46_8ea5d0ca62|fc_tmp_kegospxl46",
+    );
+    expect(toolCallId(second[0])).toBe(toolCallId(first[0]));
+  });
+
+  it("passes canonical Responses ids through without allocating new messages", () => {
+    const messages: AgentMessage[] = [
+      buildAssistantToolCall("call_gateway_0|fc_gateway_0"),
+      buildToolResult("call_gateway_0|fc_gateway_0"),
+    ];
+
+    expect(normalizeOpenAIResponsesToolCallIds(messages)).toBe(messages);
+  });
+
+  it("assigns distinct call ids to repeated native Kimi calls across turns", () => {
     const messages: AgentMessage[] = [
       buildAssistantToolCall("functions.gateway:0|fc_tmp_kegospxl46"),
       buildToolResult("functions.gateway:0|fc_tmp_kegospxl46"),
+      { role: "user", content: "check again", timestamp: 1 } as AgentMessage,
       buildAssistantToolCall("functions.gateway:0|fc_tmp_btw21n10glg"),
       buildToolResult("functions.gateway:0|fc_tmp_btw21n10glg"),
     ];
 
-    const [firstCall, firstResult, secondCall, secondResult] = normalizeOpenAIResponsesToolCallIds(
-      messages,
-    ) as [AgentMessage, AgentMessage, AgentMessage, AgentMessage];
+    const [firstCall, firstResult, , secondCall, secondResult] =
+      normalizeOpenAIResponsesToolCallIds(messages);
 
     const firstCallId = toolCallId(firstCall);
     const secondCallId = toolCallId(secondCall);
     expect(firstCallId).not.toBe(secondCallId);
     expect(toolResultId(firstResult)).toBe(firstCallId);
     expect(toolResultId(secondResult)).toBe(secondCallId);
+  });
+
+  it("normalizes mixed result aliases and incomplete persisted pairings independently", () => {
+    const pairedId = "functions.gateway:0|fc_tmp_paired";
+    const assistantOnlyId = "functions.read:0|fc_tmp_assistant_only";
+    const resultOnlyId = "functions.exec:0|fc_tmp_result_only";
+    const aliasedResult = {
+      ...buildToolResult(pairedId),
+      toolUseId: pairedId,
+    } as ToolResultMessage & { toolUseId: string };
+    const untouchedUser = { role: "user", content: "continue", timestamp: 1 } as AgentMessage;
+
+    const out = normalizeOpenAIResponsesToolCallIds([
+      aliasedResult as AgentMessage,
+      buildAssistantToolCall(pairedId),
+      untouchedUser,
+      buildAssistantToolCall(assistantOnlyId),
+      buildToolResult(resultOnlyId),
+    ]);
+
+    const normalizedPairedId = toolCallId(out[1]);
+    expect(toolResultId(out[0])).toBe(normalizedPairedId);
+    expect((out[0] as { toolUseId?: string }).toolUseId).toBe(normalizedPairedId);
+    expect(out[2]).toBe(untouchedUser);
+    expect(toolCallId(out[3])).toMatch(/^call_[A-Za-z0-9_-]+\|fc_[A-Za-z0-9_-]+$/);
+    expect(toolResultId(out[4])).toMatch(/^call_[A-Za-z0-9_-]+\|fc_[A-Za-z0-9_-]+$/);
+    expect(toolCallId(out[3])).not.toBe(toolResultId(out[4]));
   });
 });
