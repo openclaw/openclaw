@@ -103,6 +103,7 @@ import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -812,20 +813,18 @@ async function dispatchReplyFromConfigInner(
     return await deliverBindingPayload(payload, mode);
   };
 
-  const pluginOwnedBindingRecord =
-    inboundClaimContext.conversationId && inboundClaimContext.channelId
-      ? resolveConversationBindingRecord({
-          channel: inboundClaimContext.channelId,
-          accountId:
-            inboundClaimContext.accountId ??
-            ((
-              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
-            "default",
-          conversationId: inboundClaimContext.conversationId,
-          parentConversationId: inboundClaimContext.parentConversationId,
-        })
-      : null;
+  // Hook contexts use transport-native ids (for example Slack `U123`), while
+  // binding records use the channel's canonical target (`user:U123`). Resolve
+  // through the binding contract instead of reusing the hook projection.
+  const pluginBindingConversation = resolveConversationBindingContextFromMessage({ cfg, ctx });
+  const pluginOwnedBindingRecord = pluginBindingConversation
+    ? resolveConversationBindingRecord({
+        channel: pluginBindingConversation.channel,
+        accountId: pluginBindingConversation.accountId,
+        conversationId: pluginBindingConversation.conversationId,
+        parentConversationId: pluginBindingConversation.parentConversationId,
+      })
+    : null;
   const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
@@ -1245,7 +1244,6 @@ async function dispatchReplyFromConfigInner(
                 ? ({ status: "no_handler" } as const)
                 : ({ status: "missing_plugin" } as const);
             })();
-
         if (isPreDispatchOperationAborted()) {
           return finishReplyOperationAbortedDispatch();
         }

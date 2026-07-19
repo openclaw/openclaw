@@ -313,10 +313,16 @@ const conversationBindingMocks = vi.hoisted(() => {
       if (!conversationId) {
         return null;
       }
+      const rawThreadParentId = resolveTarget(channel, params.ctx.ThreadParentId);
+      const explicitThreadParentId =
+        channel === "discord" && rawThreadParentId && !rawThreadParentId.includes(":")
+          ? `channel:${rawThreadParentId}`
+          : rawThreadParentId;
       const parentConversationId =
-        threadId && baseConversationId && baseConversationId !== threadId
+        explicitThreadParentId ??
+        (threadId && baseConversationId && baseConversationId !== threadId
           ? baseConversationId
-          : resolveTarget(channel, params.ctx.ThreadParentId);
+          : undefined);
       return {
         channel,
         accountId: resolveAccountId(params.ctx, params.cfg, channel),

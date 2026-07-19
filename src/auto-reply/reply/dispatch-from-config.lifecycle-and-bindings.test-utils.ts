@@ -819,6 +819,69 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
+  it("looks up plugin bindings with the canonical conversation target", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    const binding = {
+      bindingId: "binding-slack-user",
+      targetSessionKey: "plugin-binding:codex:slack-user",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "codex",
+        pluginRoot: "/tmp/codex",
+      },
+    } satisfies SessionBindingRecord;
+    sessionBindingMocks.resolveByConversation.mockImplementation((conversation) =>
+      conversation.conversationId === "user:U123" ? binding : null,
+    );
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "openclaw",
+      Surface: "openclaw",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      From: "user:U123",
+      To: "user:U123",
+      AccountId: "default",
+      Body: "hello",
+      SessionKey: "main",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "slack",
+      accountId: "default",
+      conversationId: "user:U123",
+      parentConversationId: undefined,
+    });
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "codex",
+      expect.any(Object),
+      expect.objectContaining({
+        conversationId: "U123",
+        pluginBinding: expect.objectContaining({ bindingId: "binding-slack-user" }),
+      }),
+    );
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
   it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
@@ -1716,7 +1779,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("lets authorized plugin-owned binding commands fall through to command processing", async () => {
+  it("lets authorized gateway-style plugin commands escape plugin-owned bindings", async () => {
     setNoAbort();
     expect(
       registerPluginCommand(
@@ -1775,10 +1838,10 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
-      CommandSource: "text",
       CommandAuthorized: true,
       WasMentioned: false,
       CommandBody: "/codex detach",
+      BodyForCommands: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-escape",

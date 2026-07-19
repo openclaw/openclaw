@@ -7,7 +7,9 @@ import {
   normalizeCommandBody,
   resolveTextCommand,
 } from "../commands-registry.js";
+import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { resolveCommandContextText } from "./context-text.js";
 import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 
 export function shouldBypassPluginOwnedBindingForCommand(
@@ -24,13 +26,33 @@ export function shouldBypassPluginOwnedBindingForCommand(
   if (isNativeCommandTurn(commandTurn) && commandTurn.authorized) {
     return true;
   }
-  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
+  const isAuthorizedTextCommand =
+    (commandTurn.kind === "text-slash" && commandTurn.authorized) ||
+    (commandTurn.kind === "normal" && ctx.CommandAuthorized === true);
+  if (
+    !isAuthorizedTextCommand ||
+    !shouldHandleTextCommands({
+      cfg,
+      surface: ctx.Surface ?? ctx.Provider ?? "",
+      commandSource: ctx.CommandSource,
+    })
+  ) {
     return false;
   }
-  const commandBody = normalizeCommandBody(commandTurn.body ?? ctx.CommandBody ?? "", {
+  const commandBody = normalizeCommandBody(commandTurn.body ?? resolveCommandContextText(ctx), {
     botUsername: ctx.BotUsername,
   });
   if (!commandBody.startsWith("/")) {
+    return false;
+  }
+  if (
+    matchPluginCommand(commandBody, {
+      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
+    })
+  ) {
+    return true;
+  }
+  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
     return false;
   }
   if (resolveTextCommand(commandBody)) {
@@ -45,9 +67,5 @@ export function shouldBypassPluginOwnedBindingForCommand(
   ) {
     return true;
   }
-  return Boolean(
-    matchPluginCommand(commandBody, {
-      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
-    }),
-  );
+  return false;
 }
