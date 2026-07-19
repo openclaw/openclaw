@@ -270,7 +270,6 @@ struct SwiftUIRenderSmokeTests {
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
-                .environment(\.rootTabsUserInterfaceIdiomOverride, scenario.idiom)
                 .environment(\.horizontalSizeClass, scenario.horizontalSizeClass)
                 .environment(\.verticalSizeClass, scenario.verticalSizeClass)
 

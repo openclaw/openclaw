@@ -148,27 +148,6 @@ struct RootTabsPresentationTests {
         #expect(!shouldPresent)
     }
 
-    @Test func `sidebar tabs enabled for I pad regular width`() {
-        #expect(
-            RootTabs.shouldUseSidebarTabs(
-                idiom: .pad,
-                horizontalSizeClass: .regular))
-    }
-
-    @Test func `sidebar tabs enabled for I pad compact width`() {
-        #expect(
-            RootTabs.shouldUseSidebarTabs(
-                idiom: .pad,
-                horizontalSizeClass: .compact))
-    }
-
-    @Test func `sidebar navigation enabled for I phone`() {
-        #expect(
-            RootTabs.shouldUseSidebarTabs(
-                idiom: .phone,
-                horizontalSizeClass: .regular))
-    }
-
     @Test func `sidebar destinations match frozen page order`() {
         let destinationIDs = RootTabs.SidebarDestination.allCases.map(\.rawValue)
 
@@ -582,17 +561,20 @@ struct RootTabsPresentationTests {
         #expect(width <= RootTabs.sidebarDrawerMaximumWidth)
     }
 
-    @Test func `pinned pages storage round trips and keeps canonical order`() {
+    @Test func `pinned pages storage round trips and preserves pin order`() {
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
 
-        // Storage order does not matter; canonical sidebar order wins.
+        // Storage order is the user's pin order (web parity).
         let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs")
-        #expect(parsed == [.overview, .usage, .docs])
+        #expect(parsed == [.usage, .overview, .docs])
 
-        let storage = RootTabs.pinnedSidebarPagesStorage([.overview, .usage, .docs])
-        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.overview, .usage, .docs])
+        let storage = RootTabs.pinnedSidebarPagesStorage([.docs, .overview, .usage])
+        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.docs, .overview, .usage])
+
+        // Duplicates collapse to first occurrence.
+        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,docs") == [.usage, .docs])
 
         // Unknown raw values are dropped; chat is never pinnable.
         #expect(RootTabs.pinnedSidebarPages(from: "chat,bogus").isEmpty)

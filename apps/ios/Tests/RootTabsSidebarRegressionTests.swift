@@ -76,7 +76,7 @@ struct RootTabsSidebarRegressionTests {
         #expect(contentSurface.contains(".shadow("))
         #expect(contentSurface.contains(".offset(x: Self.sidebarContentOffset("))
         #expect(contentCard.contains(".allowsHitTesting(!self.isSidebarVisible)"))
-        #expect(contentCard.contains("if self.isSidebarVisible, !self.reduceMotion"))
+        #expect(contentCard.contains("if self.isSidebarVisible {"))
         #expect(contentCard.contains("self.hideSidebar()"))
         #expect(contentCard.contains("isEnabled: self.isSidebarVisible && !self.reduceMotion"))
         #expect(contentCard.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))

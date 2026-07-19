@@ -108,13 +108,6 @@ struct RootTabs: View {
         }
     }
 
-    static func shouldUseSidebarTabs(
-        idiom _: UIUserInterfaceIdiom,
-        horizontalSizeClass _: UserInterfaceSizeClass?) -> Bool
-    {
-        true
-    }
-
     var body: some View {
         self.rootPresentation(
             self.rootLifecycle(
@@ -143,7 +136,10 @@ struct RootTabs: View {
             .onChange(of: proxy.size) { _, size in
                 self.updateSidebarLayout(containerSize: size, force: false)
             }
-            .task(id: self.appModel.chatViewModelIdentityID) {
+            // Single refresh owner: identity changes and scene activation both
+            // land here; RootSidebar renders the model without fetching.
+            .task(id: "\(self.appModel.chatViewModelIdentityID):\(self.scenePhase == .active)") {
+                guard self.scenePhase == .active else { return }
                 await self.sidebarModel.refresh(appModel: self.appModel)
             }
         }
@@ -233,7 +229,9 @@ struct RootTabs: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(!self.isSidebarVisible)
 
-            if self.isSidebarVisible, !self.reduceMotion {
+            // Tap-to-close stays available under Reduce Motion (the drags are
+            // gated); otherwise the header X would be the only exit.
+            if self.isSidebarVisible {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -1257,10 +1255,6 @@ private struct RootCameraFlashOverlay: View {
     }
 }
 
-extension EnvironmentValues {
-    @Entry var rootTabsUserInterfaceIdiomOverride: UIUserInterfaceIdiom?
-}
-
 #if DEBUG
 #Preview(
     "Shell iPhone portrait",
@@ -1363,7 +1357,6 @@ private struct RootTabsPreviewHost: View {
             .environment(self.appModel)
             .environment(self.appModel.voiceWake)
             .environment(self.gatewayController)
-            .environment(\.rootTabsUserInterfaceIdiomOverride, self.idiom)
     }
 }
 

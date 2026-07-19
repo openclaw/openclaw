@@ -248,12 +248,21 @@ extension RootTabs {
     static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
 
     /// "" = never customized (defaults); "none" = user unpinned everything.
+    /// Storage order is the user's pin order (web parity); unknown or
+    /// unpinnable raw values are dropped.
     static func pinnedSidebarPages(from storage: String) -> [SidebarDestination] {
         let trimmed = storage.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return self.defaultPinnedSidebarPages }
         if trimmed == "none" { return [] }
-        let stored = Set(trimmed.split(separator: ",").map(String.init))
-        return self.pinnableSidebarPages.filter { stored.contains($0.rawValue) }
+        var seen = Set<String>()
+        return trimmed.split(separator: ",").compactMap { raw in
+            let value = String(raw)
+            guard seen.insert(value).inserted,
+                  let destination = SidebarDestination(rawValue: value),
+                  self.pinnableSidebarPages.contains(destination)
+            else { return nil }
+            return destination
+        }
     }
 
     static func pinnedSidebarPagesStorage(_ pages: [SidebarDestination]) -> String {

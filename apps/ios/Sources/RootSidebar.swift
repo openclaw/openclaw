@@ -4,7 +4,6 @@ import SwiftUI
 
 struct RootSidebar: View {
     @Environment(NodeAppModel.self) private var appModel
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
     @State private var searchText = ""
@@ -48,10 +47,6 @@ struct RootSidebar: View {
                 },
                 onTogglePin: self.togglePinnedPage)
         }
-        .task(id: self.refreshID) {
-            guard self.scenePhase == .active else { return }
-            await self.model.refresh(appModel: self.appModel)
-        }
     }
 
     private var pinnedPages: [RootTabs.SidebarDestination] {
@@ -63,13 +58,9 @@ struct RootSidebar: View {
         if let index = pages.firstIndex(of: destination) {
             pages.remove(at: index)
         } else {
-            pages = RootTabs.pinnableSidebarPages.filter { pages.contains($0) || $0 == destination }
+            pages.append(destination)
         }
         self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
-    }
-
-    private var refreshID: String {
-        "\(self.appModel.chatViewModelIdentityID):\(self.scenePhase == .active)"
     }
 
     /// Web-parity agent card: current agent up top, switcher when the gateway
@@ -377,7 +368,7 @@ struct RootSidebar: View {
     /// carries the main session's run/unread state.
     private var homeRow: some View {
         let isSelected = self.selectedDestination == .chat
-        let mainSession = self.model.sessions.first { $0.key == self.appModel.defaultChatSessionKey }
+        let mainSession = self.mainSessionEntry
         return Button {
             self.selectDestination(.chat)
         } label: {
@@ -489,6 +480,17 @@ struct RootSidebar: View {
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
         .background(OpenClawSidebarPalette.background)
+    }
+
+    /// Alias-aware main lookup: rosters may return namespaced keys
+    /// ("agent:<id>:main"), so raw comparison would drop Home's badges.
+    private var mainSessionEntry: OpenClawChatSessionEntry? {
+        let mainKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: self.model.sessions,
+            currentSessionKey: "main",
+            mainSessionKey: self.appModel.defaultChatSessionKey,
+            activeAgentID: self.appModel.chatAgentId)
+        return self.model.sessions.first { $0.key == mainKey }
     }
 
     private var visibleSessionSections: [ChatSessionSidebarModel.Section] {
