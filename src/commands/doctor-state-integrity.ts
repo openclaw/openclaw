@@ -258,24 +258,49 @@ function addUserRwx(mode: number): number {
   return perms | 0o700;
 }
 
+const JSONL_LINE_COUNT_CHUNK_BYTES = 64 * 1024;
+
+// Doctor only needs a line count for the main-session transcript warning.
+// Stream fixed-size chunks so a multi-hundred-MB JSONL cannot force a full-file string alloc.
 function countJsonlLines(filePath: string): number {
+  let fd: number | undefined;
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) {
-      return 0;
-    }
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.allocUnsafe(JSONL_LINE_COUNT_CHUNK_BYTES);
     let count = 0;
-    for (const char of raw) {
-      if (char === "\n") {
-        count += 1;
+    let lastByte: number | undefined;
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      for (let i = 0; i < bytesRead; i += 1) {
+        const byte = buffer[i];
+        if (byte === 0x0a) {
+          count += 1;
+        }
+        lastByte = byte;
       }
     }
-    if (!raw.endsWith("\n")) {
+    // Match prior UTF-8 string counting: a non-empty file without a trailing newline
+    // still contributes one line.
+    if (lastByte !== undefined && lastByte !== 0x0a) {
       count += 1;
     }
     return count;
   } catch {
+    // Preserve the old fail-soft contract: unreadable transcripts count as 0 lines.
     return 0;
+  } finally {
+    // closeSync must not escape: a close failure used to abort doctor after a
+    // successful count when close ran outside this function's catch.
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close failures; the advisory line count already completed or failed soft
+      }
+    }
   }
 }
 
