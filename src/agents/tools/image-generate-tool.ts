@@ -245,7 +245,7 @@ const ImageGenerateToolSchema = Type.Object({
   ),
 });
 
-export function resolveImageGenerationModelConfigForTool(params: {
+function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
@@ -259,6 +259,12 @@ export function resolveImageGenerationModelConfigForTool(params: {
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
     providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageGenerateToolTestApi")] = {
+    resolveImageGenerationModelConfigForTool,
+  };
 }
 
 function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {

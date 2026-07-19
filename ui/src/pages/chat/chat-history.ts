@@ -6,6 +6,7 @@ import type {
   GatewaySessionRow,
   GatewaySessionsDefaults,
   ModelCatalogEntry,
+  SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -43,16 +44,19 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
   isUnknownGatewayMethodError,
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
+import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   isLocallyOptimisticHistoryMessage,
   messageDisplaySignature,
   preserveOptimisticTailMessages,
+  readTranscriptSequence,
 } from "./history-merge.ts";
 import {
   controlUiNowMs,
@@ -62,7 +66,7 @@ import {
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
-  cacheChatMessages,
+  cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
@@ -79,6 +83,7 @@ import {
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
+import { normalizePlanSnapshot, type PlanStatus } from "./tool-stream.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -86,6 +91,7 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const chatBranchRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
 type ChatHistoryRequestOwnership = {
@@ -321,6 +327,10 @@ export type ChatState = {
   chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
+  /** Pane-owned explicit session queue override from the latest history response. */
+  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
+  /** Pane-owned effective queue mode from this session's latest history response. */
+  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -328,6 +338,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  planStatus?: PlanStatus | null;
   lastError: string | null;
   chatError?: string | null;
   /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
@@ -345,6 +356,12 @@ export type ChatState = {
   agentsSelectedId?: string | null;
   hello: GatewayHelloOk | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
+  sessions?: Partial<SessionCapability>;
+  chatBranches?: SessionBranch[];
+  chatBranchesSessionKey?: string | null;
+  chatBranchesConnectionEpoch?: number | null;
+  chatBranchesLoading?: boolean;
+  requestUpdate?: () => void;
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -374,11 +391,43 @@ export type ChatHistoryResult = {
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
+  inFlightRun?: {
+    runId: string;
+    text?: string;
+    plan?: {
+      steps: Array<PlanStatus["steps"][number] | string>;
+      explanation?: string;
+    };
+  };
 };
 
-export type ChatHistoryPagination =
-  | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
-  | { hasMore: true; nextOffset: number; totalMessages?: number };
+function reconcileHistoryPlanStatus(params: {
+  canAdoptRunSnapshot: boolean;
+  inFlightRun: ChatHistoryResult["inFlightRun"];
+  retainedPlan: PlanStatus | null;
+  sessionInfo: GatewaySessionRow | undefined;
+}): PlanStatus | null {
+  if (!params.canAdoptRunSnapshot) {
+    return params.retainedPlan;
+  }
+  const run = params.inFlightRun;
+  const runId = run?.runId?.trim();
+  if (run && runId) {
+    if (Object.hasOwn(run, "plan")) {
+      return run.plan ? normalizePlanSnapshot(run.plan, runId) : null;
+    }
+    return params.retainedPlan?.runId === runId ? params.retainedPlan : null;
+  }
+  const retainedRunId = params.retainedPlan?.runId;
+  if (!retainedRunId) {
+    return params.retainedPlan;
+  }
+  const activeRunIds = params.sessionInfo?.activeRunIds;
+  const confirmsTerminal =
+    params.sessionInfo?.hasActiveRun === false ||
+    (Array.isArray(activeRunIds) && !activeRunIds.includes(retainedRunId));
+  return confirmsTerminal ? null : params.retainedPlan;
+}
 
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
@@ -408,6 +457,76 @@ export function resolveChatHistoryPagination(
   };
 }
 
+function resolveChatHistorySessionId(result: ChatHistoryResult): string | null {
+  if (typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()) {
+    return result.sessionInfo.sessionId.trim();
+  }
+  return typeof result.sessionId === "string" && result.sessionId.trim()
+    ? result.sessionId.trim()
+    : null;
+}
+
+function retainedRawHistoryStart(pagination: ChatHistoryPagination | undefined): number | null {
+  const totalMessages = pagination?.totalMessages;
+  if (
+    typeof totalMessages !== "number" ||
+    !Number.isSafeInteger(totalMessages) ||
+    totalMessages < 0
+  ) {
+    return null;
+  }
+  const retainedDepth = pagination?.hasMore ? pagination.nextOffset : totalMessages;
+  const start = totalMessages - retainedDepth + 1;
+  return Number.isSafeInteger(start) && start > 0 ? start : null;
+}
+
+function reconcileLoadedHistoryTail(options: {
+  nextMessages: unknown[];
+  nextPagination: ChatHistoryPagination;
+  nextSessionId: string | null;
+  previousMessages: unknown[];
+  previousPagination: ChatHistoryPagination | undefined;
+  previousSessionId: string | null;
+}): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
+  if (
+    !options.previousSessionId ||
+    options.previousSessionId !== options.nextSessionId ||
+    options.previousMessages.length === 0
+  ) {
+    return null;
+  }
+  const previousTotal = options.previousPagination?.totalMessages;
+  const nextTotal = options.nextPagination.totalMessages;
+  const previousStart = retainedRawHistoryStart(options.previousPagination);
+  const nextStart = retainedRawHistoryStart(options.nextPagination);
+  if (
+    typeof previousTotal !== "number" ||
+    typeof nextTotal !== "number" ||
+    previousStart === null ||
+    nextStart === null ||
+    nextTotal < previousTotal ||
+    nextStart > previousTotal + 1 ||
+    nextStart <= previousStart
+  ) {
+    return null;
+  }
+  const prefix = options.previousMessages.filter((message) => {
+    const seq = readTranscriptSequence(message);
+    return seq !== null && seq < nextStart;
+  });
+  if (prefix.length === 0) {
+    return null;
+  }
+  const retainedDepth = nextTotal - previousStart + 1;
+  return {
+    messages: [...prefix, ...options.nextMessages],
+    pagination:
+      previousStart > 1
+        ? { hasMore: true, nextOffset: retainedDepth, totalMessages: nextTotal }
+        : { hasMore: false, totalMessages: nextTotal },
+  };
+}
+
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
 };
@@ -421,6 +540,8 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  stopReason?: string;
+  yielded?: true;
 };
 
 function setChatError(state: ChatState, error: string | null) {
@@ -658,16 +779,20 @@ function recordChatHistoryTiming(
   );
 }
 
-function replaceCachedChatMessages(
-  state: ChatState,
-  sessionKey: string,
-  messages: unknown[],
-  agentId?: string,
-) {
+function replaceCachedChatMessages(state: ChatState, sessionKey: string, agentId?: string) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey, agentId }, messages);
+  cacheChatSessionSnapshot(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey, agentId },
+    {
+      messages: state.chatMessages,
+      pagination: state.chatHistoryPagination ?? { hasMore: false },
+      sessionId: state.currentSessionId ?? null,
+    },
+  );
 }
 
 type ClearChatHistoryState = ChatState &
@@ -677,6 +802,17 @@ type ClearChatHistoryState = ChatState &
   };
 
 type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
+
+type RewindChatHistoryState = ChatState &
+  Parameters<typeof scheduleChatScroll>[0] & {
+    handleChatDraftChange: (next: string) => void;
+    sessions: Pick<SessionCapability, "rewind">;
+  };
+
+type SwitchChatHistoryBranchState = ChatState &
+  Parameters<typeof scheduleChatScroll>[0] & {
+    sessions: Pick<SessionCapability, "listBranches" | "switchBranch">;
+  };
 
 function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   if (state.chatRunId) {
@@ -784,6 +920,126 @@ export async function clearChatHistory(
   return "completed";
 }
 
+export async function rewindChatHistory(
+  state: RewindChatHistoryState,
+  entryId: string,
+): Promise<{ editorText?: string } | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  try {
+    const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
+    const editorText = result.editorText ?? "";
+    if (state.chatMessagesBySession) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey,
+        agentId: agentParams.agentId,
+      });
+    }
+    persistChatComposerState(state, sessionKey, {
+      agentId: agentParams.agentId,
+      draft: editorText,
+    });
+    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+      return null;
+    }
+    state.chatMessages = [];
+    await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+      return null;
+    }
+    state.handleChatDraftChange(editorText);
+    return result;
+  } catch (error) {
+    setChatError(state, error instanceof Error ? error.message : String(error));
+    scheduleChatScroll(state);
+    return null;
+  }
+}
+
+export async function switchChatHistoryBranch(
+  state: SwitchChatHistoryBranchState,
+  leafEntryId: string,
+): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  try {
+    await state.sessions.switchBranch(sessionKey, leafEntryId, agentParams);
+    if (state.chatMessagesBySession) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey,
+        agentId: agentParams.agentId,
+      });
+    }
+    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+      return false;
+    }
+    state.chatMessages = [];
+    await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+    return visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  } catch (error) {
+    setChatError(state, error instanceof Error ? error.message : String(error));
+    scheduleChatScroll(state);
+    return false;
+  }
+}
+
+export async function loadChatBranches(state: ChatState): Promise<void> {
+  const sessions = state.sessions;
+  const client = state.client;
+  const sessionKey = state.sessionKey;
+  if (!sessions?.listBranches || !client || !state.connected) {
+    return;
+  }
+  if (isGatewayMethodAdvertised(state, "sessions.branches.list") === false) {
+    state.chatBranches = [];
+    state.chatBranchesSessionKey = sessionKey;
+    state.chatBranchesConnectionEpoch = state.connectionEpoch;
+    return;
+  }
+  const version = (chatBranchRequestVersions.get(state as object) ?? 0) + 1;
+  chatBranchRequestVersions.set(state as object, version);
+  const connectionEpoch = state.connectionEpoch;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  state.chatBranchesLoading = true;
+  try {
+    const branches = await sessions.listBranches(sessionKey, agentParams);
+    if (
+      chatBranchRequestVersions.get(state as object) !== version ||
+      state.client !== client ||
+      !state.connected ||
+      state.connectionEpoch !== connectionEpoch ||
+      !visibleSessionMatches(state, sessionKey, agentParams.agentId)
+    ) {
+      return;
+    }
+    state.chatBranches = branches;
+    state.chatBranchesSessionKey = sessionKey;
+    state.chatBranchesConnectionEpoch = connectionEpoch;
+  } catch {
+    if (
+      chatBranchRequestVersions.get(state as object) === version &&
+      state.client === client &&
+      state.connectionEpoch === connectionEpoch &&
+      visibleSessionMatches(state, sessionKey, agentParams.agentId)
+    ) {
+      state.chatBranches = [];
+      state.chatBranchesSessionKey = sessionKey;
+      state.chatBranchesConnectionEpoch = connectionEpoch;
+    }
+  } finally {
+    if (chatBranchRequestVersions.get(state as object) === version) {
+      state.chatBranchesLoading = false;
+      state.requestUpdate?.();
+    }
+  }
+}
+
 export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
@@ -809,6 +1065,12 @@ export async function loadChatHistory(
     inFlight.messages === state.chatMessages
   ) {
     return inFlight.promise;
+  }
+  if (
+    state.chatBranchesSessionKey !== sessionKey ||
+    state.chatBranchesConnectionEpoch !== connectionEpoch
+  ) {
+    void loadChatBranches(state);
   }
   const promise = loadChatHistoryUncached(
     state,
@@ -910,6 +1172,8 @@ async function loadChatHistoryUncached(
   const startedAt = Date.now();
   const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
+  const previousPagination = state.chatHistoryPagination;
+  const previousSessionId = state.currentSessionId ?? null;
   const previousRunId = state.chatRunId;
   recordChatHistoryTiming(state, "start", startedAtMs, {
     requestSessionKey: sessionKey,
@@ -971,7 +1235,8 @@ async function loadChatHistoryUncached(
       return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatHistoryPagination = resolveChatHistoryPagination(res);
+    const nextPagination = resolveChatHistoryPagination(res);
+    const nextSessionId = resolveChatHistorySessionId(res);
     applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     const reconciledTerminal = reconcileAuthoritativeTerminalHistory({
@@ -981,26 +1246,31 @@ async function loadChatHistoryUncached(
       sessionKey,
       visibleMessages,
     });
+    const reconciledHistory = reconcileLoadedHistoryTail({
+      nextMessages: visibleMessages,
+      nextPagination,
+      nextSessionId,
+      previousMessages: reconciledTerminal.previousMessages,
+      previousPagination,
+      previousSessionId,
+    });
+    const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const lateOptimisticTail = collectLateOptimisticTailMessages(
       reconciledTerminal.previousMessages,
       reconciledTerminal.currentMessages,
-      visibleMessages,
+      authoritativeMessages,
     );
     state.chatMessages = preserveOptimisticTailMessages(
-      visibleMessages,
+      authoritativeMessages,
       reconciledTerminal.previousMessages,
       shouldHideHistoryMessage,
     );
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
-    replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
-    state.currentSessionId =
-      typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
-        ? res.sessionInfo.sessionId
-        : typeof res.sessionId === "string" && res.sessionId.trim()
-          ? res.sessionId
-          : null;
+    state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
+    state.currentSessionId = nextSessionId;
+    replaceCachedChatMessages(state, sessionKey, requestAgentId);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId
@@ -1009,6 +1279,9 @@ async function loadChatHistoryUncached(
     }
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     state.chatVerboseLevel = res.verboseLevel ?? null;
+    state.chatQueueModeOverride = res.sessionInfo?.queueMode;
+    state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
+    const planStatusBeforeStreamReset = state.planStatus ?? null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -1079,6 +1352,14 @@ async function loadChatHistoryUncached(
         prunePersistedToolStreamMessages(state, persistedToolStreamIds);
       }
     }
+    // Plan reconciliation shares stream adoption: rejected history cannot clobber newer live state.
+    // A missing plan is version-skew unknown; replacement or explicit terminal evidence clears it.
+    state.planStatus = reconcileHistoryPlanStatus({
+      canAdoptRunSnapshot: resetStream,
+      inFlightRun: res.inFlightRun,
+      retainedPlan: planStatusBeforeStreamReset,
+      sessionInfo: res.sessionInfo,
+    });
     recordChatHistoryTiming(state, "applied", startedAtMs, {
       requestSessionKey: sessionKey,
       requestAgentId,

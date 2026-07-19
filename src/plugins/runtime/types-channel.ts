@@ -26,6 +26,7 @@ import type {
 } from "../../config/sessions/runtime-types.js";
 import type {
   ReadChannelAllowFromStoreForAccount,
+  RemoveChannelAllowFromStoreEntryForAccount,
   UpsertChannelPairingRequestForAccount,
 } from "../../pairing/pairing-store.types.js";
 
@@ -129,6 +130,7 @@ export type PluginRuntimeChannel = {
   pairing: {
     buildPairingReply: typeof import("../../pairing/pairing-messages.js").buildPairingReply;
     readAllowFromStore: ReadChannelAllowFromStoreForAccount;
+    removeAllowFromStoreEntry: RemoveChannelAllowFromStoreEntryForAccount;
     upsertPairingRequest: UpsertChannelPairingRequestForAccount;
   };
   media: {
@@ -187,6 +189,8 @@ export type PluginRuntimeChannel = {
     run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    dispatch: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundTurn;
+    /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
     dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {

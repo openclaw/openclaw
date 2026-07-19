@@ -41,7 +41,7 @@ export type PluginHookBeforePromptBuildResult = {
   appendSystemContext?: string;
 };
 
-export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
+const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
   "appendContext",
@@ -74,15 +74,9 @@ export type PluginHookBeforeAgentStartEvent = {
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
   PluginHookBeforeModelResolveResult;
 
-/** @deprecated Use before_model_resolve override result types. */
-export type PluginHookBeforeAgentStartOverrideResult = Omit<
-  PluginHookBeforeAgentStartResult,
-  keyof PluginHookBeforePromptBuildResult
->;
-
 export const stripPromptMutationFieldsFromLegacyHookResult = (
   result: PluginHookBeforeAgentStartResult | void,
-): PluginHookBeforeAgentStartOverrideResult | void => {
+): PluginHookBeforeModelResolveResult | void => {
   if (!result || typeof result !== "object") {
     return result;
   }
@@ -91,6 +85,6 @@ export const stripPromptMutationFieldsFromLegacyHookResult = (
     delete remaining[field];
   }
   return Object.keys(remaining).length > 0
-    ? (remaining as PluginHookBeforeAgentStartOverrideResult)
+    ? (remaining as PluginHookBeforeModelResolveResult)
     : undefined;
 };

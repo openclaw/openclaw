@@ -4,6 +4,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
+  hasAbortableSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
@@ -22,6 +23,20 @@ type TestRow = {
 function makeSessionsResult(rows: TestRow[]): SessionsListResult {
   return { sessions: rows } as unknown as SessionsListResult;
 }
+
+describe("hasAbortableSessionRun", () => {
+  it("recognizes the canonical main row while chat uses its main alias", () => {
+    expect(
+      hasAbortableSessionRun({
+        chatRunId: null,
+        sessionKey: "main",
+        sessionsResult: makeSessionsResult([
+          { key: "agent:main:main", hasActiveRun: true, status: "running" },
+        ]),
+      }),
+    ).toBe(true);
+  });
+});
 
 function makeHost(over: Partial<ReconcileHost> = {}): ReconcileHost {
   return {
@@ -56,6 +71,84 @@ function completeLocalRun(host: ReconcileHost, publishRunStatus = true) {
     throw new Error("Expected local terminal reconciliation to be armed");
   }
 }
+
+describe("reconcileChatRunLifecycle yielded parent", () => {
+  it("clears the completed model run without publishing terminal task state", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "Waiting for child completion.",
+      chatRunStatus: {
+        phase: "done",
+        runId: "older-run",
+        sessionKey: "s1",
+        occurredAt: 1,
+      },
+      planStatus: {
+        steps: [{ step: "Wait for child completion", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      yielded: true,
+      runId: "r1",
+      sessionKey: "s1",
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(host.chatRunStatus).toBeNull();
+    expect(host.planStatus).toBeNull();
+    expect(host.lastLocalTerminalReconcile).toBeNull();
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      activeRunIds: [],
+      hasActiveRun: false,
+      status: "running",
+    });
+  });
+});
+
+describe("reconcileChatRunLifecycle indicators", () => {
+  it("clears plan status on terminal run end", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      planStatus: {
+        steps: [{ step: "Finish the run", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r1",
+      clearLocalRun: true,
+    });
+
+    expect(host.planStatus).toBeNull();
+  });
+
+  it("preserves an owned plan when another run terminates", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      planStatus: {
+        runId: "r1",
+        steps: [{ step: "Finish the run", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r2",
+      clearIndicators: true,
+      clearLocalRun: false,
+    });
+
+    expect(host.planStatus).toEqual({
+      runId: "r1",
+      steps: [{ step: "Finish the run", status: "in_progress" }],
+    });
+  });
+});
 
 describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875)", () => {
   it("keeps a local run active when the gateway registry overrides a terminal snapshot", () => {

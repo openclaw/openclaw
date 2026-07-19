@@ -9,6 +9,7 @@ import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snap
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
@@ -81,13 +82,15 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
 
 type GatewayConfigReloader = {
   stop: () => Promise<void>;
   hotReloadStatus: () => GatewayHotReloadStatus;
+  notifyPluginMetadataChanged: () => void;
 };
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
@@ -172,7 +175,22 @@ export function startGatewayConfigReloader(opts: {
     nextConfig: OpenClawConfig,
     ownership: GatewayConfigReloadTransactionOwnership,
     sourceConfig: OpenClawConfig,
-  ) => Promise<() => Promise<void>>;
+  ) => Promise<{
+    rollback: () => Promise<void>;
+    /** Runs only when this exact source publication can no longer roll back. */
+    commit?: () => void;
+  }>;
+  /**
+   * Fires once per accepted candidate whose persisted content changed —
+   * regardless of writer (gateway RPC, agent/CLI config_set, doctor, hand
+   * edit) and of whether the runtime applied it. The single notification
+   * point for change listeners such as the config.changed broadcast.
+   */
+  onConfigCandidateCommitted?: (info: {
+    path: string;
+    persistedHash: string | null;
+    changedPaths: readonly string[];
+  }) => void;
   onNoopConfigCommit: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -438,6 +456,17 @@ export function startGatewayConfigReloader(opts: {
       // a baseline-only candidate, which can discard prepared lifecycle state.
       await appliedRevision.flush(currentConfig);
       assertCurrent();
+      // Persisted content changed even when the runtime skipped applying it
+      // (writer intent, reload mode off): change listeners still refresh.
+      const notifyCommitted = () => {
+        if (changedPaths.length > 0) {
+          opts.onConfigCandidateCommitted?.({
+            path: opts.watchPath,
+            persistedHash: persistedHash ?? null,
+            changedPaths,
+          });
+        }
+      };
       let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
         const acceptedSourceRollback = await opts.onConfigAccepted?.(
@@ -464,6 +493,7 @@ export function startGatewayConfigReloader(opts: {
           lastSourceOnlyRuntimeRefresh = ownership.runtimeRefresh;
           lastSourceOnlyRuntimeConfig = nextConfig;
           lastSourceOnlySourceConfig = nextSourceConfig;
+          notifyCommitted();
           return;
         }
         // Runtime owners publish env at their commit edge. Keep this idempotent
@@ -492,18 +522,30 @@ export function startGatewayConfigReloader(opts: {
         await rollbackAcceptedSource?.();
         throw error;
       }
+      notifyCommitted();
     };
     if (changedPaths.length === 0) {
+      let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
       let publishedSourceRollback: (() => Promise<void>) | undefined;
+      let publishedSourceRolledBack = false;
       const publishSource = opts.onEffectiveConfigUnchanged
-        ? async () =>
-            (publishedSourceRollback ??= await opts.onEffectiveConfigUnchanged!(
+        ? async () => {
+            publishedSource ??= await opts.onEffectiveConfigUnchanged!(
               nextConfig,
               ownership,
               nextSourceConfig,
-            ))
+            );
+            publishedSourceRollback ??= async () => {
+              publishedSourceRolledBack = true;
+              await publishedSource?.rollback();
+            };
+            return publishedSourceRollback;
+          }
         : undefined;
       await commitReloadBaseline(publishSource ? { publishSource } : {});
+      if (!publishedSourceRolledBack) {
+        publishedSource?.commit?.();
+      }
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       return;
     }
@@ -528,6 +570,7 @@ export function startGatewayConfigReloader(opts: {
     const plan = buildGatewayReloadPlan(changedPaths, {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
+      candidateConfig: nextConfig,
     });
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
@@ -847,7 +890,7 @@ export function startGatewayConfigReloader(opts: {
     );
   }
 
-  const scheduleFromWatcher = () => {
+  const scheduleExternalRefresh = () => {
     opts.onConfigCandidateObserved?.();
     // Revoke the transaction synchronously. The debounced reread owns this new
     // epoch; a slow prior reload must not publish after a newer disk write.
@@ -901,7 +944,7 @@ export function startGatewayConfigReloader(opts: {
   let degradedToPolling = false;
   let watcherUsesPolling = false;
 
-  const createWatcher = () => {
+  const createWatcher = (reconcileAfterReady = false) => {
     if (stopped) {
       return;
     }
@@ -911,12 +954,27 @@ export function startGatewayConfigReloader(opts: {
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling,
     });
-    next.on("add", scheduleFromWatcher);
-    next.on("change", scheduleFromWatcher);
-    next.on("unlink", scheduleFromWatcher);
+    // A file event proves this watcher recovered. Reset only here so plugin
+    // metadata refreshes and consecutive watcher errors cannot refill the budget.
+    const scheduleFromWatcherEvent = () => {
+      watcherRecreateRetries = 0;
+      scheduleExternalRefresh();
+    };
+    next.on("add", scheduleFromWatcherEvent);
+    next.on("change", scheduleFromWatcherEvent);
+    next.on("unlink", scheduleFromWatcherEvent);
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
+    if (reconcileAfterReady) {
+      next.on("ready", () => {
+        // Replacement watchers suppress their initial add event. Reconcile only after the
+        // scan completes, and ignore a watcher that failed again before reaching ready.
+        if (!stopped && watcher === next) {
+          scheduleExternalRefresh();
+        }
+      });
+    }
     watcher = next;
     watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
@@ -943,7 +1001,7 @@ export function startGatewayConfigReloader(opts: {
         );
         watcherRecreateTimer = setTimeout(() => {
           watcherRecreateTimer = null;
-          createWatcher();
+          createWatcher(true);
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
@@ -964,13 +1022,21 @@ export function startGatewayConfigReloader(opts: {
     );
     watcherRecreateTimer = setTimeout(() => {
       watcherRecreateTimer = null;
-      createWatcher();
+      createWatcher(true);
     }, backoff);
   };
 
   createWatcher();
 
   return {
+    notifyPluginMetadataChanged: () => {
+      // The signal carries a metadata change while config bytes stay identical.
+      // Clear both metadata and config-echo caches before scheduling the shared diff path.
+      clearLoadInstalledPluginIndexInstallRecordsCache();
+      startupInternalWriteHash = null;
+      lastAppliedWriteHash = null;
+      scheduleExternalRefresh();
+    },
     stop: async () => {
       stopped = true;
       if (debounceTimer) {

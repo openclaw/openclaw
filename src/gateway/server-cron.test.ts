@@ -32,6 +32,9 @@ const {
   retireSessionMcpRuntimeMock,
   requestSafeGatewayRestartMock,
   getProcessSupervisorMock,
+  createCronScriptRuntimeMock,
+  cronTriggerEvaluatorMock,
+  cronScriptExecutorMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   consumeSelectedSystemEventEntriesMock: vi.fn((_sessionKey, entries) => entries ?? []),
@@ -88,6 +91,9 @@ const {
     spawn: vi.fn(),
     cancelScope: vi.fn(),
   })),
+  createCronScriptRuntimeMock: vi.fn(),
+  cronTriggerEvaluatorMock: vi.fn(),
+  cronScriptExecutorMock: vi.fn(),
 }));
 
 function enqueueSystemEvent(text: string, opts?: unknown) {
@@ -197,6 +203,10 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: getProcessSupervisorMock,
+}));
+
+vi.mock("../cron/trigger-script.js", () => ({
+  createCronScriptRuntime: createCronScriptRuntimeMock,
 }));
 
 import type { CronJob } from "../cron/types.js";
@@ -310,10 +320,63 @@ describe("buildGatewayCronService", () => {
       spawn: vi.fn(),
       cancelScope: vi.fn(),
     });
+    cronTriggerEvaluatorMock.mockReset();
+    cronTriggerEvaluatorMock.mockResolvedValue({ kind: "evaluated", fire: false });
+    cronScriptExecutorMock.mockReset();
+    cronScriptExecutorMock.mockResolvedValue({ kind: "completed", stateChanged: false });
+    createCronScriptRuntimeMock.mockReset();
+    createCronScriptRuntimeMock.mockReturnValue({
+      evaluateTrigger: cronTriggerEvaluatorMock,
+      executePayload: cronScriptExecutorMock,
+    });
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
     });
+  });
+
+  it("passes the persisted payload tool cap to trigger evaluation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
+    const cfg = createCronConfig("server-cron-trigger-tool-cap");
+    cfg.cron = {
+      ...cfg.cron,
+      triggers: { enabled: true, minIntervalMs: 30_000 },
+    };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "restricted trigger",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+        trigger: { script: "json({ fire: false })" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "systemEvent",
+          text: "wake",
+          toolsAllow: ["read", "cron"],
+        },
+      });
+      vi.setSystemTime(job.state.nextRunAtMs ?? 0);
+
+      expect(await state.cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
+      expect(cronTriggerEvaluatorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: job.id,
+          toolsAllow: ["read", "cron"],
+        }),
+      );
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("stops on-exit watcher children when the direct cron service stops", async () => {
@@ -705,6 +768,164 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("delivers isolated script notify through the cron announce path", async () => {
+    const cfg = createCronConfig("server-cron-script-announce");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    cronScriptExecutorMock.mockResolvedValueOnce({
+      kind: "completed",
+      notify: "queue changed",
+      stateChanged: false,
+    });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "script-announce",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "script", script: "return { notify: 'queue changed' }" },
+        delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(cronScriptExecutorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: job.id,
+          script: "return { notify: 'queue changed' }",
+          timeoutSeconds: 300,
+          toolBudget: 50,
+        }),
+      );
+      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: "queue changed",
+          jobId: job.id,
+          target: expect.objectContaining({ threadId: 456 }),
+        }),
+      );
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("delivers isolated script notify through the cron webhook path", async () => {
+    const cfg = createCronConfig("server-cron-script-webhook");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    cronScriptExecutorMock.mockResolvedValueOnce({
+      kind: "completed",
+      notify: "queue changed",
+      stateChanged: false,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ release: vi.fn() });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "script-webhook",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "script", script: "return { notify: 'queue changed' }" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      const request = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "script webhook request"),
+        "script webhook request",
+      );
+      expect(String(requireRecord(request.init, "fetch init").body)).toContain(
+        '"summary":"queue changed"',
+      );
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("does not deliver a script webhook when notify is absent", async () => {
+    const cfg = createCronConfig("server-cron-script-webhook-silent");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    cronScriptExecutorMock.mockResolvedValueOnce({ kind: "completed", stateChanged: false });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "silent-script-webhook",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "script", script: "return {}" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("does not invoke delivery when a script omits notify", async () => {
+    const cfg = createCronConfig("server-cron-script-silent");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    cronScriptExecutorMock.mockResolvedValueOnce({ kind: "completed", stateChanged: false });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "silent-script",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "script", script: "return {}" },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("suppresses command cron NO_REPLY output before webhook delivery", async () => {
     const cfg = createCronConfig("server-cron-command-webhook-no-reply");
     loadConfigMock.mockReturnValue(cfg);
@@ -959,6 +1180,8 @@ describe("buildGatewayCronService", () => {
       );
       expect(heartbeatRun.agentId).toBe("main");
       expect(heartbeatRun.sessionKey).toBe("global");
+      // The adapter rebuilds this object field-by-field; preserve the optional owner.
+      expect(heartbeatRun.owningCronJobMarker).toMatchObject({ jobId: job.id });
       expect(heartbeatRun.heartbeat).toEqual({
         target: "last",
         to: undefined,
@@ -1049,6 +1272,11 @@ describe("buildGatewayCronService", () => {
                 agentId?: string;
                 sessionKey?: string | null;
                 reason?: string;
+                owningCronLaneTaskMarker?: {
+                  lane: string;
+                  taskId: number;
+                  generation: number;
+                };
                 heartbeat?: { target?: string };
               }) => Promise<unknown>;
             };
@@ -1056,9 +1284,11 @@ describe("buildGatewayCronService", () => {
         }
       ).state?.deps;
 
+      const owningCronLaneTaskMarker = { lane: "cron", taskId: 7, generation: 3 };
       await cronDeps?.runHeartbeatOnce?.({
         reason: "cron:test",
         sessionKey: "telegram:group:123:topic:456",
+        owningCronLaneTaskMarker,
         heartbeat: { target: "last" },
       });
 
@@ -1067,6 +1297,7 @@ describe("buildGatewayCronService", () => {
         "heartbeat run options",
       );
       expect(call.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
+      expect(call.owningCronLaneTaskMarker).toEqual(owningCronLaneTaskMarker);
       expect(call.heartbeat).toEqual({
         every: "1h",
         prompt: "Default heartbeat prompt",

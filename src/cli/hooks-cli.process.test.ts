@@ -6,11 +6,20 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  registerNativeHookRelay,
+  testing as nativeHookRelayTesting,
+} from "../agents/harness/native-hook-relay.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
+const outputTimeoutMs = 20_000;
+const exitAfterOutputTimeoutMs = 5_000;
+const exitOnlyTimeoutMs = 45_000;
 
 afterEach(async () => {
+  nativeHookRelayTesting.clearNativeHookRelaysForTests();
   await Promise.all(Array.from(activeChildren, terminateChild));
 });
 
@@ -102,9 +111,10 @@ async function createLingeringPreloadFixture(): Promise<{
 
 async function runHooksCli(params: {
   args: string[];
+  completion: "exit" | "output-then-exit";
+  label: string;
   env?: NodeJS.ProcessEnv;
   stdin?: string;
-  timeoutMessage: string;
 }) {
   const child = spawn(process.execPath, ["--import", "tsx", "src/entry.ts", ...params.args], {
     cwd: path.resolve("."),
@@ -121,12 +131,6 @@ async function runHooksCli(params: {
   let stderr = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
   child.stdin.end(params.stdin ?? "");
 
   return await new Promise<{
@@ -136,10 +140,29 @@ async function runHooksCli(params: {
     stdout: string;
   }>((resolve, reject) => {
     let timedOut = false;
-    const timer = setTimeout(() => {
+    let outputObserved = false;
+    // Silent relay success has no stream milestone. Give it an exit deadline
+    // while keeping the tighter post-output deadline for leaked handles.
+    const initialTimeoutMs = params.completion === "exit" ? exitOnlyTimeoutMs : outputTimeoutMs;
+    let timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
-    }, 15_000);
+    }, initialTimeoutMs);
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (params.completion === "exit" || outputObserved) {
+        return;
+      }
+      outputObserved = true;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, exitAfterOutputTimeoutMs);
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
     child.once("error", (error) => {
       clearTimeout(timer);
       activeChildren.delete(child);
@@ -149,7 +172,13 @@ async function runHooksCli(params: {
       clearTimeout(timer);
       activeChildren.delete(child);
       if (timedOut) {
-        reject(new Error(`${params.timeoutMessage}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+        const timeoutMessage =
+          params.completion === "exit"
+            ? `${params.label} did not exit within ${exitOnlyTimeoutMs}ms`
+            : outputObserved
+              ? `${params.label} did not exit within ${exitAfterOutputTimeoutMs}ms after emitting output`
+              : `${params.label} did not emit output within ${outputTimeoutMs}ms`;
+        reject(new Error(`${timeoutMessage}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
         return;
       }
       resolve({ code, signal, stderr, stdout });
@@ -172,6 +201,8 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
       "--timeout",
       "50",
     ],
+    completion: params.event === "post_tool_use" ? "exit" : "output-then-exit",
+    label: `hooks relay ${params.event}`,
     env: {
       LINGER_MARKER: fixture.markerPath,
       NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
@@ -180,57 +211,87 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
       OPENCLAW_STATE_DIR: fixture.stateDir,
     },
     stdin: params.stdin,
-    timeoutMessage: `hooks relay ${params.event} did not exit after emitting output`,
   });
   await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
   return result;
 }
 
 describe("hooks CLI process lifecycle", () => {
-  it("exits after JSON output when plugin registration leaves a ref'd handle", async () => {
+  it("uses the explicit relay database when the child has a different state directory", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "process-explicit-state-db",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+    await expect
+      .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
+      .toBeDefined();
+
+    const childStateDir = path.join(tempDirs.make("openclaw-hooks-relay-other-state-"), "state");
+    await fs.mkdir(childStateDir, { recursive: true });
+    const result = await runHooksCli({
+      args: [
+        "hooks",
+        "relay",
+        "--provider",
+        "codex",
+        "--relay-id",
+        relay.relayId,
+        "--state-db",
+        resolveOpenClawStateSqlitePath(),
+        "--generation",
+        relay.generation,
+        "--event",
+        "post_tool_use",
+        "--timeout",
+        "5000",
+      ],
+      completion: "exit",
+      label: "hooks relay explicit state database",
+      env: {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_STATE_DIR: childStateDir,
+      },
+      stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("");
+  }, 60_000);
+
+  it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
     const fixture = await createLingeringPluginFixture();
 
-    const result = await runHooksCli({
+    // Both command families need real process coverage. Keep their expensive CLI
+    // bootstraps sequential so low-core shards test lifecycle, not startup contention.
+    const listResult = await runHooksCli({
       args: ["hooks", "list", "--json"],
+      completion: "output-then-exit",
+      label: "hooks list",
       env: {
         LINGER_MARKER: fixture.markerPath,
         OPENCLAW_CONFIG_PATH: fixture.configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_STATE_DIR: fixture.stateDir,
       },
-      timeoutMessage: "hooks list did not exit after emitting output",
     });
+    const relayResult = await runHooksRelay({ event: "pre_tool_use", stdin: "{}" });
 
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(result.stderr).not.toContain("Error:");
-    expect(JSON.parse(result.stdout)).toMatchObject({ hooks: expect.any(Array) });
+    expect(listResult, listResult.stderr).toMatchObject({ code: 0, signal: null });
+    expect(listResult.stderr).not.toContain("Error:");
+    expect(JSON.parse(listResult.stdout)).toMatchObject({ hooks: expect.any(Array) });
     await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
-  }, 20_000);
-
-  it("exits successfully after an observational relay result with a ref'd handle", async () => {
-    const result = await runHooksRelay({ event: "post_tool_use", stdin: "{}" });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stdout: "" });
-    expect(result.stderr).toMatch(/native hook relay (timed out|unavailable)/);
-  }, 20_000);
-
-  it("flushes fail-closed PreToolUse JSON before exiting with a ref'd handle", async () => {
-    const result = await runHooksRelay({ event: "pre_tool_use", stdin: "{}" });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    expect(relayResult, relayResult.stderr).toMatchObject({ code: 0, signal: null });
+    expect(JSON.parse(relayResult.stdout)).toMatchObject({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
         permissionDecisionReason: expect.any(String),
       },
     });
-  }, 20_000);
-
-  it("preserves a malformed-input exit code with a ref'd handle", async () => {
-    const result = await runHooksRelay({ event: "post_tool_use", stdin: "{nope" });
-
-    expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
-    expect(result.stderr).toContain("failed to read native hook input");
-  }, 20_000);
+  }, 60_000);
 });

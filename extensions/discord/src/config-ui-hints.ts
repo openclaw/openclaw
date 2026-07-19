@@ -115,6 +115,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Spawn Context",
     help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
+  subagentProgress: {
+    label: "Discord Subagent Progress",
+    help: "Show active subagent count reactions and typing on the source message. Default: false.",
+  },
   "ui.components.accentColor": {
     label: "Discord Component Accent Color",
     help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
@@ -205,11 +209,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.requireWakeName": {
     label: "Discord Realtime Require Wake Name",
-    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+    help: "Control OpenAI agent-proxy wake-name gating. Unset listens naturally with one human and requires a wake name with two or more; true always requires one and false never does.",
   },
   "voice.realtime.wakeNames": {
     label: "Discord Realtime Wake Names",
-    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+    help: "One- or two-word activation names used whenever OpenAI agent-proxy Discord realtime voice has an active wake-name gate.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
@@ -316,6 +320,18 @@ export const discordChannelConfigUiHints = {
     label: "Discord Online Presence User IDs",
     help: "Optional immutable Discord user ID allowlist. Omit to include all human members in the guild.",
   },
+  "guilds.*.presenceEvents.reconnectSuppressSeconds": {
+    label: "Discord Online Presence Reconnect Suppression",
+    help: "Suppress online-presence events for this many seconds after a new Gateway session while guild presence state is rebuilt. Resumed sessions are unaffected. 0 disables. Default: 300.",
+  },
+  "guilds.*.presenceEvents.burstLimit": {
+    label: "Discord Online Presence Burst Limit",
+    help: "Maximum successfully queued online-presence events for this guild per burst window; the rest are suppressed and logged once. Default: 8.",
+  },
+  "guilds.*.presenceEvents.burstWindowSeconds": {
+    label: "Discord Online Presence Burst Window",
+    help: "Sliding window in seconds used for burst detection. Default: 60.",
+  },
   activityType: {
     label: "Discord Presence Activity Type",
     help: "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
@@ -360,5 +376,18 @@ export const discordChannelConfigUiHints = {
   applicationId: {
     label: "Discord Application ID",
     help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
+  },
+  activities: {
+    label: "Discord Activities",
+    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+  },
+  "activities.clientSecret": {
+    label: "Discord Activities Client Secret",
+    help: "OAuth2 client secret for the Discord application. DISCORD_CLIENT_SECRET is used when this field is unset.",
+    sensitive: true,
+  },
+  "activities.applicationId": {
+    label: "Discord Activities Application ID",
+    help: "Optional Activity application ID. Defaults to the bot application ID learned at gateway startup.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

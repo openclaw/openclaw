@@ -13,6 +13,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
@@ -34,6 +35,8 @@ import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "../../agents/model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { resolveProviderModelRouteAuthRequirement } from "../../agents/provider-model-route-auth.js";
+import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import {
   prepareSimpleCompletionModel,
@@ -51,18 +54,18 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import { streamSimple } from "../../llm/stream.js";
+import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
   Model,
   SimpleStreamOptions,
-  StreamFn,
   Tool,
   Usage,
 } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   projectWorkerInferenceTerminalMessage,
@@ -100,16 +103,66 @@ type WorkerInferenceRuntimeDependencies = {
   loadCatalog: typeof loadModelCatalog;
   resolveDefaultModel: typeof resolveDefaultModelForAgent;
   resolveSessionAuthProfile: typeof resolveSessionAuthProfileOverride;
+  resolveAuthProfileMode: typeof resolveWorkerInferenceAuthProfileMode;
   resolveModel: typeof resolveModelAsync;
   prepareModel: typeof prepareSimpleCompletionModel;
   resolveProviderStream: typeof registerProviderStreamForModel;
   resolveStream: typeof resolveEmbeddedAgentStreamFn;
   applyStreamPolicy: typeof applyExtraParamsToAgent;
-  stream: StreamFn;
   wrapStream: typeof wrapStreamFnWithDiagnosticModelCallEvents;
   createTrace: typeof createDiagnosticTraceContextFromActiveScope;
   recordUsage: (params: WorkerInferenceUsageParams) => void;
 };
+
+function resolveWorkerInferenceAuthProfileMode(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+  profileId: string;
+}): string | undefined {
+  const configuredMode = params.config.auth?.profiles?.[params.profileId]?.mode;
+  if (configuredMode) {
+    return configuredMode;
+  }
+  return ensureAuthProfileStore(params.agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+    config: params.config,
+  }).profiles[params.profileId]?.type;
+}
+
+export function projectWorkerInferenceModelRouteConfig(params: {
+  config: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  authMode?: string;
+}): OpenClawConfig {
+  const authRequirement = resolveProviderModelRouteAuthRequirement(params.authMode);
+  if (!authRequirement) {
+    return params.config;
+  }
+  const resolution = resolveProviderModelRoutes({
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.config,
+  });
+  if (resolution?.kind !== "routes") {
+    return params.config;
+  }
+  const route = resolution.routes.find(
+    (candidate) => candidate.authRequirement === authRequirement,
+  );
+  if (!route) {
+    return params.config;
+  }
+  // Worker placement owns the agent harness, while the gateway-owned profile
+  // owns the provider route. Keep those decisions separate or OAuth can be
+  // materialized as a public API-key endpoint and fail before the first token.
+  return projectProviderModelRouteConfig({
+    provider: params.provider,
+    config: params.config,
+    route,
+  });
+}
 
 const ERROR_MESSAGES = {
   "model-not-approved": "Model is not approved for this agent.",
@@ -330,12 +383,12 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   loadCatalog: loadModelCatalog,
   resolveDefaultModel: resolveDefaultModelForAgent,
   resolveSessionAuthProfile: resolveSessionAuthProfileOverride,
+  resolveAuthProfileMode: resolveWorkerInferenceAuthProfileMode,
   resolveModel: resolveModelAsync,
   prepareModel: prepareSimpleCompletionModel,
   resolveProviderStream: registerProviderStreamForModel,
   resolveStream: resolveEmbeddedAgentStreamFn,
   applyStreamPolicy: applyExtraParamsToAgent,
-  stream: streamSimple as StreamFn,
   wrapStream: wrapStreamFnWithDiagnosticModelCallEvents,
   createTrace: createDiagnosticTraceContextFromActiveScope,
   recordUsage: emitWorkerInferenceUsage,
@@ -488,6 +541,18 @@ async function resolveApprovedModel(params: {
         : sessionProfileId
           ? { id: sessionProfileId, source: sessionProfileSource }
           : undefined;
+  const modelConfig = projectWorkerInferenceModelRouteConfig({
+    config,
+    provider: resolved.ref.provider,
+    modelId: resolved.ref.model,
+    authMode: selectedProfile
+      ? dependencies.resolveAuthProfileMode({
+          config,
+          agentDir,
+          profileId: selectedProfile.id,
+        })
+      : undefined,
+  });
   const modelResolver = bindSimpleCompletionModelResolverWorkspace(
     (provider, modelId, resolvedAgentDir, cfg, options) =>
       dependencies.resolveModel(provider, modelId, resolvedAgentDir, cfg, {
@@ -497,14 +562,16 @@ async function resolveApprovedModel(params: {
       }),
     workspaceDir,
   );
+  // Route projection and credential selection are one decision. Pin even an
+  // automatic profile so generic auth fallback cannot cross to another route.
   const prepared = await dependencies.prepareModel({
-    cfg: config,
+    cfg: modelConfig,
     provider: resolved.ref.provider,
     modelId: resolved.ref.model,
     agentDir,
-    ...(selectedProfile?.source === "user" ? { profileId: selectedProfile.id } : {}),
+    ...(selectedProfile ? { profileId: selectedProfile.id } : {}),
     ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
-    ...(selectedProfile?.source === "user" ? { bindAuthOwner: true } : {}),
+    ...(selectedProfile ? { bindAuthOwner: true } : {}),
     allowMissingApiKeyModes: ["aws-sdk"],
     useAsyncModelResolution: true,
     modelResolver,
@@ -565,6 +632,10 @@ export function createWorkerInferenceExecutor(
       model: approved.model,
     };
     const logicalModel = approved.prepared.model;
+    const llmRuntime = getModelLlmRuntime(logicalModel);
+    if (!llmRuntime) {
+      throw new Error("Prepared worker model has no lifecycle runtime owner");
+    }
     const providerModel =
       logicalModel.provider === "openai" && logicalModel.api === "openai-chatgpt-responses"
         ? {
@@ -577,12 +648,12 @@ export function createWorkerInferenceExecutor(
       cfg: config,
       agentDir: approved.agentDir,
       workspaceDir: approved.workspaceDir,
-      registerStream: false,
     });
     const authValue = approved.prepared.auth.apiKey;
     const streamAgent = {
       streamFn: dependencies.resolveStream({
-        currentStreamFn: dependencies.stream,
+        llmRuntime,
+        currentStreamFn: llmRuntime.streamSimple,
         ...(providerStream ? { providerStreamFn: providerStream } : {}),
         sessionId: request.sessionId,
         signal,

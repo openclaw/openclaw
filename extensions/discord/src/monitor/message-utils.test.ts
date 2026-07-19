@@ -7,7 +7,7 @@ import {
 } from "discord-api-types/v10";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client, type Message } from "../internal/discord.js";
-import { resetDiscordChannelInfoCacheForTest } from "./message-channel-info.js";
+import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 
 const readRemoteMediaBuffer = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -1200,7 +1200,7 @@ describe("resolveDiscordMessageText", () => {
 
 describe("resolveDiscordChannelInfo", () => {
   beforeEach(() => {
-    resetDiscordChannelInfoCacheForTest();
+    clearDiscordChannelInfoCacheForTest();
   });
 
   it("caches channel lookups between calls", async () => {

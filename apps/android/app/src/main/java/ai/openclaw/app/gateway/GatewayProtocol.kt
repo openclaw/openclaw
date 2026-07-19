@@ -74,6 +74,51 @@ data class GatewayNodeInvokeRequest(
 )
 
 @Serializable
+data class QuestionOption(
+  val label: String,
+  val description: String? = null,
+)
+
+@Serializable
+data class Question(
+  val id: String,
+  val header: String,
+  val question: String,
+  val options: List<QuestionOption>,
+  val multiSelect: Boolean? = null,
+  val isOther: Boolean? = null,
+  val isSecret: Boolean? = null,
+)
+
+@Serializable
+data class QuestionAnswers(
+  val answers: Map<String, QuestionAnswersAnswersValue>,
+)
+
+@Serializable
+data class QuestionRecord(
+  val id: String,
+  val questions: List<Question>,
+  val agentId: String? = null,
+  val sessionKey: String? = null,
+  val createdAtMs: Long,
+  val expiresAtMs: Long,
+  val status: String,
+  val answers: QuestionAnswers? = null,
+  val resolvedBy: String? = null,
+)
+
+@Serializable
+data class QuestionGetResult(
+  val question: QuestionRecord,
+)
+
+@Serializable
+data class QuestionListResult(
+  val questions: List<QuestionRecord>,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -83,6 +128,11 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
+)
+
+@Serializable
+data class QuestionAnswersAnswersValue(
+  val answers: List<String>,
 )
 
 enum class GatewayMethod(
@@ -129,6 +179,11 @@ enum class GatewayMethod(
   ExecApprovalRequest("exec.approval.request"),
   ExecApprovalWaitDecision("exec.approval.waitDecision"),
   ExecApprovalResolve("exec.approval.resolve"),
+  QuestionRequest("question.request"),
+  QuestionWaitAnswer("question.waitAnswer"),
+  QuestionResolve("question.resolve"),
+  QuestionGet("question.get"),
+  QuestionList("question.list"),
   PluginApprovalList("plugin.approval.list"),
   PluginApprovalRequest("plugin.approval.request"),
   PluginApprovalWaitDecision("plugin.approval.waitDecision"),
@@ -136,9 +191,11 @@ enum class GatewayMethod(
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
   OpenclawChat("openclaw.chat"),
+  OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
   OpenclawSetupAuthStart("openclaw.setup.auth.start"),
+  OpenclawSetupPrepareStart("openclaw.setup.prepare.start"),
   WizardStart("wizard.start"),
   WizardNext("wizard.next"),
   WizardCancel("wizard.cancel"),
@@ -174,6 +231,11 @@ enum class GatewayMethod(
   McpAppListResourceTemplates("mcp.app.listResourceTemplates"),
   McpAppReadResource("mcp.app.readResource"),
   McpAppCallTool("mcp.app.callTool"),
+  BoardGet("board.get"),
+  BoardUpdate("board.update"),
+  BoardWidgetPut("board.widget.put"),
+  BoardWidgetGrant("board.widget.grant"),
+  BoardEvent("board.event"),
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
   TasksList("tasks.list"),
@@ -202,6 +264,7 @@ enum class GatewayMethod(
   SessionsFilesList("sessions.files.list"),
   SessionsFilesGet("sessions.files.get"),
   SessionsFilesSet("sessions.files.set"),
+  SessionsFilesReveal("sessions.files.reveal"),
   ArtifactsList("artifacts.list"),
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
@@ -250,6 +313,10 @@ enum class GatewayMethod(
   SessionsCompactionGet("sessions.compaction.get"),
   SessionsCompactionBranch("sessions.compaction.branch"),
   SessionsCompactionRestore("sessions.compaction.restore"),
+  SessionsBranchesList("sessions.branches.list"),
+  SessionsBranchesSwitch("sessions.branches.switch"),
+  SessionsRewind("sessions.rewind"),
+  SessionsFork("sessions.fork"),
   SessionsCreate("sessions.create"),
   SessionsSend("sessions.send"),
   SessionsAbort("sessions.abort"),
@@ -306,6 +373,9 @@ enum class GatewayMethod(
   SystemPresence("system-presence"),
   SystemEvent("system-event"),
   MessageAction("message.action"),
+  ConversationsSend("conversations.send"),
+  ConversationsTurn("conversations.turn"),
+  ConversationsTurnCancel("conversations.turn.cancel"),
   Send("send"),
   Agent("agent"),
   AgentIdentityGet("agent.identity.get"),
@@ -354,6 +424,7 @@ enum class GatewayMethod(
   PluginsInstall("plugins.install"),
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
+  PluginsRefresh("plugins.refresh"),
   ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
@@ -372,9 +443,14 @@ enum class GatewayMethod(
   ApprovalResolve("approval.resolve"),
   SessionsSearch("sessions.search"),
   SessionsDispatch("sessions.dispatch"),
+  SessionsReclaim("sessions.reclaim"),
   ModelsProbe("models.probe"),
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
+  UiCommand("ui.command"),
+  ApprovalHistory("approval.history"),
+  PluginSurfaceRefresh("plugin.surface.refresh"),
+  ConversationsList("conversations.list"),
 }
 
 enum class GatewayEvent(
@@ -383,6 +459,7 @@ enum class GatewayEvent(
   ConnectChallenge("connect.challenge"),
   Agent("agent"),
   Chat("chat"),
+  UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
   SessionOperation("session.operation"),
@@ -410,8 +487,12 @@ enum class GatewayEvent(
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),
   ExecApprovalResolved("exec.approval.resolved"),
+  QuestionRequested("question.requested"),
+  QuestionResolved("question.resolved"),
   PluginApprovalRequested("plugin.approval.requested"),
   PluginApprovalResolved("plugin.approval.resolved"),
+  OpenclawApprovalRequested("openclaw.approval.requested"),
+  OpenclawApprovalResolved("openclaw.approval.resolved"),
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),

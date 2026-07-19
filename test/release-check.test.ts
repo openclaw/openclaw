@@ -668,14 +668,14 @@ describe("collectForbiddenPackPaths", () => {
     try {
       mkdirSync(join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
       writeFileSync(
-        join(tempRoot, "dist", "plugin-sdk", "testing.d.ts"),
+        join(tempRoot, "dist", "plugin-sdk", "channel-test-helpers.d.ts"),
         "//#region src/plugin-sdk/test-helpers/session.ts\n",
         "utf8",
       );
 
-      expect(collectForbiddenPackContentPaths(["dist/plugin-sdk/testing.d.ts"], tempRoot)).toEqual([
-        "dist/plugin-sdk/testing.d.ts",
-      ]);
+      expect(
+        collectForbiddenPackContentPaths(["dist/plugin-sdk/channel-test-helpers.d.ts"], tempRoot),
+      ).toEqual(["dist/plugin-sdk/channel-test-helpers.d.ts"]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -704,11 +704,15 @@ describe("collectMissingPackPaths", () => {
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/official-external-plugin-catalog.json",
       "scripts/lib/official-external-provider-catalog.json",
+      "scripts/lib/recommended-tool-installs.json",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/agents/compaction-planning.worker.js",
       "dist/agents/model-provider-auth.worker.js",
       "dist/audit/audit-event-writer.worker.js",
+      "dist/config/sessions/session-transcript-reconcile.worker.js",
+      "dist/state/openclaw-database-verify.worker.js",
+      "dist/system-agent/setup-inference-detection.worker.js",
       "dist/task-registry-control.runtime.js",
       "dist/telegram-ingress-worker.runtime.js",
       bundledDistPluginFile("telegram", "runtime-api.js"),
@@ -738,12 +742,16 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/official-external-channel-catalog.json",
         "scripts/lib/official-external-plugin-catalog.json",
         "scripts/lib/official-external-provider-catalog.json",
+        "scripts/lib/recommended-tool-installs.json",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
         "dist/audit/audit-event-writer.worker.js",
+        "dist/config/sessions/session-transcript-reconcile.worker.js",
+        "dist/state/openclaw-database-verify.worker.js",
+        "dist/system-agent/setup-inference-detection.worker.js",
         "dist/task-registry-control.runtime.js",
         "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",

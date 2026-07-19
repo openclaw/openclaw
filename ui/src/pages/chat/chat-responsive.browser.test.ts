@@ -20,6 +20,11 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
+// Real-app cases boot through a cold Vite dev server that transforms the whole
+// Control UI module graph on first request; with 6 Vitest workers sharing an
+// 8vCPU CI runner that first render can starve well past 10s. Budget the
+// first-render waits for contention while staying inside the 60s testTimeout.
+const APP_FIRST_RENDER_TIMEOUT_MS = 30_000;
 const LONG_SIDE_CHAT_BODY = Array.from(
   { length: 80 },
   (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
@@ -165,7 +170,7 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
                 : ""
             }
             <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat session"><option>Daily planning</option></select>
+              <select data-chat-session-select="true" aria-label="Chat thread"><option>Daily planning</option></select>
             </label>
             <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
               <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="" data-chat-thinking-value="" aria-label="Chat model">gpt-5 · High</summary>
@@ -224,7 +229,7 @@ function chatHeaderControlsHtml(hidden = false) {
               <select data-chat-agent-filter="true" aria-label="Filter sessions by agent"><option>Valentina</option></select>
             </label>
             <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat session"><option>main</option></select>
+              <select data-chat-session-select="true" aria-label="Chat thread"><option>main</option></select>
             </label>
             <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
               <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="gpt-5.5" data-chat-thinking-value="" aria-label="Chat model">gpt-5.5 · High</summary>
@@ -246,9 +251,9 @@ function chatHeaderControlsHtml(hidden = false) {
   `;
 }
 
-function chatHtml(opts: ChatFixtureOptions = {}) {
+function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
   return `
-    <div class="shell shell--chat" data-chat-responsive-fixture>
+    <div class="shell shell--chat${mobileNavLayout ? " shell--mobile-nav" : ""}" data-chat-responsive-fixture>
       <header class="topbar">
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
@@ -379,7 +384,7 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
-                          <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
+                          <summary class="context-ring" role="status" aria-label="Thread context usage: 46k/200k (23%)">
                             <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                               <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
                               <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
@@ -421,7 +426,7 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
-      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
     );
     return page;
   } catch (error) {
@@ -440,6 +445,17 @@ async function openBrowserPage(width: number, height: number): Promise<Page> {
 
 async function closeBrowserPage(page: Page): Promise<void> {
   await page.close().catch(() => {});
+}
+
+async function waitForLayoutSettled(page: Page): Promise<void> {
+  // Raw DOM mutations skip Playwright's actionability wait. Allow style invalidation
+  // to land, then observe one stable frame before measuring viewport bounds.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
 }
 
 async function getRect(page: Page, selector: string) {
@@ -616,8 +632,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             },
           ],
         });
-        await page.goto(`${realChatServer.baseUrl}chat`);
-        await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
+        await page.goto(`${realChatServer.baseUrl}chat`, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
+        await page
+          .getByText("Context hover regression fixture.")
+          .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
 
         const details = page.locator("details.msg-meta");
         const context = page.locator(".msg-meta__details");
@@ -635,7 +656,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         // the group is hovered, so enter through the message body first.
         await page.locator(".chat-text").first().hover();
         await page.locator(".msg-meta__summary").hover();
-        expect(await context.isVisible()).toBe(true);
+        // The reveal is state-driven, so the re-render can lag the hover event
+        // under CPU contention; poll instead of a one-shot visibility read.
+        await context.waitFor({ state: "visible", timeout: 10_000 });
         const hoverLayout = await page.evaluate(() => {
           const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
           const group = document.querySelector<HTMLElement>(".chat-group")!;
@@ -653,13 +676,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
 
         await page.mouse.move(0, 0);
-        expect(await context.isVisible()).toBe(false);
+        await context.waitFor({ state: "hidden", timeout: 10_000 });
 
         await page.locator(".chat-text").first().hover();
         await page.locator(".msg-meta__summary").click();
         await page.mouse.move(0, 0);
+        // Click-to-open must survive the pointer leaving the message group.
+        await context.waitFor({ state: "visible", timeout: 10_000 });
         expect(await details.getAttribute("open")).toBe("");
-        expect(await context.isVisible()).toBe(true);
       } finally {
         await closeBrowserPage(page);
       }
@@ -690,11 +714,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
 
       const image = page.locator("img.chat-message-image");
       const video = page.locator("video");
-      await image.waitFor({ timeout: 10_000 });
+      // First wait absorbs the cold-app render; both elements land in the same
+      // history render pass, so the video follows immediately after.
+      await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
       await video.waitFor({ timeout: 10_000 });
       expect(await image.getAttribute("src")).toBe(imageUrl);
       expect(await video.getAttribute("src")).toBe(videoUrl);
@@ -1825,6 +1854,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.locator(".chat-view-menu").evaluate((node) => {
           node.setAttribute("open", "");
         });
+        await waitForLayoutSettled(page);
 
         const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
@@ -1849,6 +1879,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.locator(".chat-view-menu").evaluate((node) => {
           node.setAttribute("open", "");
         });
+        await waitForLayoutSettled(page);
 
         const settingsMenu = await getRect(page, ".chat-view-menu[open]");
         expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
@@ -1883,10 +1914,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           },
         ],
       });
-      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.goto(`${realChatServer.baseUrl}chat`, {
+        waitUntil: "domcontentloaded",
+        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+      });
       await page
         .getByText("Short landscape slash command keyboard regression fixture.")
-        .waitFor({ timeout: 10_000 });
+        .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
       await textarea.fill("/");
       await textarea.focus();

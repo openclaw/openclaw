@@ -1,11 +1,18 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
 describe("config view", () => {
+  // The view module warms the lazy JSON5 parser on load; tests assert the
+  // steady state where raw diffs parse synchronously.
+  beforeAll(async () => {
+    await warmJson5();
+  });
+
   const baseProps = () => ({
     raw: "{\n}\n",
     originalRaw: "{\n}\n",
@@ -61,6 +68,9 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
+    chatFollowUpMode: undefined,
+    serverQueueMode: "steer" as const,
+    setChatFollowUpMode: vi.fn(),
     catalogOpenTarget: "viewer" as const,
     setCatalogOpenTarget: vi.fn(),
     gatewayUrl: "",
@@ -1291,6 +1301,14 @@ describe("config view", () => {
       },
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh: vi.fn(),
+      camera: {
+        devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
+        selectedDeviceId: "camera-1",
+        loading: false,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh: vi.fn(),
     });
 
     const shortcutSelect = queryRequired(
@@ -1299,12 +1317,50 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const followUpSelect = queryRequired(
+      container,
+      "[data-settings-follow-up-mode]",
+      HTMLSelectElement,
+    );
+    expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
+    expect(followUpSelect.value).toBe("server");
+    expect(Array.from(followUpSelect.options, (option) => option.value)).toEqual([
+      "server",
+      "steer",
+      "queue",
+    ]);
+    expect(container.textContent).toContain("Using server default (steer)");
     const microphoneSelect = queryRequired(
       container,
       "[data-settings-microphone]",
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+    expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
+    expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
+      "System default",
+      "Desk Camera",
+    ]);
+  });
+
+  it("marks browser follow-up overrides and resets them to the server", () => {
+    const setChatFollowUpMode = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      chatFollowUpMode: "queue",
+      serverQueueMode: "steer",
+      setChatFollowUpMode,
+    });
+
+    expect(container.textContent).toContain("Overriding server default (steer)");
+    const reset = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Reset to server default",
+    );
+    expect(reset).toBeDefined();
+    reset?.click();
+    expect(setChatFollowUpMode).toHaveBeenCalledWith(undefined);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

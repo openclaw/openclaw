@@ -16,7 +16,7 @@ Adds OpenCode model provider support to OpenClaw.
 
 ## Surface
 
-providers: opencode; contracts: mediaUnderstandingProviders
+providers: `opencode`; contracts: `mediaUnderstandingProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

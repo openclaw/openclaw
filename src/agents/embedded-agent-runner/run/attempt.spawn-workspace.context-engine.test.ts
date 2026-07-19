@@ -21,7 +21,7 @@ import {
   leasePendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
-} from "../../subagent-registry.js";
+} from "../../subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -29,7 +29,6 @@ import {
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
   buildContextEnginePromptCacheInfo,
-  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
@@ -3190,16 +3189,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         total: 1340,
       },
     } as unknown as AgentMessage;
-    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+    const promptCache = buildLoopPromptCacheInfo({
       messagesSnapshot: [seedMessage, priorAssistant],
       prePromptMessageCount: 2,
-    });
-    const promptCache = buildContextEnginePromptCacheInfo({
       retention: "short",
-      lastCallUsage: (currentAttemptAssistant as { usage?: undefined } | undefined)?.usage,
     });
 
-    expect(currentAttemptAssistant).toBeUndefined();
     expect(promptCache).toEqual({ retention: "short" });
   });
 

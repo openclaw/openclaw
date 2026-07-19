@@ -10,11 +10,9 @@ import {
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
-import {
-  runInstallPolicy,
-  validateInstallPolicyStatic,
-  type InstallPolicyRequest,
-} from "./install-policy.js";
+import { runInstallPolicy, validateInstallPolicyStatic } from "./install-policy.js";
+
+type InstallPolicyRequest = Parameters<typeof runInstallPolicy>[0]["request"];
 
 const tempDirs: string[] = [];
 
@@ -256,9 +254,12 @@ describe("runInstallPolicy", () => {
           },
           request: baseRequest(sourceDir),
         });
-        await vi.waitFor(() => {
-          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-        });
+        await vi.waitFor(
+          () => {
+            expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+          },
+          { timeout: 5_000 },
+        );
         childPid = await readPidFile(pidPath);
         noOutputTimeouts.at(-1)?.();
         const result = await resultPromise;

@@ -284,6 +284,123 @@ describe("config shared auth disconnects", () => {
     );
   });
 
+  it("accepts an unresolved isolatable TTS SecretRef and reports the cold owner", async () => {
+    const submittedConfig: OpenClawConfig = {
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+            },
+          },
+        },
+      },
+    };
+    mockPreviousConfig({});
+    prepareSecretsRuntimeSnapshotMock.mockResolvedValueOnce({
+      config: submittedConfig,
+      degradedOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "cold",
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason: "secret reference was not found",
+        },
+      ],
+    });
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(submittedConfig),
+        baseHash: "base-hash",
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
+      config: submittedConfig,
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+    });
+    expect(writeConfigFileMock).toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        degradedSecretOwners: [
+          expect.objectContaining({
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "cold",
+            reason: "secret reference was not found",
+          }),
+        ],
+      }),
+      undefined,
+    );
+  });
+
+  it.each([
+    "secret provider policy denied resolution",
+    "secret provider response violated its contract",
+    "resolved secret value was invalid",
+    "secret reference is not allowed for this provider",
+  ])("rejects non-retryable SecretRef degradation before config writes: %s", async (reason) => {
+    const submittedConfig: OpenClawConfig = {
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+            },
+          },
+        },
+      },
+    };
+    mockPreviousConfig({});
+    prepareSecretsRuntimeSnapshotMock.mockResolvedValueOnce({
+      config: submittedConfig,
+      degradedOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "cold",
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason,
+        },
+      ],
+    });
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(submittedConfig),
+        baseHash: "base-hash",
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining(reason) }),
+    );
+  });
+
   it("does not disconnect shared-auth clients for config.set auth writes without restart", async () => {
     const nextConfig = tokenAuthConfig("new-token");
     mockPreviousConfig(tokenAuthConfig("old-token"));

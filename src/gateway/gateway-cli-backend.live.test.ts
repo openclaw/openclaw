@@ -4,11 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  testing as cliBackendsTesting,
-  resolveCliBackendConfig,
-  resolveCliBackendLiveTest,
-} from "../agents/cli-backends.js";
+import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getClaudeLiveSessionGenerationForOwner } from "../agents/cli-runner/claude-live-session.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
@@ -16,10 +13,10 @@ import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
-  createMockPluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../plugin-sdk/testing.js";
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   applyCliBackendLiveEnv,

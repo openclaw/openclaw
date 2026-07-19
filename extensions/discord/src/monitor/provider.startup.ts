@@ -1,11 +1,10 @@
 // Discord provider module implements model/runtime integration.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import {
   Client,
   ReadyListener,
@@ -104,6 +103,7 @@ export async function createDiscordMonitorClient(params: {
     >;
   };
   runtime: RuntimeEnv;
+  commandDeployHashStore?: DiscordCommandDeployHashStore;
   createClient: CreateClientFn;
   createGatewayPlugin: typeof createDiscordGatewayPlugin;
   createGatewaySupervisor: typeof createDiscordGatewaySupervisor;
@@ -142,11 +142,7 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
-      commandDeployHashStorePath: path.join(
-        resolveStateDir(process.env),
-        "discord",
-        "command-deploy-cache.json",
-      ),
+      commandDeployHashStore: params.commandDeployHashStore,
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",

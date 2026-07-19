@@ -64,6 +64,7 @@ export type SystemAgentSetupApplyResult = {
   configPath: string;
   configHashBefore: string | null;
   configHashAfter: string | null;
+  bootstrapPending: boolean;
   lines: string[];
 };
 
@@ -123,6 +124,8 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
 type SystemAgentModelSelectionParams = {
   config: OpenClawConfig;
   model: string;
+  /** Write the model onto this configured agent instead of the default route. */
+  targetAgentId?: string;
   agentRuntimeId?: string;
   /** Pin the selected model to the exact credential that passed inference. */
   authProfileId?: string;
@@ -140,8 +143,19 @@ function applySystemAgentModelSelectionWithModules(
 ): OpenClawConfig {
   const { agentScope, modelConfig, runtimePolicy } = modules;
   const nextConfig = structuredClone(params.config);
-  const agentId = agentScope.resolveDefaultAgentId(nextConfig);
-  const writesAgent = Boolean(agentScope.resolveAgentExplicitModelPrimary(nextConfig, agentId));
+  const targetAgentId = params.targetAgentId ? normalizeAgentId(params.targetAgentId) : undefined;
+  const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
+  if (
+    targetAgentId &&
+    !nextConfig.agents?.list?.some((entry) => normalizeAgentId(entry.id) === targetAgentId)
+  ) {
+    throw new Error(`Could not resolve configured agent "${targetAgentId}".`);
+  }
+  // A targeted selection always lands on the agent entry; the default-route
+  // selection only writes the agent when it already carries an explicit model.
+  const writesAgent = Boolean(
+    targetAgentId || agentScope.resolveAgentExplicitModelPrimary(nextConfig, agentId),
+  );
   nextConfig.agents ??= {};
   nextConfig.agents.defaults ??= {};
   const target = modelConfig.resolveModelTarget({ raw: params.model, cfg: nextConfig });
@@ -198,7 +212,9 @@ function applySystemAgentModelSelectionWithModules(
     }
   }
   const selectedModel = params.authProfileId ? `${key}@${params.authProfileId}` : key;
-  agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel);
+  agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel, {
+    forceAgent: Boolean(targetAgentId),
+  });
   if (params.agentRuntimeId) {
     const effectiveRuntime = runtimePolicy.resolveModelRuntimePolicy({
       config: nextConfig,
@@ -495,7 +511,7 @@ export async function applySystemAgentSetup(
     }
   };
 
-  await runCommittedFollowUp(
+  const workspaceResult = await runCommittedFollowUp(
     async () =>
       await onboardHelpers.ensureWorkspaceAndSessions(workspace, runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
@@ -597,6 +613,7 @@ export async function applySystemAgentSetup(
     configPath: committed.path,
     configHashBefore: committed.previousHash,
     configHashAfter: committed.persistedHash,
+    bootstrapPending: workspaceResult?.bootstrapPending === true,
     lines,
   };
 }

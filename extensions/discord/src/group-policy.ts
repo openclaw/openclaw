@@ -3,6 +3,7 @@ import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
+  scopeKey,
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
@@ -14,12 +15,10 @@ function normalizeDiscordSlug(value?: string | null) {
   return normalizeAtHashSlug(value);
 }
 
-const encodeScopeSegment = (value: string) => `${value.length}:${value}`;
-
 // Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
-const guildScopeKey = (guildKey: string) => `guild:${encodeScopeSegment(guildKey)}`;
+const guildScopeKey = (guildKey: string) => scopeKey(["guild", guildKey]);
 const channelScopeKey = (guildKey: string, channelKey: string) =>
-  `${guildScopeKey(guildKey)}/channel:${encodeScopeSegment(channelKey)}`;
+  scopeKey(["guild", guildKey], ["channel", channelKey]);
 
 function resolveDiscordGuildKey(
   guilds: DiscordConfig["guilds"],

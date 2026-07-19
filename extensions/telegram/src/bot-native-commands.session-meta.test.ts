@@ -666,7 +666,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
     const commandModule = await import("./bot-native-commands.js");
     registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
-    await commandModule.testing.loadNativeCommandRuntime();
+    await import("./bot-native-commands.runtime.js");
     agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
   });
 

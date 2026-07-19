@@ -200,7 +200,7 @@ describe("createOpenClawCodingTools", () => {
     resetGlobalHookRunner();
   });
 
-  it("exposes gateway config and restart actions to owner sessions", () => {
+  it("exposes only gateway config reads to owner sessions", () => {
     const tools = createOpenClawCodingTools({ config: testConfig });
     const gateway = requireTool(tools, "gateway");
 
@@ -213,7 +213,7 @@ describe("createOpenClawCodingTools", () => {
     const values = new Set<string>();
     collectActionValues(action, values);
 
-    expectListIncludes([...values], ["restart", "config.get", "config.patch", "config.apply"]);
+    expect([...values]).toEqual(["config.get", "config.schema.lookup"]);
   });
 
   it("does not add Tool Search control tools from the shared factory by default", () => {
@@ -756,6 +756,30 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().disablePluginTools).toBe(true);
   });
 
+  it("forwards trusted conversation recall to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private" as const,
+      corpus: "sessions" as const,
+    };
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      conversationRecall,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().conversationRecall).toEqual(conversationRecall);
+  });
+
   it("keeps plugin-only construction off the OpenClaw core factory", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -791,6 +815,7 @@ describe("createOpenClawCodingTools", () => {
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
         nativeChannelId: "oc_native_chat",
+        clientCaps: ["inline-widgets"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -806,6 +831,7 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
+      expect(pluginToolOptions?.clientCaps).toEqual(["inline-widgets"]);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
@@ -1468,7 +1494,9 @@ describe("createOpenClawCodingTools", () => {
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("message")).toBe(true);
     expect(names.has("sessions_send")).toBe(true);
-    expect(names.has("sessions_spawn")).toBe(false);
+    // Messaging agents can spawn (and manage) sub-sessions since the
+    // visible-spawn parity change; execution tools stay coding-only.
+    expect(names.has("sessions_spawn")).toBe(true);
     expect(names.has("exec")).toBe(false);
     expect(names.has("browser")).toBe(false);
   });

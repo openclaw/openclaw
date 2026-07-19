@@ -2,10 +2,8 @@
  * Tests talk realtime relay event forwarding and connection cleanup.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  setActiveEmbeddedRun,
-  testing as embeddedRunTesting,
-} from "../agents/embedded-agent-runner/runs.js";
+import { setActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
@@ -379,6 +377,7 @@ describe("talk realtime gateway relay", () => {
       tools: [],
       model: "browser-model",
       voice: "voice-a",
+      language: "de",
     });
     await Promise.resolve();
 
@@ -398,6 +397,7 @@ describe("talk realtime gateway relay", () => {
       providerConfig: { model: "provider-model" },
       audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       instructions: "be brief",
+      language: "de",
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: true,
     });
@@ -1679,6 +1679,7 @@ describe("talk realtime gateway relay", () => {
     expect(broadcast).not.toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
     );
   });
 
@@ -2135,6 +2136,7 @@ describe("talk realtime gateway relay", () => {
     expect(broadcast).not.toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
     );
   });
 
@@ -2356,6 +2358,7 @@ describe("talk realtime gateway relay", () => {
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "run-1", state: "aborted" }),
+        expect.anything(),
       );
 
       void submitTalkRealtimeRelayToolResult({

@@ -23,24 +23,32 @@ import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
-import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.js";
-import { MissingAgentHarnessError } from "./harness/errors.js";
+import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
+import { AgentHarnessSessionSupersededError, MissingAgentHarnessError } from "./harness/errors.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isFallbackSummaryError,
-  testing,
+  resolveModelCandidateChain,
   runWithImageModelFallback,
   runWithModelFallback as runWithModelFallbackBase,
 } from "./model-fallback.js";
+import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
+import { resolveSessionSuspensionReason } from "./session-suspension.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
+
+const testing = {
+  resolveFallbackCandidates: resolveModelCandidateChain,
+  resolveSessionSuspensionReason,
+  shouldDiscardDeferredSessionSuspension,
+};
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 
@@ -149,6 +157,7 @@ const authRuntimeMock = vi.hoisted(() => {
       loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
       resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
         getProfileIds(params.store, params.provider),
+      maybeReprobeWhamBlockedProfiles: vi.fn(),
       isProfileInCooldown,
       resolveProfilesUnavailableReason: (params: {
         store: AuthProfileStore;
@@ -1523,6 +1532,33 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry a superseded harness session generation on fallback models", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const supersededError = new AgentHarnessSessionSupersededError(
+      "Codex session generation is no longer current: session-old",
+    );
+    const run = vi.fn().mockRejectedValue(supersededError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(supersededError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts fallback when a provider prompt error carries cleanup session takeover", async () => {
     const cfg = makeCfg({
       agents: {
@@ -2344,6 +2380,7 @@ describe("runWithModelFallback", () => {
             primary: "openai/gpt-4.1-mini",
             fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
           },
+          modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
         },
       },
     });

@@ -13,21 +13,28 @@ import { resolveSimpleCompletionModelResolverWorkspace } from "../../agents/simp
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerInferenceExecutor,
+  projectWorkerInferenceModelRouteConfig,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
+
+vi.mock("../../agents/sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (owner: unknown) => owner,
+}));
 
 type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
   loadCatalog: typeof loadModelCatalog;
   loadManifestSnapshot: typeof loadManifestMetadataSnapshot;
   prepareModel: typeof prepareSimpleCompletionModel;
+  resolveAuthProfileMode: () => string | undefined;
   resolveModel: typeof resolveModelAsync;
   resolveProviderStream: typeof registerProviderStreamForModel;
   resolveStream: typeof resolveEmbeddedAgentStreamFn;
@@ -35,7 +42,7 @@ type Deps = {
 type Execution = WorkerInferenceExecutionParams;
 
 const PROVIDER = "openai";
-const MODEL = "approved-model";
+const MODEL = "gpt-5.6-sol";
 const ALIAS = "fast";
 const BASE_URL = "https://chatgpt.com/backend-api";
 const ENDPOINT = `${BASE_URL}/codex`;
@@ -170,7 +177,6 @@ function setup(entry: SessionEntry = sessionEntry) {
     authProfile?: string;
     catalogWorkspace?: string;
     prepareWorkspace?: string;
-    registerStream?: boolean;
   } = {};
   const resolveModel = vi.fn<Deps["resolveModel"]>(
     async (_provider, _model, _dir, _cfg, options) => {
@@ -183,8 +189,12 @@ function setup(entry: SessionEntry = sessionEntry) {
       modelParams.modelResolver,
     );
     await modelParams.modelResolver?.(PROVIDER, MODEL, modelParams.agentDir, modelParams.cfg, {});
+    const apiRegistry = {};
     return {
-      model: logicalModel,
+      model: bindModelLlmRuntime(logicalModel, {
+        registry: apiRegistry,
+        streamSimple: fallbackStream,
+      } as never),
       auth: {
         apiKey: AUTH_MARKER,
         profileId: PROFILE,
@@ -193,13 +203,13 @@ function setup(entry: SessionEntry = sessionEntry) {
       },
     };
   });
+  const resolveAuthProfileMode = vi.fn<Deps["resolveAuthProfileMode"]>(() => undefined);
   const stream = vi.fn<StreamFn>(() => providerStream());
   const fallbackStream = vi.fn<StreamFn>(() => providerStream());
   const loadManifestSnapshot = vi.fn(
     () => ({ plugins: [] }) as unknown as ReturnType<Deps["loadManifestSnapshot"]>,
   );
-  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>((streamParams) => {
-    scope.registerStream = streamParams.registerStream;
+  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => {
     return stream;
   });
   const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
@@ -231,10 +241,10 @@ function setup(entry: SessionEntry = sessionEntry) {
     resolveSessionAuthProfile: vi.fn(async () => entry.authProfileOverride),
     resolveModel,
     prepareModel,
+    resolveAuthProfileMode,
     resolveProviderStream,
     resolveStream,
     applyStreamPolicy,
-    stream: fallbackStream,
     wrapStream: vi.fn((streamFn: StreamFn) => streamFn),
     createTrace: vi.fn(() => ({ traceId: "1".repeat(32), spanId: "2".repeat(16) })),
   };
@@ -242,6 +252,7 @@ function setup(entry: SessionEntry = sessionEntry) {
     applyStreamPolicy,
     executor: createWorkerInferenceExecutor(dependencies),
     prepareModel,
+    resolveAuthProfileMode,
     scope,
     stream,
   };
@@ -269,6 +280,68 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("projects the gateway-owned auth profile onto the provider route", () => {
+    const oauth = projectWorkerInferenceModelRouteConfig({
+      config: {},
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      authMode: "oauth",
+    });
+    const apiKey = projectWorkerInferenceModelRouteConfig({
+      config: {},
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      authMode: "api_key",
+    });
+
+    expect(oauth.models?.providers?.openai).toMatchObject({
+      auth: "oauth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    expect(apiKey.models?.providers?.openai).toMatchObject({
+      auth: "api-key",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("prepares the selected model against its gateway-owned OAuth route", async () => {
+    const runtime = setup();
+    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
+
+    expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
+      auth: "oauth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("pins an automatic profile to the route projected from that profile", async () => {
+    const runtime = setup({
+      ...sessionEntry,
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 1,
+    });
+    runtime.resolveAuthProfileMode.mockReturnValue("oauth");
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
+
+    expect(runtime.prepareModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: PROFILE,
+        preferredProfile: PROFILE,
+        bindAuthOwner: true,
+      }),
+    );
+  });
+
   it("keeps approved alias routing, endpoint, headers, and auth gateway-owned", async () => {
     const runtime = setup();
     const emitted: Parameters<Execution["emit"]>[0][] = [];
@@ -297,7 +370,6 @@ describe("worker inference provider runtime", () => {
       authProfile: PROFILE,
       catalogWorkspace: WORKSPACE,
       prepareWorkspace: WORKSPACE,
-      registerStream: false,
     });
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];
     expect(streamModel).toMatchObject({ baseUrl: ENDPOINT });

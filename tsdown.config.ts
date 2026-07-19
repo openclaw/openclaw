@@ -11,6 +11,10 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "./scripts/lib/tsdown-config-groups.mjs";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -152,6 +156,7 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
     dts: TSDOWN_DECLARATIONS,
     entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
     env,
+    name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
     outDir: config.outDir ?? tsdownPackageOutputRoot(packageDir),
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: buildInputOptions,
@@ -270,6 +275,11 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-transcript-reconcile.worker":
+      "src/config/sessions/session-transcript-reconcile.worker.ts",
+    "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
+    "system-agent/setup-inference-detection.worker":
+      "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -323,8 +333,11 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
     "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
+    "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
+    "system-agent/audit": "src/system-agent/audit.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",
     "system-agent/rescue-message": "src/system-agent/rescue-message.ts",
     "system-agent/setup-inference": "src/system-agent/setup-inference.ts",
@@ -343,24 +356,16 @@ function buildAgentCoreDistEntries(): Record<string, string> {
     agent: "packages/agent-core/src/agent.ts",
     "agent-loop": "packages/agent-core/src/agent-loop.ts",
     llm: "packages/agent-core/src/llm.ts",
-    node: "packages/agent-core/src/node.ts",
     "runtime-deps": "packages/agent-core/src/runtime-deps.ts",
     types: "packages/agent-core/src/types.ts",
     validation: "packages/agent-core/src/validation.ts",
-    "harness/agent-harness": "packages/agent-core/src/harness/agent-harness.ts",
-    "harness/types": "packages/agent-core/src/harness/types.ts",
     "harness/messages": "packages/agent-core/src/harness/messages.ts",
     "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
-    "harness/session": "packages/agent-core/src/harness/session/session.ts",
-    "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
-    "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
-    "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
     "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
     "harness/branch-summarization":
       "packages/agent-core/src/harness/compaction/branch-summarization.ts",
     "harness/prompt-template-arguments":
       "packages/agent-core/src/harness/prompt-template-arguments.ts",
-    "harness/skills": "packages/agent-core/src/harness/skills.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
   };
 }
@@ -521,6 +526,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
 
 const configs = [
   nodeBuildConfig({
+    name: TSDOWN_PACKAGE_CONFIG_GROUP,
     entry: buildAgentCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("agent-core"),
     deps: {
@@ -575,6 +581,7 @@ const configs = [
   }),
   nodeWorkspacePackageBuildConfig("model-catalog-core"),
   nodeBuildConfig({
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),

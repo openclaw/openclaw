@@ -9,6 +9,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
@@ -543,7 +544,10 @@ function resolveInboundSourceModality(ctx: TemplateContext): string | undefined 
   return resolveMediaType(ctx.MediaType) ?? ctx.MediaTypes?.map(resolveMediaType).find(Boolean);
 }
 
-function resolveInboundFormattingHints(ctx: TemplateContext):
+function resolveInboundFormattingHints(
+  ctx: TemplateContext,
+  cfg: OpenClawConfig,
+):
   | {
       text_markup: string;
       rules: string[];
@@ -557,6 +561,7 @@ function resolveInboundFormattingHints(ctx: TemplateContext):
   const agentPrompt = (getLoadedChannelPluginById(normalizedChannel) as ChannelPlugin | undefined)
     ?.agentPrompt;
   return agentPrompt?.inboundFormattingHints?.({
+    cfg,
     accountId: normalizePromptMetadataString(ctx.AccountId) ?? undefined,
   });
 }
@@ -564,7 +569,8 @@ function resolveInboundFormattingHints(ctx: TemplateContext):
 /** Builds trusted system metadata for the inbound channel and formatting hints. */
 export function buildInboundMetaSystemPrompt(
   ctx: TemplateContext,
-  options?: { includeFormattingHints?: boolean },
+  cfg: OpenClawConfig,
+  options?: { includeFormattingHints?: boolean; formattingHintsCtx?: TemplateContext },
 ): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -587,8 +593,13 @@ export function buildInboundMetaSystemPrompt(
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    // Authoring hints follow the reply delivery channel, not the inbound event:
+    // system-event turns (heartbeat/cron) carry the persisted channel/account in
+    // formattingHintsCtx while ctx still identifies the system provider.
     response_format:
-      options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
+      options?.includeFormattingHints === false
+        ? undefined
+        : resolveInboundFormattingHints(options?.formattingHintsCtx ?? ctx, cfg),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.

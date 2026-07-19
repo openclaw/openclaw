@@ -514,7 +514,11 @@ function buildLocalModeConfig(params: {
 
 async function startLocalModeTui(
   registerCleanup: CleanupRegistrar,
-  opts: { invalidEditLoop?: boolean } = {},
+  opts: {
+    invalidEditLoop?: boolean;
+    holdFirstResponse?: boolean;
+    followupReplyText?: string;
+  } = {},
 ) {
   const replyText = "LOCAL_PTY_RESPONSE";
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-local-"));
@@ -527,6 +531,8 @@ async function startLocalModeTui(
   const configPath = path.join(tempDir, "openclaw.json");
   const mockModel = await startMockModelServer(replyText, {
     invalidEditLoop: opts.invalidEditLoop,
+    holdFirstResponse: opts.holdFirstResponse,
+    followupReplyText: opts.followupReplyText,
   });
   const config = buildLocalModeConfig({
     workspaceDir,
@@ -565,7 +571,7 @@ async function startLocalModeTui(
   });
 
   const cleanup = createIdempotentCleanup(async () => {
-    run.dispose();
+    await run.dispose();
     await mockModel.stop();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -695,7 +701,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
     const fixtureMockModel = mockModel;
     const fixtureControlClient = controlClient;
     const cleanup = createIdempotentCleanup(async () => {
-      fixtureControlClient.stop();
+      await fixtureControlClient.stop();
       try {
         await fixtureGateway.cleanup();
       } finally {
@@ -713,7 +719,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
       cleanup,
     };
   } catch (error) {
-    controlClient?.stop();
+    await controlClient?.stop();
     try {
       await gateway?.cleanup();
     } finally {
@@ -770,7 +776,7 @@ async function startGatewayModeTui(
   });
   const cleanup = createIdempotentCleanup(async () => {
     shared.mockModel.releaseFirstResponse(scenario.modelId);
-    run.dispose();
+    await run.dispose();
     for (const key of sessionKeys) {
       await shared.controlClient.abortChat({ sessionKey: key });
     }
@@ -881,6 +887,68 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "steers an active real local session in the same turn",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished, {
+        holdFirstResponse: true,
+        followupReplyText: "LOCAL_STEER_COMPLETE",
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("slow local parent\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
+        });
+
+        const steerOffset = fixture.run.output().length;
+        await fixture.run.write("steer the active local turn\r");
+        await waitForOutputAfter(fixture.run, "steer the active local turn", steerOffset);
+        await sleep(SUBMISSION_SETTLE_MS);
+        fixture.mockModel.releaseFirstResponse("gpt-5.5");
+
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `steered prompt did not reach the active local session\nrequests=${JSON.stringify(
+                fixture.mockModel.requests(),
+                null,
+                2,
+              )}\n${fixture.run.output()}`,
+            ),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "steer the active local turn",
+        );
+        await fixture.run.waitForOutput("LOCAL_STEER_COMPLETE");
+        if (process.env.OPENCLAW_BEHAVIOR_EVIDENCE === "1") {
+          console.info(
+            "[behavior-evidence] local-steer",
+            JSON.stringify({
+              providerRequestCount: fixture.mockModel.requests().length,
+              secondRequestHasDynamicPrompt: (
+                JSON.stringify(fixture.mockModel.requests()[1]?.body) ?? ""
+              ).includes("steer the active local turn"),
+              renderedCompletion: fixture.run.output().includes("LOCAL_STEER_COMPLETE"),
+              secondPromptEchoedBeforeRelease: true,
+            }),
+          );
+        }
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
   function registerValidationLoopTest(mode: "gateway" | "local") {
     it(
       `renders safe validation-loop abort diagnostics through the real ${mode} backend`,
@@ -965,7 +1033,7 @@ describe("TUI PTY real backends", () => {
           await fixture.run.write("/exit\r", { delay: false });
           expect((await fixture.run.waitForExit()).exitCode).toBe(0);
         } finally {
-          eventProbe?.stop();
+          await eventProbe?.stop();
           await fixture.cleanup();
         }
       },
@@ -1289,7 +1357,7 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
-        queueClient.stop();
+        await queueClient.stop();
         await fixture.cleanup();
       }
     },
