@@ -85,13 +85,13 @@ async function readCliInputFileSafely(filePath: string): Promise<Buffer> {
 export async function readInputFiles(
   files: string[],
 ): Promise<Array<{ path: string; buffer: Buffer }>> {
-  const result: Array<{ path: string; buffer: Buffer }> = [];
-  for (const filePath of files) {
-    const resolvedPath = path.resolve(filePath);
-    result.push({
-      path: resolvedPath,
-      buffer: await readCliInputFileSafely(resolvedPath),
-    });
-  }
-  return result;
+  return await Promise.all(
+    files.map(async (filePath) => {
+      const resolvedPath = path.resolve(filePath);
+      return {
+        path: resolvedPath,
+        buffer: await readCliInputFileSafely(resolvedPath),
+      };
+    }),
+  );
 }
