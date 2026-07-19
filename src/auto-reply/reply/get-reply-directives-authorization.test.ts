@@ -8,7 +8,21 @@ describe("reply directive authorization requests", () => {
       "/model openai/gpt-5.5@work --runtime codex /think low",
     );
 
-    expect(resolveDirectiveAuthorizationRequests(directives)).toEqual([
+    expect(
+      resolveDirectiveAuthorizationRequests(directives, {
+        modelEffect: {
+          kind: "selection",
+          modelSelection: {
+            provider: "openai",
+            model: "gpt-5.5",
+            isDefault: false,
+          },
+          profileOverride: "work",
+          runtimeResolution: { kind: "set", runtime: "codex" },
+          runtime: "codex",
+        },
+      }),
+    ).toEqual([
       {
         commandName: "think",
         rawArguments: "low",
@@ -18,10 +32,22 @@ describe("reply directive authorization requests", () => {
         commandName: "model",
         rawArguments: "openai/gpt-5.5@work --runtime codex",
         values: {
-          model: "openai/gpt-5.5@work",
+          provider: "openai",
+          model: "gpt-5.5",
           profile: "work",
           runtime: "codex",
         },
+      },
+    ]);
+  });
+
+  it("keeps unresolved model selectors out of structured policy values", () => {
+    const directives = parseInlineDirectives("/model 3 --runtime codex-app-server");
+
+    expect(resolveDirectiveAuthorizationRequests(directives)).toEqual([
+      {
+        commandName: "model",
+        rawArguments: "3 --runtime codex-app-server",
       },
     ]);
   });

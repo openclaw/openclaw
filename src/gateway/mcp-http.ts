@@ -290,6 +290,8 @@ async function startMcpLoopbackServer(port = 0): Promise<{
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
         const scopedTools = toolCache.resolve({
           cfg,
+          authorization: requestContext.authorization,
+          requesterIdentitySource: requestContext.requesterIdentitySource,
           sessionKey: requestContext.sessionKey,
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
           agentId: requestContext.agentId,

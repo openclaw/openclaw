@@ -1,4 +1,8 @@
 import {
+  createSteeringAuthorizationAffinity,
+  resolveSteeringAuthorizationAffinityKey,
+} from "../../../auto-reply/reply/steering-authorization-affinity.js";
+import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -81,6 +85,14 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       },
     } satisfies CommandQueueEnqueueOptions;
   };
+  const withRunAuthorizationAffinity = (
+    opts?: CommandQueueEnqueueOptions,
+  ): CommandQueueEnqueueOptions | undefined => {
+    const authorizationAffinityKey = resolveSteeringAuthorizationAffinityKey(
+      createSteeringAuthorizationAffinity({ turnAuthority: options.getParams().turnAuthority }),
+    );
+    return authorizationAffinityKey ? { ...opts, authorizationAffinityKey } : opts;
+  };
   const noteLaneWaitIfBusy = (lane: string) => {
     const params = options.getParams();
     if (!params.onLaneWait) {
@@ -154,13 +166,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
     const params = options.getParams();
     if (params.enqueue) {
-      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
+      return params.enqueue(
+        taskWithCurrentLifecycle,
+        withRunAuthorizationAffinity(withLaneTimeout(withRunLaneWait(globalOpts))),
+      );
     }
     noteLaneWaitIfBusy(options.globalLane);
     return enqueueCommandInLane(
       options.globalLane,
       taskWithCurrentLifecycle,
-      withLaneTimeout(withRunLaneWait(globalOpts)),
+      withRunAuthorizationAffinity(withLaneTimeout(withRunLaneWait(globalOpts))),
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
@@ -171,13 +186,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
     const params = options.getParams();
     if (params.enqueue) {
-      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+      return params.enqueue(
+        taskWithLaneAdmission,
+        withRunAuthorizationAffinity(withRunLaneWait(sessionOpts)),
+      );
     }
     noteLaneWaitIfBusy(options.sessionLane);
     return enqueueCommandInLane(
       options.sessionLane,
       taskWithLaneAdmission,
-      withRunLaneWait(sessionOpts),
+      withRunAuthorizationAffinity(withRunLaneWait(sessionOpts)),
     );
   };
 

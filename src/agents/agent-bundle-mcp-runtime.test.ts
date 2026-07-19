@@ -19,6 +19,7 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForAgentSessionKey,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
@@ -1878,6 +1879,126 @@ process.on("SIGINT", shutdown);`,
     expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["bundle_probe"]);
   });
 
+  it("fails closed raw custom-key lookups shared by adjacent agents", async () => {
+    const manager = testing.createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+    const opsRuntime = await manager.getOrCreate({
+      sessionId: "session-shared-custom-ops",
+      sessionKey: "shared-custom-session",
+      agentId: "ops",
+      workspaceDir: "/workspace",
+    });
+    const mainRuntime = await manager.getOrCreate({
+      sessionId: "session-shared-custom-main",
+      sessionKey: "shared-custom-session",
+      agentId: "main",
+      workspaceDir: "/workspace",
+    });
+
+    expect(manager.resolveSessionId("shared-custom-session")).toBeUndefined();
+    expect(manager.peekSession({ sessionKey: "shared-custom-session" })).toBeUndefined();
+    expect(manager.resolveAgentSessionId("ops", "shared-custom-session")).toBe(
+      opsRuntime.sessionId,
+    );
+    expect(manager.resolveAgentSessionId("main", "shared-custom-session")).toBe(
+      mainRuntime.sessionId,
+    );
+
+    await manager.disposeSession(opsRuntime.sessionId);
+    expect(manager.resolveSessionId("shared-custom-session")).toBe(mainRuntime.sessionId);
+    expect(manager.peekSession({ sessionKey: "shared-custom-session" })).toBe(mainRuntime);
+
+    await manager.disposeAll();
+  });
+
+  it("keeps raw custom-key lookup unique when adjacent config loading fails", async () => {
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime: (params) => ({
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      }),
+      enableIdleSweepTimer: false,
+    });
+    const mainRuntime = await manager.getOrCreate({
+      sessionId: "session-config-main",
+      sessionKey: "shared-config-session",
+      agentId: "main",
+      workspaceDir: "/workspace",
+    });
+
+    await expect(
+      manager.getOrCreate({
+        sessionId: "session-config-ops",
+        sessionKey: "shared-config-session",
+        agentId: "ops",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              invalid: {
+                command: "true",
+                env: { INVALID_CLONE_VALUE: () => undefined },
+              },
+            },
+          },
+        } as never,
+      }),
+    ).rejects.toThrow();
+
+    expect(manager.resolveSessionId("shared-config-session")).toBe(mainRuntime.sessionId);
+    expect(manager.peekSession({ sessionKey: "shared-config-session" })).toBe(mainRuntime);
+    expect(manager.resolveAgentSessionId("main", "shared-config-session")).toBe(
+      mainRuntime.sessionId,
+    );
+    expect(manager.resolveAgentSessionId("ops", "shared-config-session")).toBeUndefined();
+
+    await manager.disposeAll();
+  });
+
+  it("keeps raw custom-key lookup unique when an adjacent runtime factory fails", async () => {
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime: (params) => {
+        if (params.sessionId === "session-factory-ops") {
+          throw new Error("runtime factory failed");
+        }
+        return {
+          ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+        };
+      },
+      enableIdleSweepTimer: false,
+    });
+    const mainRuntime = await manager.getOrCreate({
+      sessionId: "session-factory-main",
+      sessionKey: "shared-factory-session",
+      agentId: "main",
+      workspaceDir: "/workspace",
+    });
+
+    await expect(
+      manager.getOrCreate({
+        sessionId: "session-factory-ops",
+        sessionKey: "shared-factory-session",
+        agentId: "ops",
+        workspaceDir: "/workspace",
+      }),
+    ).rejects.toThrow("runtime factory failed");
+
+    expect(manager.resolveSessionId("shared-factory-session")).toBe(mainRuntime.sessionId);
+    expect(manager.peekSession({ sessionKey: "shared-factory-session" })).toBe(mainRuntime);
+    expect(manager.resolveAgentSessionId("main", "shared-factory-session")).toBe(
+      mainRuntime.sessionId,
+    );
+    expect(manager.resolveAgentSessionId("ops", "shared-factory-session")).toBeUndefined();
+
+    await manager.disposeAll();
+  });
+
   it("recreates the session runtime when MCP config changes", async () => {
     const createRuntime: RuntimeFactory = (params) => {
       const probeText = String(
@@ -2217,6 +2338,50 @@ process.on("SIGINT", shutdown);`,
     ).resolves.toBe(false);
   });
 
+  it("retires unscoped session runtimes only for the adjacent agent", async () => {
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire-ops-custom",
+      sessionKey: "shared-custom-session",
+      agentId: "ops",
+      workspaceDir: "/workspace",
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire-main-custom",
+      sessionKey: "shared-custom-session",
+      agentId: "main",
+      workspaceDir: "/workspace",
+    });
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({
+        sessionKey: "shared-custom-session",
+        reason: "test",
+      }),
+    ).resolves.toBe(false);
+    expect(testing.getCachedSessionIds()).toEqual(
+      expect.arrayContaining(["session-retire-ops-custom", "session-retire-main-custom"]),
+    );
+
+    await expect(
+      retireSessionMcpRuntimeForAgentSessionKey({
+        agentId: "ops",
+        sessionKey: "shared-custom-session",
+        reason: "test",
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).not.toContain("session-retire-ops-custom");
+    expect(testing.getCachedSessionIds()).toContain("session-retire-main-custom");
+
+    await expect(
+      retireSessionMcpRuntimeForAgentSessionKey({
+        agentId: "main",
+        sessionKey: "shared-custom-session",
+        reason: "test",
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).not.toContain("session-retire-main-custom");
+  });
+
   it("evicts idle runtimes after the configured TTL but skips active leases", async () => {
     let now = 1_000;
     const disposed: string[] = [];
@@ -2388,6 +2553,82 @@ describe("requester-scoped MCP connection resolution", () => {
     resolverTesting.setMcpConnectionResolverTimeoutMsForTest();
     resolverTesting.setMcpConnectionRevalidateMsForTest();
     vi.useRealTimers();
+  });
+
+  it("rejects scoped owner conflicts before normal or requester-scoped runtime mutation", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    for (const mode of ["normal", "requester-scoped"] as const) {
+      const created: string[] = [];
+      const createRuntime: RuntimeFactory = (params) => ({
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {},
+      });
+      const manager = testing.createSessionMcpRuntimeManager({
+        createRuntime: (params) => {
+          created.push(params.sessionId);
+          return createRuntime(params);
+        },
+      });
+      const validSessionId = `session-main-${mode}`;
+      const conflictingSessionId = `session-ops-conflict-${mode}`;
+      const scopedSessionKey = "agent:main:main";
+
+      await manager.getOrCreate({
+        sessionId: validSessionId,
+        sessionKey: scopedSessionKey,
+        agentId: "main",
+        workspaceDir: "/workspace",
+      });
+
+      const conflictingCreate =
+        mode === "normal"
+          ? manager.getOrCreate({
+              sessionId: conflictingSessionId,
+              sessionKey: scopedSessionKey,
+              agentId: "ops",
+              workspaceDir: "/workspace",
+            })
+          : manager.getOrCreateRequesterScoped({
+              sessionId: conflictingSessionId,
+              sessionKey: scopedSessionKey,
+              agentId: "ops",
+              workspaceDir: "/workspace",
+              requesterSenderId: "sender-a",
+              messageChannel: "discord",
+              cfg: {
+                mcp: {
+                  servers: {
+                    "user-mail": { transport: "streamable-http" },
+                  },
+                },
+              },
+            });
+
+      await expect(conflictingCreate).rejects.toThrow(
+        'Session MCP runtime agent "ops" does not match session key "agent:main:main"',
+      );
+      expect(created).toEqual([validSessionId]);
+      expect(manager.listSessionIds()).toEqual([validSessionId]);
+      expect(manager.listRuntimeKeys()).toEqual([validSessionId]);
+      expect(manager.peekSession({ sessionId: conflictingSessionId })).toBeUndefined();
+      expect(manager.resolveSessionId(scopedSessionKey)).toBe(validSessionId);
+      expect(manager.resolveAgentSessionId("main", scopedSessionKey)).toBe(validSessionId);
+      expect(manager.resolveAgentSessionId("ops", scopedSessionKey)).toBeUndefined();
+      expect(manager.deferRetirement(conflictingSessionId)).toBe(false);
+
+      await manager.disposeAll();
+    }
   });
 
   it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
@@ -3893,6 +4134,65 @@ describe("requester-scoped MCP connection resolution", () => {
       },
     ]);
     expect(manager.listRuntimeKeys().every((key) => key.startsWith("{"))).toBe(true);
+
+    await manager.disposeAll();
+  });
+
+  it("does not bind adjacent raw keys when requester-scoped creation returns undefined", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => null,
+      },
+    ]);
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime: (params) => ({
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      }),
+      enableIdleSweepTimer: false,
+    });
+    const mainRuntime = await manager.getOrCreate({
+      sessionId: "session-requester-main",
+      sessionKey: "shared-requester-session",
+      agentId: "main",
+      workspaceDir: "/workspace",
+    });
+    const requesterParams = {
+      sessionId: "session-requester-ops",
+      sessionKey: "shared-requester-session",
+      agentId: "ops",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+    };
+
+    await expect(manager.getOrCreateRequesterScoped(requesterParams)).resolves.toBeUndefined();
+    await expect(
+      manager.getOrCreateRequesterScoped({
+        ...requesterParams,
+        requesterSenderId: "sender-a",
+        messageChannel: "telegram",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(manager.resolveSessionId("shared-requester-session")).toBe(mainRuntime.sessionId);
+    expect(manager.peekSession({ sessionKey: "shared-requester-session" })).toBe(mainRuntime);
+    expect(manager.resolveAgentSessionId("main", "shared-requester-session")).toBe(
+      mainRuntime.sessionId,
+    );
+    expect(manager.resolveAgentSessionId("ops", "shared-requester-session")).toBeUndefined();
+    expect(manager.listSessionIds()).toEqual([mainRuntime.sessionId]);
 
     await manager.disposeAll();
   });

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
+import { createOperatorTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
 import { requireGatewayClientScope } from "./command-gates.js";
@@ -790,6 +791,67 @@ describe("command gating", () => {
 
     expect(result).toBeNull();
     expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("uses immutable operator scopes instead of conflicting gateway scope fields", () => {
+    const makeParams = (snapshotScopes: string[], mutableScopes: string[]) =>
+      ({
+        ctx: {
+          Provider: "internal",
+          GatewayClientScopes: mutableScopes,
+          TurnAuthority: createOperatorTurnAuthoritySnapshot({
+            scopes: snapshotScopes,
+            pairedClientId: "maintainer-ui",
+            connectionId: "connection-1",
+            isOwner: snapshotScopes.includes("operator.admin"),
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            trigger: "gateway",
+          }),
+        },
+        command: { channel: "internal" },
+      }) as unknown as HandleCommandsParams;
+    const gate = {
+      label: "/config write",
+      allowedScopes: ["operator.admin"],
+      missingText: "/config set|unset requires operator.admin for gateway clients.",
+    };
+
+    expect(
+      requireGatewayClientScope(makeParams(["operator.write"], ["operator.admin"]), gate)?.reply
+        ?.text,
+    ).toContain("requires operator.admin");
+    expect(
+      requireGatewayClientScope(makeParams(["operator.admin"], ["operator.write"]), gate),
+    ).toBeNull();
+  });
+
+  it("fails closed on unissued operator authority instead of using mutable scopes", () => {
+    const authority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.admin"],
+      pairedClientId: "maintainer-ui",
+      connectionId: "connection-1",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      trigger: "gateway",
+    });
+    const result = requireGatewayClientScope(
+      {
+        ctx: {
+          Provider: "internal",
+          GatewayClientScopes: ["operator.admin"],
+          TurnAuthority: structuredClone(authority),
+        },
+        command: { channel: "internal" },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result?.reply?.text).toContain("requires operator.admin");
   });
 
   it("enforces gateway client permissions for /config commands", async () => {

@@ -14,7 +14,10 @@ import {
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
+import { createAuthorizationPrincipal } from "../../plugins/authorization-policy-context.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import {
+  collectSessionWorkAdmissionControlSnapshots,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -185,6 +188,44 @@ describe("reply turn admission", () => {
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
       expect(result.operation.sessionId).toBe(nextSessionId);
+      result.operation.complete();
+    }
+  });
+
+  it("carries turn authority on the pre-backend lifecycle admission", async () => {
+    const sessionKey = "agent:main:telegram:topic:authority";
+    const sessionId = "session-authority";
+    const storePath = createSessionStore({
+      [sessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: createAuthorizationPrincipal({
+        provider: "telegram",
+        senderId: "maintainer",
+        isAuthorizedSender: true,
+      }),
+      agentId: "main",
+      sessionKey,
+      controllerKey: "sender:telegram:maintainer",
+    });
+
+    const result = await admitReplyTurn({
+      sessionKey,
+      sessionId,
+      storePath,
+      kind: "visible",
+      resetTriggered: false,
+      turnAuthority,
+    });
+
+    expect(result.status).toBe("owned");
+    expect(
+      collectSessionWorkAdmissionControlSnapshots({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+      }),
+    ).toEqual([{ turnAuthority }]);
+    if (result.status === "owned") {
       result.operation.complete();
     }
   });

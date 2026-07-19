@@ -78,8 +78,20 @@ function formatAuthorizationPolicyLines(
   for (const policy of authorizationPolicies.requiredPolicies) {
     const missing =
       policy.missingOperations.length > 0 ? `; missing ${policy.missingOperations.join(", ")}` : "";
+    const scopeFields: Array<[string, string[] | undefined]> = policy.scope
+      ? [
+          ["agents", policy.scope.agentIds],
+          ["providers", policy.scope.providers],
+          ["accounts", policy.scope.accountIds],
+          ["conversations", policy.scope.conversationIds],
+        ]
+      : [];
+    const scopeEntries = scopeFields.flatMap(([label, values]) =>
+      values && values.length > 0 ? [`${label}=${values.join("|")}`] : [],
+    );
+    const scope = scopeEntries.length > 0 ? ` scope(${scopeEntries.join("; ")})` : "";
     lines.push(
-      `required: ${policy.id} [${policy.operations.join(", ")}] (${policy.status}${missing})`,
+      `required: ${policy.id} [${policy.operations.join(", ")}]${scope} (${policy.status}${missing})`,
     );
   }
   return lines;

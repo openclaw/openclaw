@@ -878,6 +878,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         id: conversationId,
         label: envelopeFrom,
         spaceId: teamId,
+        threadId,
         nativeChannelId,
       },
       route: {
@@ -889,6 +890,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       reply: {
         to: teamsTo,
         replyToId: activity.replyToId ?? undefined,
+        messageThreadId: threadId,
         nativeChannelId,
       },
       message: {

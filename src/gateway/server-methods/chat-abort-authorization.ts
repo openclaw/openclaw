@@ -18,6 +18,7 @@ export type ChatAbortRequester = {
   connId?: string;
   deviceId?: string;
   isAdmin: boolean;
+  isInternal?: boolean;
 };
 
 type PreRegisteredAgentDedupePayload = {
@@ -63,6 +64,7 @@ export function resolveChatAbortRequester(
     connId: normalizeOptionalText(client?.connId),
     deviceId: normalizeOptionalText(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
+    isInternal: client == null || client.internal?.inProcessGatewayDispatch === true,
   };
 }
 
@@ -76,7 +78,7 @@ export function canRequesterAbortChatRun(
   const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
   const ownerConnId = normalizeOptionalText(entry.ownerConnId);
   if (!ownerDeviceId && !ownerConnId) {
-    return true;
+    return requester.isInternal === true;
   }
   if (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) {
     return true;
@@ -362,7 +364,11 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
+  const authorizedRuns: Array<
+    Pick<ChatAbortControllerEntry, "sessionKey" | "steeringAuthorizationAffinity"> & {
+      runId: string;
+    }
+  > = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
     if (active.controlUiVisible === false) {
@@ -383,7 +389,13 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     }
     matchedSessionRuns += 1;
     if (canRequesterAbortChatRun(active, params.requester)) {
-      authorizedRuns.push({ runId, sessionKey: active.sessionKey });
+      authorizedRuns.push({
+        runId,
+        sessionKey: active.sessionKey,
+        ...(active.steeringAuthorizationAffinity
+          ? { steeringAuthorizationAffinity: active.steeringAuthorizationAffinity }
+          : {}),
+      });
     }
   }
   return {
@@ -403,7 +415,7 @@ export function canRequesterAbortQueuedChatTurn(
   const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
   const ownerConnId = normalizeOptionalText(entry.ownerConnId);
   if (!ownerDeviceId && !ownerConnId) {
-    return true;
+    return requester.isInternal === true;
   }
   if (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) {
     return true;

@@ -1,12 +1,14 @@
 // Covers the canonical authorization snapshot and the final local message-effect gate.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  AuthorizationInvocationContext,
-  AuthorizationPolicyHandler,
-} from "../../plugins/authorization-policy.types.js";
+import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createDeferred } from "../../shared/deferred.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  installMessageActionPolicy,
+  resetMessageActionPolicyRegistry,
+} from "./message-action-runner.authorization.test-helpers.js";
 import { authorizePreparedMessageAction, runMessageAction } from "./message-action-runner.js";
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -37,36 +39,8 @@ const senderAuthorization: AuthorizationInvocationContext = {
   threadId: "1712345.0001",
 };
 
-function installMessageActionPolicy(
-  handler: AuthorizationPolicyHandler<"message.action">,
-  channelPlugin?:
-    | ReturnType<typeof createOutboundTestPlugin>
-    | Array<ReturnType<typeof createOutboundTestPlugin>>,
-) {
-  const channelPlugins = channelPlugin
-    ? Array.isArray(channelPlugin)
-      ? channelPlugin
-      : [channelPlugin]
-    : [];
-  const registry = createTestRegistry(
-    channelPlugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin })),
-  );
-  registry.authorizationPolicies.push({
-    pluginId: "message-action-policy-test",
-    pluginName: "Message action policy test",
-    origin: "workspace",
-    source: "test",
-    policy: {
-      id: "message-action-policy-test",
-      description: "Tests prepared message actions",
-      handlers: { "message.action": handler },
-    },
-  });
-  setActivePluginRegistry(registry);
-}
-
 afterEach(() => {
-  setActivePluginRegistry(createTestRegistry([]));
+  resetMessageActionPolicyRegistry();
   gatewayMocks.callGatewayLeastPrivilege.mockReset();
   gatewayMocks.isGatewayTransportError.mockReset();
   gatewayMocks.isGatewayTransportError.mockReturnValue(false);
@@ -204,6 +178,55 @@ describe("message action authorization", () => {
     ).rejects.toThrow("Message action blocked by authorization policy.");
     expect(getter).not.toHaveBeenCalled();
     expect(policy).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the detached snapshot when caller data mutates during authorization", async () => {
+    const policyEntered = createDeferred();
+    const releasePolicy = createDeferred();
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "message-1",
+      chatId: "channel-1",
+    });
+    installMessageActionPolicy(
+      async () => {
+        policyEntered.resolve();
+        await releasePolicy.promise;
+        return { effect: "pass" };
+      },
+      createOutboundTestPlugin({
+        id: "testchat",
+        outbound: {
+          deliveryMode: "direct",
+          sendText: vi.fn(),
+          sendPayload,
+        },
+      }),
+    );
+    const channelData = { testchat: { marker: "before" } };
+    const actionParams = {
+      channel: "testchat",
+      target: "channel:channel-1",
+      message: "hello",
+      channelData,
+    };
+
+    const pending = runMessageAction({
+      cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: actionParams,
+      dryRun: false,
+      agentId: "main",
+    });
+    await policyEntered.promise;
+    channelData.testchat.marker = "after";
+    releasePolicy.resolve();
+    await pending;
+
+    expect(sendPayload).toHaveBeenCalledOnce();
+    expect(sendPayload.mock.calls[0]?.[0]).toMatchObject({
+      payload: { channelData: { testchat: { marker: "before" } } },
+    });
   });
 
   it("blocks a denied local send before transport dispatch", async () => {
@@ -638,70 +661,6 @@ describe("message action authorization", () => {
     expect(rejectedSendText).not.toHaveBeenCalled();
   });
 
-  it("preserves mixed direct and gateway-core broadcasts when no message policy is active", async () => {
-    const sendText = vi.fn().mockResolvedValue({
-      channel: "directchat",
-      messageId: "message-1",
-      chatId: "channel-1",
-    });
-    const configured = (plugin: ReturnType<typeof createOutboundTestPlugin>) => ({
-      ...plugin,
-      config: { ...plugin.config, listAccountIds: () => ["default"] },
-    });
-    setActivePluginRegistry(
-      createTestRegistry(
-        [
-          configured(
-            createOutboundTestPlugin({
-              id: "directchat",
-              outbound: { deliveryMode: "direct", sendText },
-            }),
-          ),
-          configured(
-            createOutboundTestPlugin({
-              id: "gatewaychat",
-              outbound: { deliveryMode: "gateway" },
-            }),
-          ),
-        ].map((plugin) => ({ pluginId: plugin.id, source: "test", plugin })),
-      ),
-    );
-    gatewayMocks.callGatewayLeastPrivilege.mockResolvedValue({
-      results: [
-        { channel: "directchat", to: "channel:one", ok: true },
-        { channel: "gatewaychat", to: "channel:one", ok: true },
-      ],
-    });
-    const cfg = {
-      channels: {
-        directchat: { enabled: true },
-        gatewaychat: { enabled: true },
-      },
-      tools: { message: { broadcast: { enabled: true } } },
-    } as OpenClawConfig;
-
-    const result = await runMessageAction({
-      cfg,
-      action: "broadcast",
-      params: { targets: ["channel:one"], message: "hello" },
-      dryRun: false,
-      agentId: "main",
-    });
-
-    expect(result).toMatchObject({ kind: "broadcast" });
-    expect(sendText).not.toHaveBeenCalled();
-    expect(gatewayMocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
-    expect(gatewayMocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "message.action",
-        params: expect.objectContaining({
-          action: "broadcast",
-          params: expect.objectContaining({ channel: "all" }),
-        }),
-      }),
-    );
-  });
-
   it("keeps nested broadcast dry-runs local and side-effect free", async () => {
     const sendText = vi.fn().mockResolvedValue({
       channel: "directchat",
@@ -904,6 +863,10 @@ describe("message action authorization", () => {
       },
       tools: { message: { broadcast: { enabled: true } } },
     } as OpenClawConfig;
+    const broadcastAuthorization: AuthorizationInvocationContext = {
+      ...senderAuthorization,
+      principal: { kind: "operator", scopes: ["operator.write"] },
+    };
     gatewayMocks.callGatewayLeastPrivilege.mockImplementation(
       async (call: { params?: Record<string, unknown> }) => {
         const request = call.params as {
@@ -919,7 +882,7 @@ describe("message action authorization", () => {
           agentId: request.agentId,
           sessionKey: request.sessionKey,
           sessionId: request.sessionId,
-          authorization: senderAuthorization,
+          authorization: broadcastAuthorization,
           gatewayOwnedDelivery: true,
         });
         return remote.kind === "broadcast" ? remote.payload : undefined;
@@ -935,7 +898,7 @@ describe("message action authorization", () => {
         agentId: "main",
         sessionKey: senderAuthorization.sessionKey,
         sessionId: senderAuthorization.sessionId,
-        authorization: senderAuthorization,
+        authorization: broadcastAuthorization,
         gateway: {
           resolveAgentRuntimeIdentityToken,
           clientName: "cli",
@@ -947,71 +910,5 @@ describe("message action authorization", () => {
     expect(directSend).not.toHaveBeenCalled();
     expect(gatewaySend).not.toHaveBeenCalled();
     expect(gatewayMocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
-  });
-
-  it("reattaches a timed-out Gateway-owned broadcast with the same idempotency key", async () => {
-    const directSend = vi.fn();
-    const configured = (plugin: ReturnType<typeof createOutboundTestPlugin>) => ({
-      ...plugin,
-      config: { ...plugin.config, listAccountIds: () => ["default"] },
-    });
-    setActivePluginRegistry(
-      createTestRegistry(
-        [
-          configured(
-            createOutboundTestPlugin({
-              id: "directchat",
-              outbound: { deliveryMode: "direct", sendText: directSend },
-            }),
-          ),
-          configured(
-            createOutboundTestPlugin({
-              id: "gatewaychat",
-              outbound: { deliveryMode: "gateway" },
-            }),
-          ),
-        ].map((plugin) => ({ pluginId: plugin.id, source: "test", plugin })),
-      ),
-    );
-    const timeout = Object.assign(new Error("Gateway timeout"), { kind: "timeout" });
-    gatewayMocks.isGatewayTransportError.mockImplementation((error) => error === timeout);
-    gatewayMocks.callGatewayLeastPrivilege.mockRejectedValueOnce(timeout).mockResolvedValueOnce({
-      results: [
-        { channel: "directchat", to: "channel:one", ok: true },
-        { channel: "gatewaychat", to: "channel:one", ok: true },
-      ],
-    });
-
-    await expect(
-      runMessageAction({
-        cfg: {
-          channels: {
-            directchat: { enabled: true },
-            gatewaychat: { enabled: true },
-          },
-          tools: { message: { broadcast: { enabled: true } } },
-        } as OpenClawConfig,
-        action: "broadcast",
-        params: {
-          targets: ["channel:one"],
-          message: "hello",
-          idempotencyKey: "stable-broadcast-key",
-        },
-        gateway: { timeoutMs: 120_000, clientName: "cli", mode: "cli" },
-      }),
-    ).resolves.toMatchObject({ kind: "broadcast" });
-
-    expect(directSend).not.toHaveBeenCalled();
-    expect(gatewayMocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(2);
-    const firstCall = gatewayMocks.callGatewayLeastPrivilege.mock.calls[0]?.[0];
-    const secondCall = gatewayMocks.callGatewayLeastPrivilege.mock.calls[1]?.[0];
-    expect(firstCall).toMatchObject({
-      timeoutMs: 30_000,
-      params: { idempotencyKey: "stable-broadcast-key" },
-    });
-    expect(secondCall).toMatchObject({
-      timeoutMs: 60_000,
-      params: { idempotencyKey: "stable-broadcast-key" },
-    });
   });
 });

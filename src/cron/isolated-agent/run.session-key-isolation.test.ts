@@ -1,5 +1,10 @@
 // Session key isolation tests cover separate keys for concurrent cron runs.
 import { describe, expect, it } from "vitest";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
+import {
+  isIssuedTurnAuthoritySnapshot,
+  resolveTurnAuthorityAuthorization,
+} from "../../plugins/turn-authority.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -23,6 +28,27 @@ function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: stri
     throw new Error(`Expected ${label} to be called with a first argument`);
   }
   return arg;
+}
+
+function expectCronTurnAuthority(
+  value: unknown,
+  expected: { sessionId: string; sessionKey: string },
+) {
+  const authority = value as TurnAuthoritySnapshot | undefined;
+  expect(isIssuedTurnAuthoritySnapshot(authority)).toBe(true);
+  expect(resolveTurnAuthorityAuthorization(authority)).toEqual({
+    principal: { kind: "service", serviceId: "cron" },
+    agentId: "default",
+    sessionKey: expected.sessionKey,
+    sessionId: expected.sessionId,
+    runId: expected.sessionId,
+    conversationId: expected.sessionKey,
+    trigger: "cron",
+  });
+  expect(authority?.controllerKey).toBe("service:cron:test-job");
+  expect(Object.isFrozen(authority)).toBe(true);
+  expect(Object.isFrozen(authority?.authorization)).toBe(true);
+  expect(Object.isFrozen(authority?.authorization.principal)).toBe(true);
 }
 
 describe("runCronIsolatedAgentTurn isolated session identity", () => {
@@ -67,6 +93,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
+      turnAuthority?: TurnAuthoritySnapshot;
     };
     expect(runRequest.sessionId).toBe("isolated-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:daily-monitor:run:isolated-run-1");
@@ -76,6 +103,10 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).not.toContain("daily-monitor");
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expectCronTurnAuthority(runRequest.turnAuthority, {
+      sessionId: "isolated-run-1",
+      sessionKey: "agent:default:cron:daily-monitor:run:isolated-run-1",
+    });
     const embeddedRunOrder = runEmbeddedAgentMock.mock.invocationCallOrder[0];
     if (embeddedRunOrder === undefined) {
       throw new Error("Expected embedded cron execution order");
@@ -325,6 +356,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
       cleanupCliLiveSessionOnRunEnd?: boolean;
+      turnAuthority?: TurnAuthoritySnapshot;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
@@ -333,6 +365,10 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
     expect(runRequest.cleanupCliLiveSessionOnRunEnd).toBe(true);
+    expectCronTurnAuthority(runRequest.turnAuthority, {
+      sessionId: "isolated-cli-run-1",
+      sessionKey: "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
+    });
   });
 
   it("runs externally sourced CLI hook turns", async () => {

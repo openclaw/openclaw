@@ -1,4 +1,7 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  hasAuthorizationPolicies,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -183,7 +186,7 @@ export async function resumeExistingCodexThread(
         signal: params.signal,
       }),
     );
-    if (ringZeroActive) {
+    if (ringZeroActive || hasAuthorizationPolicies(undefined, params.params.config)) {
       try {
         await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
           attestCodexRingZeroThreadHasNoMcpServers(
@@ -404,7 +407,7 @@ export async function startFreshCodexThread(
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
-  if (ringZeroActive) {
+  if (ringZeroActive || hasAuthorizationPolicies(undefined, params.params.config)) {
     try {
       await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
         attestCodexRingZeroThreadHasNoMcpServers(params.client, response.thread.id, params.signal),

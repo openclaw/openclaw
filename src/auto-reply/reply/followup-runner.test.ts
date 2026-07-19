@@ -53,6 +53,8 @@ let replyRunTestingForTest: typeof import("./reply-run-registry.test-support.js"
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.test-support.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
+let createOperatorTurnAuthoritySnapshot: typeof import("../../plugins/turn-authority.js").createOperatorTurnAuthoritySnapshot;
+let createTurnAuthoritySnapshot: typeof import("../../plugins/turn-authority.js").createTurnAuthoritySnapshot;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -517,6 +519,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     await import("../../agents/cli-backends.test-support.js"));
   setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
+  ({ createOperatorTurnAuthoritySnapshot, createTurnAuthoritySnapshot } =
+    await import("../../plugins/turn-authority.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
@@ -683,6 +687,80 @@ function createQueuedRun(
   return createMockFollowupRun(overrides);
 }
 
+function createQueuedAuthorityScenarios() {
+  const toolBindings = Object.freeze({ maintenance: Object.freeze({ mode: "safe" }) });
+  const operatorAuthority = createOperatorTurnAuthoritySnapshot({
+    scopes: ["operator.admin"],
+    connectionId: "connection-owner",
+    isOwner: true,
+    agentId: "agent",
+    sessionKey: "main",
+    sessionId: "session-authority",
+    runId: "admitted-operator-run",
+    conversationId: "maintenance",
+    trigger: "gateway",
+  });
+  const senderAuthority = createTurnAuthoritySnapshot({
+    principal: {
+      kind: "sender",
+      provider: "discord",
+      accountId: "molty",
+      senderId: "maintainer-1",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      roleIds: ["maintainers", "reviewers"],
+    },
+    agentId: "agent",
+    sessionKey: "main",
+    sessionId: "session-authority",
+    runId: "admitted-sender-run",
+    conversationId: "maintenance",
+    trigger: "channel",
+    controllerKey: "sender:discord:molty:maintainer-1",
+  });
+  return [
+    {
+      label: "operator",
+      authority: operatorAuthority,
+      toolBindings,
+      expected: {
+        senderId: undefined,
+        senderIsOwner: true,
+        isAuthorizedSender: undefined,
+        memberRoleIds: undefined,
+      },
+    },
+    {
+      label: "sender roles",
+      authority: senderAuthority,
+      toolBindings,
+      expected: {
+        senderId: "maintainer-1",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        memberRoleIds: ["maintainers", "reviewers"],
+      },
+    },
+  ] as const;
+}
+
+function expectQueuedAuthorityCall(
+  call: Record<string, unknown>,
+  scenario: ReturnType<typeof createQueuedAuthorityScenarios>[number],
+): void {
+  expect(Object.isFrozen(scenario.authority)).toBe(true);
+  expect(Object.isFrozen(scenario.authority.authorization)).toBe(true);
+  expect(Object.isFrozen(scenario.authority.authorization.principal)).toBe(true);
+  expect(call.turnAuthority).toBe(scenario.authority);
+  expect(call.toolBindings).toBe(scenario.toolBindings);
+  expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  expect(call.senderId).toBe(scenario.expected.senderId);
+  expect(call.senderIsOwner).toBe(scenario.expected.senderIsOwner);
+  expect(call.isAuthorizedSender).toBe(scenario.expected.isAuthorizedSender);
+  expect(call.memberRoleIds).toEqual(scenario.expected.memberRoleIds);
+  expect(call.approvalReviewerDeviceId).toBe("reviewer-device");
+}
+
 describe("createFollowupRunner reply-lane admission", () => {
   it("drops stale active-goal context after the persisted goal completes", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
@@ -764,6 +842,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     await runner(
       createQueuedRun({
+        originatingParentConversationId: "maintenance-parent",
         run: {
           sessionId: "session-client-caps",
           sessionKey: "main",
@@ -776,6 +855,42 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
+    expect(call.parentConversationId).toBe("maintenance-parent");
+  });
+
+  it("preserves issued authority and admitted tool facts on queued embedded runs", async () => {
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    for (const scenario of createQueuedAuthorityScenarios()) {
+      runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+      await runner(
+        createQueuedRun({
+          originatingChannel: "discord",
+          originatingTo: "channel:maintenance",
+          run: {
+            sessionId: "session-authority",
+            provider: "anthropic",
+            model: "claude",
+            turnAuthority: scenario.authority,
+            toolBindings: scenario.toolBindings,
+            clientCaps: ["tool-events", "inline-widgets"],
+            senderId: "conflicting-legacy-sender",
+            senderIsOwner: !scenario.expected.senderIsOwner,
+            isAuthorizedSender: scenario.expected.isAuthorizedSender !== true,
+            memberRoleIds: ["conflicting-role"],
+            approvalReviewerDeviceId: "reviewer-device",
+          },
+        }),
+      );
+
+      const call = requireLastMockCallArg(runEmbeddedAgentMock, scenario.label);
+      expectQueuedAuthorityCall(call, scenario);
+    }
   });
 
   it("adopts a matching admission-time model lock for queued execution", async () => {
@@ -1573,6 +1688,7 @@ describe("createFollowupRunner runtime config", () => {
         originatingChannel: "telegram",
         originatingTo: "telegram:-100123:topic:42",
         originatingThreadId: "42",
+        originatingParentConversationId: "-100123",
         originatingReplyToId: "reply-42",
         messageId: "queued-message-1",
         run: {
@@ -1616,6 +1732,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
     expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(call.currentThreadTs).toBe("42");
+    expect(call.parentConversationId).toBe("-100123");
     expect(call.currentMessageId).toBe("reply-42");
     expect(call.senderId).toBe("sender-42");
     expect(call.senderName).toBe("Sender 42");
@@ -1639,6 +1756,72 @@ describe("createFollowupRunner runtime config", () => {
       suppressNextUserMessagePersistence: false,
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
+  });
+
+  it("preserves issued authority and admitted tool facts on queued CLI runs", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-authority",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "cli-session-authority" },
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    for (const scenario of createQueuedAuthorityScenarios()) {
+      runCliAgentMock.mockResolvedValueOnce({
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "claude-cli",
+            model: "claude-opus-4-7",
+          },
+        },
+      });
+      await runner(
+        createQueuedRun({
+          originatingChannel: "discord",
+          originatingTo: "channel:maintenance",
+          run: {
+            config: runtimeConfig,
+            sessionId: "session-authority",
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            turnAuthority: scenario.authority,
+            toolBindings: scenario.toolBindings,
+            clientCaps: ["tool-events", "inline-widgets"],
+            senderId: "conflicting-legacy-sender",
+            senderIsOwner: !scenario.expected.senderIsOwner,
+            isAuthorizedSender: scenario.expected.isAuthorizedSender !== true,
+            memberRoleIds: ["conflicting-role"],
+            approvalReviewerDeviceId: "reviewer-device",
+          },
+        }),
+      );
+
+      const call = requireLastMockCallArg(runCliAgentMock, scenario.label);
+      expectQueuedAuthorityCall(call, scenario);
+    }
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("bridges queued CLI thinking events into reasoning stream progress", async () => {

@@ -189,6 +189,9 @@ function createMockToolDefinitions(tools: unknown[] = []) {
   });
 }
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const splitSdkToolsMock = vi.fn(({ tools }: { tools?: unknown[] }) => ({
+  customTools: createMockToolDefinitions(tools),
+}));
 const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const guardSessionManagerMock = vi.fn(() => ({
   flushPendingToolResults: vi.fn(),
@@ -576,6 +579,7 @@ export function resetCompactHooksHarnessMocks(): void {
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
+  splitSdkToolsMock.mockClear();
   guardSessionManagerMock.mockReset();
   guardSessionManagerMock.mockReturnValue({
     flushPendingToolResults: vi.fn(),
@@ -872,9 +876,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./tool-split.js", () => ({
-    splitSdkTools: vi.fn(({ tools }: { tools?: unknown[] }) => ({
-      customTools: createMockToolDefinitions(tools),
-    })),
+    splitSdkTools: splitSdkToolsMock,
   }));
 
   vi.doMock("./compaction-safety-timeout.js", () => {

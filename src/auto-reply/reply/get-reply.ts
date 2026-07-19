@@ -13,7 +13,6 @@ import {
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -23,6 +22,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import { createAuthorizationPrincipal } from "../../plugins/authorization-policy-context.js";
+import {
+  classifyTurnAuthoritySnapshot,
+  createTurnAuthoritySnapshot,
+} from "../../plugins/turn-authority.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -37,11 +41,10 @@ import type { MsgContext } from "../templating.js";
 import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
-  authorizeCoreCommand,
+  authorizeCoreCommandName,
   resolveCommandAuthorizationDenialText,
 } from "./commands-authorization.js";
 import { buildCommandContext } from "./commands-context.js";
-import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -67,7 +70,6 @@ import {
   hasInboundMedia,
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
-import { stripStructuralPrefixes } from "./mentions.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import {
@@ -76,6 +78,18 @@ import {
 } from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import { isResetAuthorizedForContext } from "./reset-authorization.js";
+import { resolveSessionResetCommand } from "./session-reset-command.js";
+import {
+  prepareReplySessionResetActiveRunControl,
+  ReplySessionResetControlError,
+  resolveReplySessionResetControlErrorReply,
+  type PrepareReplySessionResetControl,
+} from "./session-reset-control.js";
+import {
+  REPLY_SESSION_RESET_TARGET_CHANGED_REPLY,
+  ReplySessionResetTargetChangedError,
+} from "./session-reset-target.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
@@ -84,8 +98,6 @@ import {
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
-
-type ResetCommandAction = "new" | "reset";
 
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
@@ -219,6 +231,34 @@ async function applyLinkUnderstandingIfNeeded(params: {
     );
     return false;
   }
+}
+
+function resolveReplyAuthorityConversationId(
+  ctx: MsgContext,
+  sessionKey: string | undefined,
+): string | undefined {
+  return (
+    normalizeOptionalString(ctx.NativeChannelId) ??
+    normalizeOptionalString(ctx.ChatId) ??
+    normalizeOptionalString(ctx.OriginatingTo) ??
+    normalizeOptionalString(sessionKey)
+  );
+}
+
+function isTurnAuthorityBoundToResolvedReply(params: {
+  authority: NonNullable<MsgContext["TurnAuthority"]>;
+  agentId: string;
+  sessionKey: string | undefined;
+  conversationId: string | undefined;
+}): boolean {
+  const authorization = params.authority.authorization;
+  return Boolean(
+    params.sessionKey &&
+    params.conversationId &&
+    authorization.agentId === params.agentId &&
+    authorization.sessionKey === params.sessionKey &&
+    authorization.conversationId === params.conversationId,
+  );
 }
 
 export async function getReplyFromConfig(
@@ -375,65 +415,142 @@ export async function getReplyFromConfig(
     return controller;
   });
 
-  const resetCommandSource =
-    finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body ?? "";
-  const preflightTriggerBody = stripStructuralPrefixes(resetCommandSource).trim();
-  const normalizedChatType = normalizeChatType(finalized.ChatType);
+  const resetCommand = resolveSessionResetCommand({ agentId, cfg, ctx: finalized });
+  const classifiedTurnAuthority = classifyTurnAuthoritySnapshot(finalized.TurnAuthority);
+  const authorityConversationId = resolveReplyAuthorityConversationId(finalized, agentSessionKey);
+  // A supplied snapshot is valid only for this resolved target. Trusted handoffs
+  // must rebind upstream before crossing the reply boundary.
+  const authorityBindingInvalid =
+    classifiedTurnAuthority.kind === "issued" &&
+    !isTurnAuthorityBoundToResolvedReply({
+      authority: classifiedTurnAuthority.snapshot,
+      agentId,
+      sessionKey: agentSessionKey,
+      conversationId: authorityConversationId,
+    });
+  if (classifiedTurnAuthority.kind === "invalid" || authorityBindingInvalid) {
+    typing.cleanup();
+    return markCommandReplyForDelivery({
+      text: resolveCommandAuthorizationDenialText({
+        denied: true,
+        kind: "error",
+        pluginId: "authorization-engine",
+        policyId: "turn-authority",
+        code: "turn-authority-invalid",
+      }),
+    });
+  }
   const preflightCommand = buildCommandContext({
     ctx: finalized,
     cfg,
     agentId,
     sessionKey: agentSessionKey,
-    isGroup: normalizedChatType != null && normalizedChatType !== "direct",
-    triggerBodyNormalized: preflightTriggerBody,
+    isGroup: resetCommand.isGroup,
+    triggerBodyNormalized: resetCommand.triggerBodyNormalized,
     commandAuthorized: finalized.CommandAuthorized,
   });
-  const resetLikeCommand =
-    /^\/(?:new|reset)(?:\s|$)/iu.test(preflightCommand.commandBodyNormalized) &&
-    !parseSoftResetCommand(preflightCommand.commandBodyNormalized).matched;
+  if (classifiedTurnAuthority.kind === "absent") {
+    const hasAuthenticatedSender =
+      finalized.InboundAccessAuthorized === true ||
+      finalized.CommandTurn?.authorized === true ||
+      finalized.CommandAuthorized ||
+      preflightCommand.isAuthorizedSender;
+    const principal = createAuthorizationPrincipal({
+      provider: preflightCommand.channel || preflightCommand.surface,
+      accountId: preflightCommand.accountId,
+      ...(hasAuthenticatedSender
+        ? {
+            senderId: preflightCommand.senderId,
+            senderName: preflightCommand.senderName,
+            senderUsername: preflightCommand.senderUsername,
+            senderE164: preflightCommand.senderE164,
+            senderIsOwner: preflightCommand.senderIsOwner,
+            isAuthorizedSender: preflightCommand.isAuthorizedSender,
+            roleIds: preflightCommand.memberRoleIds,
+          }
+        : {}),
+    });
+    const senderControllerKey =
+      principal.kind === "sender"
+        ? ["sender", principal.provider, principal.accountId, principal.senderId]
+            .filter(Boolean)
+            .join(":")
+        : undefined;
+    finalized.TurnAuthority = createTurnAuthoritySnapshot({
+      principal,
+      agentId,
+      sessionKey: agentSessionKey,
+      conversationId: authorityConversationId,
+      parentConversationId: finalized.ThreadParentId,
+      threadId: finalized.MessageThreadId ?? finalized.TransportThreadId,
+      trigger: "channel",
+      controllerKey: senderControllerKey,
+    });
+  }
+  let authorizedResetTarget:
+    | Readonly<{ sessionKey: string; sessionId: string | undefined }>
+    | undefined;
+  let prepareExplicitResetControl: PrepareReplySessionResetControl | undefined;
   if (
-    (preflightCommand.isAuthorizedSender || Object.is(finalized.CommandAuthorized, true)) &&
-    resetLikeCommand
+    resetCommand.hardReset &&
+    isResetAuthorizedForContext({
+      ctx: finalized,
+      cfg,
+      commandAuthorized: finalized.CommandAuthorized,
+    })
   ) {
     const resetTarget = resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
-    const authorization = await authorizeCoreCommand({
+    authorizedResetTarget = {
+      sessionKey: resetTarget.sessionKey,
+      sessionId: resetTarget.sessionEntry?.sessionId,
+    };
+    const authorization = await authorizeCoreCommandName({
       command: preflightCommand,
       ctx: finalized,
+      commandName: resetCommand.hardReset.action,
       config: cfg,
+      rawArguments: resetCommand.hardReset.bodyStripped || undefined,
       agentId,
       sessionKey: resetTarget.sessionKey,
       sessionId: resetTarget.sessionEntry?.sessionId,
       phase: "session-mutation",
       signal: internalOptsWithSkillFilter?.abortSignal,
     });
-    if (authorization.matched && !authorization.allowed) {
+    if (!authorization.allowed) {
       typing.cleanup();
       return markCommandReplyForDelivery({
         text: resolveCommandAuthorizationDenialText(authorization.denial),
       });
     }
+    prepareExplicitResetControl = async (target) =>
+      await prepareReplySessionResetActiveRunControl({
+        target,
+        turnAuthority: finalized.TurnAuthority,
+      });
   }
 
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",
-    () =>
-      maybeResolveNativeSlashCommandFastReply({
-        ctx: finalized,
-        cfg,
-        agentId,
-        agentDir,
-        agentCfg,
-        commandAuthorized: finalized.CommandAuthorized,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        provider,
-        model,
-        workspaceDir: workspaceDirForNativeCommand,
-        typing,
-        opts: optsWithSkillFilter,
-        skillFilter: mergedSkillFilter,
-      }),
+    async () =>
+      resetCommand.hardReset
+        ? { handled: false as const }
+        : await maybeResolveNativeSlashCommandFastReply({
+            ctx: finalized,
+            cfg,
+            agentId,
+            agentDir,
+            agentCfg,
+            commandAuthorized: finalized.CommandAuthorized,
+            defaultProvider,
+            defaultModel,
+            aliasIndex,
+            provider,
+            model,
+            workspaceDir: workspaceDirForNativeCommand,
+            typing,
+            opts: optsWithSkillFilter,
+            skillFilter: mergedSkillFilter,
+          }),
   );
   if (nativeSlashCommandFastReply.handled) {
     logResolverTiming("completed", "native_slash_command_fast_path");
@@ -533,6 +650,8 @@ export async function getReplyFromConfig(
             ...(internalOptsWithSkillFilter?.expectedExistingSessionId
               ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
               : {}),
+            ...(authorizedResetTarget ? { expectedResetTarget: authorizedResetTarget } : {}),
+            ...(prepareExplicitResetControl ? { prepareExplicitResetControl } : {}),
             pinExpectedExistingSession:
               internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
@@ -544,6 +663,18 @@ export async function getReplyFromConfig(
     if (error instanceof ModelSelectionLockedError) {
       typing.cleanup();
       return { text: error.message };
+    }
+    if (error instanceof ReplySessionResetTargetChangedError) {
+      typing.cleanup();
+      return markCommandReplyForDelivery({
+        text: REPLY_SESSION_RESET_TARGET_CHANGED_REPLY,
+      });
+    }
+    if (error instanceof ReplySessionResetControlError) {
+      typing.cleanup();
+      return markCommandReplyForDelivery({
+        text: resolveReplySessionResetControlErrorReply(error),
+      });
     }
     throw error;
   }
@@ -910,14 +1041,12 @@ export async function getReplyFromConfig(
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
       return;
     }
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
-    if (!resetMatch) {
+    if (!resetCommand.hardReset) {
       return;
     }
     const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
-    const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
-      action,
+      action: resetCommand.hardReset.action,
       ctx,
       cfg,
       command,

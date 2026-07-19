@@ -12,6 +12,7 @@ import {
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveCommandAuthorizationThreadId } from "./commands-authorization.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
 
@@ -110,12 +111,10 @@ export async function deliverPrivateCommandReply(params: {
   return results.some((result) => result.status === "fulfilled" && result.value.ok);
 }
 
-/** Reads the command message thread id from command context. */
+/** Reads the effective provider thread id from command context. */
 export function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
-  return typeof params.ctx.MessageThreadId === "string" ||
-    typeof params.ctx.MessageThreadId === "number"
-    ? String(params.ctx.MessageThreadId)
-    : undefined;
+  const threadId = resolveCommandAuthorizationThreadId(params.ctx);
+  return threadId === undefined ? undefined : String(threadId);
 }
 
 /** Reads the best delivery target for command route resolution. */

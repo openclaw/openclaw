@@ -311,6 +311,7 @@ async function processMessageWithPipeline(params: {
       kind: isGroup ? "channel" : "direct",
       id: spaceId,
       label: fromLabel,
+      threadId: replyThreadName,
     },
     route: {
       agentId: route.agentId,
@@ -323,6 +324,7 @@ async function processMessageWithPipeline(params: {
       originatingTo: `googlechat:${spaceId}`,
       replyToId: replyThreadName,
       replyToIdFull: replyThreadName,
+      messageThreadId: replyThreadName,
     },
     message: {
       body,

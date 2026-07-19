@@ -18,6 +18,7 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -149,6 +150,10 @@ type CompactEmbeddedAgentSessionParams = {
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
+  turnAuthority?: unknown;
+  memberRoleIds?: string[];
+  senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
 };
 
 function requireRefreshQueuedFollowupSessionCall(index = 0) {
@@ -1222,6 +1227,20 @@ describe("runMemoryFlushIfNeeded", () => {
       modelSelectionLocked: true,
     };
     const onCompactionNotice = vi.fn();
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        senderId: "maintainer",
+        aliases: { username: "maintainer_user" },
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      trigger: "message",
+    });
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -1229,6 +1248,10 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionId: "session",
         sessionFile,
         sessionKey: "agent:main:main",
+        turnAuthority,
+        memberRoleIds: ["legacy-role"],
+        senderIsOwner: true,
+        isAuthorizedSender: false,
       }),
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100,
@@ -1253,6 +1276,10 @@ describe("runMemoryFlushIfNeeded", () => {
       contextTokenBudget: 100,
       agentHarnessId: "openclaw",
       modelSelectionLocked: true,
+      turnAuthority,
+      memberRoleIds: ["legacy-role"],
+      senderIsOwner: true,
+      isAuthorizedSender: false,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");

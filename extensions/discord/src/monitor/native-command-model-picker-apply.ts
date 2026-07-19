@@ -8,7 +8,12 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  resolveStorePath,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
 import {
@@ -16,6 +21,7 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
+import type { DiscordModelPickerSessionBinding } from "./native-command-model-picker-authorization.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
@@ -24,7 +30,12 @@ type DiscordModelPickerSelectionCommand = {
   prompt: string;
   command: ChatCommandDefinition;
   args?: CommandArgs;
+  authorizationValues: Record<string, string>;
 };
+
+type DiscordModelPickerMutationAuthorization =
+  | { allowed: true }
+  | { allowed: false; noticeMessage: string };
 
 type DiscordModelPickerApplyResult =
   | { status: "success"; effectiveModelRef: string; noticeMessage: string }
@@ -33,6 +44,71 @@ type DiscordModelPickerApplyResult =
   | { status: "timeout"; noticeMessage: string }
   | { status: "failed"; noticeMessage: string };
 
+type DiscordModelPickerPersistResult =
+  | { status: "current"; changed: boolean }
+  | { status: "stale" };
+
+function normalizeExpectedRuntime(runtime: string | undefined): string | undefined {
+  const normalized = runtime?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized === "default" ? "auto" : normalized;
+}
+
+function matchesExpectedRuntime(params: {
+  expectedRuntime?: string;
+  currentRuntime: string;
+}): boolean {
+  if (!params.expectedRuntime) {
+    return true;
+  }
+  const currentRuntime = params.currentRuntime.trim() || "auto";
+  return currentRuntime === params.expectedRuntime;
+}
+
+function resolveDiscordModelPickerSessionBinding(params: {
+  cfg: OpenClawConfig;
+  route: ResolvedAgentRoute;
+}): DiscordModelPickerSessionBinding {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const entry = getSessionEntry({
+    storePath,
+    sessionKey: params.route.sessionKey,
+    readConsistency: "latest",
+  });
+  return entry ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt } : null;
+}
+
+function matchesDiscordModelPickerSessionBinding(params: {
+  entry: SessionEntry | undefined;
+  expected: DiscordModelPickerSessionBinding;
+}): boolean {
+  if (params.expected === null) {
+    return params.entry === undefined;
+  }
+  return (
+    params.entry?.sessionId === params.expected.sessionId &&
+    params.entry.updatedAt === params.expected.updatedAt
+  );
+}
+
+function matchesDiscordModelPickerAuthorizationValues(params: {
+  actual: Readonly<Record<string, string>> | undefined;
+  expected: Readonly<Record<string, string>>;
+}): boolean {
+  if (!params.actual) {
+    return false;
+  }
+  const expectedEntries = Object.entries(params.expected);
+  return (
+    Object.keys(params.actual).length === expectedEntries.length &&
+    expectedEntries.every(([key, value]) => params.actual[key] === value)
+  );
+}
+
 async function persistDiscordModelPickerOverride(params: {
   cfg: OpenClawConfig;
   route: ResolvedAgentRoute;
@@ -40,20 +116,39 @@ async function persistDiscordModelPickerOverride(params: {
   model: string;
   isDefault: boolean;
   runtime?: string;
-}): Promise<boolean> {
+  expectedSessionBinding: DiscordModelPickerSessionBinding;
+}): Promise<DiscordModelPickerPersistResult> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,
   });
+  let checkedCurrentEntry = false;
+  let stale = false;
   let persisted = false;
+  // Policy runs before the store lock. Recheck session identity and version in the writer so a
+  // reset or concurrent mutation cannot inherit the earlier decision.
   await patchSessionEntry({
     storePath,
     sessionKey: params.route.sessionKey,
-    fallbackEntry: {
-      sessionId: randomUUID(),
-      updatedAt: Date.now(),
-    },
+    ...(params.expectedSessionBinding === null
+      ? {
+          fallbackEntry: {
+            sessionId: randomUUID(),
+            updatedAt: Date.now(),
+          },
+        }
+      : {}),
     replaceEntry: true,
-    update: (entry) => {
+    update: (entry, context) => {
+      checkedCurrentEntry = true;
+      if (
+        !matchesDiscordModelPickerSessionBinding({
+          entry: context.existingEntry,
+          expected: params.expectedSessionBinding,
+        })
+      ) {
+        stale = true;
+        return null;
+      }
       persisted =
         applyModelOverrideToSessionEntry({
           entry,
@@ -76,10 +171,15 @@ async function persistDiscordModelPickerOverride(params: {
         delete entry.agentHarnessId;
         persisted = true;
       }
+      if (persisted) {
+        entry.updatedAt = Math.max(Date.now(), entry.updatedAt + 1);
+      }
       return entry;
     },
   });
-  return persisted;
+  return !checkedCurrentEntry || stale
+    ? { status: "stale" }
+    : { status: "current", changed: persisted };
 }
 
 export async function applyDiscordModelPickerSelection(params: {
@@ -101,6 +201,11 @@ export async function applyDiscordModelPickerSelection(params: {
   preferenceScope: DiscordModelPickerPreferenceScope;
   settleMs: number;
   resolveCurrentModel: (route: ResolvedAgentRoute) => string;
+  resolveCurrentRuntime: (route: ResolvedAgentRoute) => string;
+  authorizeDirectPersist: (
+    route: ResolvedAgentRoute,
+    sessionBinding: DiscordModelPickerSessionBinding,
+  ) => Promise<DiscordModelPickerMutationAuthorization>;
 }): Promise<DiscordModelPickerApplyResult> {
   try {
     const dispatchResult = await withTimeout(
@@ -116,49 +221,81 @@ export async function applyDiscordModelPickerSelection(params: {
         preferFollowUp: true,
         threadBindings: params.threadBindings,
         suppressReplies: true,
+        expectedRoute: {
+          agentId: params.route.agentId,
+          sessionKey: params.route.sessionKey,
+        },
+        requireCoreCommandAuthorization: true,
+        commandAuthorizationValues: params.selectionCommand.authorizationValues,
       }),
       12000,
     );
     if (!dispatchResult.accepted) {
       return {
         status: "rejected",
-        noticeMessage: `❌ Failed to apply ${params.resolvedModelRef}. Try /model ${params.resolvedModelRef} directly.`,
+        noticeMessage:
+          dispatchResult.rejection === "authorization-denied"
+            ? "❌ Command blocked by authorization policy."
+            : dispatchResult.rejection === "route-mismatch"
+              ? "❌ Model change authorization did not match this session."
+              : `❌ Failed to apply ${params.resolvedModelRef}. Try /model ${params.resolvedModelRef} directly.`,
+      };
+    }
+    const authorizationRoute = dispatchResult.coreCommandAuthorization;
+    const fallbackRoute = dispatchResult.effectiveRoute ?? params.route;
+    const expectedRawArguments = params.selectionCommand.args?.raw;
+    if (
+      !authorizationRoute ||
+      authorizationRoute.agentId !== params.route.agentId ||
+      authorizationRoute.sessionKey !== params.route.sessionKey ||
+      authorizationRoute.commandName !== params.selectionCommand.command.key ||
+      authorizationRoute.rawArguments !== expectedRawArguments ||
+      !matchesDiscordModelPickerAuthorizationValues({
+        actual: authorizationRoute.values,
+        expected: params.selectionCommand.authorizationValues,
+      }) ||
+      fallbackRoute.agentId !== authorizationRoute.agentId ||
+      fallbackRoute.sessionKey !== authorizationRoute.sessionKey
+    ) {
+      return {
+        status: "rejected",
+        noticeMessage: "❌ Model change authorization did not match this session.",
       };
     }
 
-    const fallbackRoute = dispatchResult.effectiveRoute ?? params.route;
     if (params.settleMs > 0) {
       await new Promise((resolve) => {
         setTimeout(resolve, params.settleMs);
       });
     }
 
+    const expectedRuntime = normalizeExpectedRuntime(params.selectedRuntime);
     let effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
-    let persisted = effectiveModelRef === params.resolvedModelRef;
-    if (params.selectedRuntime?.trim()) {
-      await persistDiscordModelPickerOverride({
-        cfg: params.cfg,
-        route: fallbackRoute,
-        provider: params.selectedProvider,
-        model: params.selectedModel,
-        isDefault:
-          params.selectedProvider === params.defaultProvider &&
-          params.selectedModel === params.defaultModel,
-        runtime: params.selectedRuntime,
-      });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
-      effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
-      persisted = effectiveModelRef === params.resolvedModelRef;
-    }
+    let effectiveRuntime = params.resolveCurrentRuntime(fallbackRoute);
+    let persisted =
+      effectiveModelRef === params.resolvedModelRef &&
+      matchesExpectedRuntime({ expectedRuntime, currentRuntime: effectiveRuntime });
 
     if (!persisted) {
       logVerbose(
-        `discord: model picker override mismatch — expected ${params.resolvedModelRef} but read ${effectiveModelRef} from session key ${fallbackRoute.sessionKey}; attempting direct session override persist`,
+        `discord: model picker override mismatch — expected ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""} but read ${effectiveModelRef} with runtime ${effectiveRuntime} from session key ${fallbackRoute.sessionKey}; attempting direct session override persist`,
       );
+      const sessionBinding = resolveDiscordModelPickerSessionBinding({
+        cfg: params.cfg,
+        route: fallbackRoute,
+      });
+      const directPersistAuthorization = await params.authorizeDirectPersist(
+        fallbackRoute,
+        sessionBinding,
+      );
+      if (!directPersistAuthorization.allowed) {
+        return {
+          status: "rejected",
+          noticeMessage: directPersistAuthorization.noticeMessage,
+        };
+      }
       try {
-        const directlyPersisted = await persistDiscordModelPickerOverride({
+        const directPersistResult = await persistDiscordModelPickerOverride({
           cfg: params.cfg,
           route: fallbackRoute,
           provider: params.selectedProvider,
@@ -167,17 +304,27 @@ export async function applyDiscordModelPickerSelection(params: {
             params.selectedProvider === params.defaultProvider &&
             params.selectedModel === params.defaultModel,
           runtime: params.selectedRuntime,
+          expectedSessionBinding: sessionBinding,
         });
+        if (directPersistResult.status === "stale") {
+          return {
+            status: "rejected",
+            noticeMessage: "❌ Model change authorization expired because this session changed.",
+          };
+        }
         await new Promise((resolve) => {
           setTimeout(resolve, 100);
         });
         effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
-        persisted = effectiveModelRef === params.resolvedModelRef;
+        effectiveRuntime = params.resolveCurrentRuntime(fallbackRoute);
+        persisted =
+          effectiveModelRef === params.resolvedModelRef &&
+          matchesExpectedRuntime({ expectedRuntime, currentRuntime: effectiveRuntime });
         if (!persisted) {
           logVerbose(
-            `discord: direct session override persist failed — expected ${params.resolvedModelRef} but read ${effectiveModelRef} from session key ${fallbackRoute.sessionKey}`,
+            `discord: direct session override persist failed — expected ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""} but read ${effectiveModelRef} with runtime ${effectiveRuntime} from session key ${fallbackRoute.sessionKey}`,
           );
-        } else if (!directlyPersisted) {
+        } else if (!directPersistResult.changed) {
           logVerbose(
             `discord: direct session override persist became a no-op because ${params.resolvedModelRef} was already present on re-read for session key ${fallbackRoute.sessionKey}`,
           );
@@ -208,12 +355,12 @@ export async function applyDiscordModelPickerSelection(params: {
       ? {
           status: "success",
           effectiveModelRef,
-          noticeMessage: `✅ Model set to ${params.resolvedModelRef}.`,
+          noticeMessage: `✅ Model set to ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""}.`,
         }
       : {
           status: "mismatch",
           effectiveModelRef,
-          noticeMessage: `⚠️ Tried to set ${params.resolvedModelRef}, but current model is ${effectiveModelRef}.`,
+          noticeMessage: `⚠️ Tried to set ${params.resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""}, but current selection is ${effectiveModelRef} with runtime ${effectiveRuntime}.`,
         };
   } catch (error) {
     if (error instanceof ModelSelectionLockedError) {

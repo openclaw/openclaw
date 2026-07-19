@@ -1,5 +1,6 @@
 /** Runs deny-only authorization policies over host-authoritative operations. */
 import { performance } from "node:perf_hooks";
+import { isProxy } from "node:util/types";
 import { getRuntimeConfig, getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -44,6 +45,12 @@ export type RequiredAuthorizationPolicy = {
   pluginId: string;
   policyId: string;
   operations: readonly AuthorizationOperation[];
+  scope?: {
+    agentIds?: readonly string[];
+    providers?: readonly string[];
+    accountIds?: readonly string[];
+    conversationIds?: readonly string[];
+  };
 };
 
 function unreadableRegistration(): PluginAuthorizationPolicyRegistryRegistration {
@@ -73,7 +80,7 @@ function copyRegistrations(
     return [];
   }
   try {
-    if (!Array.isArray(policies)) {
+    if (!Array.isArray(policies) || isProxy(policies)) {
       return [unreadableRegistration()];
     }
     const copied: PluginAuthorizationPolicyRegistryRegistration[] = [];
@@ -81,7 +88,7 @@ function copyRegistrations(
       const descriptor = Object.getOwnPropertyDescriptor(policies, String(index));
       const entry = descriptor && "value" in descriptor ? descriptor.value : undefined;
       copied.push(
-        descriptor?.enumerable && entry && typeof entry === "object"
+        descriptor?.enumerable && entry && typeof entry === "object" && !isProxy(entry)
           ? (entry as PluginAuthorizationPolicyRegistryRegistration)
           : unreadableRegistration(),
       );
@@ -105,12 +112,18 @@ export function resolveRequiredAuthorizationPolicies(
       if (!policyId || operations.length === 0) {
         continue;
       }
-      const key = `${pluginId}\u0000${policyId}\u0000${operations.join("\u0000")}`;
+      const scope = policy.scope;
+      const key = `${pluginId}\u0000${policyId}\u0000${operations.join("\u0000")}\u0000${JSON.stringify(scope ?? null)}`;
       if (seen.has(key)) {
         continue;
       }
       seen.add(key);
-      required.push({ pluginId, policyId, operations });
+      required.push({
+        pluginId,
+        policyId,
+        operations,
+        ...(scope ? { scope } : {}),
+      });
     }
   }
   return required;
@@ -336,6 +349,9 @@ function hasCanonicalJsonDescriptors(
   if (value === null || typeof value !== "object") {
     return true;
   }
+  if (isProxy(value)) {
+    return false;
+  }
   if (state.ancestors.has(value)) {
     return false;
   }
@@ -495,11 +511,15 @@ function findRegistration(
 
 function findRequiredFailure(
   registrations: readonly PluginAuthorizationPolicyRegistryRegistration[],
-  config: OpenClawConfig | undefined,
+  requiredPolicies: readonly RequiredAuthorizationPolicy[],
   operation: AuthorizationOperation,
+  context: AuthorizationInvocationContext,
 ): AuthorizationPolicyDenial | undefined {
-  for (const required of resolveRequiredAuthorizationPolicies(config)) {
-    if (!required.operations.includes(operation)) {
+  for (const required of requiredPolicies) {
+    if (
+      !required.operations.includes(operation) ||
+      !requiredAuthorizationPolicyMatchesContext(required, context)
+    ) {
       continue;
     }
     const registration = findRegistration(registrations, required);
@@ -521,6 +541,63 @@ function findRequiredFailure(
     }
   }
   return undefined;
+}
+
+function requiredAuthorizationPolicyMatchesContext(
+  required: RequiredAuthorizationPolicy,
+  context: AuthorizationInvocationContext,
+): boolean {
+  const scope = required.scope;
+  if (!scope) {
+    return true;
+  }
+  const canonicalProvenance = (value: unknown) =>
+    typeof value === "string" && value.length > 0 && value === value.trim() ? value : undefined;
+  const principal = context.principal as unknown;
+  if (!principal || typeof principal !== "object" || Array.isArray(principal)) {
+    return true;
+  }
+  const principalRecord = principal as Record<string, unknown>;
+  const principalKind = principalRecord.kind;
+  const hasChannelIdentity = principalKind === "sender" || principalKind === "unknown";
+  const isAuthenticatedOperator =
+    principalKind === "operator" &&
+    Array.isArray(principalRecord.scopes) &&
+    principalRecord.scopes.every(
+      (operatorScope) => canonicalProvenance(operatorScope) !== undefined,
+    );
+  const isAuthenticatedService =
+    principalKind === "service" && canonicalProvenance(principalRecord.serviceId) !== undefined;
+  // Authenticated operator/service principals are positively outside channel identity scopes.
+  // Missing sender/unknown provenance stays ambiguous and cannot bypass fail-closed coverage.
+  if (!hasChannelIdentity && (scope.providers || scope.accountIds)) {
+    return !(isAuthenticatedOperator || isAuthenticatedService);
+  }
+  const provider = hasChannelIdentity ? canonicalProvenance(principalRecord.provider) : undefined;
+  const accountId = hasChannelIdentity ? canonicalProvenance(principalRecord.accountId) : undefined;
+  const excludes = (values: readonly string[] | undefined, candidate: string | undefined) =>
+    values !== undefined && candidate !== undefined && !values.includes(candidate);
+  if (excludes(scope.agentIds, canonicalProvenance(context.agentId))) {
+    return false;
+  }
+  if (excludes(scope.providers, provider)) {
+    return false;
+  }
+  if (excludes(scope.accountIds, accountId)) {
+    return false;
+  }
+  if (scope.conversationIds) {
+    const conversationIds = [context.conversationId, context.parentConversationId]
+      .map(canonicalProvenance)
+      .filter((value): value is string => value !== undefined);
+    if (
+      conversationIds.length > 0 &&
+      !conversationIds.some((conversationId) => scope.conversationIds?.includes(conversationId))
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -545,10 +622,28 @@ export async function runAuthorizationPolicies(params: {
       code: "policy-config-unavailable",
     };
   }
+  const requiredPolicies = resolveRequiredAuthorizationPolicies(resolvedConfig.config);
+  if (registrations.length === 0 && requiredPolicies.length === 0) {
+    return undefined;
+  }
+  const firstRegistration = registrations[0] ?? unreadableRegistration();
+  const canonicalRequest = cloneCanonicalRequest(params.request);
+  const canonicalContext = cloneJson(params.context);
+  if (!canonicalRequest || !canonicalContext) {
+    const required = requiredPolicies[0];
+    return registrations.length > 0
+      ? denied(firstRegistration, "error", "policy-input-invalid")
+      : required
+        ? requiredDenied(required, "policy-input-invalid")
+        : undefined;
+  }
+  deepFreezeJson(canonicalContext as PluginJsonValue);
+
   const requiredFailure = findRequiredFailure(
     registrations,
-    resolvedConfig.config,
-    params.request.operation,
+    requiredPolicies,
+    canonicalRequest.operation,
+    canonicalContext,
   );
   if (requiredFailure) {
     return requiredFailure;
@@ -556,17 +651,9 @@ export async function runAuthorizationPolicies(params: {
   if (registrations.length === 0) {
     return undefined;
   }
-  const firstRegistration = registrations[0] ?? unreadableRegistration();
   if (params.signal?.aborted) {
     return denied(firstRegistration, "abort", "policy-evaluation-aborted");
   }
-
-  const canonicalRequest = cloneCanonicalRequest(params.request);
-  const canonicalContext = cloneJson(params.context);
-  if (!canonicalRequest || !canonicalContext) {
-    return denied(firstRegistration, "error", "policy-input-invalid");
-  }
-  deepFreezeJson(canonicalContext as PluginJsonValue);
 
   const chainDeadline = performance.now() + AUTHORIZATION_POLICY_CHAIN_TIMEOUT_MS;
   for (const registration of registrations) {

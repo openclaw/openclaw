@@ -29,7 +29,9 @@ import {
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
+import { createAuthorizationPrincipal } from "../../plugins/authorization-policy-context.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../../sessions/model-overrides.js";
 import {
   beginSessionWorkAdmission,
@@ -43,6 +45,8 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { prepareReplySessionResetActiveRunControl } from "./session-reset-control.js";
+import { ReplySessionResetTargetChangedError } from "./session-reset-target.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -58,6 +62,20 @@ const channelSummaryMocks = vi.hoisted(() => ({
 const browserMaintenanceMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
+
+function createSessionResetTurnAuthority(sessionKey: string, senderId = "maintainer") {
+  return createTurnAuthoritySnapshot({
+    principal: createAuthorizationPrincipal({
+      provider: "telegram",
+      senderId,
+      isAuthorizedSender: true,
+    }),
+    agentId: "main",
+    sessionKey,
+    conversationId: sessionKey,
+    controllerKey: `sender:telegram:${senderId}`,
+  });
+}
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
@@ -647,6 +665,63 @@ describe("initSessionState guarded initialization", () => {
     await heldWriter;
 
     await expect(Promise.all(turns)).resolves.toHaveLength(8);
+  });
+
+  it("applies a hard reset when the authorized target is still current", async () => {
+    const storePath = await createStorePath("openclaw-session-reset-target-stable-");
+    const sessionKey = "agent:main:telegram:direct:stable";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: "session-a", updatedAt: Date.now() },
+    });
+
+    const result = await initSessionState({
+      ctx: { RawBody: "/new", SessionKey: sessionKey },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedResetTarget: { sessionKey, sessionId: "session-a" },
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.previousSessionEntry?.sessionId).toBe("session-a");
+    expect(result.sessionId).not.toBe("session-a");
+  });
+
+  it("does not reset a replacement session that appeared after authorization", async () => {
+    const storePath = await createStorePath("openclaw-session-reset-target-rebound-");
+    const sessionKey = "agent:main:telegram:direct:rebound";
+    const replacement = { sessionId: "session-b", updatedAt: Date.now() };
+    await writeSessionStoreFast(storePath, { [sessionKey]: replacement });
+
+    await expect(
+      initSessionState({
+        ctx: { RawBody: "/reset", SessionKey: sessionKey },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        commandAuthorized: true,
+        expectedResetTarget: { sessionKey, sessionId: "session-a" },
+      }),
+    ).rejects.toBeInstanceOf(ReplySessionResetTargetChangedError);
+    expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toMatchObject(
+      replacement,
+    );
+  });
+
+  it("does not reset a session created after an absent target was authorized", async () => {
+    const storePath = await createStorePath("openclaw-session-reset-target-created-");
+    const sessionKey = "agent:main:telegram:direct:created";
+    const created = { sessionId: "session-b", updatedAt: Date.now() };
+    await writeSessionStoreFast(storePath, { [sessionKey]: created });
+
+    await expect(
+      initSessionState({
+        ctx: { RawBody: "/new", SessionKey: sessionKey },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        commandAuthorized: true,
+        expectedResetTarget: { sessionKey, sessionId: undefined },
+      }),
+    ).rejects.toBeInstanceOf(ReplySessionResetTargetChangedError);
+    expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toMatchObject(
+      created,
+    );
   });
 });
 
@@ -4157,11 +4232,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const interrupted = new Promise<void>((resolve) => {
       signalInterrupted = resolve;
     });
+    const turnAuthority = createSessionResetTurnAuthority(sessionKey);
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey, existingSessionId],
       assertAllowed: () => {},
       onInterrupt: signalInterrupted,
+      turnAuthority,
     });
     const initialization = initSessionState({
       ctx: {
@@ -4174,9 +4251,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         SessionKey: sessionKey,
         Provider: "telegram",
         Surface: "telegram",
+        TurnAuthority: turnAuthority,
       },
       cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
       commandAuthorized: true,
+      expectedResetTarget: { sessionKey, sessionId: existingSessionId },
+      prepareExplicitResetControl: async (target) =>
+        await prepareReplySessionResetActiveRunControl({ target, turnAuthority }),
     });
 
     try {
@@ -4194,6 +4275,68 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     } finally {
       admission.release();
       await initialization.catch(() => {});
+    }
+  });
+
+  it("fails busy before interrupting or mutating unattributed foreign work", async () => {
+    const storePath = await createStorePath("openclaw-reset-control-admission-");
+    const sessionKey = "agent:main:telegram:dm:reset-control-admission";
+    const existingSessionId = "session-before-reset-control";
+    const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: existingSessionId, updatedAt: Date.now() },
+    });
+    await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+    enqueueSystemEvent("preserve session-key event", { sessionKey });
+    enqueueSystemEvent("preserve session-id event", { sessionKey: existingSessionId });
+    const onInterrupt = vi.fn();
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, existingSessionId],
+      assertAllowed: () => {},
+      onInterrupt,
+    });
+    const turnAuthority = createSessionResetTurnAuthority(sessionKey);
+    const prepareExplicitResetControl = vi.fn(
+      async (target) => await prepareReplySessionResetActiveRunControl({ target, turnAuthority }),
+    );
+
+    try {
+      await expect(
+        initSessionState({
+          ctx: {
+            Body: "/new",
+            RawBody: "/new",
+            CommandBody: "/new",
+            From: "user-reset-control-admission",
+            To: "bot",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            Provider: "telegram",
+            Surface: "telegram",
+            TurnAuthority: turnAuthority,
+          },
+          cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+          commandAuthorized: true,
+          expectedResetTarget: { sessionKey, sessionId: existingSessionId },
+          prepareExplicitResetControl,
+        }),
+      ).rejects.toMatchObject({
+        name: "ReplySessionResetControlError",
+        reason: "busy",
+      });
+      expect(prepareExplicitResetControl).toHaveBeenCalledWith({
+        scope: storePath,
+        sessionId: existingSessionId,
+        sessionKey,
+      });
+      expect(onInterrupt).not.toHaveBeenCalled();
+      expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      expect(peekSystemEvents(sessionKey)).toEqual(["preserve session-key event"]);
+      expect(peekSystemEvents(existingSessionId)).toEqual(["preserve session-id event"]);
+    } finally {
+      admission.release();
     }
   });
 

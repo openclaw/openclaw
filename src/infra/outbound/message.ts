@@ -27,6 +27,7 @@ import {
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import {
   digestOutboundEffectPayload,
+  materializeOutboundEffectPayload,
   OutboundEffectAuthorizationError,
   type OutboundEffectAuthorizationInput,
   type OutboundEffectAuthorizationScope,
@@ -338,16 +339,19 @@ async function callMessageGateway<T>(params: {
 async function authorizeFinalGatewayMessageEffect(params: {
   input: OutboundEffectAuthorizationInput;
   payloads: readonly ReplyPayload[];
-}): Promise<void> {
+}): Promise<ReplyPayload[]> {
   const enforceFinalPayloadAuthorization = params.input.enforceFinalPayloadAuthorization !== false;
   let finalDigest: string | undefined;
+  let authorizedPayloads: ReplyPayload[] = [];
   let authorizationError: unknown;
   try {
     if (params.payloads.length > 1) {
       throw new Error("Outbound effect authorization requires exactly one source payload");
     }
     const initialDigest = digestOutboundEffectPayload(params.input.authorizedPayload);
-    const finalPayload = params.payloads[0];
+    let finalPayload = params.payloads[0]
+      ? materializeOutboundEffectPayload(params.payloads[0])
+      : undefined;
     finalDigest = finalPayload ? digestOutboundEffectPayload(finalPayload) : initialDigest;
     if (enforceFinalPayloadAuthorization && finalPayload && finalDigest !== initialDigest) {
       if (!params.input.authorizeChangedPayload) {
@@ -355,8 +359,12 @@ async function authorizeFinalGatewayMessageEffect(params: {
           "Outbound payload changed after authorization without a changed-payload authorizer",
         );
       }
-      await params.input.authorizeChangedPayload(finalPayload);
+      finalPayload = materializeOutboundEffectPayload(
+        await params.input.authorizeChangedPayload(finalPayload),
+      );
+      finalDigest = digestOutboundEffectPayload(finalPayload);
     }
+    authorizedPayloads = finalPayload ? [finalPayload] : [];
   } catch (error) {
     authorizationError = error;
   }
@@ -384,6 +392,7 @@ async function authorizeFinalGatewayMessageEffect(params: {
       authorizationError,
     );
   }
+  return authorizedPayloads;
 }
 
 async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {
@@ -402,7 +411,23 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
-export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
+export async function sendMessage(input: MessageSendParams): Promise<MessageSendResult> {
+  const params = input.effectAuthorization
+    ? {
+        ...input,
+        ...(input.payloads
+          ? {
+              payloads: input.payloads.map((payload) => materializeOutboundEffectPayload(payload)),
+            }
+          : {}),
+        effectAuthorization: {
+          ...input.effectAuthorization,
+          authorizedPayload: materializeOutboundEffectPayload(
+            input.effectAuthorization.authorizedPayload,
+          ),
+        },
+      }
+    : input;
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
@@ -544,11 +569,13 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
+  let authorizedGatewayPayload: ReplyPayload | undefined;
   if (params.effectAuthorization) {
-    await authorizeFinalGatewayMessageEffect({
+    const gatewayPayloads = await authorizeFinalGatewayMessageEffect({
       input: params.effectAuthorization,
       payloads: normalizedPayloads,
     });
+    authorizedGatewayPayload = gatewayPayloads[0];
   }
   const idempotencyKey = await resolveGatewayIdempotencyKey(params.idempotencyKey);
   const result = await callMessageGateway<{ messageId: string }>({
@@ -556,13 +583,17 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     method: "send",
     params: {
       to: params.to,
-      message: params.content,
-      mediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : mediaUrls,
+      message: authorizedGatewayPayload ? (authorizedGatewayPayload.text ?? "") : params.content,
+      mediaUrl: authorizedGatewayPayload ? authorizedGatewayPayload.mediaUrl : mediaUrl,
+      mediaUrls: authorizedGatewayPayload
+        ? authorizedGatewayPayload.mediaUrls
+        : mirrorMediaUrls.length
+          ? mirrorMediaUrls
+          : mediaUrls,
       buffer: shouldForwardBuffer ? params.buffer : undefined,
       filename: shouldForwardBuffer ? params.filename : undefined,
       contentType: shouldForwardBuffer ? params.contentType : undefined,
-      asVoice: params.asVoice,
+      asVoice: authorizedGatewayPayload ? authorizedGatewayPayload.audioAsVoice : params.asVoice,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,

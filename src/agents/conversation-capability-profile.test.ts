@@ -170,6 +170,110 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
   });
 
+  it("does not infer sender provenance from the delivery route", () => {
+    const config: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            team: {
+              tools: { deny: ["exec"] },
+              toolsBySender: {
+                "channel:whatsapp:alice": { allow: ["exec"] },
+              },
+            },
+          },
+        },
+      },
+    };
+    const resolve = (senderMessageProvider?: string | null) =>
+      resolveConversationCapabilityProfile({
+        config,
+        sessionKey: "agent:main:whatsapp:group:team",
+        agentId: "main",
+        messageProvider: "whatsapp",
+        senderMessageProvider,
+        chatType: "group",
+        groupId: "team",
+        senderId: "alice",
+      });
+
+    expect(resolve("whatsapp").policy.groupPolicy).toEqual({ allow: ["exec"] });
+    expect(resolve().policy.groupPolicy).toEqual({ deny: ["exec"] });
+    expect(resolve(null).policy.groupPolicy).toEqual({ deny: ["exec"] });
+  });
+
+  it("keeps cross-route group config on the delivery account without reusing source sender grants", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          accounts: {
+            "route-account": {
+              groups: {
+                team: {
+                  tools: { allow: ["read"] },
+                  toolsBySender: {
+                    "channel:discord:maintainer": { allow: ["read", "write"] },
+                  },
+                },
+              },
+            },
+            "source-account": {
+              groups: {
+                team: {
+                  tools: { allow: ["exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const profile = resolveConversationCapabilityProfile({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:group:team",
+      agentId: "main",
+      agentAccountId: "route-account",
+      messageProvider: "whatsapp",
+      senderMessageProvider: "discord",
+      senderAccountId: "source-account",
+      requireSenderRouteBinding: true,
+      chatType: "group",
+      groupId: "team",
+      senderId: "maintainer",
+    });
+
+    expect(profile.serviceIdentity.accountId).toBe("route-account");
+    expect(profile.conversation.messageProvider).toBe("whatsapp");
+    expect(profile.sender).toMatchObject({
+      provider: "discord",
+      accountId: "source-account",
+      id: "maintainer",
+    });
+    expect(profile.policy.groupPolicy).toEqual({ allow: ["read"] });
+    expect(profile.policy.senderPolicy).toEqual({ deny: ["*"] });
+  });
+
+  it("matches sender grants when host authority names the exact receiving route", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:maintainer": { deny: ["exec"] },
+          },
+        },
+      },
+      agentAccountId: "molty",
+      messageProvider: "discord",
+      senderMessageProvider: "discord",
+      senderAccountId: "molty",
+      requireSenderRouteBinding: true,
+      senderId: "maintainer",
+    });
+
+    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec"] });
+  });
+
   it("keeps built-in profile grants out of explicit overrides", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {

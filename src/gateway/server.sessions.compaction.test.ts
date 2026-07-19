@@ -16,6 +16,10 @@ import {
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
+  isIssuedTurnAuthoritySnapshot,
+  resolveTurnAuthorityAuthorization,
+} from "../plugins/turn-authority.js";
+import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -716,6 +720,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         };
         thinkLevel?: string;
         trigger?: string;
+        turnAuthority?: unknown;
         workspaceDir?: string;
         cwd?: string;
       }
@@ -756,6 +761,19 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     defaultLevel: "off",
   });
   expect(compactionCall.trigger).toBe("manual");
+  expect(isIssuedTurnAuthoritySnapshot(compactionCall.turnAuthority)).toBe(true);
+  expect(resolveTurnAuthorityAuthorization(compactionCall.turnAuthority)).toMatchObject({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "sess-main",
+    conversationId: "agent:main:main",
+    trigger: "sessions.compact",
+    principal: {
+      kind: "operator",
+      scopes: ["operator.admin"],
+      isOwner: true,
+    },
+  });
 
   const sqliteRows = await loadTranscriptEvents(sessionScope);
   expect(sqliteRows).toHaveLength(4);

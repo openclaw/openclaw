@@ -30,6 +30,7 @@ import {
   DEFAULT_QUEUE_DROP,
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
+import { createSteeringAuthorizationAffinity } from "../auto-reply/reply/steering-authorization-affinity.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -89,6 +90,12 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
+import { createAuthorizationPrincipal } from "../plugins/authorization-policy-context.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
+import {
+  createTurnAuthoritySnapshot,
+  rebindTurnAuthoritySnapshot,
+} from "../plugins/turn-authority.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -114,6 +121,7 @@ import type {
 type LocalRunState = {
   sessionKey: string;
   agentId?: string;
+  turnAuthority: TurnAuthoritySnapshot;
   controller: AbortController;
   buffer: string;
   lastBroadcastText?: string;
@@ -482,6 +490,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
             {
               steeringMode: "all",
               debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
+              steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({
+                turnAuthority: queuedAfter.run.turnAuthority,
+              }),
             },
           ).catch(() => undefined);
           if (outcome?.queued) {
@@ -507,9 +518,26 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     const controller = new AbortController();
     const queuedRunReadiness = createQueuedRunReadiness();
+    const authorityConfig = getRuntimeConfig();
+    const authorityAgentId = resolveSessionAgentId({
+      sessionKey: opts.sessionKey,
+      config: authorityConfig,
+      agentId: opts.agentId,
+    });
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: createAuthorizationPrincipal({ serviceId: "tui" }),
+      agentId: authorityAgentId,
+      sessionKey: opts.sessionKey,
+      runId,
+      conversationId: opts.sessionKey,
+      trigger: "tui",
+      controllerKey: "local:tui",
+      capability: "tui",
+    });
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
       agentId: opts.agentId,
+      turnAuthority,
       controller,
       buffer: "",
       isBtw: Boolean(question),
@@ -805,6 +833,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     runId: string;
     sessionKey: string;
     agentId?: string;
+    turnAuthority: TurnAuthoritySnapshot;
     question: string;
     timeoutMs?: number;
     controller: AbortController;
@@ -822,6 +851,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
       config: cfg,
       agentId: params.agentId,
     });
+    const turnAuthority =
+      rebindTurnAuthoritySnapshot(params.turnAuthority, {
+        agentId: sessionAgentId,
+        sessionKey: canonicalKey,
+        sessionId: entry.sessionId,
+        runId: params.runId,
+        trigger: "tui",
+      }) ?? params.turnAuthority;
     const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
     const { runBtwSideQuestion } = await import("../agents/btw.js");
@@ -834,6 +871,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionEntry: entry,
       sessionStore: store,
       sessionKey: canonicalKey,
+      turnAuthority,
       storePath,
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
@@ -1444,6 +1482,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           runId: params.runId,
           sessionKey: params.sessionKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
+          turnAuthority: activeRun.turnAuthority,
           question: activeRun.question,
           timeoutMs: params.timeoutMs,
           controller: params.controller,
@@ -1468,7 +1507,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-      const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      if (activeRun) {
+        activeRun.turnAuthority =
+          rebindTurnAuthoritySnapshot(activeRun.turnAuthority, {
+            agentId: resolveSessionAgentId({
+              sessionKey: canonicalKey,
+              config: cfg,
+              agentId: params.agentId,
+            }),
+            sessionKey: canonicalKey,
+            sessionId: entry?.sessionId,
+            runId: params.runId,
+            trigger: "tui",
+          }) ?? activeRun.turnAuthority;
+      }
       const result = await agentCommandFromIngress(
         {
           // The per-message timestamp prefix is applied at the single LLM
@@ -1487,6 +1540,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           },
           timeout: timeoutSecondsFromMs(params.timeoutMs),
           runId: params.runId,
+          turnAuthority: activeRun?.turnAuthority,
           abortSignal: params.controller.signal,
           allowModelOverride: false,
         },

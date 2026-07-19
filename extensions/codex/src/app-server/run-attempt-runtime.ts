@@ -2,6 +2,7 @@ import {
   assertContextEngineHostSupport,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
+  hasAuthorizationPolicies,
   loadCodexBundleMcpThreadConfig,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
@@ -135,7 +136,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
-    toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
+    toolsEnabled:
+      !hasAuthorizationPolicies(undefined, params.config) &&
+      (usesSupervisionConnection || supportsModelTools(params.model)),
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });

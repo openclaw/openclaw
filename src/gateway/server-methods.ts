@@ -14,6 +14,7 @@ import {
   isGatewayRestartDraining,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { isAgentRuntimeGatewayMethodAllowed } from "./agent-runtime-identity-token.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -292,6 +293,13 @@ function authorizeGatewayMethod(
   params: unknown,
   methodRegistry: GatewayMethodRegistry,
 ) {
+  const agentRuntimeIdentity = client?.internal?.agentRuntimeIdentity;
+  if (agentRuntimeIdentity && !isAgentRuntimeGatewayMethodAllowed(agentRuntimeIdentity, method)) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      `agent runtime identity is not authorized for gateway method ${method}`,
+    );
+  }
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
   if (!client?.connect) {

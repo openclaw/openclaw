@@ -36,7 +36,16 @@ export type ToolCallParamPreparer = (
   ctx: ToolCallParamPreparationContext,
 ) => unknown;
 
-export type ToolCallParamFinalizer = (params: unknown, preparedParams: unknown) => unknown;
+export type ToolCallParamFinalizer = (
+  params: unknown,
+  preparedParams: unknown,
+) => unknown | Promise<unknown>;
+
+export type ToolCallParamSnapshotAdopter = (
+  snapshot: unknown,
+  finalizedParams: unknown,
+  preparedParams: unknown,
+) => void;
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
@@ -49,6 +58,7 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   requiredClientCaps?: string[];
   prepareBeforeToolCallParams?: ToolCallParamPreparer;
   finalizeBeforeToolCallParams?: ToolCallParamFinalizer;
+  adoptBeforeToolCallParamsSnapshot?: ToolCallParamSnapshotAdopter;
 };
 
 type ErasedAgentToolExecute = {
@@ -76,6 +86,10 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
       TSchema,
       unknown
     >["finalizeBeforeToolCallParams"];
+    adoptBeforeToolCallParamsSnapshot?: AgentToolWithMeta<
+      TSchema,
+      unknown
+    >["adoptBeforeToolCallParamsSnapshot"];
   };
 
 /** Prepare raw input before OpenClaw-managed hooks inspect or rewrite it. */
@@ -96,6 +110,28 @@ export async function finalizeToolCallParams(
   preparedParams: unknown,
 ): Promise<unknown> {
   return (await tool.finalizeBeforeToolCallParams?.(params, preparedParams)) ?? params;
+}
+
+/** Reattach trusted out-of-band preparation state after JSON snapshotting. */
+export function adoptToolCallParamsSnapshot(
+  tool: AnyAgentTool,
+  snapshot: unknown,
+  finalizedParams: unknown,
+  preparedParams: unknown,
+): void {
+  tool.adoptBeforeToolCallParamsSnapshot?.(snapshot, finalizedParams, preparedParams);
+}
+
+/** Extend a tool's finalizer while preserving any inner wrapper's canonicalization. */
+export function composeToolCallParamFinalizer(
+  tool: AnyAgentTool,
+  finalize: ToolCallParamFinalizer,
+): ToolCallParamFinalizer {
+  return async (params, preparedParams) => {
+    const innerParams =
+      (await tool.finalizeBeforeToolCallParams?.(params, preparedParams)) ?? params;
+    return await finalize(innerParams, preparedParams);
+  };
 }
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {

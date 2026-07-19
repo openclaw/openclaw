@@ -12,6 +12,8 @@ export type CommandQueueEnqueueOptions = {
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
   taskTimeoutReleaseSignal?: AbortSignal;
   priority?: "foreground" | "normal" | "background";
+  /** Internal process-issued turn-affinity key used for authority-selective queue cleanup. */
+  authorizationAffinityKey?: string;
 };
 
 /** Minimal queue function contract used by code that only needs to schedule work. */

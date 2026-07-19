@@ -21,6 +21,7 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
+import type { ActiveEmbeddedRunSteeringTarget } from "./embedded-agent-runner/runs.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   deliverSubagentAnnouncement,
@@ -260,6 +261,8 @@ export async function runSubagentAnnounceFlow(params: {
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
+  /** Ephemeral capability for the exact parent attempt that spawned this run. */
+  requesterSteeringTarget?: ActiveEmbeddedRunSteeringTarget;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   onBeforeDeleteChildSession?: () => boolean;
 }): Promise<boolean> {
@@ -594,6 +597,8 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
+      originatingRequesterRunSteeringTarget: params.requesterSteeringTarget,
+      requireOriginatingRequesterRunSteeringTarget: true,
       directIdempotencyKey,
       signal: params.signal,
     });

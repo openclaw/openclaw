@@ -1539,18 +1539,21 @@ export function createExecTool(
       });
     },
     finalizeBeforeToolCallParams: (params, preparedParams) => {
+      const normalizedParams = isExecToolArgsObject(params)
+        ? stripMalformedXmlArgValueSuffixFromKeys(params, XML_ARG_VALUE_EXEC_PARAM_KEYS)
+        : params;
       const envState = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
       const deferredEnvState = getDeferredResolveExecEnvPreparedState(
         preparedParams as ExecToolArgs,
       );
       const workdirState = getResolvedExecWorkdirPreparedState(preparedParams as ExecToolArgs);
       if (!envState && !deferredEnvState && !workdirState) {
-        return params;
+        return normalizedParams;
       }
-      if (!isExecToolArgsObject(params)) {
-        return params;
+      if (!isExecToolArgsObject(normalizedParams)) {
+        return normalizedParams;
       }
-      const execParams = params;
+      const execParams = normalizedParams;
       let host: ExecHost | undefined;
       const resolveFinalHost = () => {
         host ??= resolveHostForParams(execParams);
@@ -1580,6 +1583,30 @@ export function createExecTool(
         markResolvedExecWorkdirPrepared(execParams, workdirState);
       }
       return execParams;
+    },
+    adoptBeforeToolCallParamsSnapshot: (snapshot, finalizedParams, preparedParams) => {
+      if (!isExecToolArgsObject(snapshot)) {
+        return;
+      }
+      const finalized = finalizedParams as ExecToolArgs;
+      const prepared = preparedParams as ExecToolArgs;
+      const envState =
+        getResolvedExecEnvPreparedState(finalized) ?? getResolvedExecEnvPreparedState(prepared);
+      const deferredEnvState =
+        getDeferredResolveExecEnvPreparedState(finalized) ??
+        getDeferredResolveExecEnvPreparedState(prepared);
+      const workdirState =
+        getResolvedExecWorkdirPreparedState(finalized) ??
+        getResolvedExecWorkdirPreparedState(prepared);
+      if (envState) {
+        markResolveExecEnvPrepared(snapshot, envState);
+      }
+      if (deferredEnvState) {
+        markDeferredResolveExecEnvPrepared(snapshot, deferredEnvState);
+      }
+      if (workdirState) {
+        markResolvedExecWorkdirPrepared(snapshot, workdirState);
+      }
     },
     execute: async (_toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();

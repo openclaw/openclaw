@@ -16,10 +16,15 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-events.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import {
+  attachChatAbortControllerTurnAuthority,
+  registerChatAbortController,
+  resolveAgentRunExpiresAtMs,
+} from "../chat-abort.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -46,6 +51,7 @@ export type PreparedAgentRunDispatch = {
   effectiveThinking?: string;
   effectiveAllowModelOverride: boolean;
   restoredCronContinuationLifecycleRevision?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
@@ -95,6 +101,10 @@ export async function prepareAgentRunDispatch(params: {
   getGatewayWorkAdmission: () => SessionWorkAdmissionLease | undefined;
   setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => void;
   getAdmittedRunAbort: () => ReturnType<typeof registerChatAbortController> | undefined;
+  attachTurnAuthority: (params: {
+    sessionId: string;
+    threadId?: string | number;
+  }) => TurnAuthoritySnapshot | undefined;
   markAgentRunAccepted: (accepted: boolean) => void;
 }): Promise<PreparedAgentRunDispatch | undefined> {
   const preRegistrationAbort = readGatewayDedupeEntry({
@@ -272,6 +282,29 @@ export async function prepareAgentRunDispatch(params: {
 
   const resolvedThreadId =
     params.delivery.explicitThreadId ?? params.delivery.deliveryPlan.resolvedThreadId;
+  let turnAuthority: TurnAuthoritySnapshot | undefined;
+  try {
+    turnAuthority = params.attachTurnAuthority({
+      sessionId: params.getAdmittedSessionId(),
+      threadId: resolvedThreadId,
+    });
+    if (
+      turnAuthority &&
+      activeRunAbort.entry &&
+      !attachChatAbortControllerTurnAuthority(activeRunAbort.entry, turnAuthority)
+    ) {
+      throw new Error("invalid Gateway run authority lineage");
+    }
+  } catch {
+    activeRunAbort.cleanup({ force: true });
+    activeGatewayWorkAdmission.release();
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "invalid Gateway turn authority"),
+    );
+    return undefined;
+  }
   const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
     client: params.client,
     sessionKey: params.resolvedSessionKey,
@@ -410,6 +443,7 @@ export async function prepareAgentRunDispatch(params: {
     effectiveThinking,
     effectiveAllowModelOverride,
     restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
+    turnAuthority,
     lifecycleStorePath,
     resolvedThreadId,
     dispatchTaskTrackingMode,

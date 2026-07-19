@@ -106,9 +106,11 @@ export async function invokeChatAbortHandler(params: {
   client?: {
     connId?: string;
     connect?: {
+      client?: { id?: string; mode?: string; platform?: string; version?: string };
       device?: { id?: string };
       scopes?: string[];
     };
+    internal?: { inProcessGatewayDispatch?: boolean };
   } | null;
   respond?: ChatAbortRespondMock;
 }): Promise<ChatAbortRespondMock> {

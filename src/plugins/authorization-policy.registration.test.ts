@@ -2,7 +2,7 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAuthorizationPolicies } from "./authorization-policy.js";
 import type { AuthorizationPolicyRegistration } from "./authorization-policy.types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -62,6 +62,57 @@ describe("authorization policy registration", () => {
       policyId: "deny-unhandled",
       code: "policy-unhandled-operation",
     });
+  });
+
+  it("snapshots top-level policy options exactly once", async () => {
+    const unhandledGetter = vi.fn(() => "deny" as const);
+    const timeoutGetter = vi.fn(() => 25);
+    const policy = {
+      id: "snapshotted-options",
+      description: "Snapshot registration options",
+      handlers: {},
+      get unhandled() {
+        return unhandledGetter();
+      },
+      get timeoutMs() {
+        return timeoutGetter();
+      },
+    } satisfies AuthorizationPolicyRegistration;
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "sender-access",
+        name: "Sender Access",
+        origin: "workspace",
+        contracts: { authorizationPolicies: ["snapshotted-options"] },
+      }),
+      register(api) {
+        api.authorization.registerPolicy(policy);
+      },
+    });
+
+    expect(unhandledGetter).toHaveBeenCalledTimes(1);
+    expect(timeoutGetter).toHaveBeenCalledTimes(1);
+    expect(registry.registry.authorizationPolicies[0]?.policy).toMatchObject({
+      unhandled: "deny",
+      timeoutMs: 25,
+    });
+    await expect(
+      runAuthorizationPolicies({
+        request: {
+          operation: "command.invoke",
+          phase: "final",
+          commandName: "fix",
+          owner: { kind: "core" },
+          source: "native",
+        },
+        context: { principal: { kind: "sender", senderId: "maintainer-1" } },
+        config: {},
+        registry: registry.registry,
+      }),
+    ).resolves.toMatchObject({ code: "policy-unhandled-operation" });
   });
 
   it("rejects malformed handler maps", () => {

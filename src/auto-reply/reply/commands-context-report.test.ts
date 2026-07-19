@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { createOperatorTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildCommandContext } from "./commands-context.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -519,5 +520,42 @@ describe("buildCommandContext", () => {
     expect(result.channelId).toBe("slack");
     expect(result.from).toBe("gateway-client");
     expect(result.to).toBe("user:U123");
+  });
+
+  it("uses immutable operator identity instead of conflicting sender fields", () => {
+    const ctx = buildTestCtx({
+      Provider: "internal",
+      Surface: "internal",
+      SenderId: "forged-owner",
+      MemberRoleIds: ["admin-role"],
+      Body: "/config set messages.ackReaction=ok",
+      RawBody: "/config set messages.ackReaction=ok",
+      CommandBody: "/config set messages.ackReaction=ok",
+      BodyForCommands: "/config set messages.ackReaction=ok",
+    });
+    ctx.TurnAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      pairedClientId: "maintainer-ui",
+      connectionId: "writer-connection",
+      isOwner: false,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      trigger: "gateway",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: "/config set messages.ackReaction=ok",
+      commandAuthorized: true,
+    });
+
+    expect(result).toMatchObject({
+      senderId: "maintainer-ui",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+    });
+    expect(result.memberRoleIds).toBeUndefined();
   });
 });

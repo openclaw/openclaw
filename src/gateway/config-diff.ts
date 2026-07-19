@@ -35,22 +35,81 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
   return [prefix || "<root>"];
 }
 
+function diffPluginSecurityBoundaryPaths(
+  prevConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): string[] {
+  const prevEntries = prevConfig.plugins?.entries ?? {};
+  const nextEntries = nextConfig.plugins?.entries ?? {};
+  const ids = new Set([...Object.keys(prevEntries), ...Object.keys(nextEntries)]);
+  const paths: string[] = [];
+  for (const id of ids) {
+    const prevEntry = prevEntries[id];
+    const nextEntry = nextEntries[id];
+    const entryPrefix = `plugins.entries.${id}`;
+    paths.push(
+      ...diffConfigPaths(
+        { authorization: prevEntry?.authorization },
+        { authorization: nextEntry?.authorization },
+        entryPrefix,
+      ),
+    );
+    const hasRequiredPolicy =
+      (prevEntry?.authorization?.requiredPolicies?.length ?? 0) > 0 ||
+      (nextEntry?.authorization?.requiredPolicies?.length ?? 0) > 0;
+    if (hasRequiredPolicy && !isDeepStrictEqual(prevEntry, nextEntry)) {
+      paths.push(`${entryPrefix}.authorization`);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+function diffPluginActivationPaths(
+  prevConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): string[] {
+  const project = (config: OpenClawConfig) => ({
+    plugins: {
+      enabled: config.plugins?.enabled,
+      allow: config.plugins?.allow,
+      deny: config.plugins?.deny,
+      slots: config.plugins?.slots,
+      bundledDiscovery: config.plugins?.bundledDiscovery,
+    },
+  });
+
+  return diffConfigPaths(project(prevConfig), project(nextConfig));
+}
+
 /** Preserve startup-only restart boundaries hidden by whole-object config changes. */
 export function diffGatewayReloadPaths(
   prevConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
 ): string[] {
   const changedPaths = diffConfigPaths(prevConfig, nextConfig);
-  if (!changedPaths.includes("mcp")) {
-    return changedPaths;
-  }
-  // Adding or removing the whole `mcp` object collapses to the broad `mcp`
-  // path. Preserve the Apps boundary so the listener still restarts.
-  return [
-    ...changedPaths,
-    ...diffConfigPaths(
-      { mcp: { apps: prevConfig.mcp?.apps } },
-      { mcp: { apps: nextConfig.mcp?.apps } },
-    ),
+  const preservedPaths = [
+    ...diffPluginSecurityBoundaryPaths(prevConfig, nextConfig),
+    ...diffPluginActivationPaths(prevConfig, nextConfig),
   ];
+  if (changedPaths.includes("plugins") || changedPaths.includes("plugins.entries")) {
+    const prevEntries = prevConfig.plugins?.entries ?? {};
+    const nextEntries = nextConfig.plugins?.entries ?? {};
+    const ids = new Set([...Object.keys(prevEntries), ...Object.keys(nextEntries)]);
+    for (const id of ids) {
+      if (!isDeepStrictEqual(prevEntries[id], nextEntries[id])) {
+        preservedPaths.push(`plugins.entries.${id}`);
+      }
+    }
+  }
+  if (changedPaths.includes("mcp")) {
+    // Adding or removing the whole `mcp` object collapses to the broad `mcp`
+    // path. Preserve the Apps boundary so the listener still restarts.
+    preservedPaths.push(
+      ...diffConfigPaths(
+        { mcp: { apps: prevConfig.mcp?.apps } },
+        { mcp: { apps: nextConfig.mcp?.apps } },
+      ),
+    );
+  }
+  return [...changedPaths, ...preservedPaths.filter((path) => !changedPaths.includes(path))];
 }

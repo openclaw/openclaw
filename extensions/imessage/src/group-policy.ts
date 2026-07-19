@@ -11,6 +11,7 @@ type IMessageGroupContext = {
   cfg: OpenClawConfig;
   accountId?: string | null;
   groupId?: string | null;
+  senderMessageProvider?: string | null;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -35,6 +36,6 @@ export function resolveIMessageGroupToolPolicy(
     ...params,
     tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
     path: resolveScopePath(params),
-    messageProvider: "imessage",
+    messageProvider: params.senderMessageProvider,
   });
 }

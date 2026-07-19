@@ -46,7 +46,8 @@ rejected attempt returns a generic authorization error to the model or caller.
 
 This example gives an owner every operation already permitted by base config.
 Members of a Discord maintainer role may use `/fix` and a small set of message
-actions. Everyone else is denied by this policy.
+actions in one agent's maintenance conversation. Everyone else in that domain
+is denied; operations outside the domain pass to their own policies and gates.
 
 ### Declare the policy
 
@@ -66,12 +67,22 @@ Every installed policy plugin declares its local policy ids in
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
+    "required": ["targetAgentId", "provider", "accountId", "conversationIds"],
     "properties": {
+      "targetAgentId": { "type": "string", "minLength": 1 },
+      "provider": { "type": "string", "minLength": 1 },
+      "accountId": { "type": "string", "minLength": 1 },
+      "conversationIds": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "uniqueItems": true
+      },
       "ownerKeys": {
         "type": "array",
         "items": { "type": "string" }
       },
-      "maintainerRoleIds": {
+      "maintainerRoleKeys": {
         "type": "array",
         "items": { "type": "string" }
       },
@@ -86,6 +97,9 @@ Every installed policy plugin declares its local policy ids in
 
 Policy ids are local to the plugin. Two plugins may both register
 `maintainer-control`, but one plugin cannot register the same id twice.
+Set the package's `openclaw.compat.pluginApi` and `minGatewayVersion` floors to
+the first OpenClaw release that contains this API. See
+[Building plugins](/plugins/building-plugins#quickstart).
 
 ### Register the policy
 
@@ -96,94 +110,187 @@ frozen operation snapshot, frozen invocation context, and an abort signal:
 import {
   definePluginEntry,
   type AuthorizationInvocationContext,
+  type AuthorizationPolicyRegistration,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-const SAFE_MESSAGE_ACTIONS = new Set(["react", "reply", "send", "thread-create", "thread-reply"]);
+const PLUGIN_ID = "maintainer-authorization";
+const SAFE_MESSAGE_ACTIONS = new Set(["react", "send", "thread-create", "thread-reply"]);
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 function stringSet(value: unknown): Set<string> {
   if (!Array.isArray(value)) {
     return new Set();
   }
-  return new Set(value.filter((entry): entry is string => typeof entry === "string"));
+  return new Set(value.map(text).filter(Boolean));
+}
+
+function identityKey(provider: unknown, accountId: unknown, subjectId: unknown): string {
+  const parts = [provider, accountId, subjectId].map(text);
+  return parts.every(Boolean) ? parts.join(":") : "";
+}
+
+function normalizeDiscordTarget(value: unknown): string {
+  let target = text(value);
+  const mention = target.match(/^<#(\d+)>$/u);
+  if (mention) {
+    return mention[1] ?? "";
+  }
+  for (const prefix of ["discord:", "channel:", "thread:"]) {
+    if (target.startsWith(prefix)) {
+      target = target.slice(prefix.length);
+    }
+  }
+  return target;
+}
+
+function targetMatchesSource(
+  target: unknown,
+  threadId: unknown,
+  context: AuthorizationInvocationContext,
+): boolean {
+  const current = normalizeDiscordTarget(context.conversationId);
+  const parent = normalizeDiscordTarget(context.parentConversationId);
+  const preparedTarget = normalizeDiscordTarget(target);
+  const preparedThread = normalizeDiscordTarget(threadId);
+  if (!current || !preparedTarget) {
+    return false;
+  }
+  if (preparedTarget === current) {
+    return !preparedThread || preparedThread === current;
+  }
+  return Boolean(parent && preparedTarget === parent && preparedThread === current);
+}
+
+export function createMaintainerPolicy(
+  config: Record<string, unknown>,
+): AuthorizationPolicyRegistration {
+  const targetAgentId = text(config.targetAgentId);
+  const provider = text(config.provider);
+  const accountId = text(config.accountId);
+  const conversationIds = stringSet(config.conversationIds);
+  const ownerKeys = stringSet(config.ownerKeys);
+  const maintainerRoleKeys = stringSet(config.maintainerRoleKeys);
+  const maintainerToolNames = stringSet(config.maintainerToolNames);
+  if (!targetAgentId || !provider || !accountId || conversationIds.size === 0) {
+    throw new Error("maintainer policy requires agent, provider, account, and conversation scope");
+  }
+
+  const access = (
+    context: AuthorizationInvocationContext,
+  ): "outside" | "owner" | "maintainer" | "other" => {
+    const conversationId = normalizeDiscordTarget(context.conversationId);
+    const parentConversationId = normalizeDiscordTarget(context.parentConversationId);
+    if (
+      text(context.agentId) !== targetAgentId ||
+      (!conversationIds.has(conversationId) && !conversationIds.has(parentConversationId))
+    ) {
+      return "outside";
+    }
+    const principal = context.principal;
+    if (principal.kind === "operator") {
+      return principal.isOwner || principal.scopes.includes("operator.admin") ? "owner" : "other";
+    }
+    if (
+      principal.kind !== "sender" ||
+      text(principal.provider) !== provider ||
+      text(principal.accountId) !== accountId
+    ) {
+      return "other";
+    }
+    const senderKey = identityKey(principal.provider, principal.accountId, principal.senderId);
+    if (principal.senderIsOwner || ownerKeys.has(senderKey)) {
+      return "owner";
+    }
+    const hasMaintainerRole = principal.roleIds?.some((roleId) =>
+      maintainerRoleKeys.has(identityKey(principal.provider, principal.accountId, roleId)),
+    );
+    return principal.isAuthorizedSender && hasMaintainerRole ? "maintainer" : "other";
+  };
+
+  return {
+    id: "maintainer-control",
+    description: "Owner access plus bounded maintainer commands and messaging",
+    handlers: {
+      "tool.call": (request, context) => {
+        const level = access(context);
+        if (level === "outside" || level === "owner") {
+          return { effect: "pass" as const };
+        }
+        if (level !== "maintainer" || request.phase !== "final") {
+          return { effect: "deny" as const, code: "tool-not-permitted" };
+        }
+        if (request.toolName === "message") {
+          return request.action && SAFE_MESSAGE_ACTIONS.has(request.action)
+            ? { effect: "pass" as const }
+            : { effect: "deny" as const, code: "message-action-not-permitted" };
+        }
+        return maintainerToolNames.has(request.toolName)
+          ? { effect: "pass" as const }
+          : { effect: "deny" as const, code: "tool-not-permitted" };
+      },
+      "message.action": (request, context) => {
+        const level = access(context);
+        if (level === "outside" || level === "owner") {
+          return { effect: "pass" as const };
+        }
+        const allowed =
+          level === "maintainer" &&
+          SAFE_MESSAGE_ACTIONS.has(request.action) &&
+          text(request.channel) === provider &&
+          text(request.accountId) === accountId &&
+          request.targets === undefined &&
+          targetMatchesSource(request.target, request.threadId, context);
+        return allowed
+          ? { effect: "pass" as const }
+          : { effect: "deny" as const, code: "message-action-not-permitted" };
+      },
+      "command.invoke": (request, context) => {
+        const level = access(context);
+        if (level === "outside" || level === "owner") {
+          return { effect: "pass" as const };
+        }
+        const allowed =
+          level === "maintainer" &&
+          request.phase === "final" &&
+          (request.source === "text" || request.source === "native") &&
+          request.commandName === "fix" &&
+          request.owner.kind === "plugin" &&
+          request.owner.pluginId === PLUGIN_ID;
+        return allowed
+          ? { effect: "pass" as const }
+          : { effect: "deny" as const, code: "command-not-permitted" };
+      },
+    },
+  };
 }
 
 export default definePluginEntry({
-  id: "maintainer-authorization",
+  id: PLUGIN_ID,
   name: "Maintainer authorization",
   description: "Applies caller-aware operation vetoes",
   register(api) {
-    const ownerKeys = stringSet(api.pluginConfig?.ownerKeys);
-    const maintainerRoleIds = stringSet(api.pluginConfig?.maintainerRoleIds);
-    const maintainerToolNames = stringSet(api.pluginConfig?.maintainerToolNames);
-
-    const access = (context: AuthorizationInvocationContext): "owner" | "maintainer" | "other" => {
-      if (context.principal.kind === "operator") {
-        return context.principal.isOwner || context.principal.scopes.includes("operator.admin")
-          ? "owner"
-          : "other";
-      }
-      if (context.principal.kind !== "sender") {
-        return "other";
-      }
-      const sender = context.principal;
-      const ownerKey = `${sender.provider ?? "unknown"}:${sender.senderId}`;
-      if (sender.senderIsOwner || ownerKeys.has(ownerKey)) {
-        return "owner";
-      }
-      return sender.roleIds?.some((roleId) => maintainerRoleIds.has(roleId))
-        ? "maintainer"
-        : "other";
-    };
-
-    api.authorization.registerPolicy({
-      id: "maintainer-control",
-      description: "Owner access plus bounded maintainer commands and messaging",
-      unhandled: "deny",
-      timeoutMs: 1_000,
-      handlers: {
-        "tool.call": (request, context) => {
-          const level = access(context);
-          if (level === "owner") {
-            return { effect: "pass" };
-          }
-          if (
-            level === "maintainer" &&
-            (maintainerToolNames.has(request.toolName) ||
-              (request.toolName === "message" &&
-                request.action !== undefined &&
-                SAFE_MESSAGE_ACTIONS.has(request.action)))
-          ) {
-            return { effect: "pass" };
-          }
-          return { effect: "deny", code: "tool-not-permitted" };
-        },
-        "message.action": (request, context) => {
-          const level = access(context);
-          if (
-            level === "owner" ||
-            (level === "maintainer" && SAFE_MESSAGE_ACTIONS.has(request.action))
-          ) {
-            return { effect: "pass" };
-          }
-          return { effect: "deny", code: "message-action-not-permitted" };
-        },
-        "command.invoke": (request, context) => {
-          const level = access(context);
-          if (level === "owner" || (level === "maintainer" && request.commandName === "fix")) {
-            return { effect: "pass" };
-          }
-          return { effect: "deny", code: "command-not-permitted" };
-        },
-      },
+    api.authorization.registerPolicy(
+      createMaintainerPolicy((api.pluginConfig ?? {}) as Record<string, unknown>),
+    );
+    api.registerCommand({
+      name: "fix",
+      description: "Continue the agent with a bounded repair request",
+      channels: ["discord"],
+      acceptsArgs: true,
+      requireAuth: true,
+      handler: () => ({ continueAgent: true }),
     });
   },
 });
 ```
 
 This is an example plugin-owned role model, not a built-in config schema.
-Validate any richer policy config in your plugin manifest and keep provider ids
-in identity keys. Sender ids are not globally unique across Discord, Telegram,
-Slack, or other channels.
+Validate any richer policy config in your plugin manifest and bind identity
+keys to provider plus account. Sender and role ids are not globally unique
+across accounts, Discord, Telegram, Slack, or other channels.
 
 ### Require operation coverage
 
@@ -200,13 +307,21 @@ Pin the policy and the operations it must cover in `openclaw.json`:
             {
               id: "maintainer-control",
               operations: ["tool.call", "message.action", "command.invoke"],
+              scope: {
+                agentIds: ["maintenance-agent"],
+                conversationIds: ["<DISCORD_MAINTENANCE_CHANNEL_ID>"],
+              },
             },
           ],
         },
         config: {
-          ownerKeys: ["discord:<OWNER_SENDER_ID>"],
-          maintainerRoleIds: ["<DISCORD_MAINTAINER_ROLE_ID>"],
-          maintainerToolNames: ["apply_patch", "read"],
+          targetAgentId: "maintenance-agent",
+          provider: "discord",
+          accountId: "bot-account",
+          conversationIds: ["<DISCORD_MAINTENANCE_CHANNEL_ID>"],
+          ownerKeys: ["discord:bot-account:<OWNER_SENDER_ID>"],
+          maintainerRoleKeys: ["discord:bot-account:<DISCORD_MAINTAINER_ROLE_ID>"],
+          maintainerToolNames: ["web_search"],
         },
       },
     },
@@ -219,6 +334,24 @@ operation, OpenClaw requires that exact plugin-local policy and handler. A
 missing plugin registration or missing required handler denies the operation.
 The pin also makes the plugin a startup activation candidate.
 
+`scope` limits where the pin itself applies. Configured fields use AND
+semantics, while values within one field use OR semantics. A conversation
+matches its own ID or its parent conversation ID, so a channel ID also covers
+threads below that channel. Omit `scope` for a global pin. An explicit scope
+must contain at least one non-empty selector.
+
+Scope is not the authorization rule. It only determines where a missing plugin
+or handler must fail closed. The policy handler must still validate the full
+authenticated principal, operation, and prepared input. Use a narrow scope for
+an agent-specific policy so removing that plugin does not deny unrelated agents
+that share the Gateway. Prefer stable routing selectors such as `agentIds` and
+`conversationIds` for a required pin. Missing provenance cannot prove that an
+invocation is outside a scoped pin, so missing provider or account provenance on
+a sender or unknown principal keeps the pin active. A known value outside the
+configured selectors skips it, as does an authenticated operator or service
+principal for a provider/account scope. The policy must still validate and reject
+missing or malformed provenance when the authorization rule requires it.
+
 The pin does not replace base access configuration. The maintainer still needs
 to pass channel and command sender authorization, the `message` tool must be
 available, and its action allowlist must include each intended action. For
@@ -229,7 +362,7 @@ example:
   tools: {
     message: {
       actions: {
-        allow: ["react", "reply", "send", "thread-create", "thread-reply"],
+        allow: ["react", "send", "thread-create", "thread-reply"],
       },
     },
   },
@@ -239,15 +372,20 @@ example:
 }
 ```
 
+Replies use the `send` action with `replyTo`; `reply` is not a separate message
+action. A Discord-only policy should also verify the authenticated account and
+that the prepared target remains the source channel or thread.
+
 See [Access groups](/channels/access-groups) for reusable sender lists and
 [Slash commands](/tools/slash-commands#configuration) for command sender
 authorization.
 
 Allowing `command.invoke` for `fix` authorizes that command dispatch only.
 Subsequent agent tool calls still pass through `tool.call`; this example lets a
-maintainer read and patch files but does not allow shell execution. Add only the
-tool names the maintained workflow needs, and leave dangerous operations behind
-their existing approvals and policy checks.
+maintainer search the web and use the listed message actions, but does not allow
+file access or shell execution. Add only the tool names the maintained workflow
+needs, and leave dangerous operations behind their existing approvals and policy
+checks.
 
 ### Restart and inspect
 
@@ -303,8 +441,9 @@ non-idempotent external side effect, or treat invocation count as message count.
 Perform accounting from the observation-only
 [`message_sent` hook](/plugins/hooks#message-hooks) instead.
 
-Use this handler for action-level rules such as allowing `react` and `reply`
-while denying `delete`, `edit`, `pin`, or group administration. A
+Use this handler for action-level rules such as allowing `react`, `send` with
+`replyTo`, or `thread-reply` while denying `delete`, `edit`, `pin`, or group
+administration. A
 `tool.call` check on the outer `message` tool is useful defense in depth, but
 it does not replace this final canonical action check.
 
@@ -361,17 +500,25 @@ another command available to a sender who failed those earlier gates.
 
 Policies receive one explicit principal kind:
 
-| Principal  | Meaning                                         | Useful fields                                                                         |
-| ---------- | ----------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `sender`   | Authenticated message-channel sender            | `provider`, `accountId`, `senderId`, `senderIsOwner`, `isAuthorizedSender`, `roleIds` |
-| `operator` | Authenticated Gateway client                    | `scopes`, optional `clientId`, `deviceId`, and `isOwner`                              |
-| `service`  | Named internal service                          | `serviceId`                                                                           |
-| `unknown`  | No authenticated identity reached this boundary | Optional provider and account hints only                                              |
+| Principal  | Meaning                                         | Useful fields                                                                                               |
+| ---------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `sender`   | Authenticated message-channel sender            | `provider`, `accountId`, `senderId`, normalized `aliases`, `senderIsOwner`, `isAuthorizedSender`, `roleIds` |
+| `operator` | Authenticated Gateway client                    | `scopes`, optional `clientId`, `deviceId`, and `isOwner`                                                    |
+| `service`  | Named internal service                          | `serviceId`                                                                                                 |
+| `unknown`  | No authenticated identity reached this boundary | Optional provider and account hints only                                                                    |
 
 Gateway client capabilities are feature claims, not authorization scopes. Only
 authenticated operator scopes appear on an `operator` principal. Channel,
 target, route, and thread fields are resource context; they are never treated
 as identity.
+
+`sender.aliases` can contain normalized `name`, `username`, and `e164` values
+captured by the host at admission. They use the same case-insensitive matching
+semantics as `toolsBySender` selectors; a leading `@` is removed from
+`username`. These aliases are immutable for that turn, but names and usernames
+remain mutable channel attributes. Prefer stable `senderId` rules for grants;
+use aliases mainly for compatibility restrictions or deliberate mutable-name
+policies.
 
 The surrounding invocation context can also include agent, session, run,
 conversation, parent-conversation, and thread identifiers. Treat every field
@@ -412,10 +559,11 @@ OpenClaw denies the operation when a policy:
 - is required but missing
 - lacks a handler for a configured required operation
 
-Policy denial codes are bounded machine-readable diagnostics. Policy-authored
-text is not forwarded to the model, channel user, or HTTP client. External
-callers receive a stable generic authorization error; detailed policy and code
-identity stays in trusted diagnostics.
+Policy denial codes are 1-64 lowercase ASCII characters matching
+`[a-z0-9][a-z0-9._-]{0,63}`. Policy-authored text is not forwarded to the model,
+channel user, or HTTP client. External callers receive a stable generic
+authorization error; detailed policy and code identity stays in trusted
+diagnostics.
 
 `unhandled` controls operations not implemented by a policy:
 
@@ -429,24 +577,30 @@ can assert the exact handlers that must exist now.
 ## Native Codex boundary
 
 OpenClaw-managed dynamic tools reach `tool.call` with `phase: "final"`. Native
-Codex shell, patch, and MCP tools are observed through Codex `PreToolUse` and
-use `phase: "pre-execution"`.
+Codex hooks otherwise report shell, patch, MCP, and collaboration tools at a
+`phase: "pre-execution"` boundary. Codex does not currently provide a mandatory,
+fail-closed hook contract for every native effect. Therefore, whenever an
+authorization policy is active, OpenClaw disables the Codex-native tool,
+environment, and multi-agent surfaces for that turn. OpenClaw dynamic tools
+remain available and reach the final host-owned boundary normally.
 
-Codex runs matching native pre-tool handlers concurrently and resolves
-competing input rewrites after those handlers complete. OpenClaw can block at
-its relay boundary, but an authorization policy cannot claim to see a final
-post-rewrite native input. For native tools, deny dangerous tool classes by
-host tool name and other stable metadata; do not make a safety decision that
-depends on mutable native arguments. See
-[Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries).
+This is intentionally broader than one policy's scoped pin. Do not depend on a
+native Codex tool from a sender-aware policy deployment. A future mandatory
+upstream hook contract can narrow this restriction without changing the policy
+API. See [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries).
 
 ## Lifecycle and migration
 
 Authorization policy metadata and registrations are process-stable. Restart
 the Gateway after changing plugin code, `contracts.authorizationPolicies`, or
-`plugins.entries.<id>.authorization.requiredPolicies`. A plugin-specific reload
-hook may refresh its own ordinary data, but it must not be used to swap the
-registered security boundary in place.
+any `plugins.entries.<id>` field for a plugin that declares or registers an
+authorization policy, including `enabled`, `config`, and
+`authorization.requiredPolicies`. Changes to global plugin activation settings
+such as `plugins.enabled`, `plugins.allow`, `plugins.deny`, or `plugins.slots`
+also restart the Gateway when a discovered policy plugin is present because
+they can add or remove it. A plugin-specific reload hook may refresh its own
+ordinary data, but it must not be used to swap the registered security boundary
+in place. Ordinary non-policy plugin entries remain hot-reloadable.
 
 Before disabling or removing a required policy plugin, first remove its
 `requiredPolicies` pin and restart intentionally. Leaving the pin in place is a

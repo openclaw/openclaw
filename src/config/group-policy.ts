@@ -488,7 +488,7 @@ export function resolveChannelGroupToolsPolicy(
   const defaultConfig = groups?.["*"];
   const groupSenderPolicy = resolveToolsBySender({
     toolsBySender: groupConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
+    messageProvider: params.messageProvider,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -502,7 +502,7 @@ export function resolveChannelGroupToolsPolicy(
   }
   const defaultSenderPolicy = resolveToolsBySender({
     toolsBySender: defaultConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
+    messageProvider: params.messageProvider,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

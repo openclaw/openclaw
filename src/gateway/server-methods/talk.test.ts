@@ -1671,10 +1671,10 @@ describe("talk.session unified handlers", () => {
         text: "use the safer plan",
         mode: "steer",
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: steerRespond as never,
-      context: {} as never,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig } as never,
     });
     expect(mocks.steerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
@@ -1682,6 +1682,12 @@ describe("talk.session unified handlers", () => {
       sessionKey: "agent:main:main",
       text: "use the safer plan",
       mode: "steer",
+      turnAuthority: expect.objectContaining({
+        authorization: expect.objectContaining({
+          principal: { kind: "operator", scopes: ["operator.admin"], isOwner: true },
+        }),
+        controllerKey: "connection:conn-1",
+      }),
     });
     expectRespondOk(steerRespond, {
       ok: true,
@@ -2067,11 +2073,12 @@ describe("talk.session unified handlers", () => {
         text: "use the safer plan",
         mode: "steer",
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: steerRespond as never,
       context: {
         broadcastToConnIds,
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
       } as never,
     });
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
@@ -2079,6 +2086,12 @@ describe("talk.session unified handlers", () => {
       text: "use the safer plan",
       mode: "steer",
       recentEvents: expect.any(Array),
+      turnAuthority: expect.objectContaining({
+        authorization: expect.objectContaining({
+          principal: { kind: "operator", scopes: ["operator.admin"], isOwner: true },
+        }),
+        controllerKey: "connection:conn-1",
+      }),
     });
     expectRespondOk(steerRespond, {
       ok: true,
@@ -2538,7 +2551,7 @@ describe("talk.client.toolCall handler", () => {
         name: "openclaw_agent_consult",
         args: { question: "What now?" },
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: respond as never,
       context: {
@@ -2552,6 +2565,15 @@ describe("talk.client.toolCall handler", () => {
       sessionKey: "main",
       runId: "run-voice-1",
       callId: "call-1",
+      turnAuthority: expect.objectContaining({
+        authorization: expect.objectContaining({
+          principal: { kind: "operator", scopes: ["operator.admin"], isOwner: true },
+          sessionKey: "agent:main:main",
+          conversationId: "agent:main:main",
+          trigger: "talk.agent-consult",
+        }),
+        controllerKey: "connection:conn-1",
+      }),
     });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
@@ -2634,6 +2656,7 @@ describe("talk.client.toolCall handler", () => {
 describe("talk.client.steer handler", () => {
   const createSteerContext = (ownerConnId = "conn-1") =>
     ({
+      getRuntimeConfig: () => ({}) as OpenClawConfig,
       chatAbortControllers: new Map([
         [
           "run-voice-1",
@@ -2679,7 +2702,7 @@ describe("talk.client.steer handler", () => {
         text: "use the safer plan",
         mode: "steer",
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: respond as never,
       context: createSteerContext(),
@@ -2689,6 +2712,12 @@ describe("talk.client.steer handler", () => {
       sessionKey: "agent:main:main",
       text: "use the safer plan",
       mode: "steer",
+      turnAuthority: expect.objectContaining({
+        authorization: expect.objectContaining({
+          principal: { kind: "operator", scopes: ["operator.admin"], isOwner: true },
+        }),
+        controllerKey: "connection:conn-1",
+      }),
     });
     expectRespondOk(respond, {
       ok: true,

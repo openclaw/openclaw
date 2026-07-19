@@ -1,7 +1,6 @@
 // Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type {
   RealtimeVoiceAgentControlResult,
   RealtimeVoiceSessionHarness,
@@ -550,20 +549,6 @@ describe("DiscordVoiceManager", () => {
       "agent command args",
     );
 
-  const lastAgentCommandToolNames = () => {
-    const args = lastAgentCommandArgs();
-    if (typeof args.senderIsOwner !== "boolean") {
-      throw new Error("expected agent command owner identity");
-    }
-    return createOpenClawCodingTools({
-      config: {},
-      senderIsOwner: args.senderIsOwner,
-      messageProvider: "discord",
-      workspaceDir: "/tmp/openclaw-discord-voice-tools",
-      agentDir: "/tmp/openclaw-discord-voice-agent",
-    }).map((tool) => tool.name);
-  };
-
   const agentCommandArgsAt = (index: number) =>
     requireRecord(
       mockCall(agentCommandMock as unknown as MockCallSource, index, `agent command ${index}`)[0],
@@ -670,6 +655,7 @@ describe("DiscordVoiceManager", () => {
   ) =>
     await (manager as unknown as ProcessSegmentInvoker).processSegment({
       entry: {
+        accountId: "default",
         guildId: "g1",
         channelId: "1001",
         sessionChannelId: "1001",
@@ -3859,10 +3845,12 @@ describe("DiscordVoiceManager", () => {
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
     await emitFinalRealtimeUserTranscript(bridgeParams, "Hey, Molty, how is it going");
 
-    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-      sessionKey: "discord:g1:c1",
-      text: "how is it going",
-    });
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "discord:g1:c1",
+        text: "how is it going",
+      }),
+    );
     expect(lastAgentCommandArgs().message).toContain("how is it going");
     expect(lastAgentCommandArgs().message).not.toContain("Molty");
     expect(lastAgentCommandArgs().message).not.toContain("Hey");
@@ -3918,10 +3906,12 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     await emitFinalRealtimeUserTranscript(bridgeParams, "Hey, Molty, how is it going");
 
-    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-      sessionKey: "discord:g1:c1",
-      text: "how is it going",
-    });
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "discord:g1:c1",
+        text: "how is it going",
+      }),
+    );
     expect(lastAgentCommandArgs().message).toContain("how is it going");
     expectUserMessageIncludes("wake answer");
   });
@@ -4093,10 +4083,12 @@ describe("DiscordVoiceManager", () => {
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
     await emitFinalRealtimeUserTranscript(bridgeParams, "OpenClaw, how is it going");
 
-    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-      sessionKey: "discord:g1:c1",
-      text: "how is it going",
-    });
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "discord:g1:c1",
+        text: "how is it going",
+      }),
+    );
     expect(lastAgentCommandArgs().message).toContain("how is it going");
     expect(lastAgentCommandArgs().message).not.toContain("OpenClaw");
     expectUserMessageIncludes("openclaw wake answer");
@@ -4532,10 +4524,12 @@ describe("DiscordVoiceManager", () => {
 
     await emitFinalRealtimeUserTranscript(bridgeParams, "how is it going");
 
-    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-      sessionKey: "discord:g1:c1",
-      text: "how is it going",
-    });
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "discord:g1:c1",
+        text: "how is it going",
+      }),
+    );
     expect(lastAgentCommandArgs().message).toContain("how is it going");
     expectUserMessageIncludes("status answer");
   });
@@ -6401,7 +6395,7 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
-  it("keeps owner-only tools for commands.ownerAllowFrom voice speakers", async () => {
+  it("forwards commands.ownerAllowFrom voice authority to the host tool policy", async () => {
     const ownerId = "100000000000000001";
     const client = createClient();
     client.fetchMember.mockResolvedValue({
@@ -6420,11 +6414,17 @@ describe("DiscordVoiceManager", () => {
     await processVoiceSegment(manager, ownerId);
 
     expect(agentCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({ senderIsOwner: true }),
+      expect.objectContaining({
+        senderIsOwner: true,
+        ingressAuthority: expect.objectContaining({
+          provider: "discord",
+          accountId: "default",
+          senderId: ownerId,
+          isAuthorizedSender: true,
+          conversationId: "1001",
+        }),
+      }),
       expect.anything(),
-    );
-    expect(lastAgentCommandToolNames()).toEqual(
-      expect.arrayContaining(["gateway", "nodes", "openclaw"]),
     );
   });
 
@@ -6579,10 +6579,12 @@ describe("DiscordVoiceManager", () => {
       enqueuePlayback,
     });
 
-    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-      sessionKey: "discord:g1:1001",
-      text: "use the smaller implementation",
-    });
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "discord:g1:1001",
+        text: "use the smaller implementation",
+      }),
+    );
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(lastTtsArgs().text).toBe("Got it. I steered the active run.");
     expect(enqueuePlayback).toHaveBeenCalledTimes(1);
@@ -6642,11 +6644,35 @@ describe("DiscordVoiceManager", () => {
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = lastAgentCommandArgs() as
-      | { message?: string; messageChannel?: string; messageProvider?: string }
+      | {
+          message?: string;
+          messageChannel?: string;
+          messageProvider?: string;
+          ingressAuthority?: {
+            provider?: string;
+            accountId?: string;
+            senderId?: string;
+            senderName?: string;
+            senderUsername?: string;
+            roleIds?: string[];
+            isAuthorizedSender?: boolean;
+            conversationId?: string;
+          };
+        }
       | undefined;
 
     expect(commandArgs?.messageChannel).toBe("discord");
     expect(commandArgs?.messageProvider).toBe("discord-voice");
+    expect(commandArgs?.ingressAuthority).toMatchObject({
+      provider: "discord",
+      accountId: "default",
+      senderId: "u-guest",
+      senderName: "Guest Nick",
+      senderUsername: "guest",
+      roleIds: [],
+      isAuthorizedSender: true,
+      conversationId: "1001",
+    });
     expect(commandArgs?.message).toContain("Do not call the tts tool");
     expect(commandArgs?.message).toContain("repair obvious transcription artifacts");
     expect(prepareTtsRequestMock).toHaveBeenCalledWith(

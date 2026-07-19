@@ -308,6 +308,7 @@ let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js"
 let createModelVisibilityPolicy: typeof import("../../agents/model-visibility-policy.js").createModelVisibilityPolicy;
 let buildModelAliasIndex: typeof import("../../agents/model-selection.js").buildModelAliasIndex;
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
+let prepareModelDirectiveEffect: typeof import("./directive-handling.model-selection.js").prepareModelDirectiveEffect;
 let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
 let persistInlineDirectives: typeof import("./directive-handling.persist.js").persistInlineDirectives;
 
@@ -317,7 +318,7 @@ beforeAll(async () => {
   ({ maybeHandleModelDirectiveInfo } = await import("./directive-handling.model.js"));
   ({ createModelVisibilityPolicy } = await import("../../agents/model-visibility-policy.js"));
   ({ buildModelAliasIndex } = await import("../../agents/model-selection.js"));
-  ({ resolveModelSelectionFromDirective } =
+  ({ prepareModelDirectiveEffect, resolveModelSelectionFromDirective } =
     await import("./directive-handling.model-selection.js"));
   ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
   ({ persistInlineDirectives } = await import("./directive-handling.persist.js"));
@@ -1314,6 +1315,32 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain(
       'Add "openai/gpt-5.5" or its provider wildcard to agents.list[].modelPolicy.allow.',
     );
+  });
+
+  it("keeps the active agent scope while preparing a model directive", () => {
+    const directives = parseInlineDirectives("/model openai/gpt-5.5");
+    const effect = prepareModelDirectiveEffect({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg: {
+        agents: {
+          list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
+        },
+      },
+      agentDir: TEST_AGENT_DIR,
+      agentId: "ops",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+      allowedModelCatalog: [],
+      provider: "anthropic",
+    });
+
+    expect(effect).toMatchObject({
+      kind: "invalid",
+      errorText: expect.stringContaining("agents.list[].modelPolicy.allow"),
+    });
   });
 
   it("treats explicit default /model selection as resettable default", () => {

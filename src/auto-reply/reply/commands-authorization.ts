@@ -10,6 +10,10 @@ import {
 } from "../../plugins/authorization-policy.js";
 import type { AuthorizationCommandOwner } from "../../plugins/authorization-policy.types.js";
 import type { PluginJsonValue } from "../../plugins/host-hook-json.js";
+import {
+  classifyTurnAuthoritySnapshot,
+  rebindTurnAuthoritySnapshot,
+} from "../../plugins/turn-authority.js";
 /** Final authorization gate shared by built-in command dispatch paths. */
 import { parseCommandArgs, resolveTextCommand } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
@@ -21,6 +25,13 @@ export type CoreCommandAuthorizationResult =
   | { matched: true; allowed: false; commandKey: string; denial: AuthorizationPolicyDenial };
 
 const ALWAYS_HANDLED_TEXT_COMMAND_PATTERN = /^\/(?:new|reset|stop)(?:\s|$)/i;
+
+/** Uses the provider thread even when the session intentionally stays conversation-scoped. */
+export function resolveCommandAuthorizationThreadId(
+  ctx: Pick<MsgContext, "MessageThreadId" | "TransportThreadId">,
+): string | number | undefined {
+  return ctx.MessageThreadId ?? ctx.TransportThreadId;
+}
 
 /** Keeps policy checks aligned with commands the host still handles when text commands are off. */
 export function shouldAuthorizeCoreCommandTurn(params: {
@@ -82,6 +93,32 @@ export async function authorizeCommandInvocation(params: {
 }): Promise<CommandAuthorizationResult> {
   const rawArguments = params.rawArguments?.trim();
   const values = normalizeCommandValues(params.values);
+  const classifiedAuthority = classifyTurnAuthoritySnapshot(params.ctx.TurnAuthority);
+  if (classifiedAuthority.kind === "invalid") {
+    return {
+      allowed: false,
+      denial: {
+        denied: true,
+        kind: "error",
+        pluginId: "authorization-engine",
+        policyId: "turn-authority",
+        code: "turn-authority-invalid",
+      },
+    };
+  }
+  const sourceTurnAuthority =
+    classifiedAuthority.kind === "issued" ? classifiedAuthority.snapshot : undefined;
+  const sourceAuthorization = sourceTurnAuthority?.authorization;
+  const commandTurnAuthority =
+    params.agentId && params.sessionKey
+      ? rebindTurnAuthoritySnapshot(sourceTurnAuthority, {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId ?? sourceAuthorization?.runId,
+          trigger: "command",
+        })
+      : sourceTurnAuthority;
   const denial = await runAuthorizationPolicies({
     request: {
       operation: "command.invoke",
@@ -98,28 +135,33 @@ export async function authorizeCommandInvocation(params: {
           }
         : {}),
     },
-    context: createAuthorizationInvocationContext({
-      principal: createAuthorizationPrincipal({
-        provider: params.command.channel || params.command.surface,
-        accountId: params.command.accountId,
-        senderId: params.command.senderId,
-        senderIsOwner: params.command.senderIsOwner,
-        isAuthorizedSender: params.command.isAuthorizedSender,
-        roleIds: params.command.memberRoleIds,
+    context:
+      commandTurnAuthority?.authorization ??
+      createAuthorizationInvocationContext({
+        principal: createAuthorizationPrincipal({
+          provider: params.command.channel || params.command.surface,
+          accountId: params.command.accountId,
+          senderId: params.command.senderId,
+          senderName: params.command.senderName,
+          senderUsername: params.command.senderUsername,
+          senderE164: params.command.senderE164,
+          senderIsOwner: params.command.senderIsOwner,
+          isAuthorizedSender: params.command.isAuthorizedSender,
+          roleIds: params.command.memberRoleIds,
+        }),
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        runId: params.runId,
+        conversationId:
+          params.ctx.NativeChannelId ??
+          params.ctx.OriginatingTo ??
+          params.command.to ??
+          params.command.from,
+        parentConversationId: params.ctx.ThreadParentId,
+        threadId: resolveCommandAuthorizationThreadId(params.ctx),
+        trigger: "command",
       }),
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      conversationId:
-        params.ctx.OriginatingTo ??
-        params.ctx.NativeChannelId ??
-        params.command.to ??
-        params.command.from,
-      parentConversationId: params.ctx.ThreadParentId,
-      threadId: params.ctx.MessageThreadId,
-      trigger: "command",
-    }),
     config: params.config,
     signal: params.signal,
   });

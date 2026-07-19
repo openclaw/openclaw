@@ -6,7 +6,10 @@ import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   buildDiscordModelPickerCustomId,
-  createDiscordModelPickerModelToken,
+  createDiscordModelPickerInteractionBinding,
+  createDiscordModelPickerModelFingerprint,
+  createDiscordModelPickerProviderFingerprint,
+  createDiscordModelPickerRuntimeFingerprint,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   findProviderBucketId,
@@ -23,6 +26,7 @@ import {
 } from "./model-picker.view.js";
 
 const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
+const INTERACTION_BINDING = "test_binding";
 const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = 25;
 const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = 25;
 const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX = 25;
@@ -42,8 +46,11 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
 
 type SerializedComponent = {
   type: number;
+  content?: string;
   custom_id?: string;
-  options?: Array<{ label?: string; value: string; default?: boolean }>;
+  label?: string;
+  placeholder?: string;
+  options?: Array<{ label?: string; value: string; default?: boolean; description?: string }>;
   components?: SerializedComponent[];
 };
 
@@ -51,6 +58,7 @@ const DISCORD_CONTAINER_COMPONENT_TYPE: SerializedComponent["type"] = ComponentT
 const DISCORD_ACTION_ROW_COMPONENT_TYPE: SerializedComponent["type"] = ComponentType.ActionRow;
 const DISCORD_STRING_SELECT_COMPONENT_TYPE: SerializedComponent["type"] =
   ComponentType.StringSelect;
+const DISCORD_TEXT_DISPLAY_COMPONENT_TYPE: SerializedComponent["type"] = ComponentType.TextDisplay;
 
 function extractContainerRows(components?: SerializedComponent[]): SerializedComponent[] {
   const container = components?.find(
@@ -91,6 +99,34 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
   return value;
 }
 
+function flattenSerializedComponents(
+  components: SerializedComponent[] | undefined,
+): SerializedComponent[] {
+  const flattened: SerializedComponent[] = [];
+  for (const component of components ?? []) {
+    flattened.push(component, ...flattenSerializedComponents(component.components));
+  }
+  return flattened;
+}
+
+function isWellFormedUtf16(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 describe("loadDiscordModelPickerData", () => {
   it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
@@ -106,14 +142,14 @@ describe("loadDiscordModelPickerData", () => {
 });
 
 describe("Discord model picker custom_id", () => {
-  it("encodes and decodes command/provider/page/user context", () => {
+  it("encodes and decodes command/provider/page/authority context", () => {
     const customId = buildDiscordModelPickerCustomId({
       command: "models",
       action: "provider",
       view: "models",
       provider: "OpenAI",
       page: 3,
-      userId: "1234567890",
+      interactionBinding: INTERACTION_BINDING,
     });
 
     const parsed = parseDiscordModelPickerCustomId(customId);
@@ -124,8 +160,59 @@ describe("Discord model picker custom_id", () => {
       view: "models",
       provider: "openai",
       page: 3,
-      userId: "1234567890",
+      interactionBinding: INTERACTION_BINDING,
     });
+  });
+
+  it("binds picker state to the principal and exact session", () => {
+    const base = createDiscordModelPickerInteractionBinding({
+      accountId: "default",
+      userId: "maintainer",
+      route: { agentId: "main", sessionKey: "agent:main:discord:channel:one" },
+    });
+
+    expect(base).toHaveLength(12);
+    expect(
+      createDiscordModelPickerInteractionBinding({
+        accountId: "work",
+        userId: "maintainer",
+        route: { agentId: "main", sessionKey: "agent:main:discord:channel:one" },
+      }),
+    ).not.toBe(base);
+    expect(
+      createDiscordModelPickerInteractionBinding({
+        accountId: "default",
+        userId: "maintainer",
+        route: { agentId: "worker", sessionKey: "agent:main:discord:channel:one" },
+      }),
+    ).not.toBe(base);
+    expect(
+      createDiscordModelPickerInteractionBinding({
+        accountId: "default",
+        userId: "outsider",
+        route: { agentId: "main", sessionKey: "agent:main:discord:channel:one" },
+      }),
+    ).not.toBe(base);
+    expect(
+      createDiscordModelPickerInteractionBinding({
+        accountId: "default",
+        userId: "maintainer",
+        route: { agentId: "main", sessionKey: "agent:main:discord:channel:two" },
+      }),
+    ).not.toBe(base);
+  });
+
+  it("rejects legacy unbound picker ids", () => {
+    expect(
+      parseDiscordModelPickerData({
+        c: "model",
+        a: "submit",
+        v: "models",
+        u: "1234567890",
+        p: "openai",
+        g: "1",
+      }),
+    ).toBeNull();
   });
 
   it("parses component data payloads", () => {
@@ -133,7 +220,7 @@ describe("Discord model picker custom_id", () => {
       cmd: "model",
       act: "back",
       view: "providers",
-      u: "42",
+      b: INTERACTION_BINDING,
       p: "anthropic",
       pg: "2",
     });
@@ -142,32 +229,34 @@ describe("Discord model picker custom_id", () => {
       command: "model",
       action: "back",
       view: "providers",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       provider: "anthropic",
       page: 2,
     });
   });
 
-  it("parses compact custom_id aliases", () => {
-    const parsed = parseDiscordModelPickerData({
-      c: "models",
-      a: "submit",
-      v: "models",
-      u: "42",
-      p: "openai",
-      g: "3",
-      mi: "2",
-    });
-
-    expect(parsed).toEqual({
-      command: "models",
-      action: "submit",
-      view: "models",
-      userId: "42",
-      provider: "openai",
-      page: 3,
-      modelIndex: 2,
-    });
+  it("rejects positional model and recents state", () => {
+    expect(
+      parseDiscordModelPickerData({
+        c: "models",
+        a: "submit",
+        v: "models",
+        b: INTERACTION_BINDING,
+        p: "openai",
+        g: "3",
+        mi: "2",
+      }),
+    ).toBeNull();
+    expect(
+      parseDiscordModelPickerData({
+        c: "models",
+        a: "submit",
+        v: "recents",
+        b: INTERACTION_BINDING,
+        g: "1",
+        rs: "1",
+      }),
+    ).toBeNull();
   });
 
   it("parses plus-signed compact numeric fields", () => {
@@ -175,50 +264,46 @@ describe("Discord model picker custom_id", () => {
       c: "models",
       a: "submit",
       v: "recents",
-      u: "42",
+      b: INTERACTION_BINDING,
       p: "openai",
       g: "+03",
       pp: "+02",
-      mi: "+07",
-      ri: "+04",
-      rs: "+01",
     });
 
     expect(parsed).toEqual({
       command: "models",
       action: "submit",
       view: "recents",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       provider: "openai",
       page: 3,
       providerPage: 2,
-      modelIndex: 7,
-      runtimeIndex: 4,
-      recentSlot: 1,
     });
   });
 
-  it("parses optional submit model index", () => {
+  it("parses stable model and runtime fingerprints", () => {
+    const runtimeFingerprint = createDiscordModelPickerRuntimeFingerprint("openai", "codex");
+    const modelFingerprint = createDiscordModelPickerModelFingerprint("openai", "gpt-4o");
     const parsed = parseDiscordModelPickerData({
       cmd: "models",
       act: "submit",
       view: "models",
-      u: "42",
+      b: INTERACTION_BINDING,
       p: "openai",
-      r: "codex",
+      rt: runtimeFingerprint,
+      m: modelFingerprint,
       pg: "1",
-      mi: "7",
     });
 
     expect(parsed).toEqual({
       command: "models",
       action: "submit",
       view: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       provider: "openai",
-      runtime: "codex",
+      runtimeFingerprint,
+      modelFingerprint,
       page: 1,
-      modelIndex: 7,
     });
   });
 
@@ -228,16 +313,15 @@ describe("Discord model picker custom_id", () => {
         cmd: "models",
         act: "submit",
         view: "models",
-        u: "42",
+        b: INTERACTION_BINDING,
         p: "openai",
         pg: "3next",
-        mi: "7model",
       }),
     ).toEqual({
       command: "models",
       action: "submit",
       view: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       provider: "openai",
       page: 1,
     });
@@ -249,7 +333,7 @@ describe("Discord model picker custom_id", () => {
         cmd: "status",
         act: "nav",
         view: "providers",
-        u: "42",
+        b: INTERACTION_BINDING,
       }),
     ).toBeNull();
     expect(
@@ -257,7 +341,7 @@ describe("Discord model picker custom_id", () => {
         cmd: "model",
         act: "unknown",
         view: "providers",
-        u: "42",
+        b: INTERACTION_BINDING,
       }),
     ).toBeNull();
     expect(
@@ -265,27 +349,82 @@ describe("Discord model picker custom_id", () => {
         cmd: "model",
         act: "nav",
         view: "unknown",
-        u: "42",
+        b: INTERACTION_BINDING,
       }),
     ).toBeNull();
   });
 
-  it("enforces Discord custom_id max length", () => {
+  it("compacts long provider state within Discord's custom_id limit", () => {
     const longProvider = `provider-${"x".repeat(DISCORD_CUSTOM_ID_MAX_CHARS)}`;
-    expect(() =>
-      buildDiscordModelPickerCustomId({
-        command: "model",
-        action: "provider",
-        view: "models",
-        provider: longProvider,
-        page: 1,
-        userId: "42",
-      }),
-    ).toThrow(/custom_id exceeds/i);
+    const customId = buildDiscordModelPickerCustomId({
+      command: "model",
+      action: "provider",
+      view: "models",
+      provider: longProvider,
+      page: 1,
+      interactionBinding: INTERACTION_BINDING,
+    });
+
+    expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+    expect(parseDiscordModelPickerCustomId(customId)).toMatchObject({
+      command: "model",
+      action: "provider",
+      view: "models",
+      providerFingerprint: createDiscordModelPickerProviderFingerprint(longProvider),
+      interactionBinding: INTERACTION_BINDING,
+    });
+  });
+
+  it("compacts terminal picker controls without dropping stable authorization state", () => {
+    const provider = "azure-openai-responses";
+    const runtimeFingerprint = createDiscordModelPickerRuntimeFingerprint(provider, "codex");
+    const modelFingerprint = createDiscordModelPickerModelFingerprint(provider, " gpt-5.5");
+
+    for (const action of ["submit", "nav", "recents"] as const) {
+      const customId = buildDiscordModelPickerCustomId({
+        command: "models",
+        action,
+        view: action === "recents" ? "recents" : "models",
+        provider,
+        runtimeFingerprint,
+        runtimePage: 4,
+        modelFingerprint,
+        page: 12,
+        providerPage: 9,
+        interactionBinding: INTERACTION_BINDING,
+      });
+      expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+      expect(parseDiscordModelPickerCustomId(customId)).toMatchObject({
+        command: "models",
+        action,
+        providerFingerprint: createDiscordModelPickerProviderFingerprint(provider),
+        runtimeFingerprint,
+        runtimePage: 4,
+        modelFingerprint,
+        interactionBinding: INTERACTION_BINDING,
+      });
+    }
+  });
+
+  it("preserves complete non-BMP bucket ids through custom_id encoding", () => {
+    const customId = buildDiscordModelPickerCustomId({
+      command: "models",
+      action: "nav",
+      view: "models",
+      provider: "openai",
+      page: 2,
+      modelBucket: "😀-🚀",
+      interactionBinding: INTERACTION_BINDING,
+    });
+
+    expect(parseDiscordModelPickerCustomId(customId)?.modelBucket).toBe("😀-🚀");
   });
 
   it("keeps typical submit ids under Discord max length", () => {
-    const modelToken = createDiscordModelPickerModelToken("azure-openai-responses", "gpt-5.5");
+    const modelFingerprint = createDiscordModelPickerModelFingerprint(
+      "azure-openai-responses",
+      "gpt-5.5",
+    );
     const customId = buildDiscordModelPickerCustomId({
       command: "models",
       action: "submit",
@@ -293,15 +432,13 @@ describe("Discord model picker custom_id", () => {
       provider: "azure-openai-responses",
       page: 1,
       providerPage: 1,
-      modelIndex: 10,
-      modelToken,
-      userId: "12345678901234567890",
+      modelFingerprint,
+      interactionBinding: INTERACTION_BINDING,
     });
 
     expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
     const parsed = parseDiscordModelPickerCustomId(customId);
-    expect(parsed?.modelToken).toBe(modelToken);
-    expect(parsed?.modelIndex).toBeUndefined();
+    expect(parsed?.modelFingerprint).toBe(modelFingerprint);
   });
 });
 
@@ -417,6 +554,117 @@ describe("model paging", () => {
     expect(secondBucket.items).toHaveLength(9);
   });
 
+  it("uses complete Unicode code points for non-BMP model buckets", () => {
+    const models = [
+      ...Array.from({ length: 20 }, (_, index) => `😀-model-${index}`),
+      ...Array.from({ length: 10 }, (_, index) => `🚀-model-${index}`),
+    ];
+    const data = createModelsProviderData({ openai: models });
+    const emojiPage = requireValue(
+      getDiscordModelPickerModelPage({ data, provider: "openai", bucket: "😀" }),
+      "emoji model page should exist",
+    );
+    const rocketPage = requireValue(
+      getDiscordModelPickerModelPage({ data, provider: "openai", bucket: "🚀" }),
+      "rocket model page should exist",
+    );
+
+    expect(emojiPage.buckets.map((bucket) => bucket.id)).toEqual(
+      expect.arrayContaining(["😀", "🚀"]),
+    );
+    expect(emojiPage.items).toHaveLength(20);
+    expect(emojiPage.items.every((model) => model.startsWith("😀"))).toBe(true);
+    expect(rocketPage.items).toHaveLength(10);
+    expect(rocketPage.items.every((model) => model.startsWith("🚀"))).toBe(true);
+  });
+
+  it("keeps locale-interleaved Unicode prefix buckets unique and reachable", () => {
+    const models = ["a", "á", "b"].flatMap((prefix) =>
+      Array.from({ length: 20 }, (_, index) => `${prefix}-model-${String(index).padStart(2, "0")}`),
+    );
+    const data = createModelsProviderData({ openai: models });
+    const initialPage = requireValue(
+      getDiscordModelPickerModelPage({ data, provider: "openai" }),
+      "Unicode bucket model page should exist",
+    );
+    const bucketIds = initialPage.buckets.map((bucket) => bucket.id);
+
+    expect(new Set(bucketIds).size).toBe(bucketIds.length);
+    const rows = renderModelsViewRows({
+      command: "model",
+      interactionBinding: INTERACTION_BINDING,
+      data,
+      provider: "openai",
+    });
+    const bucketSelect = requireValue(
+      rows
+        .flatMap((row) => row.components ?? [])
+        .find((component) => component.options?.some((option) => bucketIds.includes(option.value))),
+      "Unicode bucket select should render",
+    );
+    const selectValues = bucketSelect.options?.map((option) => option.value) ?? [];
+    expect(new Set(selectValues).size).toBe(selectValues.length);
+    expect(new Set(selectValues)).toEqual(new Set(bucketIds));
+
+    const reachableModels = new Set<string>();
+    for (const bucket of initialPage.buckets) {
+      const firstPage = requireValue(
+        getDiscordModelPickerModelPage({ data, provider: "openai", bucket: bucket.id }),
+        `bucket ${bucket.id} should resolve`,
+      );
+      for (let page = 1; page <= firstPage.totalPages; page += 1) {
+        const resolvedPage = requireValue(
+          getDiscordModelPickerModelPage({
+            data,
+            provider: "openai",
+            bucket: bucket.id,
+            page,
+          }),
+          `bucket ${bucket.id} page ${page} should resolve`,
+        );
+        for (const model of resolvedPage.items) {
+          reachableModels.add(model);
+        }
+      }
+    }
+    expect(reachableModels.size).toBe(models.length);
+    expect(models.every((model) => reachableModels.has(model))).toBe(true);
+  });
+
+  it("preserves an exact NBSP bucket through paginated model controls", () => {
+    const nbsp = "\u00a0";
+    const nbspModels = Array.from({ length: 26 }, (_, index) => `${nbsp}model-${index}`);
+    const data = createModelsProviderData({
+      openai: [...nbspModels, ...Array.from({ length: 20 }, (_, index) => `a-model-${index}`)],
+    });
+    const firstPage = requireValue(
+      getDiscordModelPickerModelPage({ data, provider: "openai", bucket: nbsp }),
+      "NBSP bucket should resolve",
+    );
+    const secondPage = requireValue(
+      getDiscordModelPickerModelPage({ data, provider: "openai", bucket: nbsp, page: 2 }),
+      "NBSP bucket second page should resolve",
+    );
+
+    expect(firstPage.bucket?.id).toBe(nbsp);
+    expect(firstPage.items).toHaveLength(25);
+    expect(secondPage.items).toHaveLength(1);
+    expect(new Set([...firstPage.items, ...secondPage.items])).toEqual(new Set(nbspModels));
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      interactionBinding: INTERACTION_BINDING,
+      data,
+      provider: "openai",
+      modelBucket: nbsp,
+    });
+    const nextButton = requireValue(
+      rows.flatMap((row) => row.components ?? []).find((component) => component.label === "Next ▶"),
+      "NBSP bucket should render model pagination",
+    );
+    expect(parseDiscordModelPickerCustomId(nextButton.custom_id ?? "")?.modelBucket).toBe(nbsp);
+  });
+
   it("returns null for unknown provider", () => {
     const data = createModelsProviderData({ anthropic: ["claude-sonnet-4-5"] });
     const page = getDiscordModelPickerModelPage({ data, provider: "openai", page: 1 });
@@ -445,7 +693,7 @@ describe("Discord model picker rendering", () => {
 
     const rendered = renderDiscordModelPickerProvidersView({
       command: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       currentModel: "provider-01/model-1",
     });
@@ -472,7 +720,7 @@ describe("Discord model picker rendering", () => {
       "provider view should render a provider select",
     );
     expect(providerSelect.options).toHaveLength(Object.keys(entries).length);
-    expect(providerSelect.options?.find((option) => option.value === "provider-01")?.default).toBe(
+    expect(providerSelect.options?.find((option) => option.label === "provider-01")?.default).toBe(
       true,
     );
 
@@ -497,7 +745,7 @@ describe("Discord model picker rendering", () => {
 
     const rendered = renderDiscordModelPickerProvidersView({
       command: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       currentModel: "provider-01/model-1",
     });
@@ -514,7 +762,7 @@ describe("Discord model picker rendering", () => {
     // Exactly one bucket-action select exists; it carries view=providers.
     const bucketIds = customIds.filter((customId) => customId.includes(";a=bucket;"));
     expect(bucketIds).toHaveLength(1);
-    expect(bucketIds[0]).toMatch(/a=bucket;v=providers;u=42/);
+    expect(bucketIds[0]).toContain(`a=bucket;v=providers;b=${INTERACTION_BINDING}`);
   });
 
   it("model select customId omits providerBucket/modelBucket (derived at re-render)", () => {
@@ -524,13 +772,13 @@ describe("Discord model picker rendering", () => {
     // findProviderBucketId / findModelBucketId. This test pins the new
     // shape and guards against accidentally re-introducing pb/mb on the
     // model select, which previously pushed the customId past Discord's
-    // 100-char cap for long providers + 20-digit user ids.
+    // 100-char cap for long providers + interaction bindings.
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
     const data = createModelsProviderData({ vllm: models });
 
     const rendered = renderDiscordModelPickerModelsView({
       command: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "vllm",
       page: 1,
@@ -551,9 +799,9 @@ describe("Discord model picker rendering", () => {
     expect(modelActionIds[0]).not.toMatch(/;mb=/);
   });
 
-  it("model select customId stays under Discord's 100-char limit for long providers + 20-digit user ids", () => {
+  it("keeps model select customId under 100 chars with a long provider and binding", () => {
     // Regression for reviewloop pass 3 finding #1: combining a long
-    // provider id, full Discord snowflake user id, and bucket fields was
+    // provider id, interaction binding, and bucket fields was
     // pushing the model select customId past 100 chars and crashing the
     // render. With pb/mb dropped, the cap holds.
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
@@ -561,7 +809,7 @@ describe("Discord model picker rendering", () => {
 
     const rendered = renderDiscordModelPickerModelsView({
       command: "models",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "azure-openai-responses",
       page: 1,
@@ -606,7 +854,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "models",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "google",
       page: 1,
@@ -632,7 +880,7 @@ describe("Discord model picker rendering", () => {
 
     expect(runtimeCustomId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
     expect(parsed.modelBucket).toBe("21-30");
-    expect(parsed.runtime).toBeUndefined();
+    expect(parsed.runtimeFingerprint).toBeUndefined();
   });
 
   it("model bucket select keeps long runtime state compact", () => {
@@ -659,7 +907,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "models",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "google-gemini-cli",
       page: 1,
@@ -684,8 +932,9 @@ describe("Discord model picker rendering", () => {
     );
 
     expect(bucketCustomId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
-    expect(parsed.runtime).toBeUndefined();
-    expect(parsed.runtimeIndex).toBe(1);
+    expect(parsed.runtimeFingerprint).toBe(
+      createDiscordModelPickerRuntimeFingerprint("google-gemini-cli", "google-gemini-cli"),
+    );
   });
 
   it("model pagination derives provider buckets to stay under Discord's customId limit", () => {
@@ -697,7 +946,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "models",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "azure-openai-responses",
       page: 1,
@@ -767,7 +1016,7 @@ describe("Discord model picker rendering", () => {
 
     const rendered = renderDiscordModelPickerProvidersView({
       command: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       providerBucket: "p",
     });
@@ -808,7 +1057,7 @@ describe("Discord model picker rendering", () => {
 
     const rendered = renderDiscordModelPickerProvidersView({
       command: "model",
-      userId: "99",
+      interactionBinding: INTERACTION_BINDING,
       data,
       layout: "classic",
     });
@@ -826,12 +1075,228 @@ describe("Discord model picker rendering", () => {
     expect(firstComponent.type).toBe(ComponentType.ActionRow);
   });
 
+  it("caps v2 text displays and classic content without splitting Unicode", () => {
+    const provider = `provider-${"😀".repeat(2_100)}`;
+    const model = `model-${"🚀".repeat(2_100)}`;
+    const modelRef = `${provider}/${model}`;
+    const data = createModelsProviderData({ [provider]: [model] });
+
+    const v2Payload = serializePayload(
+      toDiscordModelPickerMessagePayload(
+        renderDiscordModelPickerModelsView({
+          command: "model",
+          interactionBinding: INTERACTION_BINDING,
+          data,
+          provider,
+          currentModel: modelRef,
+          pendingModel: modelRef,
+          pendingModelIndex: 1,
+        }),
+      ),
+    ) as { components?: SerializedComponent[] };
+    const textDisplays = flattenSerializedComponents(v2Payload.components).filter(
+      (component) => component.type === DISCORD_TEXT_DISPLAY_COMPONENT_TYPE,
+    );
+
+    expect(textDisplays.length).toBeGreaterThan(1);
+    expect(textDisplays.every((component) => (component.content?.length ?? 0) <= 4_000)).toBe(true);
+    expect(textDisplays.every((component) => isWellFormedUtf16(component.content ?? ""))).toBe(
+      true,
+    );
+    expect(textDisplays.some((component) => component.content?.endsWith("…"))).toBe(true);
+
+    const classicPayload = serializePayload(
+      toDiscordModelPickerMessagePayload(
+        renderDiscordModelPickerModelsView({
+          command: "model",
+          interactionBinding: INTERACTION_BINDING,
+          data,
+          provider,
+          currentModel: modelRef,
+          pendingModel: modelRef,
+          pendingModelIndex: 1,
+          layout: "classic",
+        }),
+      ),
+    ) as { content?: string };
+
+    expect(classicPayload.content?.length).toBeLessThanOrEqual(2_000);
+    expect(classicPayload.content?.endsWith("…")).toBe(true);
+    expect(isWellFormedUtf16(classicPayload.content ?? "")).toBe(true);
+  });
+
+  it("omits reset and default recent controls when the configured default is filtered out", () => {
+    const data = createModelsProviderData({ openai: ["gpt-visible"] });
+    data.resolvedDefault = { provider: "anthropic", model: "claude-hidden" };
+
+    const modelRows = renderModelsViewRows({
+      command: "model",
+      interactionBinding: INTERACTION_BINDING,
+      data,
+      provider: "openai",
+      currentModel: "openai/gpt-visible",
+      pendingModel: "openai/gpt-visible",
+      pendingModelIndex: 1,
+      quickModels: ["anthropic/claude-hidden", "openai/gpt-visible"],
+    });
+    const modelComponents = modelRows.flatMap((row) => row.components ?? []);
+
+    expect(
+      modelComponents.some((component) =>
+        component.options?.some((option) => option.label === "gpt-visible"),
+      ),
+    ).toBe(true);
+    expect(modelComponents.some((component) => component.label === "Submit")).toBe(true);
+    expect(modelComponents.some((component) => component.label === "Reset to default")).toBe(false);
+    expect(modelComponents.some((component) => component.custom_id?.includes(";a=reset;"))).toBe(
+      false,
+    );
+
+    const recentLabels = renderRecentsViewRows({
+      command: "model",
+      interactionBinding: INTERACTION_BINDING,
+      data,
+      quickModels: ["anthropic/claude-hidden", "openai/gpt-visible"],
+    })
+      .flatMap((row) => row.components ?? [])
+      .map((component) => component.label);
+    expect(recentLabels).toContain("openai/gpt-visible");
+    expect(recentLabels).not.toContain("anthropic/claude-hidden (default)");
+    expect(recentLabels).not.toContain("anthropic/claude-hidden");
+  });
+
+  it("keeps trailing model and recents controls in classic fallback rendering", () => {
+    const data = createModelsProviderData({ openai: ["gpt-4.1", "gpt-4o"] });
+    const modelPayload = serializePayload(
+      toDiscordModelPickerMessagePayload(
+        renderDiscordModelPickerModelsView({
+          command: "model",
+          interactionBinding: INTERACTION_BINDING,
+          data,
+          provider: "openai",
+          currentModel: "openai/gpt-4.1",
+          pendingModel: "openai/gpt-4o",
+          pendingModelIndex: 2,
+          layout: "classic",
+        }),
+      ),
+    ) as { content?: string; components?: SerializedComponent[] };
+    const modelCustomIds = (modelPayload.components ?? [])
+      .flatMap((row) => row.components ?? [])
+      .map((component) => component.custom_id ?? "");
+    expect(modelPayload.content).toContain("Selected: openai/gpt-4o");
+    expect(modelCustomIds.some((customId) => customId.includes(";a=submit;"))).toBe(true);
+    expect(modelCustomIds.some((customId) => customId.includes(";a=reset;"))).toBe(true);
+
+    const recentsPayload = serializePayload(
+      toDiscordModelPickerMessagePayload(
+        renderDiscordModelPickerRecentsView({
+          command: "model",
+          interactionBinding: INTERACTION_BINDING,
+          data,
+          quickModels: ["openai/gpt-4o"],
+          layout: "classic",
+        }),
+      ),
+    ) as { content?: string; components?: SerializedComponent[] };
+    const recentsCustomIds = (recentsPayload.components ?? [])
+      .flatMap((row) => row.components ?? [])
+      .map((component) => component.custom_id ?? "");
+    expect(recentsPayload.content).toContain("Tap a model to switch.");
+    expect(recentsCustomIds.some((customId) => customId.includes(";a=back;"))).toBe(true);
+  });
+
+  it("caps the maximal classic models view at five action rows", () => {
+    const bucketedModels = [
+      ...Array.from({ length: 30 }, (_, index) => `alpha-${String(index + 1).padStart(2, "0")}`),
+      "beta-01",
+    ];
+    const providerEntries = Object.fromEntries(
+      Array.from({ length: 30 }, (_, index) => [
+        `provider-${String(index + 1).padStart(2, "0")}`,
+        ["model"],
+      ]),
+    );
+    const data = createModelsProviderData({ ...providerEntries, vllm: bucketedModels });
+    data.resolvedDefault = { provider: "vllm", model: "alpha-01" };
+    data.runtimeChoicesByProvider = new Map([
+      [
+        "vllm",
+        [
+          { id: "openclaw", label: "OpenClaw Default" },
+          { id: "codex", label: "Codex" },
+        ],
+      ],
+    ]);
+
+    const payload = serializePayload(
+      toDiscordModelPickerMessagePayload(
+        renderDiscordModelPickerModelsView({
+          command: "model",
+          interactionBinding: INTERACTION_BINDING,
+          data,
+          provider: "vllm",
+          page: 1,
+          currentModel: "vllm/alpha-02",
+          currentRuntime: "codex",
+          pendingModel: "vllm/alpha-03",
+          pendingModelIndex: 3,
+          pendingRuntime: "codex",
+          quickModels: ["vllm/beta-01"],
+          layout: "classic",
+        }),
+      ),
+    ) as { components?: SerializedComponent[] };
+    const rows = payload.components ?? [];
+    const controls = rows.flatMap((row) => row.components ?? []);
+    const actions = controls.flatMap((component) => {
+      const action = parseDiscordModelPickerCustomId(component.custom_id ?? "")?.action;
+      return action ? [action] : [];
+    });
+
+    expect(rows).toHaveLength(5);
+    expect(rows.every((row) => row.type === DISCORD_ACTION_ROW_COMPONENT_TYPE)).toBe(true);
+    expect(rows.every((row) => (row.components?.length ?? 0) <= 5)).toBe(true);
+    expect(actions).toEqual(
+      expect.arrayContaining(["bucket", "runtime", "model", "nav", "reset", "submit"]),
+    );
+    expect(actions).not.toContain("provider");
+    expect(controls.map((component) => component.label)).toEqual(
+      expect.arrayContaining(["Reset to default", "Submit"]),
+    );
+  });
+
+  it("packs and caps classic recents within Discord's five action rows", () => {
+    const models = Array.from({ length: 7 }, (_, index) => `model-${index}`);
+    const data = createModelsProviderData({ openai: models });
+    const payload = serializePayload(
+      toDiscordModelPickerMessagePayload(
+        renderDiscordModelPickerRecentsView({
+          command: "model",
+          interactionBinding: INTERACTION_BINDING,
+          data,
+          quickModels: models.slice(1).map((model) => `openai/${model}`),
+          layout: "classic",
+        }),
+      ),
+    ) as { components?: SerializedComponent[] };
+    const rows = payload.components ?? [];
+
+    expect(rows.length).toBeLessThanOrEqual(5);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => (row.components?.length ?? 0) <= 5)).toBe(true);
+    const labels = rows.flatMap((row) => row.components ?? []).map((component) => component.label);
+    expect(labels).toContain("openai/model-5");
+    expect(labels).not.toContain("openai/model-6");
+    expect(labels).toContain("Back");
+  });
+
   it("preserves the stored model suffix spacing in Discord current-model text", () => {
     const data = createModelsProviderData({ openai: [" gpt-5", "gpt-4o"] });
 
     const rendered = renderDiscordModelPickerProvidersView({
       command: "model",
-      userId: "99",
+      interactionBinding: INTERACTION_BINDING,
       data,
       currentModel: " OpenAI/ gpt-5 ",
       layout: "classic",
@@ -860,7 +1325,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "models",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "vllm",
       page: 1,
@@ -874,7 +1339,7 @@ describe("Discord model picker rendering", () => {
       .find(
         (component) =>
           component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE &&
-          component.options?.some((option) => option.value === "vllm"),
+          parseDiscordModelPickerCustomId(component.custom_id ?? "")?.action === "provider",
       );
     expect(providerSelect).toBeUndefined();
 
@@ -903,7 +1368,7 @@ describe("Discord model picker rendering", () => {
 
     const rendered = renderDiscordModelPickerModelsView({
       command: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "openai",
       page: 1,
@@ -928,7 +1393,7 @@ describe("Discord model picker rendering", () => {
     }
     expect(providerSelect.options?.length).toBe(2);
     const openaiProviderOption = providerSelect.options?.find(
-      (option) => option.value === "openai",
+      (option) => option.label === "openai",
     );
     expect(openaiProviderOption?.default).toBe(true);
     const parsedProviderState = parseDiscordModelPickerCustomId(providerSelect.custom_id ?? "");
@@ -941,7 +1406,7 @@ describe("Discord model picker rendering", () => {
       throw new Error("models view did not render a model select");
     }
     expect(modelSelect.options?.length).toBe(3);
-    const o3ModelOption = modelSelect.options?.find((option) => option.value === "o3");
+    const o3ModelOption = modelSelect.options?.find((option) => option.label === "o3");
     expect(o3ModelOption?.default).toBe(true);
 
     const parsedModelSelectState = parseDiscordModelPickerCustomId(modelSelect.custom_id ?? "");
@@ -966,8 +1431,130 @@ describe("Discord model picker rendering", () => {
     const submitState = parseDiscordModelPickerCustomId(navButtons[3]?.custom_id ?? "");
     expect(submitState?.action).toBe("submit");
     expect(submitState?.provider).toBe("openai");
-    expect(submitState?.modelIndex).toBeUndefined();
-    expect(submitState?.modelToken).toBe(createDiscordModelPickerModelToken("openai", "o3"));
+    expect(submitState?.modelFingerprint).toBe(
+      createDiscordModelPickerModelFingerprint("openai", "o3"),
+    );
+  });
+
+  it("keeps select labels and opaque values within Discord limits", () => {
+    const provider = `provider-${"p".repeat(180)}`;
+    const model = ` ${"m".repeat(140)}`;
+    const runtime = `runtime-${"r".repeat(120)}`;
+    const data = createModelsProviderData({ [provider]: [model] });
+    data.runtimeChoicesByProvider = new Map([
+      [
+        provider,
+        [
+          {
+            id: runtime,
+            label: `Runtime ${"L".repeat(120)}`,
+            description: `Runtime description ${"D".repeat(120)}`,
+          },
+          { id: "openclaw", label: "OpenClaw Default" },
+        ],
+      ],
+    ]);
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      interactionBinding: INTERACTION_BINDING,
+      data,
+      provider,
+      pendingModel: `${provider}/${model}`,
+      pendingModelIndex: 1,
+      pendingRuntime: runtime,
+    });
+    const options = rows
+      .flatMap((row) => row.components ?? [])
+      .flatMap((component) => component.options ?? []);
+
+    expect(options.length).toBeGreaterThan(0);
+    for (const option of options) {
+      expect(option.label?.length ?? 0).toBeLessThanOrEqual(100);
+      expect(option.value.length).toBeLessThanOrEqual(100);
+      expect(option.description?.length ?? 0).toBeLessThanOrEqual(100);
+    }
+    const modelOption = requireValue(
+      options.find(
+        (option) => option.value === createDiscordModelPickerModelFingerprint(provider, model),
+      ),
+      "long model should render with an opaque select value",
+    );
+    expect(modelOption.label).toHaveLength(100);
+    expect(modelOption.label?.endsWith("…")).toBe(true);
+    expect(modelOption.default).toBe(true);
+    const modelSelect = requireValue(
+      rows
+        .flatMap((row) => row.components ?? [])
+        .find((component) =>
+          component.options?.some((option) => option.value === modelOption.value),
+        ),
+      "long provider model select should render",
+    );
+    expect(modelSelect.placeholder).toHaveLength(150);
+    expect(modelSelect.placeholder?.endsWith("…")).toBe(true);
+
+    const emojiProvider = `provider-${"😀".repeat(100)}`;
+    const emojiRows = renderModelsViewRows({
+      command: "model",
+      interactionBinding: INTERACTION_BINDING,
+      data: createModelsProviderData({ [emojiProvider]: ["model"] }),
+      provider: emojiProvider,
+    });
+    const emojiPlaceholder = requireValue(
+      emojiRows
+        .flatMap((row) => row.components ?? [])
+        .find((component) => component.options?.some((option) => option.label === "model"))
+        ?.placeholder,
+      "emoji provider model select should have a placeholder",
+    );
+    expect(emojiPlaceholder.length).toBeLessThanOrEqual(150);
+    expect(emojiPlaceholder.endsWith("…")).toBe(true);
+    expect(emojiPlaceholder.slice(0, -1).endsWith("😀")).toBe(true);
+  });
+
+  it("paginates runtime choices within Discord's 25-option limit", () => {
+    const data = createModelsProviderData({ openai: ["gpt-4o"] });
+    data.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        Array.from({ length: 60 }, (_, index) => ({
+          id: `runtime-${String(index + 1).padStart(2, "0")}`,
+          label: `Runtime ${index + 1}`,
+        })),
+      ],
+    ]);
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      interactionBinding: INTERACTION_BINDING,
+      data,
+      provider: "openai",
+      currentRuntime: "runtime-30",
+    });
+    const runtimeSelect = requireValue(
+      rows
+        .flatMap((row) => row.components ?? [])
+        .find((component) => component.placeholder?.startsWith("Select runtime")),
+      "runtime picker should render",
+    );
+
+    expect(runtimeSelect.options).toHaveLength(25);
+    expect(runtimeSelect.options?.some((option) => option.value === "runtime-page-prev")).toBe(
+      true,
+    );
+    expect(runtimeSelect.options?.some((option) => option.value === "runtime-page-next")).toBe(
+      true,
+    );
+    expect(runtimeSelect.options?.find((option) => option.label === "Runtime 30")?.default).toBe(
+      true,
+    );
+    expect(runtimeSelect.placeholder).toBe("Select runtime (page 2/3)");
+    expect(parseDiscordModelPickerCustomId(runtimeSelect.custom_id ?? "")).toMatchObject({
+      action: "runtime",
+      runtimePage: 2,
+      runtimeFingerprint: createDiscordModelPickerRuntimeFingerprint("openai", "runtime-30"),
+    });
   });
 
   it("defaults the runtime picker to the first effective runtime choice", () => {
@@ -995,7 +1582,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "openai",
       page: 1,
@@ -1012,23 +1599,26 @@ describe("Discord model picker rendering", () => {
     if (!runtimeSelect) {
       throw new Error("models view did not render a runtime select");
     }
-    expect(runtimeSelect.options?.find((option) => option.value === "codex")?.default).toBe(true);
-    expect(runtimeSelect.options?.find((option) => option.value === "openclaw")?.default).toBe(
-      false,
+    expect(runtimeSelect.options?.find((option) => option.label === "OpenAI Codex")?.default).toBe(
+      true,
     );
+    expect(
+      runtimeSelect.options?.find((option) => option.label === "OpenClaw Default")?.default,
+    ).toBe(false);
 
     const modelSelect = rows[2]?.components?.find(
       (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
     const parsedModelSelectState = parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "");
-    expect(parsedModelSelectState?.runtime).toBeUndefined();
+    expect(parsedModelSelectState?.runtimeFingerprint).toBeUndefined();
 
     const navButtons = rows[3]?.components ?? [];
     const submitState = parseDiscordModelPickerCustomId(navButtons.at(-1)?.custom_id ?? "");
     expect(submitState?.action).toBe("submit");
-    expect(submitState?.runtime).toBeUndefined();
-    expect(submitState?.modelIndex).toBeUndefined();
-    expect(submitState?.modelToken).toBe(createDiscordModelPickerModelToken("openai", "o3"));
+    expect(submitState?.runtimeFingerprint).toBeUndefined();
+    expect(submitState?.modelFingerprint).toBe(
+      createDiscordModelPickerModelFingerprint("openai", "o3"),
+    );
   });
 
   it("carries only explicit runtime picker state into model submit ids", () => {
@@ -1055,7 +1645,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "models",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "openai",
       currentModel: "openai/gpt-4.1",
@@ -1068,17 +1658,15 @@ describe("Discord model picker rendering", () => {
       (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
     const modelSelectState = parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "");
-    expect(modelSelectState?.runtime).toBeUndefined();
-    expect(modelSelectState?.runtimeIndex).toBe(2);
+    const runtimeFingerprint = createDiscordModelPickerRuntimeFingerprint("openai", "openclaw");
+    expect(modelSelectState?.runtimeFingerprint).toBe(runtimeFingerprint);
     const submitState = parseDiscordModelPickerCustomId(
       rows[3]?.components?.at(-1)?.custom_id ?? "",
     );
-    expect(submitState?.runtime).toBeUndefined();
-    expect(submitState?.runtimeIndex).toBe(2);
+    expect(submitState?.runtimeFingerprint).toBe(runtimeFingerprint);
     const resetState = parseDiscordModelPickerCustomId(rows[3]?.components?.[2]?.custom_id ?? "");
     expect(resetState?.action).toBe("reset");
-    expect(resetState?.runtime).toBeUndefined();
-    expect(resetState?.runtimeIndex).toBe(2);
+    expect(resetState?.runtimeFingerprint).toBe(runtimeFingerprint);
   });
 
   it("renders not-found model view with a back button", () => {
@@ -1086,7 +1674,7 @@ describe("Discord model picker rendering", () => {
 
     const rendered = renderDiscordModelPickerModelsView({
       command: "model",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "does-not-exist",
       providerPage: 3,
@@ -1122,7 +1710,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "model",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "openai",
       page: 1,
@@ -1149,7 +1737,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "model",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "openai",
       page: 1,
@@ -1183,7 +1771,7 @@ describe("Discord model picker rendering", () => {
 
     const rows = renderModelsViewRows({
       command: "model",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       provider: "openai",
       page: 1,
@@ -1212,7 +1800,7 @@ describe("Discord model picker recents view", () => {
     // Neither quickModel matches, so no deduping — 1 default + 2 recents + 1 back = 4 rows.
     const rows = renderRecentsViewRows({
       command: "model",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       quickModels: ["openai/gpt-4o", "anthropic/claude-sonnet-4-5"],
       currentModel: "openai/gpt-4o",
@@ -1231,8 +1819,9 @@ describe("Discord model picker recents view", () => {
     );
     expect(defaultState.action).toBe("submit");
     expect(defaultState.view).toBe("recents");
-    expect(defaultState.recentSlot).toBeUndefined();
-    expect(defaultState.modelToken).toBe(createDiscordModelPickerModelToken("openai", "gpt-4.1"));
+    expect(defaultState.modelFingerprint).toBe(
+      createDiscordModelPickerModelFingerprint("openai", "gpt-4.1"),
+    );
 
     // Second row: first recent.
     const recentBtn1 = requireValue(
@@ -1243,8 +1832,9 @@ describe("Discord model picker recents view", () => {
       parseDiscordModelPickerCustomId(recentBtn1.custom_id ?? ""),
       "first recent custom id should parse",
     );
-    expect(recentState1.recentSlot).toBeUndefined();
-    expect(recentState1.modelToken).toBe(createDiscordModelPickerModelToken("openai", "gpt-4o"));
+    expect(recentState1.modelFingerprint).toBe(
+      createDiscordModelPickerModelFingerprint("openai", "gpt-4o"),
+    );
 
     // Third row: second recent.
     const recentBtn2 = requireValue(
@@ -1255,9 +1845,8 @@ describe("Discord model picker recents view", () => {
       parseDiscordModelPickerCustomId(recentBtn2.custom_id ?? ""),
       "second recent custom id should parse",
     );
-    expect(recentState2.recentSlot).toBeUndefined();
-    expect(recentState2.modelToken).toBe(
-      createDiscordModelPickerModelToken("anthropic", "claude-sonnet-4-5"),
+    expect(recentState2.modelFingerprint).toBe(
+      createDiscordModelPickerModelFingerprint("anthropic", "claude-sonnet-4-5"),
     );
 
     // Fourth row (after divider): Back button.
@@ -1280,11 +1869,11 @@ describe("Discord model picker recents view", () => {
 
     const rows = renderRecentsViewRows({
       command: "model",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       quickModels: ["openai/gpt-4o"],
       currentModel: "openai/gpt-4o",
-      runtime: "codex",
+      runtimeFingerprint: createDiscordModelPickerRuntimeFingerprint("openai", "codex"),
     });
 
     const defaultState = requireValue(
@@ -1300,9 +1889,10 @@ describe("Discord model picker recents view", () => {
       "recents back button custom id should parse",
     );
 
-    expect(defaultState.runtime).toBe("codex");
-    expect(recentState.runtime).toBe("codex");
-    expect(backState.runtime).toBe("codex");
+    const runtimeFingerprint = createDiscordModelPickerRuntimeFingerprint("openai", "codex");
+    expect(defaultState.runtimeFingerprint).toBe(runtimeFingerprint);
+    expect(recentState.runtimeFingerprint).toBe(runtimeFingerprint);
+    expect(backState.runtimeFingerprint).toBe(runtimeFingerprint);
   });
 
   it("preserves the browse model bucket on recents back buttons", () => {
@@ -1312,7 +1902,7 @@ describe("Discord model picker recents view", () => {
 
     const rows = renderRecentsViewRows({
       command: "model",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       quickModels: ["openai/model-21"],
       currentModel: "openai/model-21",
@@ -1339,12 +1929,15 @@ describe("Discord model picker recents view", () => {
 
     const rows = renderRecentsViewRows({
       command: "model",
-      userId: "12345678901234567890",
+      interactionBinding: INTERACTION_BINDING,
       data,
       quickModels: ["google-gemini-cli/qwen3-02"],
       currentModel: "google-gemini-cli/qwen3-02",
       provider: "google-gemini-cli",
-      runtimeIndex: 1,
+      runtimeFingerprint: createDiscordModelPickerRuntimeFingerprint(
+        "google-gemini-cli",
+        "google-gemini-cli",
+      ),
     });
 
     const states = rows.map((row) => {
@@ -1355,9 +1948,13 @@ describe("Discord model picker recents view", () => {
         "recents custom id should parse",
       );
     });
-    expect(states[0]?.runtimeIndex).toBe(1);
-    expect(states[1]?.runtimeIndex).toBe(1);
-    expect(states[2]?.runtimeIndex).toBe(1);
+    const runtimeFingerprint = createDiscordModelPickerRuntimeFingerprint(
+      "google-gemini-cli",
+      "google-gemini-cli",
+    );
+    expect(states[0]?.runtimeFingerprint).toBe(runtimeFingerprint);
+    expect(states[1]?.runtimeFingerprint).toBe(runtimeFingerprint);
+    expect(states[2]?.runtimeFingerprint).toBe(runtimeFingerprint);
   });
 
   it("includes (default) suffix on default model button label", () => {
@@ -1367,7 +1964,7 @@ describe("Discord model picker recents view", () => {
 
     const rows = renderRecentsViewRows({
       command: "model",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       quickModels: ["openai/gpt-4o"],
       currentModel: "openai/gpt-4o",
@@ -1387,7 +1984,7 @@ describe("Discord model picker recents view", () => {
     // Default is openai/gpt-4o (first key). quickModels contains the default.
     const rows = renderRecentsViewRows({
       command: "model",
-      userId: "42",
+      interactionBinding: INTERACTION_BINDING,
       data,
       quickModels: ["openai/gpt-4o", "anthropic/claude-sonnet-4-5"],
       currentModel: "openai/gpt-4o",

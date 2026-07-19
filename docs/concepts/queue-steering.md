@@ -38,7 +38,7 @@ Codex review and manual compaction turns reject same-turn steering. When a runti
 
 ## Burst example
 
-If four users send messages while the agent is executing a tool call:
+If one user sends four messages while the agent is executing a tool call:
 
 - With default behavior, the active runtime receives all four messages in arrival order before its next model decision. OpenClaw drains them at the next model boundary; Codex receives them as one batched `turn/steer`.
 - With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates a followup turn with compatible queued messages after the debounce window.
@@ -46,7 +46,9 @@ If four users send messages while the agent is executing a tool call:
 
 ## Scope
 
-Steering always targets the current active session run. It does not create a new session, change the active run's tool policy, or split messages by sender. In multi-user channels, inbound prompts already include sender and route context, so the next model call can see who sent each message.
+Steering always targets the current active session run. It never changes that run's tool policy. OpenClaw compares the authenticated sender, account, roles, owner/authorization bits, agent, session, and conversation/thread scope with the immutable identity that minted the active run's tools. Only an exact match can enter that run.
+
+In a multi-user channel, a message from another sender—or from the same sender after relevant role or authorization facts change—waits for a separate followup turn. This prevents one person from borrowing another person's active tool capability. The same check applies to `/steer` and other active-run injection paths.
 
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 

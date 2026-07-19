@@ -2,10 +2,7 @@
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import {
-  createAuthorizationInvocationContext,
-  createAuthorizationPrincipal,
-} from "../../../plugins/authorization-policy-context.js";
+import { resolveTurnAuthorityAuthorization } from "../../../plugins/turn-authority.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   applyCodeModeCatalog,
@@ -76,27 +73,9 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     sessionKey: input.sandboxSessionKey,
     sessionId: attempt.sessionId,
     runId: attempt.runId,
-    authorization: createAuthorizationInvocationContext({
-      principal: createAuthorizationPrincipal({
-        provider: attempt.messageProvider ?? attempt.messageChannel,
-        accountId: attempt.agentAccountId,
-        senderId: attempt.senderId,
-        senderIsOwner: attempt.senderIsOwner,
-        isAuthorizedSender: attempt.isAuthorizedSender,
-        roleIds: attempt.memberRoleIds,
-      }),
-      agentId: input.sessionAgentId,
-      sessionKey: input.sandboxSessionKey,
-      sessionId: attempt.sessionId,
-      runId: attempt.runId,
-      conversationId:
-        attempt.chatId ??
-        attempt.currentChannelId ??
-        attempt.currentMessagingTarget ??
-        attempt.messageTo,
-      threadId: attempt.currentThreadTs ?? attempt.messageThreadId,
-      trigger: attempt.trigger,
-    }),
+    // Client tools may run after policy reload. Without host-issued authority,
+    // leave authorization absent so final evaluation uses an unknown principal.
+    authorization: resolveTurnAuthorityAuthorization(attempt.turnAuthority),
     approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
     channelId: attempt.currentChannelId,
     trace: input.runTrace,

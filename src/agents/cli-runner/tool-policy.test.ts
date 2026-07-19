@@ -19,11 +19,17 @@ describe("resolveLoopbackToolsAllowFromMcpPermissions", () => {
     ).toEqual(["memory_search", "memory_get"]);
   });
 
-  it("keeps the full surface on wildcard entries", () => {
+  it("keeps the full loopback surface on its namespaced wildcard", () => {
     expect(resolveLoopbackToolsAllowFromMcpPermissions(["mcp__openclaw__*"])).toBeUndefined();
-    expect(
+  });
+
+  it("rejects a bare wildcard that could include foreign MCP servers", () => {
+    expect(() =>
       resolveLoopbackToolsAllowFromMcpPermissions(["mcp__openclaw__memory_search", "*"]),
-    ).toBeUndefined();
+    ).toThrow("bare MCP wildcard cannot be isolated");
+    expect(() => resolveLoopbackToolsAllowFromMcpPermissions(["mcp__openclaw__*", "*"])).toThrow(
+      "bare MCP wildcard cannot be isolated",
+    );
   });
 
   it("drops tools owned by other MCP servers and fails closed when none remain", () => {

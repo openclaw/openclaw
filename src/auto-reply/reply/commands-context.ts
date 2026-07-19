@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { classifyTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { MsgContext } from "../templating.js";
@@ -27,6 +28,42 @@ export function buildCommandContext(params: {
     cfg,
     commandAuthorized: params.commandAuthorized,
   });
+  const classifiedAuthority = classifyTurnAuthoritySnapshot(ctx.TurnAuthority);
+  const turnAuthorization =
+    classifiedAuthority.kind === "issued" ? classifiedAuthority.snapshot.authorization : undefined;
+  const turnPrincipal = turnAuthorization?.principal;
+  const turnSender = turnPrincipal?.kind === "sender" ? turnPrincipal : undefined;
+  const turnOperator = turnPrincipal?.kind === "operator" ? turnPrincipal : undefined;
+  // An issued turn is the authority boundary. Compatibility fields must never widen it.
+  const hasSuppliedTurnAuthority = classifiedAuthority.kind !== "absent";
+  const senderIdentity: Pick<
+    CommandContext,
+    | "senderId"
+    | "senderName"
+    | "senderUsername"
+    | "senderE164"
+    | "senderIsOwner"
+    | "isAuthorizedSender"
+    | "memberRoleIds"
+  > = hasSuppliedTurnAuthority
+    ? {
+        senderId: turnSender?.senderId ?? turnOperator?.clientId ?? turnOperator?.deviceId,
+        senderName: turnSender?.aliases?.name,
+        senderUsername: turnSender?.aliases?.username,
+        senderE164: turnSender?.aliases?.e164,
+        senderIsOwner: turnSender?.senderIsOwner === true || turnOperator?.isOwner === true,
+        isAuthorizedSender: turnSender?.isAuthorizedSender === true || turnOperator !== undefined,
+        memberRoleIds: turnSender?.roleIds?.length ? [...turnSender.roleIds] : undefined,
+      }
+    : {
+        senderId: auth.senderId,
+        senderName: normalizeOptionalString(ctx.SenderName),
+        senderUsername: normalizeOptionalString(ctx.SenderUsername),
+        senderE164: normalizeOptionalString(ctx.SenderE164),
+        senderIsOwner: auth.senderIsOwner,
+        isAuthorizedSender: auth.isAuthorizedSender,
+        memberRoleIds: ctx.MemberRoleIds?.length ? [...ctx.MemberRoleIds] : undefined,
+      };
   const surface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
   const channel = normalizeLowercaseStringOrEmpty(
     ctx.OriginatingChannel ?? ctx.Provider ?? surface,
@@ -49,12 +86,7 @@ export function buildCommandContext(params: {
     channelId: channelId ?? auth.providerId,
     accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: auth.ownerList,
-    senderIsOwner: auth.senderIsOwner,
-    isAuthorizedSender: auth.isAuthorizedSender,
-    senderId: auth.senderId,
-    ...(Array.isArray(ctx.MemberRoleIds) && ctx.MemberRoleIds.length > 0
-      ? { memberRoleIds: [...ctx.MemberRoleIds] }
-      : {}),
+    ...senderIdentity,
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,

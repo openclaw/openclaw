@@ -130,7 +130,12 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (hasKey) {
     // Key lookups may hit legacy store aliases. Migrate/prune before returning
     // the canonical key so later calls operate on one store identity.
-    const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key,
+      agentId: p.agentId,
+      clone: false,
+    });
     const store = target.store;
     if (store[target.canonicalKey]) {
       if (
@@ -168,6 +173,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     const refreshedTarget = resolveGatewaySessionStoreTargetWithStore({
       cfg,
       key: target.canonicalKey,
+      agentId: p.agentId,
       clone: false,
     });
     if (

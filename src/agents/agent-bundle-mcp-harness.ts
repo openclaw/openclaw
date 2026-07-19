@@ -106,6 +106,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
   const scopedRuntime = await getOrCreateRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.conversationCapabilityProfile?.agentId ?? params.policyContext?.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,

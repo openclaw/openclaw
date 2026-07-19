@@ -564,6 +564,12 @@ describe("plugins cli list", () => {
           {
             id: "maintainer-access",
             operations: ["tool.call", "command.invoke"],
+            scope: {
+              agentIds: ["molty"],
+              providers: ["discord"],
+              accountIds: ["molty"],
+              conversationIds: ["maintenance", "maintenance-ops"],
+            },
             status: "not-runtime-inspected",
             missingOperations: [],
           },
@@ -581,7 +587,7 @@ describe("plugins cli list", () => {
     expect(runtimeLogs.join("\n")).toContain("Authorization policies");
     expect(runtimeLogs.join("\n")).toContain("declared: maintainer-access");
     expect(runtimeLogs.join("\n")).toContain(
-      "required: maintainer-access [tool.call, command.invoke] (not-runtime-inspected)",
+      "required: maintainer-access [tool.call, command.invoke] scope(agents=molty; providers=discord; accounts=molty; conversations=maintenance|maintenance-ops) (not-runtime-inspected)",
     );
     expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
     expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");

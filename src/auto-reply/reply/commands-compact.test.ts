@@ -1,6 +1,7 @@
 // Tests compact command behavior for session compaction and reply status.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
@@ -142,6 +143,20 @@ describe("handleCompactCommand", () => {
       compacted: false,
     });
     const abortController = new AbortController();
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "whatsapp",
+        senderId: "authority-owner",
+        aliases: { username: "authority_user" },
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      trigger: "message",
+    });
 
     const result = await handleCompactCommand(
       {
@@ -160,6 +175,15 @@ describe("handleCompactCommand", () => {
           SenderName: "Alice",
           SenderUsername: "alice_u",
           SenderE164: "+15551234567",
+          TurnAuthority: turnAuthority,
+        },
+        command: {
+          ...buildCompactParams("/compact", {} as OpenClawConfig).command,
+          commandBodyNormalized: "/compact",
+          senderId: "owner",
+          senderIsOwner: true,
+          isAuthorizedSender: true,
+          memberRoleIds: ["maintainers", "write"],
         },
         agentDir: "/tmp/openclaw-agent-compact",
         opts: { abortSignal: abortController.signal },
@@ -195,6 +219,10 @@ describe("handleCompactCommand", () => {
     expect(call.senderName).toBe("Alice");
     expect(call.senderUsername).toBe("alice_u");
     expect(call.senderE164).toBe("+15551234567");
+    expect(call.memberRoleIds).toEqual(["maintainers", "write"]);
+    expect(call.senderIsOwner).toBe(true);
+    expect(call.isAuthorizedSender).toBe(true);
+    expect(call.turnAuthority).toBe(turnAuthority);
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
     expect(call.authProfileId).toBe("github-copilot:work");
     expect(call.authProfileIdSource).toBe("user");

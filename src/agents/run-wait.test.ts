@@ -16,8 +16,6 @@ vi.mock("../gateway/call.js", () => ({
 
 import {
   isRecoverableAgentWaitError,
-  readLatestAssistantReply,
-  readLatestAssistantReplySnapshot,
   waitForAgentRun,
   waitForAgentRunsToDrain,
   waitForAgentRunAndReadUpdatedAssistantReply,
@@ -26,6 +24,7 @@ import {
 type AgentWaitGatewayRequest = {
   method?: string;
   params?: {
+    offset?: number;
     runId?: string;
     timeoutMs?: unknown;
   };
@@ -42,6 +41,14 @@ function expectNumber(value: unknown, label: string): number {
 
 function gatewayWaitRequests(): AgentWaitGatewayRequest[] {
   return callGatewayMock.mock.calls.map(([request]) => request as AgentWaitGatewayRequest);
+}
+
+function createRunTurnBoundary(runId: string, seq = 1) {
+  return {
+    role: "user",
+    content: [{ type: "text", text: "run input" }],
+    __openclaw: { idempotencyKey: `${runId}:user`, seq },
+  };
 }
 
 function requireRequestAt(
@@ -72,205 +79,6 @@ function expectAgentWaitRequest(
   expect(paramTimeoutMs).toBeGreaterThanOrEqual(1);
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
-
-describe("readLatestAssistantReply", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
-  it("returns the most recent assistant message when compaction markers trail history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "All checks passed and changes were pushed." }],
-        },
-        { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
-        { role: "system", content: [{ type: "text", text: "Compaction" }] },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("All checks passed and changes were pushed.");
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:child", limit: 50 },
-    });
-  });
-
-  it("falls back to older assistant text when latest assistant has no text", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "older output" }] },
-        { role: "assistant", content: [] },
-        { role: "system", content: [{ type: "text", text: "Compaction" }] },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("older output");
-  });
-
-  it("skips trailing transcript-only OpenClaw assistant mirrors for normal latest-reply reads", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "real worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "already delivered through message tool" }],
-          openclawMessageToolMirror: {
-            toolName: "message",
-            toolCallId: "call-message-send",
-          },
-          timestamp: 11,
-        },
-        {
-          role: "assistant",
-          provider: "openclaw",
-          model: "gateway-injected",
-          content: [{ type: "text", text: "gateway notice" }],
-          timestamp: 12,
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("real worker reply");
-  });
-
-  it("skips trailing inter-session input rows for normal latest-reply reads", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "older worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "forwarded sessions_send prompt" }],
-          provenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:source",
-            sourceTool: "sessions_send",
-          },
-          timestamp: 11,
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:target" });
-
-    expect(result).toBe("older worker reply");
-  });
-
-  it("stops at trailing transcript artifacts for waited reply extraction", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "older worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          provider: "openclaw",
-          model: "gateway-injected",
-          content: [{ type: "text", text: "gateway notice" }],
-          timestamp: 11,
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReplySnapshot({
-      sessionKey: "agent:main:target",
-      stopAtTranscriptArtifact: true,
-    });
-
-    expect(result).toEqual({});
-  });
-
-  it("returns assistant fingerprints for delta comparisons", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "new output" }],
-          timestamp: 42,
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReplySnapshot({ sessionKey: "agent:main:child" });
-
-    expect(result.text).toBe("new output");
-    expect(result.fingerprint).toContain('"timestamp":42');
-  });
-
-  it("reads only final_answer text from phased assistant history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Need fix line quoting properly.",
-              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Fixed the quoting issue.",
-              textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
-            },
-          ],
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("Fixed the quoting issue.");
-  });
-
-  it("preserves spaces across split final_answer history blocks", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Need fix line quoting properly.",
-              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Hi ",
-              textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
-            },
-            {
-              type: "text",
-              text: "there",
-              textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
-            },
-          ],
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("Hi there");
-  });
-});
 
 describe("waitForAgentRun", () => {
   beforeEach(() => {
@@ -471,7 +279,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
         status: "ok",
       })
       .mockResolvedValueOnce({
-        messages: [assistantMessage],
+        messages: [createRunTurnBoundary("run-1"), assistantMessage],
       });
 
     const result = await waitForAgentRunAndReadUpdatedAssistantReply({
@@ -497,6 +305,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       })
       .mockResolvedValueOnce({
         messages: [
+          createRunTurnBoundary("run-text-baseline"),
           {
             role: "assistant",
             content: [{ type: "text", text: "same reply" }],
@@ -533,6 +342,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       .mockResolvedValueOnce({
         messages: [
           baselineMessage,
+          createRunTurnBoundary("run-source-reply"),
           {
             role: "assistant",
             provider: "openclaw",
@@ -572,6 +382,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       .mockResolvedValueOnce({
         messages: [
           baselineMessage,
+          createRunTurnBoundary("run-projected-source-reply"),
           {
             role: "assistant",
             content: [{ type: "text", text: "already delivered source reply" }],
@@ -611,7 +422,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
             sourceTool: "sessions_send",
           },
           content: [{ type: "text", text: "forwarded request" }],
-          __openclaw: { seq: 41 },
+          __openclaw: { idempotencyKey: "run-internal-source-reply:user", seq: 41 },
           timestamp: 41,
         },
         {
@@ -651,7 +462,10 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
             sourceTool: "sessions_send",
           },
           content: [{ type: "text", text: "forwarded request" }],
-          __openclaw: { seq: 41 },
+          __openclaw: {
+            idempotencyKey: "run-internal-source-reply-with-private-final:user",
+            seq: 41,
+          },
           timestamp: 41,
         },
         {
@@ -696,7 +510,10 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
             sourceTool: "sessions_send",
           },
           content: [{ type: "text", text: "new forwarded request" }],
-          __openclaw: { seq: 42 },
+          __openclaw: {
+            idempotencyKey: "run-after-late-internal-source-reply:user",
+            seq: 42,
+          },
           timestamp: 42,
         },
         {
@@ -741,6 +558,10 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
             sourceTool: "sessions_send",
           },
           content: [{ type: "text", text: "forwarded request" }],
+          __openclaw: {
+            idempotencyKey: "run-source-reply-with-private-final:user",
+            seq: 41,
+          },
           timestamp: 41,
         },
         {
@@ -792,6 +613,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
             sourceTool: "sessions_send",
           },
           content: [{ type: "text", text: "new forwarded request" }],
+          __openclaw: { idempotencyKey: "run-after-older-source-reply:user", seq: 41 },
           timestamp: 41,
         },
         {
@@ -826,6 +648,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
             content: [{ type: "text", text: "stale previous reply" }],
             timestamp: 41,
           },
+          createRunTurnBoundary("run-source-reply-without-baseline", 42),
           {
             role: "assistant",
             provider: "openclaw",
@@ -855,6 +678,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       })
       .mockResolvedValueOnce({
         messages: [
+          createRunTurnBoundary("run-2"),
           {
             role: "assistant",
             content: [{ type: "text", text: "fresh reply" }],
@@ -891,6 +715,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       })
       .mockResolvedValueOnce({
         messages: [
+          createRunTurnBoundary("run-with-metadata"),
           {
             role: "assistant",
             content: [{ type: "text", text: "fresh reply" }],
@@ -918,6 +743,107 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       providerStarted: true,
       replyText: "fresh reply",
     });
+  });
+
+  it("does not return a newer concurrent run's reply", async () => {
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" }).mockResolvedValueOnce({
+      messages: [
+        createRunTurnBoundary("run-awaited", 40),
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "awaited reply" }],
+          __openclaw: { seq: 41 },
+        },
+        createRunTurnBoundary("run-concurrent", 42),
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "newer unrelated reply" }],
+          __openclaw: { seq: 43 },
+        },
+      ],
+    });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-awaited",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({ status: "ok", replyText: "awaited reply" });
+  });
+
+  it("does not start history lookup after agent.wait consumes the reply deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      callGatewayMock.mockImplementation(async (request: AgentWaitGatewayRequest) => {
+        if (request.method === "agent.wait") {
+          vi.setSystemTime(2_001);
+          return { status: "ok" };
+        }
+        throw new Error(`unexpected method: ${String(request.method)}`);
+      });
+
+      const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+        runId: "run-deadline-exhausted",
+        sessionKey: "agent:main:child",
+        timeoutMs: 1_000,
+      });
+
+      expect(result).toEqual({ status: "ok", replyText: undefined });
+      expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a hanging history page by the remaining agent.wait deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      let historyPage = 0;
+      callGatewayMock.mockImplementation((request: AgentWaitGatewayRequest) => {
+        if (request.method === "agent.wait") {
+          vi.setSystemTime(1_500);
+          return Promise.resolve({ status: "ok" });
+        }
+        if (request.method !== "chat.history") {
+          return Promise.reject(new Error(`unexpected method: ${String(request.method)}`));
+        }
+        const timeoutMs = expectNumber(request.timeoutMs, "chat.history timeoutMs");
+        historyPage += 1;
+        if (historyPage === 1) {
+          expect(timeoutMs).toBe(500);
+          vi.setSystemTime(1_750);
+          return Promise.resolve({
+            messages: [],
+            hasMore: true,
+            nextOffset: 1,
+            totalMessages: 2,
+          });
+        }
+        return new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("gateway timeout while reading history")), timeoutMs);
+        });
+      });
+
+      const resultPromise = waitForAgentRunAndReadUpdatedAssistantReply({
+        runId: "run-hanging-history",
+        sessionKey: "agent:main:child",
+        timeoutMs: 1_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const historyRequest = requireRequestAt(gatewayWaitRequests(), 2);
+      expect(historyRequest.method).toBe("chat.history");
+      expect(historyRequest.params?.offset).toBe(1);
+      expect(historyRequest.timeoutMs).toBe(250);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(resultPromise).resolves.toEqual({ status: "ok", replyText: undefined });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

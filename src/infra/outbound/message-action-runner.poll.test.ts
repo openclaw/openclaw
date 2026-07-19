@@ -115,6 +115,9 @@ async function runPollAction(params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
+  messageActionAuthorization?: { toolContext?: Record<string, unknown> };
+  sessionKey?: string;
+  senderIsOwner?: boolean;
   inboundEventKind?: "user_request" | "room_event";
 }) {
   await runMessageAction({
@@ -122,18 +125,29 @@ async function runPollAction(params: {
     action: "poll",
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
+    messageActionAuthorization: params.messageActionAuthorization as never,
+    sessionKey: params.sessionKey,
+    senderIsOwner: params.senderIsOwner,
     inboundEventKind: params.inboundEventKind,
   });
   const call = firstMockArg(mocks.preparePollAction, "preparePollAction") as {
-    resolveCorePoll?: () => {
+    ctx?: {
+      agentId?: string;
+      inboundEventKind?: string;
+      params?: Record<string, unknown>;
+      senderIsOwner?: boolean;
+    };
+  };
+  const execution = firstMockArg(mocks.executePreparedPollAction, "executePreparedPollAction") as {
+    poll?: {
       durationHours?: number;
       maxSelections?: number;
+      question?: string;
       threadId?: string;
     };
-    ctx?: { inboundEventKind?: string; params?: Record<string, unknown> };
   };
   return {
-    ...call.resolveCorePoll?.(),
+    ...execution.poll,
     ctx: call.ctx,
   };
 }
@@ -155,10 +169,10 @@ describe("runMessageAction poll handling", () => {
         getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
     );
     mocks.preparePollAction.mockReset();
-    mocks.preparePollAction.mockImplementation((input) => ({
+    mocks.preparePollAction.mockImplementation(async (input) => ({
       kind: "core",
       ctx: input.ctx,
-      poll: input.resolveCorePoll(),
+      poll: await input.resolveCorePoll(),
     }));
     mocks.executePreparedPollAction.mockReset();
     mocks.executePreparedPollAction.mockImplementation(async (prepared) => ({
@@ -186,8 +200,75 @@ describe("runMessageAction poll handling", () => {
         },
       }),
     ).rejects.toThrow(/pollOption requires at least two values/i);
-    expect(mocks.preparePollAction).toHaveBeenCalledTimes(1);
+    expect(mocks.preparePollAction).toHaveBeenCalledOnce();
     expect(mocks.executePreparedPollAction).not.toHaveBeenCalled();
+  });
+
+  it("authorizes exact plugin poll input before shared core parsing", async () => {
+    let seenInput: Record<string, unknown> | undefined;
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected active plugin registry");
+    }
+    registry.authorizationPolicies.push({
+      pluginId: "plugin-poll-input-test",
+      pluginName: "Plugin poll input test",
+      origin: "workspace",
+      source: "test",
+      policy: {
+        id: "plugin-poll-input-test",
+        description: "Captures provider-native poll input",
+        handlers: {
+          "message.action": (request) => {
+            seenInput = request.input;
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    mocks.preparePollAction.mockImplementationOnce(async (input) => ({
+      kind: "plugin",
+      ctx: input.ctx,
+    }));
+    mocks.executePreparedPollAction.mockResolvedValueOnce({
+      handledBy: "plugin",
+      payload: { ok: true },
+    });
+
+    await runMessageAction({
+      cfg: pollerConfig,
+      action: "poll",
+      params: {
+        channel: "poller",
+        target: "poller:123",
+        pollQuestion: { localizationKey: "lunch" },
+        pollOption: { providerTemplate: "lunch-defaults" },
+        pollDurationHours: "provider-default",
+        pollPublic: true,
+        silent: "provider-default",
+      },
+    });
+
+    expect(seenInput).toMatchObject({
+      pollQuestion: { localizationKey: "lunch" },
+      pollOption: { providerTemplate: "lunch-defaults" },
+      pollDurationHours: "provider-default",
+      pollPublic: true,
+      silent: "provider-default",
+    });
+    expect(seenInput).not.toHaveProperty("question");
+    expect(seenInput).not.toHaveProperty("options");
+    expect(seenInput).not.toHaveProperty("maxSelections");
+    const prepared = firstMockArg(mocks.executePreparedPollAction, "executePreparedPollAction") as {
+      ctx?: { params?: Record<string, unknown> };
+    };
+    expect(prepared.ctx?.params).toMatchObject({
+      pollQuestion: { localizationKey: "lunch" },
+      pollOption: { providerTemplate: "lunch-defaults" },
+      pollDurationHours: "provider-default",
+      pollPublic: true,
+      silent: "provider-default",
+    });
   });
 
   it("passes shared poll fields and auto threadId to the prepared action", async () => {
@@ -211,10 +292,62 @@ describe("runMessageAction poll handling", () => {
     expect(call?.ctx?.params?.threadId).toBe("42");
   });
 
+  it("passes the session-resolved agent id into poll execution", async () => {
+    const call = await runPollAction({
+      cfg: pollerConfig,
+      actionParams: {
+        channel: "poller",
+        target: "poller:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      sessionKey: "agent:poll-worker:main",
+    });
+
+    expect(call.ctx?.agentId).toBe("poll-worker");
+  });
+
+  it("passes resolved sender ownership into local poll execution", async () => {
+    const call = await runPollAction({
+      cfg: pollerConfig,
+      actionParams: {
+        channel: "poller",
+        target: "poller:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      senderIsOwner: true,
+    });
+
+    expect(call.ctx?.senderIsOwner).toBe(true);
+  });
+
+  it("transmits cross-context decoration in the core poll question", async () => {
+    const call = await runPollAction({
+      cfg: pollerConfig,
+      actionParams: {
+        channel: "poller",
+        target: "poller:destination",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      toolContext: {
+        currentChannelId: "poller:source",
+        currentChannelProvider: "poller",
+      },
+    });
+
+    expect(call.question).toMatch(/^\[from .+\] Lunch\?$/u);
+    expect(call.ctx?.params?.pollQuestion).toBe(call.question);
+    expect(call.ctx?.params).not.toHaveProperty("message");
+  });
+
   it("authorizes the normalized core poll plan before execution", async () => {
     let seenInput: Record<string, unknown> | undefined;
-    const handler: AuthorizationPolicyHandler<"message.action"> = (request) => {
+    let seenAgentId: string | undefined;
+    const handler: AuthorizationPolicyHandler<"message.action"> = (request, context) => {
       seenInput = request.input;
+      seenAgentId = context.agentId;
       return request.input.pollMulti === true
         ? { effect: "deny", code: "multiselect-blocked" }
         : { effect: "pass" };
@@ -248,6 +381,7 @@ describe("runMessageAction poll handling", () => {
           pollDurationHours: "2",
           silent: "true",
         },
+        sessionKey: "agent:poll-worker:main",
       }),
     ).rejects.toThrow("Message action blocked by authorization policy.");
 
@@ -262,6 +396,7 @@ describe("runMessageAction poll handling", () => {
       pollDurationHours: 2,
       silent: true,
     });
+    expect(seenAgentId).toBe("poll-worker");
     expect(mocks.executePreparedPollAction).not.toHaveBeenCalled();
   });
 

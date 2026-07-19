@@ -19,6 +19,7 @@ export type NativeHookRelayCliOptions = {
   stateDb?: string;
   generation?: string;
   event?: string;
+  failClosedPreToolUse?: boolean;
   preToolUseUnavailable?: string;
   timeout?: string;
 };
@@ -64,7 +65,7 @@ export async function runNativeHookRelayCli(
     timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 5_000);
   } catch (error) {
     writeText(stderr, formatRelayCliError("invalid native hook timeout", error));
-    return 1;
+    return writeNativeHookRelayLocalFailure({ stderr, opts, provider, event });
   }
 
   const deadline = createNativeHookRelayDeadline(timeoutMs);
@@ -85,7 +86,7 @@ export async function runNativeHookRelayCli(
         });
       }
       writeText(stderr, formatRelayCliError("failed to read native hook input", error));
-      return 1;
+      return writeNativeHookRelayLocalFailure({ stderr, opts, provider, event });
     }
 
     try {
@@ -103,9 +104,14 @@ export async function runNativeHookRelayCli(
           timeoutMs: remainingMs,
         }),
       );
-      writeText(stdout, response.stdout);
-      writeText(stderr, response.stderr);
-      return response.exitCode;
+      return writeNativeHookRelayProcessResponse({
+        stdout,
+        stderr,
+        opts,
+        provider,
+        event,
+        response,
+      });
     } catch (error) {
       if (isNativeHookRelayDeadlineError(error)) {
         return writeNativeHookRelayDeadlineResponse({
@@ -136,9 +142,14 @@ export async function runNativeHookRelayCli(
           scopes: [ADMIN_SCOPE],
         }),
       );
-      writeText(stdout, response.stdout);
-      writeText(stderr, response.stderr);
-      return response.exitCode;
+      return writeNativeHookRelayProcessResponse({
+        stdout,
+        stderr,
+        opts,
+        provider,
+        event,
+        response,
+      });
     } catch (error) {
       if (isNativeHookRelayDeadlineError(error)) {
         return writeNativeHookRelayDeadlineResponse({
@@ -286,6 +297,11 @@ function writeNativeHookRelayUnavailableResponse(params: {
   event: string;
   message?: string;
 }): number {
+  const failClosedExitCode = resolveFailClosedPreToolUseExitCode(params);
+  if (failClosedExitCode !== undefined) {
+    writeText(params.stderr, `${params.message ?? "Native hook relay unavailable"}\n`);
+    return failClosedExitCode;
+  }
   const response = renderNativeHookRelayUnavailableResponse({
     provider: params.provider,
     event: params.event,
@@ -295,6 +311,55 @@ function writeNativeHookRelayUnavailableResponse(params: {
   writeText(params.stdout, response.stdout);
   writeText(params.stderr, response.stderr);
   return response.exitCode;
+}
+
+function writeNativeHookRelayProcessResponse(params: {
+  stdout: NodeJS.WritableStream;
+  stderr: NodeJS.WritableStream;
+  opts: NativeHookRelayCliOptions;
+  provider: string;
+  event: string;
+  response: NativeHookRelayProcessResponse;
+}): number {
+  writeText(params.stdout, params.response.stdout);
+  writeText(params.stderr, params.response.stderr);
+  const failClosedExitCode = resolveFailClosedPreToolUseExitCode(params);
+  if (failClosedExitCode !== undefined && params.response.exitCode !== 0) {
+    if (!params.response.stderr.trim()) {
+      writeText(params.stderr, "OpenClaw authorization relay failed; refusing native tool call.\n");
+    }
+    return failClosedExitCode;
+  }
+  return params.response.exitCode;
+}
+
+function writeNativeHookRelayLocalFailure(params: {
+  stderr: NodeJS.WritableStream;
+  opts: NativeHookRelayCliOptions;
+  provider: string;
+  event: string;
+}): number {
+  const failClosedExitCode = resolveFailClosedPreToolUseExitCode(params);
+  if (failClosedExitCode === undefined) {
+    return 1;
+  }
+  writeText(params.stderr, "OpenClaw authorization relay failed; refusing native tool call.\n");
+  return failClosedExitCode;
+}
+
+function resolveFailClosedPreToolUseExitCode(params: {
+  opts: NativeHookRelayCliOptions;
+  provider: string;
+  event: string;
+}): number | undefined {
+  // The no-policy marker is safe only when fail-closed is absent. If both
+  // flags reach the CLI, the authorization boundary must win.
+  if (params.opts.failClosedPreToolUse !== true || params.event !== "pre_tool_use") {
+    return undefined;
+  }
+  // Copilot CLI before 1.0.70 treats exit 2 as a warning. Exit 1 blocks both
+  // those shipped runtimes and newer Copilot versions; Codex/Claude use 2.
+  return params.provider === "copilot" ? 1 : 2;
 }
 
 function writeNativeHookRelayDeadlineResponse(params: {

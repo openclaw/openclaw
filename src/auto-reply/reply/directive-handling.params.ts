@@ -5,6 +5,7 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
+import type { PreparedModelDirectiveEffect } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
@@ -34,6 +35,8 @@ type HandleDirectiveOnlyCoreParams = {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  /** Concrete effect authorized by the reply ingress before this mutation path. */
+  modelDirectiveEffect?: PreparedModelDirectiveEffect;
 };
 
 /** Full directive-only command handler inputs. */

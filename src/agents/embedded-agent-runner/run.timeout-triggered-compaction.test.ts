@@ -1,5 +1,6 @@
 // Coverage for timeout-triggered compaction and retry routing.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
@@ -56,6 +57,13 @@ type CompactRuntimeContext = {
   currentThreadTs?: string;
   currentMessageId?: string;
   senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
+  memberRoleIds?: string[];
+  turnAuthority?: unknown;
   authProfileId?: string;
   provider?: string;
   model?: string;
@@ -299,6 +307,20 @@ describe("timeout-triggered compaction", () => {
 
   it("passes channel, thread, message, and sender context into timeout compaction", async () => {
     useOpenAIPlatformAuthFixture();
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "slack",
+        accountId: "acct-1",
+        senderId: "timeout-maintainer",
+        aliases: { name: "Timeout Maintainer", username: "timeout_user" },
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+      agentId: "main",
+      sessionKey: "test-key",
+      trigger: "message",
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -327,6 +349,13 @@ describe("timeout-triggered compaction", () => {
       currentThreadTs: "thread-1",
       currentMessageId: "message-1",
       senderId: "sender-1",
+      senderName: "Legacy Sender",
+      senderUsername: "legacy_user",
+      senderE164: "+15550001111",
+      senderIsOwner: true,
+      isAuthorizedSender: false,
+      memberRoleIds: ["legacy-role"],
+      turnAuthority,
       agentHarnessId: "openclaw",
       modelSelectionLocked: true,
       config: {
@@ -343,6 +372,13 @@ describe("timeout-triggered compaction", () => {
     expect(compactParams.runtimeContext?.currentThreadTs).toBe("thread-1");
     expect(compactParams.runtimeContext?.currentMessageId).toBe("message-1");
     expect(compactParams.runtimeContext?.senderId).toBe("sender-1");
+    expect(compactParams.runtimeContext?.senderName).toBe("Legacy Sender");
+    expect(compactParams.runtimeContext?.senderUsername).toBe("legacy_user");
+    expect(compactParams.runtimeContext?.senderE164).toBe("+15550001111");
+    expect(compactParams.runtimeContext?.senderIsOwner).toBe(true);
+    expect(compactParams.runtimeContext?.isAuthorizedSender).toBe(false);
+    expect(compactParams.runtimeContext?.memberRoleIds).toEqual(["legacy-role"]);
+    expect(compactParams.runtimeContext?.turnAuthority).toBe(turnAuthority);
     expect(compactParams.runtimeContext?.modelSelectionLocked).toBe(true);
     expect(compactParams.runtimeContext?.provider).toBe("openai");
     expect(compactParams.runtimeContext?.model).toBe("gpt-5.5");

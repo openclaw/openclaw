@@ -8,8 +8,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
@@ -196,6 +205,8 @@ describe("exec PATH login shell merge", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
@@ -215,6 +226,71 @@ describe("exec PATH login shell merge", () => {
       const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
       expect(value).toBe("ok");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("authorizes and executes the same post-hook normalized exec params", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-policy-xml-"));
+    try {
+      const policyInputs: unknown[] = [];
+      const registry = createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: async () => ({
+            params: {
+              command: "echo ok</arg_value>>",
+              workdir: `${tempDir}</arg_value>>`,
+              host: "gateway</arg_value>>",
+              security: "full</arg_value>>",
+              ask: "off</arg_value>>",
+              yieldMs: FOREGROUND_TEST_YIELD_MS,
+            },
+          }),
+        },
+      ]);
+      registry.authorizationPolicies.push({
+        pluginId: "exec-policy",
+        source: "/plugins/exec-policy/index.ts",
+        policy: {
+          id: "exec-policy",
+          description: "Observe canonical exec effects",
+          handlers: {
+            "tool.call": (request) => {
+              policyInputs.push(request.input);
+              return { effect: "pass" };
+            },
+          },
+        },
+      });
+      initializeGlobalHookRunner(registry);
+      setActivePluginRegistry(registry);
+      const execTool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const execute = vi.fn(execTool.execute.bind(execTool));
+      const instrumented = { ...execTool, execute } as unknown as AnyAgentTool;
+      const wrapped = wrapToolWithBeforeToolCallHook(instrumented, {
+        loopDetection: { enabled: false },
+      });
+
+      const result = await wrapped.execute(
+        "call-policy-xml-suffix",
+        { command: "echo initial", workdir: tempDir },
+        undefined,
+        undefined,
+      );
+
+      const expected = {
+        command: "echo ok",
+        workdir: tempDir,
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      };
+      expect(policyInputs).toEqual([expected]);
+      expect(execute.mock.calls[0]?.[1]).toEqual(expected);
+      expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

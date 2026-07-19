@@ -10,6 +10,8 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -26,6 +28,33 @@ export type AnnounceTarget = {
   accountId?: string;
   threadId?: string; // Forum topic/thread ID
 };
+
+/** Keeps every unscoped session lane isolated by its adjacent agent identity. */
+export function resolveSessionsSendNestedLane(sessionKey: string, agentId: string): string {
+  const laneSessionKey = parseAgentSessionKey(sessionKey)
+    ? sessionKey
+    : toAgentStoreSessionKey({ agentId, requestKey: sessionKey });
+  return resolveNestedAgentLaneForSession(laneSessionKey);
+}
+
+/** Compares endpoints after binding legacy/global/custom keys to their adjacent agents. */
+export function isSameSessionsSendEndpoint(params: {
+  leftSessionKey: string;
+  leftAgentId: string;
+  rightSessionKey: string;
+  rightAgentId: string;
+}): boolean {
+  return (
+    toAgentStoreSessionKey({
+      agentId: params.leftAgentId,
+      requestKey: params.leftSessionKey,
+    }) ===
+    toAgentStoreSessionKey({
+      agentId: params.rightAgentId,
+      requestKey: params.rightSessionKey,
+    })
+  );
+}
 
 /** Resolves a session key into the channel target used for source-reply announcements. */
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {

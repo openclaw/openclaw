@@ -77,7 +77,7 @@ describe("irc policy", () => {
     expect(resolveIrcGroupRequireMention({ groups, target: "#ops" })).toBe(true);
   });
 
-  it("falls through to wildcard fields when the matched field is unset", () => {
+  it("applies sender policies before falling through to wildcard tools", () => {
     const groups = {
       "#ops": { toolsBySender: { "*": { allow: ["sessions.list"] } } },
       "*": { requireMention: false, tools: { deny: ["exec"] } },
@@ -85,7 +85,38 @@ describe("irc policy", () => {
 
     expect(resolveIrcGroupRequireMention({ groups, target: "#ops" })).toBe(false);
     expect(resolveIrcGroupToolPolicy({ groups, target: "#ops" })).toEqual({
+      allow: ["sessions.list"],
+    });
+  });
+
+  it("matches channel-prefixed senders against the admitted source provider", () => {
+    const groups = {
+      "#ops": {
+        tools: { deny: ["exec"] },
+        toolsBySender: {
+          "channel:discord:alice": { allow: ["sessions.list"] },
+        },
+      },
+    };
+
+    expect(
+      resolveIrcGroupToolPolicy({
+        groups,
+        target: "#ops",
+        senderMessageProvider: "discord",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["sessions.list"] });
+    expect(resolveIrcGroupToolPolicy({ groups, target: "#ops", senderId: "alice" })).toEqual({
       deny: ["exec"],
     });
+    expect(
+      resolveIrcGroupToolPolicy({
+        groups,
+        target: "#ops",
+        senderMessageProvider: null,
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
   });
 });

@@ -18,6 +18,7 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import { resolveSessionModelRef } from "../session-utils.js";
 
 type GatewaySessionCompactionParams = {
@@ -28,6 +29,7 @@ type GatewaySessionCompactionParams = {
   sessionKey: string;
   sessionStoreKey: string;
   storePath: string;
+  turnAuthority?: TurnAuthoritySnapshot;
 };
 
 function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): boolean {
@@ -129,6 +131,7 @@ export async function runGatewaySessionCompaction(
       allowed: false,
       defaultLevel: "off",
     },
+    turnAuthority: params.turnAuthority,
     trigger: "manual",
   });
 }

@@ -1,10 +1,13 @@
 // Covers agent harness selection, fallback behavior, and compaction routing.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSteeringAuthorizationAffinity } from "../../auto-reply/reply/steering-authorization-affinity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
+import { createAuthorizationPrincipal } from "../../plugins/authorization-policy-context.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -155,8 +158,9 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
+    steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({}),
     config,
-  } as EmbeddedRunAttemptParams;
+  };
 }
 
 function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
@@ -943,6 +947,100 @@ describe("runAgentHarnessAttempt", () => {
         senderIsOwner: false,
       }),
     ).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "display name",
+      aliasParams: { senderName: "Ada Lovelace" },
+      policyKey: "name:Ada Lovelace",
+      forgedField: "senderName",
+      forgedValue: "Forged User",
+      forgedPolicyKey: "name:Forged User",
+    },
+    {
+      name: "username",
+      aliasParams: { senderUsername: "@Ada" },
+      policyKey: "username:ada",
+      forgedField: "senderUsername",
+      forgedValue: "forged-user",
+      forgedPolicyKey: "username:forged-user",
+    },
+    {
+      name: "E.164 number",
+      aliasParams: { senderE164: "+15550001111" },
+      policyKey: "e164:+15550001111",
+      forgedField: "senderE164",
+      forgedValue: "+15559999999",
+      forgedPolicyKey: "e164:+15559999999",
+    },
+  ])(
+    "uses the issued $name alias for plugin harness sender policy",
+    ({ aliasParams, policyKey, forgedField, forgedValue, forgedPolicyKey }) => {
+      const turnAuthority = createTurnAuthoritySnapshot({
+        principal: createAuthorizationPrincipal({
+          provider: "discord",
+          accountId: "default",
+          senderId: "maintainer-1",
+          ...aliasParams,
+        }),
+      });
+      const base = {
+        ...createAttemptParams(),
+        messageProvider: "discord",
+        agentAccountId: "default",
+        senderId: "forged-sender",
+        [forgedField]: forgedValue,
+        turnAuthority,
+      };
+
+      expect(
+        resolvePluginHarnessPolicyToolsAllow({
+          ...base,
+          config: {
+            tools: { toolsBySender: { [policyKey]: { deny: ["exec"] } } },
+          } as OpenClawConfig,
+        }),
+      ).toEqual([]);
+      expect(
+        resolvePluginHarnessPolicyToolsAllow({
+          ...base,
+          config: {
+            tools: { toolsBySender: { [forgedPolicyKey]: { deny: ["*"] } } },
+          } as OpenClawConfig,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("does not infer a delivery provider for a provider-less issued sender", () => {
+    const config = {
+      tools: {
+        toolsBySender: {
+          "channel:discord:maintainer-1": { allow: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+    const base = {
+      ...createAttemptParams(config),
+      messageProvider: "discord",
+      agentAccountId: "default",
+      senderId: "maintainer-1",
+    };
+    const resolveForProvider = (provider?: string) =>
+      resolvePluginHarnessPolicyToolsAllow({
+        ...base,
+        turnAuthority: createTurnAuthoritySnapshot({
+          principal: createAuthorizationPrincipal({
+            provider,
+            accountId: "default",
+            senderId: "maintainer-1",
+          }),
+        }),
+      });
+
+    expect(resolveForProvider()).toEqual([]);
+    expect(resolveForProvider("discord")).toBeUndefined();
   });
 
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {

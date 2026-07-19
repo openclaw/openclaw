@@ -52,8 +52,10 @@ import {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
 } from "../plugins/authorization-policy-context.js";
+import { materializeAuthorizationToolInput } from "../plugins/authorization-policy-input.js";
 import {
   AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  hasAuthorizationPoliciesForOperation,
   runAuthorizationPolicies,
 } from "../plugins/authorization-policy.js";
 import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
@@ -243,7 +245,15 @@ type BeforeToolCallPreparingTool = AnyAgentTool & {
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
   ) => unknown;
-  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
+  finalizeBeforeToolCallParams?: (
+    params: unknown,
+    preparedParams: unknown,
+  ) => unknown | Promise<unknown>;
+  adoptBeforeToolCallParamsSnapshot?: (
+    snapshot: unknown,
+    finalizedParams: unknown,
+    preparedParams: unknown,
+  ) => void;
 };
 
 export type BeforeToolCallPolicyDiagnosticState = {
@@ -1926,6 +1936,11 @@ export function wrapToolWithBeforeToolCallHook(
         return blockedResult;
       }
       let executeParams: unknown;
+      const authorizationPolicyActive = hasAuthorizationPoliciesForOperation({
+        operation: "tool.call",
+        config: ctx?.config,
+      });
+      let invalidAuthorizationInput = false;
       try {
         // Stop cancellation-ignoring hooks before the synchronous mutation boundary.
         signal?.throwIfAborted();
@@ -1935,43 +1950,70 @@ export function wrapToolWithBeforeToolCallHook(
           hookParams,
           adjustedParams: outcome.params,
         });
-        executeParams =
-          (tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams?.(
-            executeParams,
-            preparedParams,
-          ) ?? executeParams;
+        if (authorizationPolicyActive) {
+          const detachedParams = materializeAuthorizationToolInput(executeParams);
+          if (!detachedParams) {
+            invalidAuthorizationInput = true;
+          } else {
+            executeParams = detachedParams;
+          }
+        }
+        if (!invalidAuthorizationInput) {
+          executeParams =
+            (await (tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams?.(
+              executeParams,
+              preparedParams,
+            )) ?? executeParams;
+        }
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
       }
-      const authorizationDenial = await runAuthorizationPolicies({
-        request: {
-          operation: "tool.call",
-          toolName: normalizedToolName,
-          phase: "final",
-          ...(isPlainObject(executeParams) &&
-          typeof executeParams.action === "string" &&
-          executeParams.action.trim()
-            ? { action: executeParams.action.trim() }
-            : {}),
-          input: executeParams as Record<string, PluginJsonValue>,
-        },
-        context:
-          ctx?.authorization ??
-          createAuthorizationInvocationContext({
-            principal: createAuthorizationPrincipal({}),
-            agentId: ctx?.agentId,
-            sessionKey: ctx?.sessionKey,
-            sessionId: ctx?.sessionId,
-            runId: ctx?.runId,
-            conversationId: ctx?.channelId,
-          }),
-        config: ctx?.config,
-        signal,
-      });
-      if (authorizationDenial) {
+      if (authorizationPolicyActive && !invalidAuthorizationInput) {
+        const finalizedParams = executeParams;
+        const detachedParams = materializeAuthorizationToolInput(finalizedParams);
+        if (!detachedParams) {
+          invalidAuthorizationInput = true;
+        } else {
+          (tool as BeforeToolCallPreparingTool).adoptBeforeToolCallParamsSnapshot?.(
+            detachedParams,
+            finalizedParams,
+            preparedParams,
+          );
+          executeParams = detachedParams;
+        }
+      }
+      const authorizationInput = executeParams as Record<string, PluginJsonValue>;
+      const authorizationDenial = invalidAuthorizationInput
+        ? true
+        : await runAuthorizationPolicies({
+            request: {
+              operation: "tool.call",
+              toolName: normalizedToolName,
+              phase: "final",
+              ...(isPlainObject(authorizationInput) &&
+              typeof authorizationInput.action === "string" &&
+              authorizationInput.action.trim()
+                ? { action: authorizationInput.action.trim() }
+                : {}),
+              input: authorizationInput,
+            },
+            context:
+              ctx?.authorization ??
+              createAuthorizationInvocationContext({
+                principal: createAuthorizationPrincipal({}),
+                agentId: ctx?.agentId,
+                sessionKey: ctx?.sessionKey,
+                sessionId: ctx?.sessionId,
+                runId: ctx?.runId,
+                conversationId: ctx?.channelId,
+              }),
+            config: ctx?.config,
+            signal,
+          });
+      if (invalidAuthorizationInput || authorizationDenial) {
         const reason = AUTHORIZATION_POLICY_DENIED_MESSAGE;
-        const eventBase = buildEventBase(executeParams);
+        const eventBase = buildEventBase(invalidAuthorizationInput ? {} : executeParams);
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEvent({
             type: "tool.execution.blocked",
@@ -1997,7 +2039,7 @@ export function wrapToolWithBeforeToolCallHook(
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
-          toolParams: executeParams,
+          toolParams: invalidAuthorizationInput ? {} : executeParams,
           toolCallId,
           result: blockedResult,
           toolCallOrdinal,

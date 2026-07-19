@@ -4,8 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import {
+  createOperatorTurnAuthoritySnapshot,
+  rebindTurnAuthoritySnapshot,
+} from "../plugins/turn-authority.js";
+import {
   abortChatRunById,
   abortChatRunsForProvider,
+  attachChatAbortControllerTurnAuthority,
   boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
@@ -180,6 +185,133 @@ describe("isChatStopCommandText", () => {
 });
 
 describe("registerChatAbortController", () => {
+  it("attaches one immutable process-issued steering authority", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-authority",
+      sessionId: "sess-authority",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      timeoutMs: 60_000,
+    });
+    const entry = registration.entry;
+    expect(entry).toBeDefined();
+    if (!entry) {
+      throw new Error("expected registered abort entry");
+    }
+    const authority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      connectionId: "owner-connection",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-authority",
+      conversationId: "agent:main:main",
+      trigger: "gateway",
+    });
+
+    expect(attachChatAbortControllerTurnAuthority(entry, authority)).toBe(true);
+    expect(entry.steeringAuthorizationAffinity).toBeDefined();
+    expect(Object.getOwnPropertyDescriptor(entry, "steeringAuthorizationAffinity")).toMatchObject({
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+    expect(attachChatAbortControllerTurnAuthority(entry, authority)).toBe(true);
+
+    const otherAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      connectionId: "other-connection",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-authority",
+      conversationId: "agent:main:main",
+      trigger: "gateway",
+    });
+    expect(attachChatAbortControllerTurnAuthority(entry, otherAuthority)).toBe(false);
+  });
+
+  it("rejects agent, session key, and session id mismatches before attachment", () => {
+    const registration = registerChatAbortController({
+      chatAbortControllers: new Map(),
+      runId: "run-authority-mismatch",
+      sessionId: "sess-authority",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      timeoutMs: 60_000,
+    });
+    const entry = registration.entry;
+    if (!entry) {
+      throw new Error("expected registered abort entry");
+    }
+    const createAuthority = (overrides: {
+      agentId?: string;
+      sessionKey?: string;
+      sessionId?: string;
+    }) =>
+      createOperatorTurnAuthoritySnapshot({
+        scopes: ["operator.write"],
+        connectionId: "owner-connection",
+        agentId: overrides.agentId ?? "main",
+        sessionKey: overrides.sessionKey ?? "agent:main:main",
+        sessionId: overrides.sessionId ?? "sess-authority",
+        conversationId: "agent:main:main",
+        trigger: "gateway",
+      });
+
+    expect(
+      attachChatAbortControllerTurnAuthority(entry, createAuthority({ agentId: "other" })),
+    ).toBe(false);
+    expect(
+      attachChatAbortControllerTurnAuthority(
+        entry,
+        createAuthority({ sessionKey: "agent:main:other" }),
+      ),
+    ).toBe(false);
+    expect(
+      attachChatAbortControllerTurnAuthority(entry, createAuthority({ sessionId: "sess-other" })),
+    ).toBe(false);
+    expect(entry.steeringAuthorizationAffinity).toBeUndefined();
+    expect(attachChatAbortControllerTurnAuthority(entry, createAuthority({}))).toBe(true);
+  });
+
+  it("accepts a host-issued authority explicitly rebound to the registered target", () => {
+    const registration = registerChatAbortController({
+      chatAbortControllers: new Map(),
+      runId: "run-authority-rebound",
+      sessionId: "sess-target",
+      sessionKey: "agent:target:main",
+      agentId: "target",
+      timeoutMs: 60_000,
+    });
+    const entry = registration.entry;
+    if (!entry) {
+      throw new Error("expected registered abort entry");
+    }
+    const sourceAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      connectionId: "owner-connection",
+      agentId: "source",
+      sessionKey: "agent:source:main",
+      sessionId: "sess-source",
+      conversationId: "agent:source:main",
+      trigger: "gateway",
+    });
+    const reboundAuthority = rebindTurnAuthoritySnapshot(sourceAuthority, {
+      agentId: "target",
+      sessionKey: "agent:target:main",
+      sessionId: "sess-target",
+      runId: "run-authority-rebound",
+      trigger: "sessions_send",
+    });
+    if (!reboundAuthority) {
+      throw new Error("expected rebound authority");
+    }
+
+    expect(attachChatAbortControllerTurnAuthority(entry, sourceAuthority)).toBe(false);
+    expect(attachChatAbortControllerTurnAuthority(entry, reboundAuthority)).toBe(true);
+  });
+
   it("expires registrations immediately when the process clock is invalid", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({

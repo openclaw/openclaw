@@ -21,6 +21,8 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
+import { resolveTurnAuthorityAuthorization } from "../../plugins/turn-authority.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   annotateInterSessionPromptText,
@@ -64,6 +66,7 @@ export function startAgentRunExecution(params: {
   requestedSessionKey?: string;
   requestedSessionKeyRaw?: string;
   resolvedSessionId?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
   agentId?: string;
   activeSessionAgentId: string;
   delivery: AgentDeliveryPhaseResult;
@@ -76,6 +79,8 @@ export function startAgentRunExecution(params: {
   images: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder: PromptImageOrderEntry[];
   effectiveTranscriptInputText: string;
+  /** Transcript override recovered only from a verified sessions_send delegation. */
+  delegatedTranscriptMessage?: string;
   inputProvenance?: InputProvenance;
   runId: string;
   idempotencyKey: string;
@@ -184,7 +189,7 @@ export function startAgentRunExecution(params: {
         params.imageOrder.length === 0
           ? createUserTurnTranscriptRecorder({
               input: {
-                text: params.effectiveTranscriptInputText,
+                text: params.delegatedTranscriptMessage ?? params.effectiveTranscriptInputText,
                 timestamp: Date.now(),
                 idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
                 ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
@@ -282,18 +287,45 @@ export function startAgentRunExecution(params: {
         runId: params.runId,
         sessionEntry: params.sessionEntry,
       });
+      const turnAuthorization = resolveTurnAuthorityAuthorization(params.turnAuthority);
+      const turnPrincipal = turnAuthorization?.principal;
+      const delegatedProvider =
+        turnPrincipal?.kind === "sender" || turnPrincipal?.kind === "unknown"
+          ? turnPrincipal.provider
+          : undefined;
+      const delegatedAccountId =
+        turnPrincipal?.kind === "sender" || turnPrincipal?.kind === "unknown"
+          ? turnPrincipal.accountId
+          : undefined;
+      const delegatedSenderId =
+        turnPrincipal?.kind === "sender" ? turnPrincipal.senderId : undefined;
+      const delegatedSenderIsOwner =
+        turnPrincipal?.kind === "sender"
+          ? turnPrincipal.senderIsOwner === true
+          : turnPrincipal?.kind === "operator"
+            ? turnPrincipal.isOwner === true
+            : false;
+      const delegatedThreadId =
+        turnAuthorization?.threadId == null ? undefined : String(turnAuthorization.threadId);
       const runContext = {
         messageChannel:
-          restartRecoveryChannelContext?.channel ?? params.delivery.originMessageChannel,
+          restartRecoveryChannelContext?.channel ??
+          delegatedProvider ??
+          params.delivery.originMessageChannel,
         accountId:
-          restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
-        senderId: restartRecoveryChannelContext?.requesterSenderId,
+          restartRecoveryChannelContext?.requesterAccountId ??
+          delegatedAccountId ??
+          params.delivery.resolvedAccountId,
+        senderId: restartRecoveryChannelContext?.requesterSenderId ?? delegatedSenderId,
         groupId: params.groupId,
         groupChannel: params.groupChannel,
         groupSpace: params.groupSpace,
-        currentChannelId: restartRecoveryChannelContext?.currentChannelId,
+        currentChannelId:
+          restartRecoveryChannelContext?.currentChannelId ?? turnAuthorization?.conversationId,
+        chatId: turnAuthorization?.conversationId,
         currentThreadTs:
           restartRecoveryChannelContext?.currentThreadTs ??
+          delegatedThreadId ??
           (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
       };
       setChannelSourceTurnId(runContext, restartRecoveryChannelContext?.sourceTurnId);
@@ -305,6 +337,7 @@ export function startAgentRunExecution(params: {
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
+          transcriptMessage: params.delegatedTranscriptMessage,
           images: params.images,
           imageOrder: params.imageOrder,
           agentId: ingressAgentId,
@@ -346,9 +379,12 @@ export function startAgentRunExecution(params: {
           acpTurnSource: params.request.acpTurnSource,
           internalEvents: params.request.internalEvents,
           inputProvenance: params.inputProvenance,
-          senderIsOwner: params.restoredCronContinuation
-            ? true
-            : clientHasAdminScope(params.client),
+          turnAuthority: params.turnAuthority,
+          senderIsOwner: params.turnAuthority
+            ? delegatedSenderIsOwner
+            : params.restoredCronContinuation
+              ? true
+              : clientHasAdminScope(params.client),
           sessionEffects: params.sessionEffects,
           skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
           preserveUserFacingSessionModelState:

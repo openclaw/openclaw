@@ -471,6 +471,7 @@ describe("createCopilotToolBridge", () => {
 
     it("forwards identity, owner/policy, and channel/routing fields from attemptParams", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
+      const turnAuthority = { authorization: { principal: { kind: "operator" } } } as never;
 
       await createCopilotToolBridge({
         agentId: "agent-1",
@@ -481,6 +482,9 @@ describe("createCopilotToolBridge", () => {
           senderUsername: "ada",
           senderE164: "+15551234567",
           senderIsOwner: true,
+          isAuthorizedSender: false,
+          turnAuthority,
+          parentConversationId: "parent-channel",
           memberRoleIds: ["role-admin"],
           allowGatewaySubagentBinding: true,
           spawnedBy: "parent:agent",
@@ -516,6 +520,8 @@ describe("createCopilotToolBridge", () => {
         senderUsername: "ada",
         senderE164: "+15551234567",
         senderIsOwner: true,
+        isAuthorizedSender: false,
+        parentConversationId: "parent-channel",
         memberRoleIds: ["role-admin"],
         allowGatewaySubagentBinding: true,
         spawnedBy: "parent:agent",
@@ -535,6 +541,7 @@ describe("createCopilotToolBridge", () => {
         enableHeartbeatTool: true,
         delegationCapability: "report_only",
       });
+      expect(opts.turnAuthority).toBe(turnAuthority);
     });
 
     it("falls back messageProvider to attemptParams.messageChannel when messageProvider is absent (codex parity)", async () => {

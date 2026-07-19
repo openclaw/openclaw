@@ -45,6 +45,7 @@ function followupRouteIdentityKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    run.originatingParentConversationId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
@@ -59,6 +60,7 @@ function followupMessageRouteIdentityKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    run.originatingParentConversationId ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
   ]);
 }

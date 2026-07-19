@@ -30,6 +30,8 @@ async function invokeAbort({
   connId,
   deviceId,
   preserveSideRuns,
+  advertiseGatewayBackend = false,
+  inProcessGatewayDispatch = false,
   scopes = ["operator.write"],
 }: {
   context: ReturnType<typeof createChatAbortContext>;
@@ -38,6 +40,8 @@ async function invokeAbort({
   connId: string;
   deviceId: string;
   preserveSideRuns?: boolean;
+  advertiseGatewayBackend?: boolean;
+  inProcessGatewayDispatch?: boolean;
   scopes?: string[];
 }) {
   return await invokeChatAbortHandler({
@@ -50,7 +54,21 @@ async function invokeAbort({
     },
     client: {
       connId,
-      connect: { device: { id: deviceId }, scopes },
+      connect: {
+        ...(advertiseGatewayBackend
+          ? {
+              client: {
+                id: "gateway-client",
+                version: "test",
+                platform: "node",
+                mode: "backend",
+              },
+            }
+          : {}),
+        device: { id: deviceId },
+        scopes,
+      },
+      ...(inProcessGatewayDispatch ? { internal: { inProcessGatewayDispatch: true } } : {}),
     },
   });
 }
@@ -85,6 +103,61 @@ function expectAbortPayload(
 }
 
 describe("chat.abort authorization", () => {
+  it("fails closed for tracked runs without controller ownership", async () => {
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-unowned", createActiveRun("main")]]),
+    });
+
+    const writer = await invokeAbort({
+      context,
+      runId: "run-unowned",
+      connId: "conn-writer",
+      deviceId: "dev-writer",
+    });
+    expect(requireLastRespondCall(writer)[2]?.message).toBe("unauthorized");
+    expect(context.chatAbortControllers.has("run-unowned")).toBe(true);
+
+    const spoofedBackend = await invokeAbort({
+      context,
+      runId: "run-unowned",
+      connId: "conn-spoofed",
+      deviceId: "dev-spoofed",
+      advertiseGatewayBackend: true,
+    });
+    expect(requireLastRespondCall(spoofedBackend)[2]?.message).toBe("unauthorized");
+    expect(context.chatAbortControllers.has("run-unowned")).toBe(true);
+
+    const admin = await invokeAbort({
+      context,
+      runId: "run-unowned",
+      connId: "conn-admin",
+      deviceId: "dev-admin",
+      scopes: ["operator.admin"],
+    });
+    expectAbortPayload(requireLastRespondCall(admin)[1], {
+      aborted: true,
+      runIds: ["run-unowned"],
+    });
+  });
+
+  it("permits only a server-marked in-process dispatcher to abort unowned work", async () => {
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-internal", createActiveRun("main")]]),
+    });
+
+    const internal = await invokeAbort({
+      context,
+      runId: "run-internal",
+      connId: "conn-internal",
+      deviceId: "dev-internal",
+      inProcessGatewayDispatch: true,
+    });
+    expectAbortPayload(requireLastRespondCall(internal)[1], {
+      aborted: true,
+      runIds: ["run-internal"],
+    });
+  });
+
   it("rejects non-admin worker-only inference aborts", async () => {
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
@@ -409,6 +482,17 @@ describe("chat.abort queued-turn contract", () => {
         ],
       ]),
     });
+
+    const spoofedBackend = await invokeAbort({
+      context,
+      runId: "queued-ownerless",
+      connId: "conn-spoofed",
+      deviceId: "dev-spoofed",
+      advertiseGatewayBackend: true,
+    });
+    expect(requireLastRespondCall(spoofedBackend)[2]?.message).toBe("unauthorized");
+    expect(controller.signal.aborted).toBe(false);
+    expect(context.chatQueuedTurns.has("queued-ownerless")).toBe(true);
 
     const respond = await invokeAbort({
       context,

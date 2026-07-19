@@ -16,6 +16,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { TurnAuthoritySnapshot } from "../../../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
@@ -120,8 +121,12 @@ export type RunEmbeddedAgentParams = {
   isAuthorizedSender?: boolean;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
+  /** Immutable host-issued authority for this admitted turn. */
+  turnAuthority?: TurnAuthoritySnapshot;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Transport-native parent conversation ID when the current conversation is a thread. */
+  parentConversationId?: string;
   /** Transport-native chat/conversation ID for hook identity context. */
   chatId?: string;
   /** Channel-specific identity metadata surfaced to plugin hooks. */

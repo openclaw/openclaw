@@ -16,6 +16,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-mark
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -57,6 +58,7 @@ import type {
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import { resolveFallbackCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+import { isCronTurnAuthoritySnapshotForRun } from "./turn-authority.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
@@ -201,6 +203,7 @@ function createCronPromptExecutor(params: {
   agentDir: string;
   agentSessionKey: string;
   runSessionKey: string;
+  turnAuthority: TurnAuthoritySnapshot;
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
   lane?: string;
@@ -435,6 +438,7 @@ function createCronPromptExecutor(params: {
                 agentId: params.agentId,
                 trigger: "cron",
                 jobId: params.job.id,
+                turnAuthority: params.turnAuthority,
                 cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
                 sessionFile,
                 workspaceDir: params.workspaceDir,
@@ -506,6 +510,7 @@ function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
+          turnAuthority: params.turnAuthority,
           cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession === true,
           allowGatewaySubagentBinding: true,
           messageChannel,
@@ -619,6 +624,7 @@ export async function executeCronRun(params: {
   agentDir: string;
   agentSessionKey: string;
   runSessionKey: string;
+  turnAuthority: TurnAuthoritySnapshot;
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
   lane?: string;
@@ -662,6 +668,20 @@ export async function executeCronRun(params: {
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
 }): Promise<CronExecutionResult> {
+  const runId = params.cronSession.sessionEntry.sessionId;
+  if (
+    !isCronTurnAuthoritySnapshotForRun(params.turnAuthority, {
+      jobId: params.job.id,
+      agentId: params.agentId,
+      sessionKey: params.runSessionKey,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      runId,
+    })
+  ) {
+    // Validate the complete scheduler binding before run context registration or
+    // either runner starts; an issued snapshot from another turn is still foreign.
+    throw new Error("cron execution requires matching scheduler-issued turn authority");
+  }
   const resolvedVerboseLevel: VerboseLevel =
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??
@@ -687,6 +707,7 @@ export async function executeCronRun(params: {
     agentDir: params.agentDir,
     agentSessionKey: params.agentSessionKey,
     runSessionKey: params.runSessionKey,
+    turnAuthority: params.turnAuthority,
     usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
     lane: params.lane,

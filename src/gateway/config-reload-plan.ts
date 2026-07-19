@@ -7,6 +7,14 @@ import {
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  normalizePluginsConfigWithResolver,
+  resolveEffectivePluginActivationState,
+} from "../plugins/config-policy.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
+import {
   getActivePluginChannelRegistryVersion,
   getActivePluginHttpRouteRegistry,
   getActivePluginHttpRouteRegistryVersion,
@@ -61,9 +69,33 @@ type GatewayReloadPlanOptions = {
   forceChangedPaths?: Iterable<string>;
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
   candidateConfig?: OpenClawConfig;
+  previousConfig?: OpenClawConfig;
+  nextConfig?: OpenClawConfig;
+  pluginMetadataSnapshot?: PolicyActivationMetadataSnapshot | null;
 };
 
+type PolicyActivationMetadataSnapshot = Pick<
+  PluginMetadataSnapshot,
+  "normalizePluginId" | "pluginIds" | "plugins"
+>;
+
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
+const PLUGIN_AUTHORIZATION_RESTART_RULE: ReloadRule = {
+  prefix: "plugins.entries.<id>.authorization",
+  kind: "restart",
+};
+const PLUGIN_ACTIVATION_RESTART_RULE: ReloadRule = {
+  prefix: "plugins.<activation>",
+  kind: "restart",
+};
+const PLUGIN_ACTIVATION_PREFIXES = [
+  "plugins.enabled",
+  "plugins.allow",
+  "plugins.deny",
+  "plugins.slots",
+  "plugins.bundledDiscovery",
+] as const;
+const PLUGIN_ENTRY_PREFIX = "plugins.entries.";
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
@@ -170,6 +202,7 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
+let cachedAuthorizationPolicyPluginIds = new Set<string>();
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
 let cachedChannelRegistryVersion = -1;
@@ -195,6 +228,16 @@ function listReloadRules(): ReloadRule[] {
   if (cachedReloadRules) {
     return cachedReloadRules;
   }
+  const authorizationPolicyPluginIds = new Set<string>();
+  for (const plugin of registry?.plugins ?? []) {
+    if ((plugin.contracts?.authorizationPolicies?.length ?? 0) > 0) {
+      authorizationPolicyPluginIds.add(normalizePluginPolicyId(plugin.id));
+    }
+  }
+  for (const registration of registry?.authorizationPolicies ?? []) {
+    authorizationPolicyPluginIds.add(normalizePluginPolicyId(registration.pluginId));
+  }
+  cachedAuthorizationPolicyPluginIds = new Set([...authorizationPolicyPluginIds].filter(Boolean));
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
   const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => {
     const restartAction = plugin.reload?.accountScopedRestart
@@ -269,8 +312,196 @@ function listReloadRules(): ReloadRule[] {
   return rules;
 }
 
-function matchRule(path: string): ReloadRule | null {
-  for (const rule of listReloadRules()) {
+function configuredPluginEntryIds(options: GatewayReloadPlanOptions): Set<string> | undefined {
+  if (!options.previousConfig && !options.nextConfig) {
+    return undefined;
+  }
+  const ids = new Set<string>();
+  for (const config of [options.previousConfig, options.nextConfig]) {
+    const entries = config?.plugins?.entries;
+    if (!isPlainObject(entries)) {
+      continue;
+    }
+    for (const id of Object.keys(entries)) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function isPluginEntryActivationPath(path: string, pluginEntryIds?: ReadonlySet<string>): boolean {
+  if (path === "plugins.entries") {
+    return true;
+  }
+  if (!path.startsWith(PLUGIN_ENTRY_PREFIX)) {
+    return false;
+  }
+  if (pluginEntryIds) {
+    for (const id of pluginEntryIds) {
+      const entryPath = `${PLUGIN_ENTRY_PREFIX}${id}`;
+      if (path === entryPath || path === `${entryPath}.enabled`) {
+        return true;
+      }
+    }
+    return false;
+  }
+  // Metadata-only callers have no config keys to disambiguate dotted ids from
+  // nested config. Preserve the historical single-segment fallback there.
+  const remainder = path.slice(PLUGIN_ENTRY_PREFIX.length);
+  const firstDot = remainder.indexOf(".");
+  return firstDot === -1 || (firstDot > 0 && remainder.slice(firstDot) === ".enabled");
+}
+
+function isPluginActivationPath(path: string, pluginEntryIds?: ReadonlySet<string>): boolean {
+  return (
+    isPluginEntryActivationPath(path, pluginEntryIds) ||
+    PLUGIN_ACTIVATION_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}.`))
+  );
+}
+
+function isAuthorizationPolicyPluginEntryPath(
+  path: string,
+  options?: {
+    pluginEntryIds?: ReadonlySet<string>;
+    normalizePluginId?: PolicyActivationMetadataSnapshot["normalizePluginId"];
+  },
+): boolean {
+  const pluginEntryIds = options?.pluginEntryIds;
+  if (
+    cachedAuthorizationPolicyPluginIds.size === 0 ||
+    !pluginEntryIds ||
+    !path.startsWith(PLUGIN_ENTRY_PREFIX)
+  ) {
+    return false;
+  }
+  let configuredId: string | undefined;
+  for (const id of pluginEntryIds) {
+    const entryPath = `${PLUGIN_ENTRY_PREFIX}${id}`;
+    if (
+      (path === entryPath || path.startsWith(`${entryPath}.`)) &&
+      (configuredId === undefined || id.length > configuredId.length)
+    ) {
+      configuredId = id;
+    }
+  }
+  if (!configuredId) {
+    return false;
+  }
+  if (cachedAuthorizationPolicyPluginIds.has(normalizePluginPolicyId(configuredId))) {
+    return true;
+  }
+  // A missing or failed startup resolver cannot prove this key is unrelated.
+  if (!options?.normalizePluginId) {
+    return true;
+  }
+  try {
+    const normalizedId = normalizePluginPolicyId(options.normalizePluginId(configuredId));
+    return !normalizedId || cachedAuthorizationPolicyPluginIds.has(normalizedId);
+  } catch {
+    return true;
+  }
+}
+
+function resolvePolicyActivationMetadataSnapshot(
+  options: GatewayReloadPlanOptions,
+): PolicyActivationMetadataSnapshot | undefined {
+  if (options.pluginMetadataSnapshot !== undefined) {
+    return options.pluginMetadataSnapshot ?? undefined;
+  }
+  return getCurrentPluginMetadataSnapshot({ allowWorkspaceScopedSnapshot: true });
+}
+
+function configActivatesAuthorizationPolicy(params: {
+  config: OpenClawConfig;
+  snapshot: PolicyActivationMetadataSnapshot;
+}): boolean {
+  const normalizedConfig = normalizePluginsConfigWithResolver(
+    params.config.plugins,
+    params.snapshot.normalizePluginId,
+  );
+  return params.snapshot.plugins.some((plugin) => {
+    if ((plugin.contracts?.authorizationPolicies?.length ?? 0) === 0) {
+      return false;
+    }
+    const activation = resolveEffectivePluginActivationState({
+      id: plugin.id,
+      origin: plugin.origin,
+      config: normalizedConfig,
+      rootConfig: params.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    });
+    return activation.enabled && (plugin.origin === "bundled" || activation.explicitlyEnabled);
+  });
+}
+
+function canHotReloadPluginActivation(
+  changedPaths: readonly string[],
+  options: GatewayReloadPlanOptions,
+  snapshot: PolicyActivationMetadataSnapshot | undefined,
+): boolean {
+  const pluginEntryIds = configuredPluginEntryIds(options);
+  if (
+    !changedPaths.some((path) => isPluginActivationPath(path, pluginEntryIds)) ||
+    !options.previousConfig ||
+    !options.nextConfig
+  ) {
+    return false;
+  }
+  // Changing discovery mode can expose manifests outside the current snapshot,
+  // so no existing inventory can prove the next activation set policy-free.
+  if (
+    changedPaths.some(
+      (path) => path === "plugins.bundledDiscovery" || path.startsWith("plugins.bundledDiscovery."),
+    )
+  ) {
+    return false;
+  }
+  // Scoped startup snapshots omit inactive plugins. Only a complete discovered
+  // inventory can prove that both activation sets contain no policy owner.
+  if (!snapshot || snapshot.pluginIds !== undefined) {
+    return false;
+  }
+  const activeRegistry = getActivePluginHttpRouteRegistry();
+  if ((activeRegistry?.authorizationPolicies?.length ?? 0) > 0) {
+    return false;
+  }
+  return ![options.previousConfig, options.nextConfig].some((config) =>
+    configActivatesAuthorizationPolicy({ config, snapshot }),
+  );
+}
+
+function matchRule(
+  path: string,
+  options?: {
+    allowPluginActivationHotReload?: boolean;
+    pluginEntryIds?: ReadonlySet<string>;
+    normalizePluginId?: PolicyActivationMetadataSnapshot["normalizePluginId"];
+  },
+): ReloadRule | null {
+  // Required policies and their registered handlers form one startup security
+  // boundary. Never replace only the config half through ordinary plugin reload.
+  if (/^plugins\.entries\..+\.authorization(?:$|\.requiredPolicies(?:\.|$))/.test(path)) {
+    return PLUGIN_AUTHORIZATION_RESTART_RULE;
+  }
+  const rules = listReloadRules();
+  if (
+    isPluginActivationPath(path, options?.pluginEntryIds) &&
+    options?.allowPluginActivationHotReload !== true
+  ) {
+    return PLUGIN_ACTIVATION_RESTART_RULE;
+  }
+  if (isAuthorizationPolicyPluginEntryPath(path, options)) {
+    return PLUGIN_AUTHORIZATION_RESTART_RULE;
+  }
+  // A policy plugin's entire entry feeds its startup handler registration.
+  // Plugin-declared hot prefixes must not replace that handler in process.
+  for (const pluginId of cachedAuthorizationPolicyPluginIds) {
+    const prefix = `plugins.entries.${pluginId}`;
+    if (path === prefix || path.startsWith(`${prefix}.`)) {
+      return PLUGIN_AUTHORIZATION_RESTART_RULE;
+    }
+  }
+  for (const rule of rules) {
     if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
       return rule;
     }
@@ -409,6 +640,14 @@ export function buildGatewayReloadPlan(
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
   const restartChannelAccounts = new Map<ChannelKind, Set<string>>();
+  const pluginEntryIds = configuredPluginEntryIds(options);
+  const policyActivationMetadataSnapshot =
+    pluginEntryIds !== undefined ? resolvePolicyActivationMetadataSnapshot(options) : undefined;
+  const allowPluginActivationHotReload = canHotReloadPluginActivation(
+    changedPaths,
+    options,
+    policyActivationMetadataSnapshot,
+  );
   const plan: GatewayReloadPlan = {
     changedPaths,
     restartGateway: false,
@@ -497,7 +736,11 @@ export function buildGatewayReloadPlan(
       plan.noopPaths.push(path);
       continue;
     }
-    const rule = matchRule(path);
+    const rule = matchRule(path, {
+      allowPluginActivationHotReload,
+      pluginEntryIds,
+      normalizePluginId: policyActivationMetadataSnapshot?.normalizePluginId,
+    });
     if (!rule) {
       plan.restartGateway = true;
       plan.restartReasons.push(path);

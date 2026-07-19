@@ -425,6 +425,22 @@ The OpenClaw transcript remains the compatibility layer for:
 If your harness stores a sidecar binding, implement `reset(...)` so OpenClaw
 can clear it when the owning OpenClaw session is reset.
 
+### Turn authority and steering
+
+`AgentHarnessAttemptParams.turnAuthority`, when present, is an immutable,
+host-issued snapshot of the caller admitted for that attempt. Preserve that
+exact object when the harness constructs OpenClaw dynamic tools or starts a
+side question. Never synthesize authority from display names, route fields, or
+legacy sender fields; missing authority remains unknown to authorization
+policies.
+
+Channel, command, inter-session, and subagent delivery must use the normal host
+admission and active-run steering paths. Those paths require the exact
+process-issued run affinity before input can enter an existing turn.
+`queueAgentHarnessMessage(...)` is a compatibility escape hatch only for a
+trusted harness plugin operating on the exact active handle it owns; it is not
+a general sender or session authorization API.
+
 ## Tool and media results
 
 Core constructs the OpenClaw tool list and passes it into the prepared

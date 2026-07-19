@@ -22,6 +22,7 @@ import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { createAgentCommandIngressTurnAuthority } from "./agent-command-ingress-authority.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
@@ -566,14 +567,28 @@ async function agentCommandFromIngressInternal(
   }
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
+  if (opts.turnAuthority && opts.ingressAuthority) {
+    throw new Error("Ingress agent runs cannot supply both turnAuthority and ingressAuthority.");
+  }
+  const turnAuthority = opts.ingressAuthority
+    ? createAgentCommandIngressTurnAuthority({
+        facts: opts.ingressAuthority,
+        accountId: opts.accountId,
+        agentId: opts.agentId,
+        sessionKey: opts.sessionKey,
+        senderIsOwner: opts.senderIsOwner,
+      })
+    : opts.turnAuthority;
+  const { ingressAuthority: _ingressAuthority, ...runtimeOpts } = opts;
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
     const result = await runWithAgentCommandRecoveryOwner({
       lifecycleGeneration,
       mode: "claim",
       opts: {
-        ...opts,
+        ...runtimeOpts,
         lifecycleGeneration,
         senderIsOwner: opts.senderIsOwner === true,
+        turnAuthority,
       },
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,

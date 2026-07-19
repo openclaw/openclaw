@@ -4,11 +4,22 @@
  * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
  */
 import crypto from "node:crypto";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
+import { rebindTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
+import {
+  normalizeAgentId,
+  normalizeOptionalAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
   type AssistantReplySnapshot,
@@ -26,6 +37,8 @@ import {
   isAnnounceSkip,
   isNonDeliverableSessionsReply,
   isReplySkip,
+  isSameSessionsSendEndpoint,
+  resolveSessionsSendNestedLane,
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
@@ -54,12 +67,35 @@ async function deliverAnnounceReply(params: {
   announceTarget: AnnounceTarget;
   message: string;
   runContextId: string;
+  targetSessionKey: string;
+  targetAgentId: string;
+  turnAuthority?: TurnAuthoritySnapshot;
 }) {
   const message = params.message.trim();
   if (!message) {
     return;
   }
   try {
+    const targetAgentId = normalizeAgentId(params.targetAgentId);
+    // The target composes the announce, but its effect still belongs to the source turn.
+    // Preserve that principal/source route or Gateway transport auth would widen it to operator.
+    const turnAuthority = rebindTurnAuthoritySnapshot(params.turnAuthority, {
+      agentId: targetAgentId,
+      sessionKey: params.targetSessionKey,
+      trigger: "sessions_send",
+    });
+    if (!turnAuthority) {
+      throw new Error("sessions_send announce delivery requires trusted turn authority");
+    }
+    const agentRuntimeIdentityToken = await mintAgentRuntimeIdentityToken({
+      agentId: targetAgentId,
+      sessionKey: params.targetSessionKey,
+      gatewayMethods: ["send"],
+      messageActionContext: {
+        expiresAtMs: Date.now() + 60_000,
+        turnAuthority,
+      },
+    });
     await sessionsSendA2ADeps.callGateway({
       method: "send",
       params: {
@@ -68,9 +104,17 @@ async function deliverAnnounceReply(params: {
         channel: params.announceTarget.channel,
         accountId: params.announceTarget.accountId,
         threadId: params.announceTarget.threadId,
+        agentId: targetAgentId,
+        sessionKey: params.targetSessionKey,
         idempotencyKey: crypto.randomUUID(),
       },
       timeoutMs: 10_000,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientDisplayName: "agent",
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      scopes: ["operator.write"],
+      requireLocalBackendSharedAuth: true,
+      agentRuntimeIdentityToken,
     });
   } catch (err) {
     log.warn("sessions_send announce delivery failed", {
@@ -84,19 +128,50 @@ async function deliverAnnounceReply(params: {
 
 export async function runSessionsSendA2AFlow(params: {
   targetSessionKey: string;
+  targetAgentId?: string;
   displayKey: string;
   message: string;
   announceTimeoutMs: number;
   maxPingPongTurns: number;
   requesterSessionKey?: string;
+  requesterAgentId?: string;
   requesterChannel?: GatewayMessageChannel;
+  requesterSourceRoute?: AnnounceTarget;
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
+  turnAuthority?: TurnAuthoritySnapshot;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
+    const targetSessionAgentId = parseAgentSessionKey(params.targetSessionKey)?.agentId;
+    const explicitTargetAgentId = normalizeOptionalAgentId(params.targetAgentId);
+    if (!targetSessionAgentId && !explicitTargetAgentId) {
+      throw new Error("sessions_send unscoped target requires an explicit target agent");
+    }
+    const targetAgentId = explicitTargetAgentId ?? normalizeAgentId(targetSessionAgentId);
+    if (targetSessionAgentId && normalizeAgentId(targetSessionAgentId) !== targetAgentId) {
+      throw new Error("sessions_send target agent does not match its session");
+    }
+    const requesterSessionAgentId = parseAgentSessionKey(params.requesterSessionKey)?.agentId;
+    const explicitRequesterAgentId = normalizeOptionalAgentId(params.requesterAgentId);
+    if (params.requesterSessionKey && !requesterSessionAgentId && !explicitRequesterAgentId) {
+      throw new Error("sessions_send unscoped requester requires an explicit requester agent");
+    }
+    const authorityRequesterAgentId = params.turnAuthority?.authorization.agentId
+      ? normalizeAgentId(params.turnAuthority.authorization.agentId)
+      : undefined;
+    const requesterAgentId =
+      explicitRequesterAgentId ??
+      authorityRequesterAgentId ??
+      normalizeAgentId(requesterSessionAgentId);
+    if (
+      (authorityRequesterAgentId && authorityRequesterAgentId !== requesterAgentId) ||
+      (requesterSessionAgentId && normalizeAgentId(requesterSessionAgentId) !== requesterAgentId)
+    ) {
+      throw new Error("sessions_send requester agent does not match its authority and session");
+    }
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
@@ -106,9 +181,16 @@ export async function runSessionsSendA2AFlow(params: {
         callGateway: sessionsSendA2ADeps.callGateway,
       });
       if (wait.status === "ok") {
+        // A missing pre-run snapshot means freshness is unknowable. Never turn
+        // an older assistant message into a new cross-session reply.
+        if (params.baseline === undefined) {
+          return;
+        }
         const latestSnapshot = await readLatestAssistantReplySnapshot({
           sessionKey: params.targetSessionKey,
+          agentId: targetAgentId,
           stopAtTranscriptArtifact: true,
+          attributableToRunId: params.waitRunId,
           callGateway: sessionsSendA2ADeps.callGateway,
         });
         primaryReply = hasUpdatedAssistantReplySnapshot(latestSnapshot, params.baseline)
@@ -131,9 +213,11 @@ export async function runSessionsSendA2AFlow(params: {
             extraSystemPrompt:
               "A previous sessions_send delivery failed after it was accepted. Decide whether to retry, use another route, or report the failure. Do not assume the target received the message.",
             timeoutMs: params.announceTimeoutMs,
-            lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
+            lane: resolveSessionsSendNestedLane(params.requesterSessionKey, requesterAgentId),
             sourceSessionKey: params.targetSessionKey,
             sourceTool: "sessions_send",
+            turnAuthority: params.turnAuthority,
+            targetAgentId: requesterAgentId,
           });
         }
         return;
@@ -146,46 +230,55 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
-      sessionKey: params.targetSessionKey,
-      displayKey: params.displayKey,
-    });
-    const targetChannel = announceTarget?.channel ?? "unknown";
-
     // A same-session send is a human-facing source-channel reply, not a true
     // agent-to-agent announcement. Asking the same session to decide whether to
     // announce can re-run the same prompt and duplicate source-reply side effects.
     const sameSessionSourceReply =
-      params.requesterSessionKey && params.requesterSessionKey === params.targetSessionKey;
-    const canDirectDeliverSameSessionReply =
-      announceTarget &&
-      (!params.requesterChannel || params.requesterChannel === announceTarget.channel);
-    if (sameSessionSourceReply && canDirectDeliverSameSessionReply) {
-      if (params.waitRunId && !params.roundOneReply && !params.baseline) {
+      params.requesterSessionKey &&
+      isSameSessionsSendEndpoint({
+        leftSessionKey: params.requesterSessionKey,
+        leftAgentId: requesterAgentId,
+        rightSessionKey: params.targetSessionKey,
+        rightAgentId: targetAgentId,
+      });
+    if (sameSessionSourceReply && params.requesterSourceRoute) {
+      if (params.waitRunId && !params.roundOneReply && params.baseline === undefined) {
         return;
       }
       await deliverAnnounceReply({
-        announceTarget,
+        // Session delivery metadata can move while the nested run is active.
+        // Use only the immutable host-issued route of the calling turn.
+        announceTarget: params.requesterSourceRoute,
         message: latestReply,
         runContextId,
+        targetSessionKey: params.targetSessionKey,
+        targetAgentId,
+        turnAuthority: params.turnAuthority,
       });
       return;
     }
-    if (sameSessionSourceReply && !announceTarget) {
+    if (sameSessionSourceReply) {
       return;
     }
 
-    if (
-      params.maxPingPongTurns > 0 &&
-      params.requesterSessionKey &&
-      params.requesterSessionKey !== params.targetSessionKey
-    ) {
-      let currentSessionKey = params.requesterSessionKey;
-      let nextSessionKey = params.targetSessionKey;
+    const announceTarget = await resolveAnnounceTarget({
+      sessionKey: params.targetSessionKey,
+      displayKey: params.displayKey,
+      targetAgentId,
+    });
+    const targetChannel = announceTarget?.channel ?? "unknown";
+
+    if (params.maxPingPongTurns > 0 && params.requesterSessionKey && !sameSessionSourceReply) {
+      let currentIsRequester = true;
       let incomingMessage = latestReply;
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
-        const currentRole =
-          currentSessionKey === params.requesterSessionKey ? "requester" : "target";
+        const currentSessionKey = currentIsRequester
+          ? params.requesterSessionKey
+          : params.targetSessionKey;
+        const nextSessionKey = currentIsRequester
+          ? params.targetSessionKey
+          : params.requesterSessionKey;
+        const currentRole = currentIsRequester ? "requester" : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
@@ -197,23 +290,25 @@ export async function runSessionsSendA2AFlow(params: {
         });
         const replyText = await runAgentStep({
           sessionKey: currentSessionKey,
+          targetAgentId: currentIsRequester ? requesterAgentId : targetAgentId,
           message: incomingMessage,
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
-          lane: resolveNestedAgentLaneForSession(currentSessionKey),
+          lane: resolveSessionsSendNestedLane(
+            currentSessionKey,
+            currentIsRequester ? requesterAgentId : targetAgentId,
+          ),
           sourceSessionKey: nextSessionKey,
-          sourceChannel:
-            nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
+          sourceChannel: currentIsRequester ? targetChannel : params.requesterChannel,
           sourceTool: "sessions_send",
+          turnAuthority: params.turnAuthority,
         });
         if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
         }
         latestReply = replyText;
         incomingMessage = replyText;
-        const swap = currentSessionKey;
-        currentSessionKey = nextSessionKey;
-        nextSessionKey = swap;
+        currentIsRequester = !currentIsRequester;
       }
     }
 
@@ -228,14 +323,16 @@ export async function runSessionsSendA2AFlow(params: {
     });
     const announceReply = await runAgentStep({
       sessionKey: params.targetSessionKey,
+      targetAgentId,
       message: "Agent-to-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
-      lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
+      lane: resolveSessionsSendNestedLane(params.targetSessionKey, targetAgentId),
       transcriptMessage: "",
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
+      turnAuthority: params.turnAuthority,
     });
     if (
       announceTarget &&
@@ -248,6 +345,9 @@ export async function runSessionsSendA2AFlow(params: {
         announceTarget,
         message: announceReply,
         runContextId,
+        targetSessionKey: params.targetSessionKey,
+        targetAgentId,
+        turnAuthority: params.turnAuthority,
       });
     }
   } catch (err) {

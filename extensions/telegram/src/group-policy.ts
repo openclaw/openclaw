@@ -122,6 +122,6 @@ export function resolveTelegramGroupToolPolicy(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
-    messageProvider: "telegram",
+    messageProvider: params.senderMessageProvider,
   });
 }

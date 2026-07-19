@@ -96,8 +96,8 @@ function usesUnfilteredCatalogModels(
 
 function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
-  if (!normalized || normalized === "auto" || normalized === "default") {
-    return "openclaw";
+  if (!normalized || normalized === "default") {
+    return "auto";
   }
   return normalized;
 }
@@ -109,6 +109,13 @@ function buildRuntimeChoice(params: {
   cli?: boolean;
 }): ModelsRuntimeChoice {
   const id = normalizeRuntimeChoiceId(params.runtime);
+  if (id === "auto") {
+    return {
+      id,
+      label: "Automatic",
+      description: "Use the configured provider/model runtime policy.",
+    };
+  }
   const label = resolveAgentRuntimeLabel({ config: params.cfg, resolvedHarness: id });
   return {
     id,
@@ -370,14 +377,17 @@ export async function buildModelsProviderData(
       provider === normalizeProviderId(resolvedDefault.provider)
         ? resolvedDefault.model
         : undefined;
-    const choices = runtimeChoicesByProvider.get(provider) ?? [
+    const choices = runtimeChoicesByProvider.get(provider) ?? [];
+    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "auto" }));
+    addRuntimeChoice(
+      choices,
       buildDefaultRuntimeChoice({
         cfg,
         agentId,
         provider,
         modelId: defaultModelId,
       }),
-    ];
+    );
     addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "openclaw" }));
     addRuntimeChoice(
       choices,

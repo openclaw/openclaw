@@ -151,7 +151,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     triggerBodyNormalized: sessionState.triggerBodyNormalized,
     commandAuthorized: params.commandAuthorized,
   });
-  if (command.isAuthorizedSender) {
+  if (command.isAuthorizedSender || params.ctx.TurnAuthority !== undefined) {
     const authorization = await authorizeCoreCommand({
       command,
       ctx: params.ctx,

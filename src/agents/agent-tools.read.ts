@@ -46,6 +46,7 @@ import {
   type ReadToolTruncationDetails,
 } from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+import { composeToolCallParamFinalizer } from "./tools/common.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
@@ -697,22 +698,29 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   options: MemoryFlushAppendOnlyWriteOptions,
 ): AnyAgentTool {
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
+  const finalizeParams = (args: unknown): unknown => {
+    const record = getToolParamsRecord(args);
+    const normalizedRecord = record
+      ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+      : undefined;
+    assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
+    return normalizedRecord ?? args;
+  };
   return {
     ...tool,
     description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
+    finalizeBeforeToolCallParams: composeToolCallParamFinalizer(tool, finalizeParams),
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const record = getToolParamsRecord(args);
-      const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
-        : undefined;
-      assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
+      const normalizedArgs = finalizeParams(args);
+      const normalizedRecord = getToolParamsRecord(normalizedArgs);
       const filePath =
         typeof normalizedRecord?.path === "string" && normalizedRecord.path.trim()
           ? normalizedRecord.path
           : undefined;
-      const content = typeof record?.content === "string" ? record.content : undefined;
+      const content =
+        typeof normalizedRecord?.content === "string" ? normalizedRecord.content : undefined;
       if (!filePath || content === undefined) {
-        return tool.execute(toolCallId, args, signal, onUpdate);
+        return tool.execute(toolCallId, normalizedArgs, signal, onUpdate);
       }
 
       const resolvedPath = resolveToolPathAgainstWorkspaceRoot({
@@ -811,69 +819,70 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 ): AnyAgentTool {
   const pathParamKeys =
     options?.pathParamKeys && options.pathParamKeys.length > 0 ? options.pathParamKeys : ["path"];
-  return {
-    ...tool,
-    execute: async (toolCallId, args, signal, onUpdate) => {
-      const record = getToolParamsRecord(args);
-      let normalizedRecord: Record<string, unknown> | undefined;
-      for (const key of pathParamKeys) {
-        const rawFilePath = record?.[key];
-        if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
-          continue;
-        }
-        const filePath = normalizeFileToolPathParam(rawFilePath);
-        if (!filePath.trim()) {
-          throw malformedXmlArgValuePathError(key);
-        }
-        if (filePath !== rawFilePath && record) {
-          normalizedRecord ??= { ...record };
-          normalizedRecord[key] = filePath;
-        }
-        let guardedRoot = root;
-        let workspaceMapping: ReturnType<typeof mapContainerPathToRoot> | undefined;
-        let sandboxPath = filePath;
-        for (const mount of [...(options?.additionalContainerMounts ?? [])].toSorted(
-          (a, b) => b.containerRoot.length - a.containerRoot.length,
-        )) {
-          const mountMapping = mapContainerPathToRoot({
-            filePath,
-            root: mount.hostRoot,
-            containerRoot: mount.containerRoot,
-          });
-          if (mountMapping.matched) {
-            guardedRoot = path.resolve(mount.hostRoot);
-            sandboxPath = mountMapping.filePath;
-            break;
-          }
-        }
-        if (guardedRoot === root) {
-          workspaceMapping = mapContainerPathToRoot({
-            filePath,
-            root,
-            containerRoot: options?.containerWorkdir,
-          });
-          sandboxPath = workspaceMapping.filePath;
-        }
-        const additionalRoots =
-          guardedRoot === root && !workspaceMapping?.matched
-            ? (options?.additionalRoots ?? [])
-            : [];
-        let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
-        try {
-          sandboxResult = await assertSandboxPathWithinAnyRoot({
-            filePath: sandboxPath,
-            roots: [guardedRoot, ...additionalRoots],
-          });
-        } catch (error) {
-          throw withWorkspaceSafeTempHint(error);
-        }
-        if (options?.normalizeGuardedPathParams && record) {
-          normalizedRecord ??= { ...record };
-          normalizedRecord[key] = sandboxResult.resolved;
+  const finalizeParams = async (args: unknown): Promise<unknown> => {
+    const record = getToolParamsRecord(args);
+    let normalizedRecord: Record<string, unknown> | undefined;
+    for (const key of pathParamKeys) {
+      const rawFilePath = record?.[key];
+      if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
+        continue;
+      }
+      const filePath = normalizeFileToolPathParam(rawFilePath);
+      if (!filePath.trim()) {
+        throw malformedXmlArgValuePathError(key);
+      }
+      if (filePath !== rawFilePath && record) {
+        normalizedRecord ??= { ...record };
+        normalizedRecord[key] = filePath;
+      }
+      let guardedRoot = root;
+      let workspaceMapping: ReturnType<typeof mapContainerPathToRoot> | undefined;
+      let sandboxPath = filePath;
+      for (const mount of [...(options?.additionalContainerMounts ?? [])].toSorted(
+        (a, b) => b.containerRoot.length - a.containerRoot.length,
+      )) {
+        const mountMapping = mapContainerPathToRoot({
+          filePath,
+          root: mount.hostRoot,
+          containerRoot: mount.containerRoot,
+        });
+        if (mountMapping.matched) {
+          guardedRoot = path.resolve(mount.hostRoot);
+          sandboxPath = mountMapping.filePath;
+          break;
         }
       }
-      return tool.execute(toolCallId, normalizedRecord ?? args, signal, onUpdate);
-    },
+      if (guardedRoot === root) {
+        workspaceMapping = mapContainerPathToRoot({
+          filePath,
+          root,
+          containerRoot: options?.containerWorkdir,
+        });
+        sandboxPath = workspaceMapping.filePath;
+      }
+      const additionalRoots =
+        guardedRoot === root && !workspaceMapping?.matched ? (options?.additionalRoots ?? []) : [];
+      let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
+      try {
+        sandboxResult = await assertSandboxPathWithinAnyRoot({
+          filePath: sandboxPath,
+          roots: [guardedRoot, ...additionalRoots],
+        });
+      } catch (error) {
+        throw withWorkspaceSafeTempHint(error);
+      }
+      if (options?.normalizeGuardedPathParams && record) {
+        normalizedRecord ??= { ...record };
+        normalizedRecord[key] = sandboxResult.resolved;
+      }
+    }
+    return normalizedRecord ?? args;
+  };
+  return {
+    ...tool,
+    finalizeBeforeToolCallParams: composeToolCallParamFinalizer(tool, finalizeParams),
+    execute: async (toolCallId, args, signal, onUpdate) =>
+      tool.execute(toolCallId, await finalizeParams(args), signal, onUpdate),
   };
 }
 
@@ -932,18 +941,23 @@ export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
+  const finalizeParams = (params: unknown): Record<string, unknown> => {
+    const record = getToolParamsRecord(params);
+    const normalizedRecord = record
+      ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+      : undefined;
+    assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
+    return normalizedRecord ?? {};
+  };
   return {
     ...base,
+    finalizeBeforeToolCallParams: composeToolCallParamFinalizer(base, finalizeParams),
     execute: async (toolCallId, params, signal) => {
-      const record = getToolParamsRecord(params);
-      const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
-        : undefined;
-      assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
+      const normalizedRecord = finalizeParams(params);
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
-        args: normalizedRecord ?? {},
+        args: normalizedRecord,
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
@@ -994,19 +1008,21 @@ export function wrapReadToolWithSkillContent(
     },
   }) as unknown as AnyAgentTool;
   const virtualRead = createOpenClawReadTool(virtualBase, options);
+  const finalizeParams = (args: unknown): unknown => {
+    const record = getToolParamsRecord(args);
+    return record ? normalizeFileToolPathParamsFromKeys(record, ["path"]) : args;
+  };
   return {
     ...tool,
+    finalizeBeforeToolCallParams: composeToolCallParamFinalizer(tool, finalizeParams),
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const record = getToolParamsRecord(args);
-      const rawPath = record?.path;
-      const normalizedPath =
-        typeof rawPath === "string" ? normalizeFileToolPathParam(rawPath) : undefined;
+      const normalizedArgs = finalizeParams(args);
+      const record = getToolParamsRecord(normalizedArgs);
+      const normalizedPath = typeof record?.path === "string" ? record.path : undefined;
       if (normalizedPath && contentByPath.has(normalizedPath)) {
-        const virtualArgs =
-          normalizedPath === rawPath || !record ? args : { ...record, path: normalizedPath };
-        return virtualRead.execute(toolCallId, virtualArgs, signal, onUpdate);
+        return virtualRead.execute(toolCallId, normalizedArgs, signal, onUpdate);
       }
-      return tool.execute(toolCallId, args, signal, onUpdate);
+      return tool.execute(toolCallId, normalizedArgs, signal, onUpdate);
     },
   };
 }

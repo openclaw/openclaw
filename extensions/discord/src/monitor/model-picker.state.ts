@@ -1,15 +1,21 @@
 // Discord plugin module implements model picker.state behavior.
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import type {
+  ModelsProviderData,
+  ModelsRuntimeChoice,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData } from "../internal/discord.js";
 
 export const DISCORD_MODEL_PICKER_CUSTOM_ID_KEY = "mdlpk";
+export const DISCORD_MODEL_PICKER_RUNTIME_PAGE_PREV_VALUE = "runtime-page-prev";
+export const DISCORD_MODEL_PICKER_RUNTIME_PAGE_NEXT_VALUE = "runtime-page-next";
 const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
 
 const DISCORD_COMPONENT_MAX_SELECT_OPTIONS = 25;
@@ -18,8 +24,31 @@ const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPT
 const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
 function compareBucketItems(left: string, right: string): number {
-  const normalized = left.toLowerCase().localeCompare(right.toLowerCase());
-  return normalized === 0 ? left.localeCompare(right) : normalized;
+  const leftPrefix = firstUnicodeCodePoint(left);
+  const rightPrefix = firstUnicodeCodePoint(right);
+  if (leftPrefix !== rightPrefix) {
+    return leftPrefix < rightPrefix ? -1 : 1;
+  }
+  const leftRemainder = left.slice(firstUnicodeCodePointLength(left));
+  const rightRemainder = right.slice(firstUnicodeCodePointLength(right));
+  const normalized = leftRemainder.toLowerCase().localeCompare(rightRemainder.toLowerCase());
+  if (normalized !== 0) {
+    return normalized;
+  }
+  if (leftRemainder !== rightRemainder) {
+    return leftRemainder < rightRemainder ? -1 : 1;
+  }
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+function firstUnicodeCodePoint(value: string): string {
+  const first = value[Symbol.iterator]().next();
+  return first.done ? "" : first.value.toLowerCase();
+}
+
+function firstUnicodeCodePointLength(value: string): number {
+  const codePoint = value.codePointAt(0);
+  return codePoint === undefined ? 0 : codePoint > 0xffff ? 2 : 1;
 }
 
 const COMMAND_CONTEXTS = ["model", "models"] as const;
@@ -44,19 +73,42 @@ type DiscordModelPickerAction = (typeof PICKER_ACTIONS)[number];
 type DiscordModelPickerView = (typeof PICKER_VIEWS)[number];
 export type DiscordModelPickerLayout = "v2" | "classic";
 
+const COMMAND_CONTEXT_CODES = {
+  model: "m",
+  models: "l",
+} as const satisfies Record<DiscordModelPickerCommandContext, string>;
+const PICKER_ACTION_CODES = {
+  open: "o",
+  provider: "p",
+  model: "m",
+  runtime: "t",
+  submit: "s",
+  quick: "q",
+  back: "b",
+  reset: "d",
+  cancel: "c",
+  recents: "e",
+  nav: "n",
+  bucket: "k",
+} as const satisfies Record<DiscordModelPickerAction, string>;
+const PICKER_VIEW_CODES = {
+  providers: "p",
+  models: "m",
+  recents: "r",
+} as const satisfies Record<DiscordModelPickerView, string>;
+
 export type DiscordModelPickerState = {
   command: DiscordModelPickerCommandContext;
   action: DiscordModelPickerAction;
   view: DiscordModelPickerView;
-  userId: string;
+  interactionBinding: string;
   provider?: string;
-  runtime?: string;
-  runtimeIndex?: number;
+  providerFingerprint?: string;
+  runtimeFingerprint?: string;
+  runtimePage?: number;
   page: number;
   providerPage?: number;
-  modelIndex?: number;
-  modelToken?: string;
-  recentSlot?: number;
+  modelFingerprint?: string;
   /**
    * Letter-range bucket label (e.g. "a-g") when the provider/model count
    * exceeds {@link DISCORD_MODEL_PICKER_BUCKET_THRESHOLD}. Filters the
@@ -76,13 +128,72 @@ const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIO
 
 /** Target items per alpha bucket. Discord caps selects at 25 options. */
 const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;
-const DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+const DISCORD_MODEL_PICKER_MODEL_FINGERPRINT_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+const DISCORD_MODEL_PICKER_PROVIDER_FINGERPRINT_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+const DISCORD_MODEL_PICKER_RUNTIME_FINGERPRINT_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+const DISCORD_MODEL_PICKER_INTERACTION_BINDING_PATTERN = /^[A-Za-z0-9_-]{12}$/u;
+// Picker controls are transient. A process-local key makes their compact route binding
+// opaque and invalidates stale controls after restart instead of trusting unsigned ids.
+const discordModelPickerBindingSeed = randomBytes(32);
 
-export function createDiscordModelPickerModelToken(provider: string, model: string): string {
+export function createDiscordModelPickerInteractionBinding(params: {
+  accountId: string;
+  userId: string;
+  route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
+}): string {
+  return createHmac("sha256", discordModelPickerBindingSeed)
+    .update(
+      JSON.stringify([
+        params.accountId.trim(),
+        params.userId.trim(),
+        params.route.agentId,
+        params.route.sessionKey,
+      ]),
+      "utf8",
+    )
+    .digest("base64url")
+    .slice(0, 12);
+}
+
+export function createDiscordModelPickerModelFingerprint(provider: string, model: string): string {
   return createHash("sha256")
     .update(JSON.stringify([normalizeProviderId(provider), model]), "utf8")
     .digest("base64url")
     .slice(0, 8);
+}
+
+export function createDiscordModelPickerProviderFingerprint(provider: string): string {
+  return createHash("sha256")
+    .update(normalizeProviderId(provider), "utf8")
+    .digest("base64url")
+    .slice(0, 8);
+}
+
+export function createDiscordModelPickerRuntimeFingerprint(
+  provider: string,
+  runtime: string,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify([normalizeProviderId(provider), runtime.trim()]), "utf8")
+    .digest("base64url")
+    .slice(0, 8);
+}
+
+export function getDiscordModelPickerRuntimeChoices(params: {
+  data: ModelsProviderData;
+  provider: string;
+}): ModelsRuntimeChoice[] {
+  const choices = params.data.runtimeChoicesByProvider?.get(normalizeProviderId(params.provider));
+  if (choices?.length) {
+    return choices;
+  }
+  return [
+    {
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
+    },
+  ];
 }
 
 export type DiscordModelPickerBucket = {
@@ -129,6 +240,27 @@ function isValidPickerAction(value: string): value is DiscordModelPickerAction {
 
 function isValidPickerView(value: string): value is DiscordModelPickerView {
   return (PICKER_VIEWS as readonly string[]).includes(value);
+}
+
+function decodeCommandContext(value: string): DiscordModelPickerCommandContext | undefined {
+  if (isValidCommandContext(value)) {
+    return value;
+  }
+  return COMMAND_CONTEXTS.find((command) => COMMAND_CONTEXT_CODES[command] === value);
+}
+
+function decodePickerAction(value: string): DiscordModelPickerAction | undefined {
+  if (isValidPickerAction(value)) {
+    return value;
+  }
+  return PICKER_ACTIONS.find((action) => PICKER_ACTION_CODES[action] === value);
+}
+
+function decodePickerView(value: string): DiscordModelPickerView | undefined {
+  if (isValidPickerView(value)) {
+    return value;
+  }
+  return PICKER_VIEWS.find((view) => PICKER_VIEW_CODES[view] === value);
 }
 
 export function normalizeModelPickerPage(value: number | undefined): number {
@@ -201,21 +333,19 @@ export function buildDiscordModelPickerCustomId(params: {
   command: DiscordModelPickerCommandContext;
   action: DiscordModelPickerAction;
   view: DiscordModelPickerView;
-  userId: string;
+  interactionBinding: string;
   provider?: string;
-  runtime?: string;
-  runtimeIndex?: number;
+  runtimeFingerprint?: string;
+  runtimePage?: number;
   page?: number;
   providerPage?: number;
-  modelIndex?: number;
-  modelToken?: string;
-  recentSlot?: number;
+  modelFingerprint?: string;
   providerBucket?: string;
   modelBucket?: string;
 }): string {
-  const userId = params.userId.trim();
-  if (!userId) {
-    throw new Error("Discord model picker custom_id requires userId");
+  const interactionBinding = params.interactionBinding.trim();
+  if (!DISCORD_MODEL_PICKER_INTERACTION_BINDING_PATTERN.test(interactionBinding)) {
+    throw new Error("Discord model picker custom_id requires a valid interaction binding");
   }
 
   const page = normalizeModelPickerPage(params.page);
@@ -223,72 +353,94 @@ export function buildDiscordModelPickerCustomId(params: {
     typeof params.providerPage === "number" && Number.isFinite(params.providerPage)
       ? Math.max(1, Math.floor(params.providerPage))
       : undefined;
+  const runtimePage =
+    typeof params.runtimePage === "number" && Number.isFinite(params.runtimePage)
+      ? Math.max(1, Math.floor(params.runtimePage))
+      : undefined;
   const normalizedProvider = params.provider ? normalizeProviderId(params.provider) : undefined;
-  const modelIndex =
-    typeof params.modelIndex === "number" && Number.isFinite(params.modelIndex)
-      ? Math.max(1, Math.floor(params.modelIndex))
-      : undefined;
-  const recentSlot =
-    typeof params.recentSlot === "number" && Number.isFinite(params.recentSlot)
-      ? Math.max(1, Math.floor(params.recentSlot))
-      : undefined;
-  const modelToken = params.modelToken?.trim();
-  if (modelToken && !DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelToken)) {
-    throw new Error("Discord model picker model token is invalid");
+  const modelFingerprint = params.modelFingerprint?.trim();
+  if (modelFingerprint && !DISCORD_MODEL_PICKER_MODEL_FINGERPRINT_PATTERN.test(modelFingerprint)) {
+    throw new Error("Discord model picker model fingerprint is invalid");
   }
 
   const parts = [
     `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:c=${encodeCustomIdComponent(params.command)}`,
     `a=${encodeCustomIdComponent(params.action)}`,
     `v=${encodeCustomIdComponent(params.view)}`,
-    `u=${encodeCustomIdComponent(userId)}`,
+    `b=${interactionBinding}`,
     `g=${String(page)}`,
   ];
   if (normalizedProvider) {
     parts.push(`p=${encodeCustomIdComponent(normalizedProvider)}`);
   }
-  const runtime = params.runtime?.trim();
-  if (runtime) {
-    parts.push(`r=${encodeCustomIdComponent(runtime)}`);
+  const runtimeFingerprint = params.runtimeFingerprint?.trim();
+  if (
+    runtimeFingerprint &&
+    !DISCORD_MODEL_PICKER_RUNTIME_FINGERPRINT_PATTERN.test(runtimeFingerprint)
+  ) {
+    throw new Error("Discord model picker runtime fingerprint is invalid");
   }
-  const runtimeIndex =
-    typeof params.runtimeIndex === "number" && Number.isFinite(params.runtimeIndex)
-      ? Math.max(1, Math.floor(params.runtimeIndex))
-      : undefined;
-  if (runtimeIndex) {
-    parts.push(`ri=${String(runtimeIndex)}`);
+  if (runtimeFingerprint) {
+    parts.push(`rt=${runtimeFingerprint}`);
+  }
+  if (runtimePage) {
+    parts.push(`rp=${String(runtimePage)}`);
   }
   if (providerPage) {
     parts.push(`pp=${String(providerPage)}`);
   }
-  if (modelToken) {
-    parts.push(`m=${modelToken}`);
-  } else {
-    // Legacy positional state is accepted until the next render. New model
-    // components use the stable token so catalog reordering cannot retarget them.
-    if (modelIndex) {
-      parts.push(`mi=${String(modelIndex)}`);
-    }
-    if (recentSlot) {
-      parts.push(`rs=${String(recentSlot)}`);
-    }
+  if (modelFingerprint) {
+    parts.push(`m=${modelFingerprint}`);
   }
-  const providerBucket = params.providerBucket?.trim().toLowerCase();
+  const providerBucket = params.providerBucket;
   if (providerBucket) {
     parts.push(`pb=${encodeCustomIdComponent(providerBucket)}`);
   }
-  const modelBucket = params.modelBucket?.trim().toLowerCase();
+  const modelBucket = params.modelBucket;
   if (modelBucket) {
     parts.push(`mb=${encodeCustomIdComponent(modelBucket)}`);
   }
 
   const customId = parts.join(";");
-  if (customId.length > DISCORD_CUSTOM_ID_MAX_CHARS) {
+  if (customId.length <= DISCORD_CUSTOM_ID_MAX_CHARS) {
+    return customId;
+  }
+
+  const compactParts = [
+    `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:c=${COMMAND_CONTEXT_CODES[params.command]}`,
+    `a=${PICKER_ACTION_CODES[params.action]}`,
+    `v=${PICKER_VIEW_CODES[params.view]}`,
+    `b=${interactionBinding}`,
+    `g=${String(page)}`,
+  ];
+  if (normalizedProvider) {
+    compactParts.push(`f=${createDiscordModelPickerProviderFingerprint(normalizedProvider)}`);
+  }
+  if (runtimeFingerprint) {
+    compactParts.push(`r=${runtimeFingerprint}`);
+  }
+  if (runtimePage) {
+    compactParts.push(`j=${String(runtimePage)}`);
+  }
+  if (providerPage) {
+    compactParts.push(`h=${String(providerPage)}`);
+  }
+  if (modelFingerprint) {
+    compactParts.push(`m=${modelFingerprint}`);
+  }
+  if (providerBucket) {
+    compactParts.push(`q=${encodeCustomIdComponent(providerBucket)}`);
+  }
+  if (modelBucket) {
+    compactParts.push(`k=${encodeCustomIdComponent(modelBucket)}`);
+  }
+  const compactCustomId = compactParts.join(";");
+  if (compactCustomId.length > DISCORD_CUSTOM_ID_MAX_CHARS) {
     throw new Error(
-      `Discord model picker custom_id exceeds ${DISCORD_CUSTOM_ID_MAX_CHARS} chars (${customId.length})`,
+      `Discord model picker custom_id exceeds ${DISCORD_CUSTOM_ID_MAX_CHARS} chars (${compactCustomId.length})`,
     );
   }
-  return customId;
+  return compactCustomId;
 }
 
 export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPickerState | null {
@@ -296,49 +448,69 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
     return null;
   }
 
-  const command = decodeCustomIdComponent(coerceString(data.c ?? data.cmd));
-  const action = decodeCustomIdComponent(coerceString(data.a ?? data.act));
-  const view = decodeCustomIdComponent(coerceString(data.v ?? data.view));
-  const userId = decodeCustomIdComponent(coerceString(data.u));
-  const providerRaw = decodeCustomIdComponent(coerceString(data.p));
-  const runtimeRaw = decodeCustomIdComponent(coerceString(data.r));
-  const runtimeIndex = parseRawPositiveInt(data.ri);
-  const page = parseRawPage(data.g ?? data.pg);
-  const providerPage = parseRawPositiveInt(data.pp);
-  const modelIndex = parseRawPositiveInt(data.mi);
-  const modelTokenRaw = coerceString(data.m).trim();
-  const modelToken = DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelTokenRaw)
-    ? modelTokenRaw
-    : undefined;
-  const recentSlot = parseRawPositiveInt(data.rs);
-  const providerBucketRaw = decodeCustomIdComponent(coerceString(data.pb)).trim().toLowerCase();
-  const modelBucketRaw = decodeCustomIdComponent(coerceString(data.mb)).trim().toLowerCase();
-
-  if (!isValidCommandContext(command) || !isValidPickerAction(action) || !isValidPickerView(view)) {
+  // Positional model and recents state can silently retarget when catalogs or
+  // preferences change. This picker is unshipped, so reject it instead of carrying compat.
+  if (data.mi !== undefined || data.rs !== undefined) {
     return null;
   }
 
-  const trimmedUserId = userId.trim();
-  if (!trimmedUserId) {
+  const command = decodeCommandContext(decodeCustomIdComponent(coerceString(data.c ?? data.cmd)));
+  const action = decodePickerAction(decodeCustomIdComponent(coerceString(data.a ?? data.act)));
+  const view = decodePickerView(decodeCustomIdComponent(coerceString(data.v ?? data.view)));
+  const interactionBinding = decodeCustomIdComponent(coerceString(data.b));
+  const providerRaw = decodeCustomIdComponent(coerceString(data.p));
+  const providerFingerprintRaw = coerceString(data.pf ?? data.f).trim();
+  const providerFingerprint = DISCORD_MODEL_PICKER_PROVIDER_FINGERPRINT_PATTERN.test(
+    providerFingerprintRaw,
+  )
+    ? providerFingerprintRaw
+    : undefined;
+  const runtimeFingerprintRaw = coerceString(data.rt ?? data.r).trim();
+  const runtimeFingerprint = DISCORD_MODEL_PICKER_RUNTIME_FINGERPRINT_PATTERN.test(
+    runtimeFingerprintRaw,
+  )
+    ? runtimeFingerprintRaw
+    : undefined;
+  const runtimePage = parseRawPositiveInt(data.rp ?? data.j);
+  const page = parseRawPage(data.g ?? data.pg);
+  const providerPage = parseRawPositiveInt(data.pp ?? data.h);
+  const modelFingerprintRaw = coerceString(data.m).trim();
+  const modelFingerprint = DISCORD_MODEL_PICKER_MODEL_FINGERPRINT_PATTERN.test(modelFingerprintRaw)
+    ? modelFingerprintRaw
+    : undefined;
+  const providerBucketRaw = decodeCustomIdComponent(coerceString(data.pb ?? data.q));
+  const modelBucketRaw = decodeCustomIdComponent(coerceString(data.mb ?? data.k));
+
+  if (!command || !action || !view) {
+    return null;
+  }
+
+  if (!DISCORD_MODEL_PICKER_INTERACTION_BINDING_PATTERN.test(interactionBinding)) {
+    return null;
+  }
+
+  if (
+    (providerFingerprintRaw && !providerFingerprint) ||
+    (providerRaw && providerFingerprint) ||
+    (coerceString(data.rt ?? data.r) && !runtimeFingerprint) ||
+    (coerceString(data.m) && !modelFingerprint)
+  ) {
     return null;
   }
 
   const provider = providerRaw ? normalizeProviderId(providerRaw) : undefined;
-  const runtime = runtimeRaw.trim() || undefined;
-
   return {
     command,
     action,
     view,
-    userId: trimmedUserId,
+    interactionBinding,
     provider,
-    runtime,
-    ...(typeof runtimeIndex === "number" ? { runtimeIndex } : {}),
+    ...(providerFingerprint ? { providerFingerprint } : {}),
+    ...(runtimeFingerprint ? { runtimeFingerprint } : {}),
+    ...(typeof runtimePage === "number" ? { runtimePage } : {}),
     page,
     ...(typeof providerPage === "number" ? { providerPage } : {}),
-    ...(typeof modelIndex === "number" ? { modelIndex } : {}),
-    ...(modelToken ? { modelToken } : {}),
-    ...(typeof recentSlot === "number" ? { recentSlot } : {}),
+    ...(modelFingerprint ? { modelFingerprint } : {}),
     ...(providerBucketRaw ? { providerBucket: providerBucketRaw } : {}),
     ...(modelBucketRaw ? { modelBucket: modelBucketRaw } : {}),
   };
@@ -370,7 +542,9 @@ function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBucket[] 
     ];
   }
 
-  const firstLetter = (value: string): string => value.charAt(0).toLowerCase();
+  // String iteration preserves one complete Unicode code point. charAt(0)
+  // would split emoji/non-BMP prefixes into lone surrogate bucket ids.
+  const firstLetter = firstUnicodeCodePoint;
   const firstItem = expectDefined(sortedItems.at(0), "non-empty sorted model picker items");
   const allSamePrefix = sortedItems.every((item) => firstLetter(item) === firstLetter(firstItem));
   if (allSamePrefix) {
@@ -480,7 +654,7 @@ export function findProviderBucketLocation(
   provider: string,
 ): { bucket?: string; page: number } | undefined {
   const normalized = normalizeProviderId(provider);
-  const sorted = [...data.providers].toSorted();
+  const sorted = [...data.providers].toSorted(compareBucketItems);
   const idx = sorted.indexOf(normalized);
   if (idx < 0) {
     return undefined;
@@ -525,9 +699,9 @@ export function findModelBucketId(
 function buildDiscordModelPickerProviderItems(
   data: ModelsProviderData,
 ): DiscordModelPickerProviderItem[] {
-  // Sort lexicographically so the alpha-bucket boundaries are deterministic
-  // for any caller that derives buckets from `data.providers`.
-  return [...data.providers].toSorted().map((provider) => ({
+  // Keep every normalized first-code-point group contiguous so bucket ids
+  // remain unique even when locale collation interleaves accented prefixes.
+  return [...data.providers].toSorted(compareBucketItems).map((provider) => ({
     id: provider,
     count: data.byProvider.get(provider)?.size ?? 0,
   }));

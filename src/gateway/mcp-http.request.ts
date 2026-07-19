@@ -2,6 +2,7 @@
 // Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -444,6 +445,17 @@ function resolveMcpAuthorizationPrincipal(auth: McpLoopbackRequestAuth): Authori
   return createAuthorizationPrincipal({ serviceId: "mcp-loopback" });
 }
 
+function resolveMcpRequestAgentId(
+  cfg: OpenClawConfig,
+  context: Pick<McpRequestContext, "sessionKey" | "runtimePolicySessionKey" | "agentId">,
+): string {
+  return resolveSessionAgentId({
+    config: cfg,
+    agentId: context.agentId,
+    sessionKey: context.runtimePolicySessionKey?.trim() || context.sessionKey,
+  });
+}
+
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
@@ -455,32 +467,38 @@ export function resolveMcpRequestContext(
     // child process can replay the token, but cannot scope-shop by rewriting
     // session, channel, capability, or ownership headers.
     const context = structuredClone(auth.boundContext);
+    const agentId = resolveMcpRequestAgentId(cfg, context);
     return {
       ...context,
+      agentId,
       authorization:
-        context.authorization ??
-        createAuthorizationInvocationContext({
-          principal: authorizationPrincipal,
-          agentId: context.agentId,
-          sessionKey: context.sessionKey,
-          sessionId: context.sessionId,
-          runId: context.runId,
-          conversationId: context.currentChannelId,
-          threadId: context.currentThreadTs,
-          trigger: context.trigger ?? "mcp",
-        }),
+        context.authorization !== undefined
+          ? { ...context.authorization, agentId }
+          : createAuthorizationInvocationContext({
+              principal: authorizationPrincipal,
+              agentId,
+              sessionKey: context.sessionKey,
+              sessionId: context.sessionId,
+              runId: context.runId,
+              conversationId: context.currentChannelId,
+              threadId: context.currentThreadTs,
+              trigger: context.trigger ?? "mcp",
+            }),
     };
   }
   // Grant-authenticated callers get only their server-bound session; spoofable
   // delivery/action headers stay reserved for the gateway-launched loopback client.
   if (auth.boundSessionKey) {
+    const agentId = resolveMcpRequestAgentId(cfg, { sessionKey: auth.boundSessionKey });
     return {
       authorization: createAuthorizationInvocationContext({
         principal: authorizationPrincipal,
+        agentId,
         sessionKey: auth.boundSessionKey,
         trigger: "mcp",
       }),
       sessionKey: auth.boundSessionKey,
+      agentId,
       sessionId: undefined,
       messageProvider: undefined,
       clientCaps: undefined,
@@ -496,8 +514,11 @@ export function resolveMcpRequestContext(
       senderIsOwner: auth.senderIsOwner,
     };
   }
+  const sessionKey = resolveScopedSessionKey(cfg, getHeader(req, "x-session-key"));
+  const agentId = resolveMcpRequestAgentId(cfg, { sessionKey });
   const context: McpRequestContext = {
-    sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
+    sessionKey,
+    agentId,
     sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
@@ -527,6 +548,7 @@ export function resolveMcpRequestContext(
     ...context,
     authorization: createAuthorizationInvocationContext({
       principal: authorizationPrincipal,
+      agentId,
       sessionKey: context.sessionKey,
       sessionId: context.sessionId,
       conversationId: context.currentChannelId,

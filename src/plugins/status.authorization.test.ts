@@ -118,7 +118,16 @@ describe("plugin authorization status reports", () => {
           guard: {
             authorization: {
               requiredPolicies: [
-                { id: "ready", operations: ["tool.call"] },
+                {
+                  id: "ready",
+                  operations: ["tool.call"],
+                  scope: {
+                    agentIds: ["molty"],
+                    providers: ["discord"],
+                    accountIds: ["molty"],
+                    conversationIds: ["maintenance"],
+                  },
+                },
                 {
                   id: "partial",
                   operations: ["tool.call", "message.action", "command.invoke"],
@@ -175,6 +184,12 @@ describe("plugin authorization status reports", () => {
         {
           id: "ready",
           operations: ["tool.call"],
+          scope: {
+            agentIds: ["molty"],
+            providers: ["discord"],
+            accountIds: ["molty"],
+            conversationIds: ["maintenance"],
+          },
           status: "ready",
           missingOperations: [],
         },

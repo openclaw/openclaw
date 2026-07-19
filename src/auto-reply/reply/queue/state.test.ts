@@ -1,7 +1,17 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
 import { afterEach, describe, expect, it } from "vitest";
+import { createOperatorTurnAuthoritySnapshot } from "../../../plugins/turn-authority.js";
+import {
+  createSteeringAuthorizationAffinity,
+  resolveSteeringAuthorizationAffinityKey,
+} from "../steering-authorization-affinity.js";
 import { enqueueFollowupRun } from "./enqueue.js";
-import { clearFollowupQueue, getFollowupQueue, refreshQueuedFollowupSession } from "./state.js";
+import {
+  clearFollowupQueue,
+  clearFollowupQueueByAuthorizationAffinity,
+  getFollowupQueue,
+  refreshQueuedFollowupSession,
+} from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 const QUEUE_KEY = "agent:main:dm:test";
@@ -25,6 +35,29 @@ function makeRun(): FollowupRun["run"] {
     authProfileIdSource: "user",
     timeoutMs: 30_000,
     blockReplyBreak: "message_end",
+  };
+}
+
+function makeAuthority(connectionId: string) {
+  return createOperatorTurnAuthoritySnapshot({
+    scopes: ["operator.write"],
+    connectionId,
+    agentId: "main",
+    sessionKey: QUEUE_KEY,
+    conversationId: QUEUE_KEY,
+    trigger: "gateway",
+    capability: "queue-cleanup-test",
+  });
+}
+
+function makeQueuedRun(prompt: string, connectionId?: string): FollowupRun {
+  return {
+    prompt,
+    enqueuedAt: Date.now(),
+    run: {
+      ...makeRun(),
+      ...(connectionId ? { turnAuthority: makeAuthority(connectionId) } : {}),
+    },
   };
 }
 
@@ -199,6 +232,98 @@ describe("getFollowupQueue", () => {
     expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
     clearFollowupQueue(QUEUE_KEY);
     expect(queuedRun.queueAbortSignal?.aborted).toBe(true);
+  });
+
+  it("selectively clears only pending work from the exact controller authority", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const sameOwner = makeQueuedRun("same owner", "conn-owner");
+    const foreignOwner = makeQueuedRun("foreign owner", "conn-foreign");
+    const unattributed = makeQueuedRun("unattributed");
+    const sameOwnerInFlight = makeQueuedRun("same owner in flight", "conn-owner");
+    queue.items.push(sameOwner, foreignOwner, unattributed, sameOwnerInFlight);
+    queue.inFlight.add(sameOwnerInFlight);
+
+    const sameOwnerSummary = makeQueuedRun("same owner summary", "conn-owner");
+    const foreignSummary = makeQueuedRun("foreign summary", "conn-foreign");
+    const unattributedSummary = makeQueuedRun("unattributed summary");
+    queue.summarySources.push(sameOwnerSummary, foreignSummary, unattributedSummary);
+    queue.summaryLines.push("same owner", "foreign", "unattributed");
+    const sameOwnerElided = makeQueuedRun("same owner elided", "conn-owner");
+    const foreignElided = makeQueuedRun("foreign elided", "conn-foreign");
+    queue.summaryElisions.push(
+      {
+        contextKey: "same-owner",
+        count: 1,
+        sources: [sameOwnerElided],
+        sourceRefs: new WeakMap(),
+      },
+      {
+        contextKey: "foreign-owner",
+        count: 1,
+        sources: [foreignElided],
+        sourceRefs: new WeakMap(),
+      },
+    );
+    queue.droppedCount = 5;
+
+    const affinityKey = resolveSteeringAuthorizationAffinityKey(
+      createSteeringAuthorizationAffinity({ turnAuthority: makeAuthority("conn-owner") }),
+    );
+    expect(clearFollowupQueueByAuthorizationAffinity(QUEUE_KEY, affinityKey)).toBe(3);
+
+    expect(queue.items.map((item) => item.prompt)).toEqual([
+      "foreign owner",
+      "unattributed",
+      "same owner in flight",
+    ]);
+    expect(queue.summarySources.map((item) => item.prompt)).toEqual([
+      "foreign summary",
+      "unattributed summary",
+    ]);
+    expect(queue.summaryLines).toEqual(["foreign", "unattributed"]);
+    expect(
+      queue.summaryElisions.flatMap((entry) => entry.sources).map((item) => item.prompt),
+    ).toEqual(["foreign elided"]);
+    expect(queue.droppedCount).toBe(3);
+    expect(queue.abortController.signal.aborted).toBe(false);
+    expect(clearFollowupQueueByAuthorizationAffinity(QUEUE_KEY, undefined)).toBe(0);
+  });
+
+  it("clears an authority elision by logical count when retained sources are limited", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.summaryElisions.push(
+      {
+        contextKey: "same-owner",
+        count: 8,
+        sources: [
+          makeQueuedRun("same owner retained 1", "conn-owner"),
+          makeQueuedRun("same owner retained 2", "conn-owner"),
+        ],
+        sourceRefs: new WeakMap(),
+      },
+      {
+        contextKey: "foreign-owner",
+        count: 4,
+        sources: [makeQueuedRun("foreign retained", "conn-foreign")],
+        sourceRefs: new WeakMap(),
+      },
+    );
+    queue.droppedCount = 12;
+
+    const affinityKey = resolveSteeringAuthorizationAffinityKey(
+      createSteeringAuthorizationAffinity({ turnAuthority: makeAuthority("conn-owner") }),
+    );
+    expect(clearFollowupQueueByAuthorizationAffinity(QUEUE_KEY, affinityKey)).toBe(8);
+
+    expect(queue.summaryElisions).toHaveLength(1);
+    expect(queue.summaryElisions[0]).toMatchObject({
+      contextKey: "foreign-owner",
+      count: 4,
+    });
+    expect(queue.summaryElisions[0]?.sources.map((source) => source.prompt)).toEqual([
+      "foreign retained",
+    ]);
+    expect(queue.droppedCount).toBe(4);
   });
 
   it("trims overflow metadata when a live queue cap shrinks", () => {

@@ -270,6 +270,7 @@ function callerClient(agentId: string): GatewayClient {
         kind: "agentRuntime",
         agentId,
         sessionKey: `agent:${agentId}:main`,
+        gatewayMethods: ["cron.list"],
       },
     },
   };

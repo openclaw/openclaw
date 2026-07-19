@@ -70,7 +70,7 @@ describe("slack group policy", () => {
     expect(resolveSlackGroupToolPolicy({ cfg: partialCfg, groupId: "partial" })).toBeUndefined();
   });
 
-  it("does not match channel-prefixed toolsBySender without a message provider", () => {
+  it("matches channel-prefixed senders by admitted source and fails closed without one", () => {
     const channelSenderCfg = {
       channels: {
         slack: {
@@ -79,6 +79,7 @@ describe("slack group policy", () => {
               tools: { deny: ["exec"] },
               toolsBySender: {
                 "channel:slack:user:alice": { allow: ["exec"] },
+                "channel:discord:user:alice": { allow: ["sessions.list"] },
               },
             },
           },
@@ -90,6 +91,30 @@ describe("slack group policy", () => {
       resolveSlackGroupToolPolicy({
         cfg: channelSenderCfg,
         groupId: "alerts",
+        senderMessageProvider: "slack",
+        senderId: "user:alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+    expect(
+      resolveSlackGroupToolPolicy({
+        cfg: channelSenderCfg,
+        groupId: "alerts",
+        senderMessageProvider: "discord",
+        senderId: "user:alice",
+      }),
+    ).toEqual({ allow: ["sessions.list"] });
+    expect(
+      resolveSlackGroupToolPolicy({
+        cfg: channelSenderCfg,
+        groupId: "alerts",
+        senderId: "user:alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveSlackGroupToolPolicy({
+        cfg: channelSenderCfg,
+        groupId: "alerts",
+        senderMessageProvider: null,
         senderId: "user:alice",
       }),
     ).toEqual({ deny: ["exec"] });

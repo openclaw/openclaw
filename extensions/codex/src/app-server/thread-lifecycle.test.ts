@@ -87,6 +87,67 @@ describe("Codex ring-zero thread config", () => {
 });
 
 describe("Codex delegation capability", () => {
+  it("keeps dynamic tools but disables every native source under authorization policy", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.config = {
+      plugins: {
+        entries: {
+          "maintainer-control": {
+            authorization: {
+              requiredPolicies: [{ id: "maintainer-control", operations: ["tool.call"] }],
+            },
+          },
+        },
+      },
+    } as never;
+    const dynamicTools = [{ type: "function", name: "message", description: "message" }] as never;
+    const request = buildThreadStartParams(params, {
+      appServer: createAppServerOptions() as never,
+      cwd: "/repo",
+      dynamicTools,
+      config: {
+        mcp_servers: {
+          bundled: { command: "bundle-mcp" },
+        },
+      },
+      nativeCodeModeEnabled: false,
+      ringZeroInheritedMcpServerNames: ["inherited"],
+    });
+
+    expect(request.dynamicTools).toEqual(dynamicTools);
+    expect(request.environments).toEqual([]);
+    expect(request.config).toMatchObject({
+      "features.apps": false,
+      "features.code_mode": false,
+      "features.hooks": false,
+      "features.multi_agent": false,
+      "features.multi_agent_v2": false,
+      "features.plugins": false,
+      mcp_servers: {
+        bundled: { enabled: false },
+        inherited: { enabled: false },
+      },
+    });
+  });
+
+  it("disables native delegation with the rest of the native tool surface", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const request = buildThreadStartParams(params, {
+      appServer: createAppServerOptions() as never,
+      cwd: "/repo",
+      dynamicTools: [],
+      config: {
+        "features.multi_agent": true,
+        "features.multi_agent_v2": true,
+      },
+      nativeCodeModeEnabled: false,
+    });
+
+    expect(request.environments).toEqual([]);
+    expect(request.config?.["features.multi_agent"]).toBe(false);
+    expect(request.config?.["features.multi_agent_v2"]).toBe(false);
+  });
+
   it("disables native delegation and goal continuation on start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.delegationCapability = "report_only";
@@ -1003,6 +1064,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "features.multi_agent": false,
+      "features.multi_agent_v2": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1023,6 +1086,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "features.multi_agent": false,
+      "features.multi_agent_v2": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });

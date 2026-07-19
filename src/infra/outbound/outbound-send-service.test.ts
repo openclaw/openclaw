@@ -911,25 +911,45 @@ describe("executeSendAction", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("fails closed when a prepared plugin send route disappears", async () => {
+  it("falls back to the authorized core send when a prepared plugin route declines", async () => {
+    const effectAuthorization = {
+      authorizedPayload: { text: "hello", audioAsVoice: false },
+      authorizeChangedPayload: vi.fn(async (payload) => payload),
+      waitForAuthorizationBarrier: vi.fn(async () => {}),
+    };
     mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
 
-    await expect(
-      executeSendAction({
-        ctx: {
-          cfg: {},
-          channel: "demo-outbound",
-          params: { to: "channel:123", message: "hello" },
-          dryRun: false,
-        },
-        to: "channel:123",
-        message: "hello",
-      }),
-    ).rejects.toThrow("Prepared plugin send action lost its execution route.");
+    const prepared = await prepareSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+    const result = await executePreparedSendAction(prepared, {
+      effectAuthorization,
+      effectAuthorizationScope: "message-action",
+    });
 
+    expect(result.handledBy).toBe("core");
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledOnce();
-    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    const sendParams = expectSingleCallFields(mocks.sendMessage, {
+      content: "hello",
+      payloads: [{ text: "hello", audioAsVoice: false }],
+      effectAuthorizationScope: "message-action",
+    });
+    expect(sendParams.effectAuthorization).toBe(effectAuthorization);
+    expect(effectAuthorization.waitForAuthorizationBarrier).not.toHaveBeenCalled();
   });
 
   it("uses plugin poll action when available", async () => {
@@ -1307,7 +1327,7 @@ describe("executeSendAction", () => {
         accountId: "acc-1",
         dryRun: false,
       },
-      resolveCorePoll: () => ({
+      resolveCorePoll: async () => ({
         to: "channel:123",
         question: "Lunch?",
         options: ["Pizza", "Sushi"],

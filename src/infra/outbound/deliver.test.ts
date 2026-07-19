@@ -26,6 +26,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { PluginHookRegistration } from "../../plugins/types.js";
+import { createDeferred } from "../../shared/deferred.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -3138,6 +3139,73 @@ describe("deliverOutboundPayloads", () => {
       expect.not.objectContaining({ isError: false }),
     );
     expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the returned changed-payload snapshot after hook data mutates", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    const changedPayload = {
+      text: "rewritten",
+      channelData: { testchat: { marker: "before" } },
+    };
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValue({ payload: changedPayload });
+    const authorizationEntered = createDeferred();
+    const releaseAuthorization = createDeferred();
+    const authorizeChangedPayload = vi.fn(async (payload) => {
+      authorizationEntered.resolve();
+      await releaseAuthorization.promise;
+      return payload;
+    });
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "message-1",
+      chatId: "channel-1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const pending = deliverOutboundPayloads({
+      cfg: {},
+      channel: "testchat",
+      to: "channel:one",
+      payloads: [{ text: "original" }],
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "testchat",
+        context: { channelId: "testchat", conversationId: "channel:one" },
+      },
+      effectAuthorization: {
+        authorizedPayload: { text: "original" },
+        authorizeChangedPayload,
+      },
+    });
+    await authorizationEntered.promise;
+    changedPayload.channelData.testchat.marker = "after";
+    releaseAuthorization.resolve();
+    await pending;
+
+    expect(sendPayload).toHaveBeenCalledOnce();
+    expect(sendPayload.mock.calls[0]?.[0]).toMatchObject({
+      payload: {
+        text: "rewritten",
+        channelData: { testchat: { marker: "before" } },
+      },
+    });
   });
 
   it("seals and authorizes the final payload before platform I/O", async () => {

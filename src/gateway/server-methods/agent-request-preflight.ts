@@ -10,10 +10,19 @@ import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exe
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
+  classifySessionKeyShape,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import {
   isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
+import {
+  digestSessionsSendAgentRequest,
+  type AgentRuntimeSessionsSendDelegation,
+} from "../agent-runtime-identity-token.js";
 import {
   isAcceptedAgentDedupePayload,
   readGatewayDedupeEntry,
@@ -33,6 +42,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type AgentRequestPreflight = {
   request: AgentRunRequest;
+  sessionsSendDelegation?: AgentRuntimeSessionsSendDelegation;
   cfg: ReturnType<GatewayRequestHandlerOptions["context"]["getRuntimeConfig"]>;
   runId: string;
   lifecycleGeneration: string;
@@ -71,6 +81,46 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const request = params.params as AgentRunRequest;
+  const sessionsSendDelegation =
+    params.client?.internal?.agentRuntimeIdentity?.sessionsSendDelegation;
+  if (sessionsSendDelegation) {
+    const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+    const runtimeIdentity = params.client?.internal?.agentRuntimeIdentity;
+    const targetSessionKey = request.sessionKey?.trim();
+    const requestedAgentId = normalizeOptionalString(request.agentId);
+    const targetSessionShape = classifySessionKeyShape(targetSessionKey);
+    const targetSessionAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
+    // Opaque keys cannot prove their store from the key. Require the exact
+    // signed request to carry the delegated adjacent agent explicitly.
+    const targetAgentMatches =
+      targetSessionKey && targetSessionShape !== "malformed_agent"
+        ? !targetSessionAgentId
+          ? Boolean(
+              requestedAgentId &&
+              normalizeAgentId(requestedAgentId) === sessionsSendDelegation.targetAgentId,
+            )
+          : normalizeAgentId(targetSessionAgentId) === sessionsSendDelegation.targetAgentId &&
+            (!requestedAgentId ||
+              normalizeAgentId(requestedAgentId) === sessionsSendDelegation.targetAgentId)
+        : false;
+    const validDelegation =
+      Date.now() < sessionsSendDelegation.expiresAtMs &&
+      digestSessionsSendAgentRequest(request) === sessionsSendDelegation.requestDigest &&
+      targetSessionKey === sessionsSendDelegation.targetSessionKey &&
+      targetAgentMatches &&
+      inputProvenance?.kind === "inter_session" &&
+      inputProvenance.sourceTool === "sessions_send" &&
+      runtimeIdentity?.agentId === sessionsSendDelegation.turnAuthority.authorization.agentId &&
+      runtimeIdentity?.sessionKey === sessionsSendDelegation.turnAuthority.authorization.sessionKey;
+    if (!validDelegation) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid sessions_send authority delegation"),
+      );
+      return undefined;
+    }
+  }
   if (request.cwd && !path.isAbsolute(request.cwd)) {
     params.respond(
       false,
@@ -200,6 +250,7 @@ export function prepareAgentRequestPreflight(
   }
   return {
     request,
+    sessionsSendDelegation,
     cfg,
     runId,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),

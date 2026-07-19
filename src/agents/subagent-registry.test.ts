@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSteeringAuthorizationAffinity } from "../auto-reply/reply/steering-authorization-affinity.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type {
   SessionAccessScope,
@@ -12,6 +13,7 @@ import type {
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { createTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -32,10 +34,29 @@ import {
 } from "../tasks/task-runtime.test-helpers.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import {
+  captureActiveEmbeddedRunSteeringTarget,
+  setActiveEmbeddedRun,
+} from "./embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "./embedded-agent-runner/runs.test-support.js";
+import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+
+type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+
+function createTestSteeringAffinity(serviceId: string) {
+  return createSteeringAuthorizationAffinity({
+    turnAuthority: createTurnAuthoritySnapshot({
+      principal: { kind: "service", serviceId },
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      conversationId: "agent:main:main",
+      controllerKey: `service:${serviceId}`,
+    }),
+  });
+}
 
 const noop = () => {};
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
@@ -176,7 +197,7 @@ const mocks = vi.hoisted(() => ({
   ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-  runSubagentAnnounceFlow: vi.fn(async () => true),
+  runSubagentAnnounceFlow: vi.fn<RunSubagentAnnounceFlow>(async () => true),
   maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
     async (wakeParams: {
       settledEntry: { runId: string };
@@ -344,6 +365,7 @@ describe("subagent registry seam flow", () => {
       resolveContextEngine: mocks.resolveContextEngine,
     });
     mod.resetSubagentRegistryForTests({ persist: false });
+    embeddedRunTesting.resetActiveEmbeddedRuns();
   });
 
   afterEach(() => {
@@ -351,6 +373,7 @@ describe("subagent registry seam flow", () => {
     resetDetachedTaskLifecycleRuntimeForTests();
     mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
+    embeddedRunTesting.resetActiveEmbeddedRuns();
     vi.useRealTimers();
   });
 
@@ -438,6 +461,147 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(entry?.completion?.resultText).toBe("replacement final reply");
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledOnce();
+  });
+
+  it("carries an exact requester-attempt capability from registry admission to completion", async () => {
+    const affinity = createTestSteeringAffinity("subagent-registry-parent");
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("sess-parent", {
+      runId: "run-parent",
+      queueMessage,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      steeringAuthorizationAffinity: affinity,
+      abort: noop,
+    });
+    const requesterSteeringTarget = expectDefined(
+      captureActiveEmbeddedRunSteeringTarget({
+        sessionId: "sess-parent",
+        runId: "run-parent",
+        steeringAuthorizationAffinity: affinity,
+      }),
+      "requester steering target",
+    );
+    mocks.runSubagentAnnounceFlow.mockImplementationOnce(async (params: unknown) => {
+      const target = expectDefined(
+        requireRecord(params, "announce params").requesterSteeringTarget as
+          | typeof requesterSteeringTarget
+          | undefined,
+        "announce requester steering target",
+      );
+      const outcome = await target.queueMessageWithOutcome("child completed");
+      return outcome.queued;
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-child-capability",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "return to exact parent attempt",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      requesterSteeringTarget,
+    });
+
+    await waitForFast(() => expect(queueMessage).toHaveBeenCalledOnce());
+    expect(queueMessage).toHaveBeenCalledWith("child completed", {
+      steeringAuthorizationAffinity: affinity,
+    });
+  });
+
+  it("does not carry completion steering authority from a different requester", async () => {
+    const activeAffinity = createTestSteeringAffinity("subagent-registry-parent");
+    const differentAffinity = createTestSteeringAffinity("subagent-registry-other");
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("sess-parent", {
+      runId: "run-parent",
+      queueMessage,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      steeringAuthorizationAffinity: activeAffinity,
+      abort: noop,
+    });
+    const requesterSteeringTarget = captureActiveEmbeddedRunSteeringTarget({
+      sessionId: "sess-parent",
+      runId: "run-parent",
+      steeringAuthorizationAffinity: differentAffinity,
+    });
+    expect(requesterSteeringTarget).toBeUndefined();
+
+    mod.registerSubagentRun({
+      runId: "run-child-different-authority",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do not enter another requester's parent",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+    const announceParams = requireRecord(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "completion announce"),
+      "completion announce params",
+    );
+    expect(announceParams.requesterSteeringTarget).toBeUndefined();
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not inject a registry completion after the requester attempt is replaced", async () => {
+    const affinity = createTestSteeringAffinity("subagent-registry-parent");
+    const originalQueue = vi.fn(async () => {});
+    const replacementQueue = vi.fn(async () => {});
+    setActiveEmbeddedRun("sess-parent", {
+      runId: "run-parent",
+      queueMessage: originalQueue,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      steeringAuthorizationAffinity: affinity,
+      abort: noop,
+    });
+    const requesterSteeringTarget = expectDefined(
+      captureActiveEmbeddedRunSteeringTarget({
+        sessionId: "sess-parent",
+        runId: "run-parent",
+        steeringAuthorizationAffinity: affinity,
+      }),
+      "requester steering target",
+    );
+    setActiveEmbeddedRun("sess-parent", {
+      runId: "run-parent-next",
+      queueMessage: replacementQueue,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      steeringAuthorizationAffinity: affinity,
+      abort: noop,
+    });
+    mocks.runSubagentAnnounceFlow.mockImplementationOnce(async (params: unknown) => {
+      const target = expectDefined(
+        requireRecord(params, "announce params").requesterSteeringTarget as
+          | typeof requesterSteeringTarget
+          | undefined,
+        "announce requester steering target",
+      );
+      const outcome = await target.queueMessageWithOutcome("child completed");
+      expect(outcome).toMatchObject({ queued: false, reason: "no_active_run" });
+      return false;
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-child-stale-capability",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do not enter replacement parent",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      requesterSteeringTarget,
+    });
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+    expect(originalQueue).not.toHaveBeenCalled();
+    expect(replacementQueue).not.toHaveBeenCalled();
   });
 
   it("retries a terminal completion deferred by restart drain", async () => {

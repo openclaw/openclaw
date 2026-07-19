@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
+import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
   loadSessionEntry,
@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { createTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -37,15 +38,50 @@ type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
 let cachedSessionsSendTool: SessionSendTool | null = null;
 
+function createSessionsSendTurnAuthority() {
+  return createTurnAuthoritySnapshot({
+    principal: {
+      kind: "sender",
+      provider: "discord",
+      accountId: "molty",
+      senderId: "maintainer-test-sender",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      roleIds: ["maintainers"],
+    },
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    conversationId: "maintenance-test-channel",
+    trigger: "channel",
+  });
+}
+
+function bindSessionsSendTurnAuthority(tool: SessionSendTool): SessionSendTool {
+  return wrapToolWithGatewayCallerIdentity(tool, {
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    turnAuthority: createSessionsSendTurnAuthority(),
+  });
+}
+
 function getSessionsSendTool(): SessionSendTool {
   if (cachedSessionsSendTool) {
     return cachedSessionsSendTool;
   }
-  const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-  if (!tool) {
+  const baseTool = createOpenClawTools({
+    agentChannel: "discord",
+    senderIsOwner: false,
+    config: {
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true },
+      },
+    },
+  }).find((candidate) => candidate.name === "sessions_send");
+  if (!baseTool) {
     throw new Error("missing sessions_send tool");
   }
-  cachedSessionsSendTool = tool;
+  cachedSessionsSendTool = bindSessionsSendTurnAuthority(baseTool);
   return cachedSessionsSendTool;
 }
 
@@ -58,7 +94,7 @@ function expectSessionsSendDetails(
     reply?: string;
     sessionKey?: string;
   };
-  expect(details.status).toBe("ok");
+  expect(details.status, JSON.stringify(details)).toBe("ok");
   expect(details.reply).toBe(expected.reply);
   expect(details.sessionKey).toBe(expected.sessionKey);
 }
@@ -180,11 +216,36 @@ describe("sessions_send gateway loopback", () => {
     expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
     const firstCall = spy.mock.calls.at(0)?.[0] as
-      | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
+      | {
+          lane?: string;
+          senderIsOwner?: boolean;
+          turnAuthority?: {
+            authorization?: {
+              principal?: { kind?: string; senderId?: string; senderIsOwner?: boolean };
+              agentId?: string;
+              sessionKey?: string;
+              trigger?: string;
+            };
+          };
+          inputProvenance?: { kind?: string; sourceTool?: string };
+        }
       | undefined;
     expect(firstCall?.lane).toMatch(/^nested(?::|$)/);
     expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
+    expect(firstCall?.senderIsOwner).toBe(false);
+    expect(firstCall?.turnAuthority).toMatchObject({
+      authorization: {
+        principal: {
+          kind: "sender",
+          senderId: "maintainer-test-sender",
+          senderIsOwner: false,
+        },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        trigger: "sessions_send",
+      },
+    });
   });
 
   it(
@@ -259,12 +320,14 @@ describe("sessions_send gateway loopback", () => {
           },
         });
 
-        agentStepTesting.setDepsForTest({
-          agentCommandFromIngress: async () => ({
-            payloads: [{ text: "announce through channel", mediaUrl: null }],
-            meta: { durationMs: 1 },
+        const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+        spy.mockImplementation(async (opts: unknown) =>
+          emitLifecycleAssistantReply({
+            opts,
+            defaultSessionId: "sess-whatsapp-peer",
+            resolveText: () => "announce through channel",
           }),
-        });
+        );
 
         await runSessionsSendA2AFlow({
           targetSessionKey: "agent:main:whatsapp:direct:peer-1",
@@ -273,6 +336,7 @@ describe("sessions_send gateway loopback", () => {
           announceTimeoutMs: 5_000,
           maxPingPongTurns: 0,
           roundOneReply: "target response",
+          turnAuthority: createSessionsSendTurnAuthority(),
         });
 
         await vi.waitFor(
@@ -288,7 +352,6 @@ describe("sessions_send gateway loopback", () => {
           { timeout: 5_000 },
         );
       } finally {
-        agentStepTesting.setDepsForTest();
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
@@ -447,13 +510,6 @@ describe("sessions_send gateway loopback", () => {
           stream: "lifecycle",
           data: { phase: "end", startedAt, endedAt: Date.now() },
         });
-        agentStepTesting.setDepsForTest({
-          agentCommandFromIngress: async () => ({
-            payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
-            meta: { durationMs: 1 },
-          }),
-        });
-
         await runSessionsSendA2AFlow({
           targetSessionKey: sessionKey,
           displayKey: sessionKey,
@@ -461,11 +517,11 @@ describe("sessions_send gateway loopback", () => {
           announceTimeoutMs: 5_000,
           maxPingPongTurns: 0,
           waitRunId: runId,
+          turnAuthority: createSessionsSendTurnAuthority(),
         });
 
         expect(sendCalls).toEqual([]);
       } finally {
-        agentStepTesting.setDepsForTest();
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
@@ -507,7 +563,7 @@ describe("sessions_send label lookup", () => {
         timeoutMs: 5000,
       });
 
-      const tool = createOpenClawTools({
+      const baseTool = createOpenClawTools({
         config: {
           tools: {
             sessions: {
@@ -516,9 +572,10 @@ describe("sessions_send label lookup", () => {
           },
         },
       }).find((candidate) => candidate.name === "sessions_send");
-      if (!tool) {
+      if (!baseTool) {
         throw new Error("missing sessions_send tool");
       }
+      const tool = bindSessionsSendTurnAuthority(baseTool);
 
       // Send using label instead of sessionKey
       const result = await tool.execute("call-by-label", {
@@ -582,13 +639,15 @@ describe("sessions_send agent targeting", () => {
         );
         spy.mockClear();
 
-        const tool = createOpenClawTools({
+        const baseTool = createOpenClawTools({
           agentSessionKey: "agent:main:main",
+          turnAuthority: createSessionsSendTurnAuthority(),
           config,
         }).find((candidate) => candidate.name === "sessions_send");
-        if (!tool) {
+        if (!baseTool) {
           throw new Error("missing sessions_send tool");
         }
+        const tool = bindSessionsSendTurnAuthority(baseTool);
 
         const result = await tool.execute("call-agent-id", {
           agentId: "orion",

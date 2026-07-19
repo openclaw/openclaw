@@ -633,7 +633,7 @@ Each list is optional:
 
 Installed plugins that need the host-trusted pre-tool policy tier must declare each registered local id in `contracts.trustedToolPolicies` and be explicitly enabled. Bundled plugins keep the existing trusted-policy path, but installed plugins with undeclared policy ids are rejected before registration. Policy ids are scoped to the registering plugin, so two plugins may both declare and register `workflow-budget`; a single plugin may not register the same local id twice.
 
-Installed plugins that register sender-aware operation vetoes must declare each local id in `contracts.authorizationPolicies` and be explicitly enabled. Operators can pin required handlers with `plugins.entries.<id>.authorization.requiredPolicies`; a missing policy or required operation handler then fails closed. See [Authorization policies](/plugins/authorization-policies).
+Installed plugins that register sender-aware operation vetoes must declare each local id in `contracts.authorizationPolicies` and be explicitly enabled. Operators can pin required handlers with `plugins.entries.<id>.authorization.requiredPolicies`; a missing policy or required operation handler then fails closed. An optional pin `scope` can select agent, sender provider, channel account, and source conversation without changing the policy handler's own authorization responsibility. See [Authorization policies](/plugins/authorization-policies).
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.
 

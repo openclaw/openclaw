@@ -98,6 +98,7 @@ type QueueEntry = {
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  authorizationAffinityKey?: string;
 };
 
 type LaneState = {
@@ -565,6 +566,7 @@ export function enqueueCommandInLane<T>(
       taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
+      authorizationAffinityKey: opts?.authorizationAffinityKey,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);
@@ -640,6 +642,35 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
+}
+
+/**
+ * Clear only queued work minted from the same turn authority as the interrupter.
+ * Missing/unattributed entries stay queued because their ownership cannot be proven.
+ */
+export function clearCommandLaneByAuthorizationAffinity(
+  lane: string,
+  authorizationAffinityKey: string | undefined,
+): number {
+  const key = authorizationAffinityKey?.trim();
+  if (!key) {
+    return 0;
+  }
+  const cleaned = normalizeLane(lane);
+  const state = getQueueState().lanes.get(cleaned);
+  if (!state) {
+    return 0;
+  }
+  const removed: QueueEntry[] = [];
+  const retained: QueueEntry[] = [];
+  for (const entry of state.queue) {
+    (entry.authorizationAffinityKey === key ? removed : retained).push(entry);
+  }
+  state.queue = retained;
+  for (const entry of removed) {
+    entry.reject(new CommandLaneClearedError(cleaned));
+  }
+  return removed.length;
 }
 
 /**

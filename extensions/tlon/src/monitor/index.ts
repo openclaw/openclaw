@@ -526,6 +526,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         kind: isGroup ? "group" : "direct",
         id: tlonConversationId,
         label: fromLabel,
+        threadId: parentId ?? undefined,
       },
       route: {
         agentId: route.agentId,
@@ -537,6 +538,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         to: `tlon:${botShipName}`,
         originatingTo: `tlon:${isGroup ? groupChannel : botShipName}`,
         replyToId: parentId ?? undefined,
+        messageThreadId: parentId ?? undefined,
       },
       message: {
         body,

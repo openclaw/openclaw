@@ -40,6 +40,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
       scopes: params?.scopes ?? [WRITE_SCOPE],
     },
     internal: {
+      inProcessGatewayDispatch: true,
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),

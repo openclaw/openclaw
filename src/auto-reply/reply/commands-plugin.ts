@@ -6,7 +6,11 @@
  */
 
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import {
+  executePluginCommandWithTurnAuthority,
+  matchPluginCommand,
+} from "../../plugins/commands.js";
+import { resolveCommandAuthorizationThreadId } from "./commands-authorization.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
@@ -32,7 +36,7 @@ export const handlePluginCommand: CommandHandler = async (
   }
 
   // Execute the plugin command (always returns a result)
-  const result = await executePluginCommand({
+  const result = await executePluginCommandWithTurnAuthority({
     command: match.command,
     args: match.args,
     senderId: command.senderId,
@@ -50,19 +54,16 @@ export const handlePluginCommand: CommandHandler = async (
     commandBody: command.commandBodyNormalized,
     commandSource: params.ctx.CommandSource,
     abortSignal: params.opts?.abortSignal,
+    turnAuthority: params.ctx.TurnAuthority,
     config: cfg,
     from: command.from,
     to: command.to,
     accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof params.ctx.MessageThreadId === "string" ||
-      typeof params.ctx.MessageThreadId === "number"
-        ? params.ctx.MessageThreadId
-        : undefined,
+    messageThreadId: resolveCommandAuthorizationThreadId(params.ctx),
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     conversationId:
-      normalizeOptionalString(params.ctx.OriginatingTo) ??
       normalizeOptionalString(params.ctx.NativeChannelId) ??
+      normalizeOptionalString(params.ctx.OriginatingTo) ??
       command.to ??
       command.from,
     parentConversationId: normalizeOptionalString(params.ctx.ThreadParentId),

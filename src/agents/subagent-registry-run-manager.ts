@@ -16,6 +16,7 @@ import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
+import type { ActiveEmbeddedRunSteeringTarget } from "./embedded-agent-runner/runs.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
@@ -40,6 +41,7 @@ import {
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { subagentCompletionSteeringTargets } from "./subagent-registry-memory.js";
 import type { SubagentProgressOrigin, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
@@ -190,6 +192,8 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Exact process-local requester attempt allowed to receive this run's completion. */
+  requesterSteeringTarget?: ActiveEmbeddedRunSteeringTarget;
 };
 
 export function createSubagentRunManager(params: {
@@ -693,6 +697,11 @@ export function createSubagentRunManager(params: {
     });
     clearDeliveryState(next);
 
+    const requesterSteeringTarget = subagentCompletionSteeringTargets.get(source);
+    if (requesterSteeringTarget) {
+      subagentCompletionSteeringTargets.set(next, requesterSteeringTarget);
+    }
+
     if (previousRunId !== nextRunId) {
       params.runs.delete(previousRunId);
     }
@@ -799,6 +808,9 @@ export function createSubagentRunManager(params: {
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
+    if (registerParams.requesterSteeringTarget) {
+      subagentCompletionSteeringTargets.set(entry, registerParams.requesterSteeringTarget);
+    }
     params.runs.set(runId, entry);
     const killReconciliationSnapshots = markOlderKillReconciliationsSuperseded(entry);
     try {

@@ -280,6 +280,8 @@ export type ChannelGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  /** Host-authenticated source provider for sender selectors; missing/null means unavailable. */
+  senderMessageProvider?: string | null;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

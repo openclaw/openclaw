@@ -107,6 +107,26 @@ async function waitAndQueueActiveRunMessage(
 }
 
 describe("runCodexAppServerAttempt steering", () => {
+  it("copies the host-prepared steering authorization affinity onto the active handle", async () => {
+    const { waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createSteeringParams();
+    const steeringAuthorizationAffinity = Object.freeze({ incomplete: true as const });
+    params.steeringAuthorizationAffinity = steeringAuthorizationAffinity;
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    await vi.waitFor(() => {
+      const handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as { steeringAuthorizationAffinity?: unknown } | undefined;
+      expect(handle?.steeringAuthorizationAffinity).toBe(steeringAuthorizationAffinity);
+    }, fastWait);
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();

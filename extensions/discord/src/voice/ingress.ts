@@ -15,6 +15,67 @@ const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 
 const logger = createSubsystemLogger("discord/voice");
 
+// Keep one turn's admitted roles attached to its exact context object; later turns re-fetch roles.
+const authorityFactsByIngressContext = new WeakMap<
+  DiscordVoiceIngressContext,
+  {
+    provider: "discord";
+    accountId?: string;
+    senderId: string;
+    senderName: string;
+    senderUsername?: string;
+    roleIds: string[];
+    isAuthorizedSender: true;
+    conversationId: string;
+  }
+>();
+
+export function resolveDiscordVoiceIngressAuthorityFacts(params: {
+  context: DiscordVoiceIngressContext;
+  entry: Pick<VoiceSessionEntry, "accountId" | "channelId" | "route">;
+  userId: string;
+}) {
+  return (
+    authorityFactsByIngressContext.get(params.context) ?? {
+      provider: "discord",
+      accountId: params.entry.accountId ?? params.entry.route.accountId,
+      senderId: params.userId,
+      senderName: params.context.speakerLabel,
+      roleIds: [],
+      isAuthorizedSender: true,
+      conversationId: params.entry.channelId,
+    }
+  );
+}
+
+export function copyDiscordVoiceIngressAuthorityFacts(
+  source: DiscordVoiceIngressContext,
+  target: DiscordVoiceIngressContext,
+): void {
+  const facts = authorityFactsByIngressContext.get(source);
+  if (facts) {
+    authorityFactsByIngressContext.set(target, facts);
+  }
+}
+
+function createDiscordVoiceIngressAuthorityFacts(params: {
+  context: DiscordVoiceIngressContext;
+  entry: Pick<VoiceSessionEntry, "accountId" | "channelId" | "route">;
+  identity: Awaited<ReturnType<DiscordVoiceSpeakerContextResolver["resolveIdentity"]>>;
+  userId: string;
+}) {
+  return {
+    provider: "discord",
+    accountId: params.entry.accountId ?? params.entry.route.accountId,
+    senderId: params.userId,
+    senderName: params.context.speakerLabel,
+    senderUsername: params.identity.name,
+    roleIds: params.identity.memberRoleIds,
+    isAuthorizedSender: true as const,
+    conversationId: params.entry.channelId,
+  };
+}
+
 export type DiscordVoiceIngressContext = {
   extraSystemPrompt?: string;
   senderIsOwner: boolean;
@@ -97,11 +158,21 @@ export async function resolveDiscordVoiceIngressContext(params: {
   if (!access.ok) {
     return null;
   }
-  return {
+  const context: DiscordVoiceIngressContext = {
     extraSystemPrompt: buildDiscordGroupSystemPrompt(access.channelConfig),
     senderIsOwner: speaker.senderIsOwner,
     speakerLabel: speaker.label,
   };
+  authorityFactsByIngressContext.set(
+    context,
+    createDiscordVoiceIngressAuthorityFacts({
+      context,
+      entry,
+      identity: speakerIdentity,
+      userId,
+    }),
+  );
+  return context;
 }
 
 export async function runDiscordVoiceAgentTurn(params: {
@@ -139,8 +210,14 @@ export async function runDiscordVoiceAgentTurn(params: {
       agentId: params.entry.route.agentId,
       messageChannel: "discord",
       messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
+      accountId: params.entry.accountId,
       extraSystemPrompt: context.extraSystemPrompt,
       senderIsOwner: context.senderIsOwner,
+      ingressAuthority: resolveDiscordVoiceIngressAuthorityFacts({
+        context,
+        entry: params.entry,
+        userId: params.userId,
+      }),
       allowModelOverride: Boolean(voiceModel),
       model: voiceModel,
       toolsAllow: params.toolsAllow,

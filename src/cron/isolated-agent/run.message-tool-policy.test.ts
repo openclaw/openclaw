@@ -28,6 +28,7 @@ import {
   runCliAgentMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
+import { createCronTurnAuthoritySnapshot } from "./turn-authority.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { executeCronRun } = await import("./run-executor.js");
@@ -354,6 +355,13 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
           agentDir: "/tmp/agent-dir",
           agentSessionKey: "cron:message-tool-policy",
           runSessionKey: "cron:message-tool-policy:run:test-session-id",
+          turnAuthority: createCronTurnAuthoritySnapshot({
+            jobId: "message-tool-policy",
+            agentId: "default",
+            sessionKey: "cron:message-tool-policy:run:test-session-id",
+            sessionId: "test-session-id",
+            runId: "test-session-id",
+          }),
           workspaceDir: "/tmp/workspace",
           agentVerboseDefault: undefined,
           thinkLevel: undefined,

@@ -16,6 +16,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
+import type { ActiveEmbeddedRunSteeringTarget } from "../embedded-agent-runner/runs.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
@@ -113,6 +114,7 @@ export async function maybeSpawnVisibleSession(params: {
   requestedAgentId?: string;
   sandbox: "inherit" | "require";
   options?: VisibleSessionsSpawnOptions;
+  requesterSteeringTarget?: ActiveEmbeddedRunSteeringTarget;
 }): Promise<Record<string, unknown> | undefined> {
   const worktree = params.raw.worktree === true;
   const worktreeName = readStringParam(params.raw, "worktreeName");
@@ -348,6 +350,9 @@ export async function maybeSpawnVisibleSession(params: {
         runTimeoutSeconds,
         expectsCompletionMessage: params.raw.expectsCompletionMessage !== false,
         spawnMode: "run",
+        ...(params.requesterSteeringTarget
+          ? { requesterSteeringTarget: params.requesterSteeringTarget }
+          : {}),
       });
     } catch (error) {
       let abortResponse: { abortedRunId?: string | null };

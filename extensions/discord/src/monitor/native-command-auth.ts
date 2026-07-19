@@ -231,7 +231,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     channel: interaction.channel,
     client: interaction.client,
     hasGuild: Boolean(interaction.guild),
-    channelIdFallback: "",
+    channelIdFallback: interaction.rawData.channel_id?.trim() ?? "",
   });
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)

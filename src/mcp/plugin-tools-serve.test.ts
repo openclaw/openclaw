@@ -2,7 +2,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type HookContext,
   wrapToolWithBeforeToolCallHook,
@@ -17,6 +17,8 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
@@ -27,6 +29,10 @@ const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled:
 const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool,
@@ -71,6 +77,7 @@ afterEach(() => {
   routeLogsToStderrMock.mockReset();
   resetAdjustedParamsByToolCallIdForTests();
   resetGlobalHookRunner();
+  resetPluginRuntimeStateForTest();
 });
 
 function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
@@ -92,6 +99,56 @@ function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
 }
 
 describe("plugin tools MCP server", () => {
+  it("executes the detached MCP tool input approved by an async policy", async () => {
+    let releasePolicy: (() => void) | undefined;
+    let notifyPolicyStarted: (() => void) | undefined;
+    const policyStarted = new Promise<void>((resolve) => {
+      notifyPolicyStarted = resolve;
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "mcp-policy",
+      source: "/plugins/mcp-policy/index.ts",
+      policy: {
+        id: "mcp-policy",
+        description: "Wait before allowing",
+        handlers: {
+          "tool.call": async () => {
+            notifyPolicyStarted?.();
+            await new Promise<void>((resolve) => {
+              releasePolicy = resolve;
+            });
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const execute = vi.fn().mockResolvedValue({ content: "Stored." });
+    const handlers = createPluginToolsMcpHandlers([
+      {
+        name: "memory_store",
+        description: "Store memory",
+        parameters: { type: "object", properties: {} },
+        execute,
+      } as unknown as AnyAgentTool,
+    ]);
+    const retainedInput = { text: "approved", nested: { target: "memory" } };
+
+    const pending = handlers.callTool({ name: "memory_store", arguments: retainedInput });
+    await policyStarted;
+    retainedInput.text = "mutated";
+    retainedInput.nested.target = "mutated";
+    releasePolicy?.();
+    await pending;
+
+    expect(execute.mock.calls[0]?.[1]).toEqual({
+      text: "approved",
+      nested: { target: "memory" },
+    });
+    expect(execute.mock.calls[0]?.[1]).not.toBe(retainedInput);
+  });
+
   it("passes the managed ACP session agent into plugin tool factories", async () => {
     const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
     const runtimeRegistry = createMockPluginRegistry([]);

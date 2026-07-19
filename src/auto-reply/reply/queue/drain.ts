@@ -30,6 +30,10 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import {
+  createSteeringAuthorizationAffinity,
+  resolveSteeringAuthorizationAffinityKey,
+} from "../steering-authorization-affinity.js";
 import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
   admitFollowupRunLifecycle,
@@ -122,6 +126,7 @@ type OriginRoutingMetadata = Pick<
   | "originatingAccountId"
   | "originatingThreadId"
   | "originatingChatId"
+  | "originatingParentConversationId"
   | "originatingReplyToId"
   | "originatingReplyToMode"
   | "originatingChatType"
@@ -137,6 +142,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
         item.originatingAccountId ||
         item.originatingThreadId != null ||
         item.originatingChatId ||
+        item.originatingParentConversationId ||
         item.originatingReplyToId ||
         item.originatingReplyToMode ||
         item.originatingChatType,
@@ -150,6 +156,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
     originatingChatId: source.originatingChatId,
+    originatingParentConversationId: source.originatingParentConversationId,
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
@@ -162,12 +169,19 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
-  return JSON.stringify([
+function resolveFollowupAuthorizationKey(queued: FollowupRun): string {
+  const run = queued.run;
+  const affinity = createSteeringAuthorizationAffinity({
+    turnAuthority: run.turnAuthority,
+  });
+  return stableStringify([
+    resolveSteeringAuthorizationAffinityKey(affinity) ?? null,
     run.senderId ?? "",
-    JSON.stringify(run.channelContext ?? null),
+    run.channelContext ?? null,
     run.senderE164 ?? "",
     run.senderIsOwner === true,
+    run.isAuthorizedSender === true,
+    [...new Set(run.memberRoleIds ?? [])].toSorted(),
     run.execOverrides?.host ?? "",
     run.execOverrides?.security ?? "",
     run.execOverrides?.ask ?? "",
@@ -183,7 +197,7 @@ function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
 export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
   const execution = run.run;
   const provenance = execution.inputProvenance;
-  return JSON.stringify([
+  const identity = stableStringify([
     channelRouteDedupeKey({
       channel: run.originatingChannel,
       to: run.originatingTo,
@@ -191,15 +205,16 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       threadId: run.originatingThreadId,
     }),
     run.originatingChatId ?? "",
+    run.originatingParentConversationId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
-    resolveFollowupAuthorizationKey(execution),
+    resolveFollowupAuthorizationKey(run),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
     execution.messageProvider ?? "",
-    JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
-    stableStringify(execution.toolBindings ?? null),
+    [...new Set(execution.clientCaps ?? [])].toSorted(),
+    execution.toolBindings ?? null,
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
     execution.groupId ?? "",
@@ -227,6 +242,9 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.blockReplyBreak,
     resolveTurnAdoptionLifecycleDeliveryKey(run.turnAdoptionLifecycle),
   ]);
+  // Context identities can contain binding targets and reviewer device ids.
+  // Retain only a deterministic digest in queue state and diagnostics.
+  return createHash("sha256").update(identity).digest("hex");
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
@@ -818,6 +836,7 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
     !accountId &&
     (threadId == null || threadId === "") &&
     !item.originatingChatId &&
+    !item.originatingParentConversationId &&
     !replyToId
   ) {
     return chatType ? { key: JSON.stringify(["unresolved", chatType]) } : {};
@@ -833,6 +852,7 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
         accountId ?? "",
         threadId ?? "",
         item.originatingChatId ?? "",
+        item.originatingParentConversationId ?? "",
         replyToId ?? "",
         item.originatingReplyToMode ?? "",
         chatType ?? "",
@@ -844,6 +864,7 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
     ? {
         key: JSON.stringify([
           key,
+          item.originatingParentConversationId ?? "",
           replyToId ?? "",
           item.originatingReplyToMode ?? "",
           chatType ?? "",
@@ -896,6 +917,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
     originatingChatId: source.originatingChatId,
+    originatingParentConversationId: source.originatingParentConversationId,
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
@@ -934,6 +956,7 @@ async function runSyntheticOverflowSummary(params: {
           accountId: params.source.originatingAccountId,
           threadId: params.source.originatingThreadId,
         }),
+        params.source.originatingParentConversationId ?? "",
         resolveFollowupReplyAnchor(params.source) ?? "",
         params.source.originatingReplyToMode ?? "",
         normalizeChatType(params.source.originatingChatType) ?? "",

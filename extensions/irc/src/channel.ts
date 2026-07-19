@@ -217,12 +217,29 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         }
         return resolveIrcGroupRequireMention({ groups: account.config.groups, target: groupId });
       },
-      resolveToolPolicy: ({ cfg, accountId, groupId }) => {
+      resolveToolPolicy: ({
+        cfg,
+        accountId,
+        groupId,
+        senderMessageProvider,
+        senderId,
+        senderName,
+        senderUsername,
+        senderE164,
+      }) => {
         const account = resolveIrcAccount({ cfg: cfg as CoreConfig, accountId });
         if (!groupId) {
           return undefined;
         }
-        return resolveIrcGroupToolPolicy({ groups: account.config.groups, target: groupId });
+        return resolveIrcGroupToolPolicy({
+          groups: account.config.groups,
+          target: groupId,
+          senderMessageProvider,
+          senderId,
+          senderName,
+          senderUsername,
+          senderE164,
+        });
       },
     },
     messaging: {

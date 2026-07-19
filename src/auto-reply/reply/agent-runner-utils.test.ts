@@ -1,5 +1,10 @@
 // Tests agent runner utility decisions for fallbacks, channels, and reasoning tags.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAuthorizationPrincipal } from "../../plugins/authorization-policy-context.js";
+import {
+  createOperatorTurnAuthoritySnapshot,
+  createTurnAuthoritySnapshot,
+} from "../../plugins/turn-authority.js";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
@@ -188,6 +193,77 @@ describe("agent-runner-utils", () => {
     expect(resolved.isAuthorizedSender).toBe(true);
   });
 
+  it("projects issued sender aliases into deferred run params", () => {
+    const run = makeRun({
+      senderId: "legacy-sender",
+      senderName: "Legacy Name",
+      senderUsername: "legacy-user",
+      senderE164: "+15559999999",
+      turnAuthority: createTurnAuthoritySnapshot({
+        principal: createAuthorizationPrincipal({
+          provider: "discord",
+          senderId: "canonical-sender",
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15550000001",
+        }),
+        agentId: "agent-1",
+        sessionKey: "agent:test:session",
+      }),
+    });
+
+    expect(
+      buildEmbeddedRunBaseParams({
+        run,
+        provider: "openai",
+        model: "gpt-4.1",
+        runId: "run-1",
+        authProfile: resolveProviderScopedAuthProfile({
+          provider: "openai",
+          primaryProvider: "openai",
+        }),
+      }),
+    ).toMatchObject({
+      senderId: "canonical-sender",
+      senderName: "canonical name",
+      senderUsername: "canonical-user",
+      senderE164: "+15550000001",
+    });
+  });
+
+  it("clears legacy sender aliases for issued non-sender authority", () => {
+    const run = makeRun({
+      senderId: "legacy-sender",
+      senderName: "Legacy Name",
+      senderUsername: "legacy-user",
+      senderE164: "+15559999999",
+      turnAuthority: createOperatorTurnAuthoritySnapshot({
+        scopes: ["operator.write"],
+        connectionId: "connection-1",
+        agentId: "agent-1",
+        sessionKey: "agent:test:session",
+      }),
+    });
+
+    expect(
+      buildEmbeddedRunBaseParams({
+        run,
+        provider: "openai",
+        model: "gpt-4.1",
+        runId: "run-1",
+        authProfile: resolveProviderScopedAuthProfile({
+          provider: "openai",
+          primaryProvider: "openai",
+        }),
+      }),
+    ).toMatchObject({
+      senderId: undefined,
+      senderName: undefined,
+      senderUsername: undefined,
+      senderE164: undefined,
+    });
+  });
+
   it("threads prompt cache affinity through embedded execution params", () => {
     const run = makeRun();
 
@@ -308,6 +384,7 @@ describe("agent-runner-utils", () => {
         To: "channel-1",
         ChatType: "Channel",
         NativeChannelId: "native-chat-1",
+        ThreadParentId: "native-parent-1",
         SenderId: "sender-1",
         ChannelContext: {
           sender: { id: "sender-1", providerUserId: "provider-user-1" },
@@ -330,6 +407,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.chatType).toBe("channel");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
     expect(resolved.embeddedContext.chatId).toBe("native-chat-1");
+    expect(resolved.embeddedContext.parentConversationId).toBe("native-parent-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
     expect(resolved.senderContext).toEqual({

@@ -728,11 +728,16 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "auto",
+      label: "Automatic",
+      description: "Use the configured provider/model runtime policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
       id: "codex",
       label: "OpenAI Codex",
       description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
     });
-    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[2]).toEqual({
       id: "openclaw",
       label: "OpenClaw Default",
       description: "Use the built-in OpenClaw runtime.",
@@ -757,6 +762,11 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "auto",
+      label: "Automatic",
+      description: "Use the configured provider/model runtime policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
       id: "openclaw",
       label: "OpenClaw Default",
       description: "Use the built-in OpenClaw runtime.",
@@ -785,11 +795,16 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "auto",
+      label: "Automatic",
+      description: "Use the configured provider/model runtime policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
       id: "codex",
       label: "OpenAI Codex",
       description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
     });
-    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[2]).toEqual({
       id: "openclaw",
       label: "OpenClaw Default",
       description: "Use the built-in OpenClaw runtime.",
@@ -815,6 +830,11 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
+      id: "auto",
+      label: "Automatic",
+      description: "Use the configured provider/model runtime policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
       id: "openclaw",
       label: "OpenClaw Default",
       description: "Use the built-in OpenClaw runtime.",
@@ -840,11 +860,16 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
+      id: "auto",
+      label: "Automatic",
+      description: "Use the configured provider/model runtime policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
       id: "claude-cli",
       label: "Claude CLI",
       description: "Use the Claude CLI runtime selected by the effective harness policy.",
     });
-    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
+    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[2]).toEqual({
       id: "openclaw",
       label: "OpenClaw Default",
       description: "Use the built-in OpenClaw runtime.",

@@ -27,6 +27,46 @@ import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
+const resolveTurnAuthorityAuthorizationMock = vi.hoisted(() => vi.fn());
+const authorizationPolicyActiveOverride = vi.hoisted(() => ({
+  value: undefined as boolean | undefined,
+}));
+const webSearchPolicyCalls = vi.hoisted(
+  () =>
+    [] as Array<{
+      senderMessageProvider?: string | null;
+      allowed: boolean;
+    }>,
+);
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...original,
+    hasAuthorizationPolicies: (...args: Parameters<typeof original.hasAuthorizationPolicies>) =>
+      authorizationPolicyActiveOverride.value ?? original.hasAuthorizationPolicies(...args),
+    resolveTurnAuthorityAuthorization: resolveTurnAuthorityAuthorizationMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness")>();
+  return {
+    ...original,
+    resolveWebSearchToolPolicy: (
+      ...args: Parameters<typeof original.resolveWebSearchToolPolicy>
+    ) => {
+      const resolution = original.resolveWebSearchToolPolicy(...args);
+      webSearchPolicyCalls.push({
+        senderMessageProvider: args[0].senderMessageProvider,
+        allowed: resolution.allowed,
+      });
+      return resolution;
+    },
+  };
+});
+
 let tempDir: string;
 
 function setOpenClawCodingToolsFactoryForTests(
@@ -149,6 +189,9 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   beforeEach(async () => {
+    authorizationPolicyActiveOverride.value = undefined;
+    resolveTurnAuthorityAuthorizationMock.mockReset();
+    webSearchPolicyCalls.length = 0;
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
   });
 
@@ -454,6 +497,49 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(persistentWebSearchAllowed).toBe(false);
+  });
+
+  it("does not infer the delivery provider for provider-less issued web_search policy", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.messageProvider = "discord";
+    params.agentAccountId = "default";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = {
+      tools: {
+        toolsBySender: {
+          "channel:discord:maintainer-1": { allow: ["web_search"] },
+        },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+
+    const resolveForProvider = async (provider?: string) => {
+      const authorization = {
+        principal: {
+          kind: "sender",
+          ...(provider ? { provider } : {}),
+          accountId: "default",
+          senderId: "maintainer-1",
+        },
+      } as const;
+      resolveTurnAuthorityAuthorizationMock.mockReturnValueOnce(authorization);
+      params.turnAuthority = { authorization } as never;
+
+      await buildDynamicToolsForTest(params, workspaceDir);
+
+      return webSearchPolicyCalls.at(-1);
+    };
+
+    expect(await resolveForProvider()).toEqual({
+      senderMessageProvider: null,
+      allowed: false,
+    });
+    expect(await resolveForProvider("discord")).toEqual({
+      senderMessageProvider: "discord",
+      allowed: true,
+    });
   });
 
   it("keeps managed web_search when a managed provider is explicitly selected", async () => {
@@ -1209,6 +1295,60 @@ describe("Codex app-server dynamic tool build", () => {
     });
   });
 
+  it("clears legacy sender identity when authorization policy is active", async () => {
+    authorizationPolicyActiveOverride.value = true;
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.senderId = "legacy-owner";
+    params.senderName = "Legacy Owner";
+    params.senderUsername = "legacy-owner";
+    params.senderE164 = "+15559999999";
+    params.senderIsOwner = true;
+    params.isAuthorizedSender = true;
+    params.memberRoleIds = ["admins"];
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    expect(factoryOptions[0]).toMatchObject({
+      senderIsOwner: false,
+    });
+    const options = factoryOptions[0] as Record<string, unknown>;
+    expect(options.senderId).toBeUndefined();
+    expect(options.senderName).toBeUndefined();
+    expect(options.senderUsername).toBeUndefined();
+    expect(options.senderE164).toBeUndefined();
+    expect(options.isAuthorizedSender).toBeUndefined();
+    expect(options.memberRoleIds).toBeUndefined();
+  });
+
+  it("passes the exact host authority into Codex dynamic tool construction", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const authorization = { principal: { kind: "operator" } } as const;
+    const turnAuthority = { authorization } as never;
+    resolveTurnAuthorityAuthorizationMock.mockReturnValueOnce(authorization);
+    params.disableTools = false;
+    params.turnAuthority = turnAuthority;
+    params.senderId = "conflicting-sender";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    expect((factoryOptions[0] as { turnAuthority?: unknown }).turnAuthority).toBe(turnAuthority);
+  });
+
   it("passes native and routable channel targets into Codex dynamic tools", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1479,6 +1619,25 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
     params.toolsAllow = ["message"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("disables Codex native tools when authorization policies are required", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      plugins: {
+        entries: {
+          "sender-access": {
+            authorization: {
+              requiredPolicies: [{ id: "maintainer-tools", operations: ["tool.call"] }],
+            },
+          },
+        },
+      },
+    } as never;
+
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 

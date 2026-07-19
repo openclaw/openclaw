@@ -44,6 +44,16 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Sets the manifest-declared authorization policy ID required from this plugin. Keep the ID aligned with the policy registered by the plugin at startup.",
   "plugins.entries.*.authorization.requiredPolicies.*.operations":
     "Selects the host operation families the required policy must handle: tool.call, message.action, or command.invoke. Use only the families that need this fail-closed policy.",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope":
+    "Use these host-derived routing selectors to limit where the required-policy pin applies. Scope authenticates nothing; omit it for a global pin. Configured fields combine with AND semantics.",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.agentIds":
+    "Use these host-derived agent IDs to keep an agent-specific pin from affecting other agents that share the same Gateway.",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.providers":
+    "Use these source-provider selectors, such as discord or telegram, when the pin applies only to selected channel transports. The policy must still authenticate the principal.",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.accountIds":
+    "Use these source channel-account selectors to distinguish multiple bot accounts on one provider. The policy must still authenticate the principal.",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.conversationIds":
+    "Use these source conversation IDs to limit the pin to selected channels or chats. A thread matches either its own ID or its parent conversation ID.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":

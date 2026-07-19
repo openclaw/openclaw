@@ -6,10 +6,17 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const runtimeIdentityMocks = vi.hoisted(() => {
+  const runtimeIdentity = ["signed", "sessions", "send"].join("-");
+  const mintRuntimeIdentity = vi.fn(async (_params: unknown) => runtimeIdentity);
+  return { mintRuntimeIdentity };
+});
 const facadeRuntimeMock = vi.hoisted(() => ({
   sessionKeyResolvers: new Map<
     string,
@@ -24,6 +31,11 @@ const facadeRuntimeMock = vi.hoisted(() => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+vi.mock("../../gateway/agent-runtime-identity-token.js", () => ({
+  async mintAgentRuntimeIdentityToken(params: unknown) {
+    return await runtimeIdentityMocks.mintRuntimeIdentity(params);
+  },
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
@@ -75,8 +87,10 @@ vi.mock("./sessions-send-tool.a2a.js", () => ({
 
 let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
 let createSessionsSendTool: typeof import("./sessions-send-tool.js").createSessionsSendTool;
+let createRawSessionsSendTool: typeof import("./sessions-send-tool.js").createSessionsSendTool;
 let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["resolveAnnounceTarget"];
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
+let wrapToolWithGatewayCallerIdentity: (typeof import("./gateway-caller-context.js"))["wrapToolWithGatewayCallerIdentity"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
 const resolveSessionConversationStub: NonNullable<
@@ -115,7 +129,31 @@ function requireGatewayRequest(index = 0) {
 
 beforeAll(async () => {
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
-  ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
+  const sessionsSendModule = await import("./sessions-send-tool.js");
+  createRawSessionsSendTool = sessionsSendModule.createSessionsSendTool;
+  ({ wrapToolWithGatewayCallerIdentity } = await import("./gateway-caller-context.js"));
+  createSessionsSendTool = ((options) => {
+    const sessionKey = options?.agentSessionKey ?? MAIN_AGENT_SESSION_KEY;
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: options?.agentChannel,
+        senderId: "sessions-test-sender",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+      },
+      agentId,
+      sessionKey,
+      conversationId: "sessions-test-conversation",
+      trigger: "channel",
+    });
+    return wrapToolWithGatewayCallerIdentity(sessionsSendModule.createSessionsSendTool(options), {
+      agentId,
+      sessionKey,
+      turnAuthority,
+    });
+  }) as typeof createSessionsSendTool;
   ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
   ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
 });
@@ -309,6 +347,7 @@ describe("sanitizeTextContent", () => {
 });
 
 beforeEach(() => {
+  runtimeIdentityMocks.mintRuntimeIdentity.mockClear();
   facadeRuntimeMock.sessionKeyResolvers.clear();
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
@@ -991,7 +1030,170 @@ describe("sessions_send gating", () => {
     ]);
   });
 
-  it("keeps synchronous distinct-target sends unchanged", async () => {
+  it("uses the authenticated caller key for a non-default agent alias", async () => {
+    const agentId = "ops";
+    const canonicalSessionKey = `agent:${agentId}:main`;
+    const aliasedAuthority = createTurnAuthoritySnapshot({
+      principal: { kind: "sender", senderId: "sessions-test-sender" },
+      agentId,
+      sessionKey: "main",
+      trigger: "channel",
+    });
+    const tool = wrapToolWithGatewayCallerIdentity(
+      createRawSessionsSendTool({
+        agentSessionKey: "main",
+        agentChannel: MAIN_AGENT_CHANNEL,
+        config: {
+          session: { scope: "per-sender", mainKey: "main" },
+          tools: {
+            agentToAgent: { enabled: false },
+            sessions: { visibility: "all" },
+          },
+        } as never,
+      }),
+      { agentId, sessionKey: "main", turnAuthority: aliasedAuthority },
+    );
+
+    const result = await tool.execute("call-aliased-non-default-self-send", {
+      sessionKey: canonicalSessionKey,
+      message: "use this as my reply",
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: "sessions_send cannot target the calling session; use your own reply instead",
+    });
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({ method: "agent" }),
+    ]);
+  });
+
+  it("rejects a custom unscoped alias of the calling agent session", async () => {
+    const agentId = "ops";
+    const customSessionKey = "custom-ops-session";
+    const canonicalSessionKey = `agent:${agentId}:${customSessionKey}`;
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: { kind: "sender", senderId: "sessions-test-sender" },
+      agentId,
+      sessionKey: canonicalSessionKey,
+      trigger: "channel",
+    });
+    const tool = wrapToolWithGatewayCallerIdentity(
+      createRawSessionsSendTool({
+        agentSessionKey: canonicalSessionKey,
+        agentChannel: MAIN_AGENT_CHANNEL,
+        config: {
+          session: { scope: "per-sender", mainKey: "main" },
+          tools: {
+            agentToAgent: { enabled: false },
+            sessions: { visibility: "all" },
+          },
+        } as never,
+      }),
+      { agentId, sessionKey: canonicalSessionKey, turnAuthority },
+    );
+    callGatewayMock.mockResolvedValueOnce({ key: customSessionKey });
+
+    const result = await tool.execute("call-custom-unscoped-self-send", {
+      sessionKey: customSessionKey,
+      agentId,
+      message: "use this as my reply",
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: "sessions_send cannot target the calling session; use your own reply instead",
+    });
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({ method: "agent" }),
+    ]);
+  });
+
+  it("keeps an explicit agent binding for a custom unscoped session key", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const agentId = "ops";
+    const customSessionKey = "custom-ops-session";
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: { kind: "sender", senderId: "sessions-test-sender" },
+      agentId,
+      sessionKey: `agent:${agentId}:main`,
+      trigger: "channel",
+    });
+    const tool = wrapToolWithGatewayCallerIdentity(
+      createRawSessionsSendTool({
+        agentSessionKey: `agent:${agentId}:main`,
+        agentChannel: MAIN_AGENT_CHANNEL,
+        config: {
+          session: { scope: "per-sender", mainKey: "main" },
+          tools: {
+            agentToAgent: { enabled: false },
+            sessions: { visibility: "all" },
+          },
+        } as never,
+      }),
+      { agentId, sessionKey: `agent:${agentId}:main`, turnAuthority },
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        return { key: customSessionKey };
+      }
+      if (request.method === "sessions.list") {
+        return { sessions: [{ key: customSessionKey, agentId, kind: "other" }] };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-custom-agent", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-custom-agent", {
+      sessionKey: customSessionKey,
+      agentId,
+      message: "ping",
+      timeoutSeconds: 0,
+      watch: true,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "accepted",
+      sessionKey: customSessionKey,
+      watched: false,
+    });
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          agentId,
+          sessionKey: customSessionKey,
+          lane: `nested:agent:${agentId}:${customSessionKey}`,
+        }),
+      }),
+    ]);
+    expect(runtimeIdentityMocks.mintRuntimeIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionsSendDelegation: expect.objectContaining({
+          targetAgentId: agentId,
+          targetSessionKey: customSessionKey,
+        }),
+      }),
+    );
+    expect(runSessionsSendA2AFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: customSessionKey,
+        targetAgentId: agentId,
+        requesterAgentId: agentId,
+      }),
+    );
+  });
+
+  it("does not report a pending follow-up when the target produces no reply text", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
     const targetSessionKey = "agent:main:other";
     const tool = createSessionsSendTool({
       agentSessionKey: MAIN_AGENT_SESSION_KEY,
@@ -1043,9 +1245,11 @@ describe("sessions_send gating", () => {
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
     expect(details.sessionKey).toBe(targetSessionKey);
+    expect(details.delivery).toEqual({ status: "skipped", mode: "announce" });
+    expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
   });
 
-  it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
+  it("does not promise fire-and-forget same-session delivery without a source route", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
     vi.mocked(runSessionsSendA2AFlow).mockClear();
     const tool = createMainSessionsSendTool();
@@ -1081,22 +1285,36 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
-    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-    expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
-    expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+    expect(details.delivery).toEqual({ status: "skipped", mode: "announce" });
+    expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
   });
 
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
     vi.mocked(runSessionsSendA2AFlow).mockClear();
-    const tool = createSessionsSendTool({
-      agentSessionKey: "main",
-      agentChannel: MAIN_AGENT_CHANNEL,
-      config: {
-        session: { scope: "per-sender", mainKey: MAIN_AGENT_SESSION_KEY },
-        tools: { agentToAgent: { enabled: false } },
-      } as never,
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: { kind: "sender", senderId: "sessions-test-sender" },
+      agentId: "main",
+      sessionKey: "main",
+      trigger: "channel",
     });
+    const tool = wrapToolWithGatewayCallerIdentity(
+      createRawSessionsSendTool({
+        agentSessionKey: "main",
+        agentChannel: MAIN_AGENT_CHANNEL,
+        config: {
+          session: { scope: "per-sender", mainKey: MAIN_AGENT_SESSION_KEY },
+          tools: { agentToAgent: { enabled: false } },
+        } as never,
+      }),
+      {
+        agentId: "main",
+        sessionKey: "main",
+        turnAuthority,
+        turnSourceChannel: MAIN_AGENT_CHANNEL,
+        turnSourceTo: "user:owner",
+      },
+    );
     const staleAssistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: "older reply from a previous run" }],
@@ -1129,6 +1347,7 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe("main");
+    expect(details.delivery).toEqual({ status: "pending", mode: "announce" });
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.requesterSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(flowParams?.targetSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
@@ -1166,9 +1385,39 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
-    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-    expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
-    expect(flowParams?.baseline).toBeUndefined();
+    expect(details.delivery).toEqual({ status: "skipped", mode: "announce" });
+    expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+  });
+
+  it("skips same-session follow-up without a source route after an empty baseline", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const tool = createMainSessionsSendTool();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-known-empty", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-known-empty-history", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).delivery).toEqual({ status: "skipped", mode: "announce" });
+    expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
   });
 
   it.each([

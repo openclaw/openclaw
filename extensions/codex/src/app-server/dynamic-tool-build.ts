@@ -8,12 +8,14 @@ import {
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
   filterProviderNormalizableTools,
+  hasAuthorizationPolicies,
   isHostScopedAgentToolActive,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
   resolveSandboxContext,
+  resolveTurnAuthorityAuthorization,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type RuntimeToolSchemaDiagnostic,
@@ -207,6 +209,11 @@ export function formatCodexDynamicToolBuildStageSummary(
 /** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
+  const admittedPrincipal = resolveTurnAuthorityAuthorization(params.turnAuthority)?.principal;
+  const admittedSender = admittedPrincipal?.kind === "sender" ? admittedPrincipal : undefined;
+  const admittedOperator = admittedPrincipal?.kind === "operator" ? admittedPrincipal : undefined;
+  const useLegacySenderIdentity =
+    admittedPrincipal === undefined && !hasAuthorizationPolicies(undefined, params.config);
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
@@ -259,14 +266,32 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    memberRoleIds: params.memberRoleIds,
+    memberRoleIds: admittedPrincipal
+      ? admittedSender?.roleIds
+      : useLegacySenderIdentity
+        ? params.memberRoleIds
+        : undefined,
     spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
-    isAuthorizedSender: params.isAuthorizedSender,
+    senderId: admittedSender?.senderId ?? (useLegacySenderIdentity ? params.senderId : undefined),
+    senderName:
+      admittedSender?.aliases?.name ?? (useLegacySenderIdentity ? params.senderName : undefined),
+    senderUsername:
+      admittedSender?.aliases?.username ??
+      (useLegacySenderIdentity ? params.senderUsername : undefined),
+    senderE164:
+      admittedSender?.aliases?.e164 ?? (useLegacySenderIdentity ? params.senderE164 : undefined),
+    senderIsOwner: admittedPrincipal
+      ? (admittedSender?.senderIsOwner ?? admittedOperator?.isOwner ?? false)
+      : useLegacySenderIdentity
+        ? params.senderIsOwner
+        : false,
+    isAuthorizedSender: admittedPrincipal
+      ? admittedSender?.isAuthorizedSender
+      : useLegacySenderIdentity
+        ? params.isAuthorizedSender
+        : undefined,
+    turnAuthority: params.turnAuthority,
+    parentConversationId: params.parentConversationId,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
@@ -386,14 +411,23 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     sandboxToolPolicy: input.sandbox?.tools,
     messageProvider: resolveCodexMessageToolProvider(params),
     agentAccountId: params.agentAccountId,
+    // `undefined` means "inherit the delivery route" to the shared resolver.
+    // Preserve an issued sender's missing provider as explicit unknown instead.
+    senderMessageProvider: admittedSender ? (admittedSender.provider ?? null) : undefined,
+    senderAccountId: admittedPrincipal ? admittedSender?.accountId : undefined,
+    requireSenderRouteBinding: admittedSender !== undefined,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
+    senderId: admittedSender?.senderId ?? (useLegacySenderIdentity ? params.senderId : undefined),
+    senderName:
+      admittedSender?.aliases?.name ?? (useLegacySenderIdentity ? params.senderName : undefined),
+    senderUsername:
+      admittedSender?.aliases?.username ??
+      (useLegacySenderIdentity ? params.senderUsername : undefined),
+    senderE164:
+      admittedSender?.aliases?.e164 ?? (useLegacySenderIdentity ? params.senderE164 : undefined),
   });
   const senderScopedWebSearchRestriction =
     !webSearchPolicy.allowed && webSearchPolicy.persistentAllowed;
@@ -504,6 +538,11 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   } = {},
 ): boolean {
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  // Codex currently skips PreToolUse for write_stdin. Keep native interactive
+  // execution unavailable whenever sender-aware policy is part of this turn.
+  if (hasAuthorizationPolicies(undefined, params.config)) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);

@@ -2760,7 +2760,11 @@ describe("exec approval handlers", () => {
     deviceId?: string;
     scopes?: string[];
     approvalRuntime?: boolean;
-    agentRuntimeIdentity?: { agentId: string; sessionKey: string };
+    agentRuntimeIdentity?: {
+      agentId: string;
+      sessionKey: string;
+      gatewayMethods: readonly [string];
+    };
   }): ExecApprovalRequestArgs["client"] {
     const internal = {
       ...(params.approvalRuntime ? { approvalRuntime: true } : {}),
@@ -3568,7 +3572,11 @@ describe("exec approval handlers", () => {
       deviceId: "device-auto-review-resolver",
       scopes: ["operator.approvals"],
       approvalRuntime: true,
-      agentRuntimeIdentity: { agentId: "main", sessionKey: "agent:main:main" },
+      agentRuntimeIdentity: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        gatewayMethods: ["exec.approval.resolve"],
+      },
     });
     const requestPromise = requestExecApproval({
       handlers,
@@ -3619,7 +3627,11 @@ describe("exec approval handlers", () => {
       clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
       scopes: ["operator.approvals"],
       approvalRuntime: true,
-      agentRuntimeIdentity: { agentId: "other", sessionKey: "agent:other:main" },
+      agentRuntimeIdentity: {
+        agentId: "other",
+        sessionKey: "agent:other:main",
+        gatewayMethods: ["exec.approval.resolve"],
+      },
     });
     const requestPromise = requestExecApproval({
       handlers,

@@ -1,5 +1,6 @@
 // Send gateway methods route operator/tool messages and poll actions through
 // channel plugins, outbound session state, durable delivery, and transcript mirrors.
+import { createHash } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -15,6 +16,7 @@ import {
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { stableStringify } from "../../agents/stable-stringify.js";
 import { ToolAuthorizationError } from "../../agents/tools/common.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
@@ -34,6 +36,10 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  materializeOutboundEffectData,
+  materializeOutboundEffectPayload,
+} from "../../infra/outbound/effect-authorization.js";
 import {
   hydrateAttachmentParamsForAction,
   resolveAttachmentMediaPolicy,
@@ -67,7 +73,11 @@ import {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
 } from "../../plugins/authorization-policy-context.js";
-import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
+import type {
+  AuthorizationInvocationContext,
+  TurnAuthoritySnapshot,
+} from "../../plugins/authorization-policy.types.js";
+import { resolveTurnAuthorityAuthorization } from "../../plugins/turn-authority.js";
 import { normalizePollInput } from "../../polls.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -94,6 +104,60 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 
 type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
 
+type GatewayMessageActionRequest = {
+  channel: string;
+  action: string;
+  params: Record<string, unknown>;
+  accountId?: string;
+  requesterAccountId?: string;
+  requesterSenderId?: string;
+  senderIsOwner?: boolean;
+  sessionKey?: string;
+  sessionId?: string;
+  inboundTurnKind?: "user_request" | "room_event";
+  agentId?: string;
+  toolContext?: MessageActionToolContext;
+  conversationReadOrigin?: "direct-operator";
+  idempotencyKey: string;
+};
+
+type GatewaySendRequest = {
+  to: string;
+  message?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
+  asVoice?: boolean;
+  gifPlayback?: boolean;
+  channel?: string;
+  accountId?: string;
+  agentId?: string;
+  replyToId?: string;
+  threadId?: string;
+  forceDocument?: boolean;
+  silent?: boolean;
+  parseMode?: "HTML";
+  sessionKey?: string;
+  idempotencyKey: string;
+};
+
+type GatewayPollRequest = {
+  to: string;
+  question: string;
+  options: string[];
+  maxSelections?: number;
+  durationSeconds?: number;
+  durationHours?: number;
+  silent?: boolean;
+  isAnonymous?: boolean;
+  threadId?: string;
+  channel?: string;
+  accountId?: string;
+  idempotencyKey: string;
+};
+
 function resolveTrustedAgentRuntimeMessageContext(params: {
   client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
 }):
@@ -107,6 +171,8 @@ function resolveTrustedAgentRuntimeMessageContext(params: {
       requesterSenderIsOwner: boolean | undefined;
       requesterIsAuthorizedSender: boolean | undefined;
       requesterRoleIds: readonly string[] | undefined;
+      parentConversationId: string | undefined;
+      turnAuthority: TurnAuthoritySnapshot | undefined;
       sessionId: string | undefined;
       sourceReplyFinal: boolean | undefined;
       sourceReplyToolCallId: string | undefined;
@@ -127,6 +193,8 @@ function resolveTrustedAgentRuntimeMessageContext(params: {
       requesterSenderIsOwner: undefined,
       requesterIsAuthorizedSender: undefined,
       requesterRoleIds: undefined,
+      parentConversationId: undefined,
+      turnAuthority: undefined,
       sessionId: undefined,
       sourceReplyFinal: undefined,
       sourceReplyToolCallId: undefined,
@@ -145,6 +213,8 @@ function resolveTrustedAgentRuntimeMessageContext(params: {
       requesterSenderIsOwner: undefined,
       requesterIsAuthorizedSender: undefined,
       requesterRoleIds: undefined,
+      parentConversationId: undefined,
+      turnAuthority: undefined,
       sessionId: undefined,
       sourceReplyFinal: undefined,
       sourceReplyToolCallId: undefined,
@@ -166,6 +236,8 @@ function resolveTrustedAgentRuntimeMessageContext(params: {
     requesterSenderIsOwner: messageActionContext.requesterSenderIsOwner,
     requesterIsAuthorizedSender: messageActionContext.requesterIsAuthorizedSender,
     requesterRoleIds: messageActionContext.requesterRoleIds,
+    parentConversationId: messageActionContext.parentConversationId,
+    turnAuthority: messageActionContext.turnAuthority,
     sessionId: messageActionContext.sessionId,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
     sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
@@ -225,11 +297,14 @@ function resolveGatewayMessageActionAuthorizationContext(params: {
   >;
 }): AuthorizationInvocationContext {
   const trusted = params.trustedContext;
+  const turnAuthorization = resolveTurnAuthorityAuthorization(trusted?.turnAuthority);
+  if (turnAuthorization) {
+    return turnAuthorization;
+  }
   const sourceToolContext = trusted?.toolContext;
   const sourceConversationId =
     sourceToolContext?.currentChannelId ?? sourceToolContext?.currentMessagingTarget;
   const trustedSenderId = trusted?.requesterSenderId;
-  const hasTrustedSender = Boolean(trustedSenderId);
   // A signed runtime may omit the optional turn session id, but it may never
   // replace that signed fact with a request-controlled value.
   const sessionId = trusted?.identityAgentId ? trusted.sessionId : params.sessionId;
@@ -247,7 +322,7 @@ function resolveGatewayMessageActionAuthorizationContext(params: {
       : params.client?.connect
         ? createAuthorizationPrincipal({
             operatorScopes: params.client.connect.scopes ?? [],
-            operatorClientId: params.client.connect.client?.id,
+            operatorClientId: params.client.pairedClientId,
             operatorDeviceId: params.client.connect.device?.id,
             operatorIsOwner: (params.client.connect.scopes ?? []).includes(ADMIN_SCOPE),
           })
@@ -257,8 +332,9 @@ function resolveGatewayMessageActionAuthorizationContext(params: {
     agentId: trusted?.identityAgentId ?? params.agentId,
     sessionKey: trusted?.identitySessionKey ?? params.sessionKey,
     sessionId,
-    conversationId: hasTrustedSender ? sourceConversationId : params.targetConversationId,
-    threadId: hasTrustedSender
+    conversationId: trusted?.identityAgentId ? sourceConversationId : params.targetConversationId,
+    parentConversationId: trusted?.identityAgentId ? trusted.parentConversationId : undefined,
+    threadId: trusted?.identityAgentId
       ? sourceConversationId
         ? sourceToolContext?.currentThreadTs
         : undefined
@@ -267,12 +343,63 @@ function resolveGatewayMessageActionAuthorizationContext(params: {
   });
 }
 
+function isResolvedAuthorizationPrincipalOwner(
+  authorization: AuthorizationInvocationContext,
+): boolean {
+  const principal = authorization.principal;
+  if (principal.kind === "sender") {
+    return principal.senderIsOwner === true;
+  }
+  return principal.kind === "operator" ? principal.isOwner === true : false;
+}
+
+function normalizeGatewayDedupeChannel(value: unknown): string | undefined {
+  const channelInput = readStringValue(value);
+  return channelInput
+    ? (normalizeMessageChannel(channelInput) ?? normalizeOptionalLowercaseString(channelInput))
+    : undefined;
+}
+
+function resolveGatewayAuthorityBoundDedupeFingerprint(params: {
+  client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
+  requestSemantics: unknown;
+  trustedContext: Extract<
+    ReturnType<typeof resolveTrustedAgentRuntimeMessageContext>,
+    { ok: true }
+  >;
+}): string {
+  const authorization = resolveGatewayMessageActionAuthorizationContext({
+    client: params.client,
+    trustedContext: params.trustedContext,
+  });
+  const principal = authorization.principal;
+  // Operator turns are device-controlled when possible and connection-controlled otherwise.
+  // Dedupe must use the same boundary so paired device-less sockets cannot replay each other.
+  const operatorConnectionId =
+    principal.kind === "operator" && !principal.deviceId ? params.client?.connId : undefined;
+  const canonical = stableStringify({
+    authority: {
+      authorization,
+      controllerKey: params.trustedContext.turnAuthority?.controllerKey,
+      capabilityDigest: params.trustedContext.turnAuthority?.capabilityDigest,
+      operatorConnectionId,
+      sourceReplyFinal: params.trustedContext.sourceReplyFinal,
+      sourceReplyToolCallId: params.trustedContext.sourceReplyToolCallId,
+    },
+    request: params.requestSemantics,
+  });
+  // Dedupe is an authorization boundary: only identical host authority, delivery
+  // context, and effect semantics may join or replay. Hashing also keeps them out of map keys.
+  return createHash("sha256").update(canonical).digest("base64url");
+}
+
 function resolveGatewayInflightRequest(params: {
   context: GatewayRequestContext;
   prefix: "message.action" | "poll" | "send";
   idempotencyKey: string;
   respond: RespondFn;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  requestFingerprint: string;
 }):
   | {
       kind: "ready";
@@ -287,8 +414,8 @@ function resolveGatewayInflightRequest(params: {
   const idem = params.idempotencyKey;
   const dedupeKey =
     params.prefix === "message.action"
-      ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${idem}`
-      : `${params.prefix}:${idem}`;
+      ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${params.requestFingerprint}:${idem}`
+      : `${params.prefix}:${params.requestFingerprint}:${idem}`;
   return resolveIdempotentGatewayRequest({
     context: params.context,
     dedupeKey,
@@ -596,22 +723,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const request = p as {
-      channel: string;
-      action: string;
-      params: Record<string, unknown>;
-      accountId?: string;
-      requesterAccountId?: string;
-      requesterSenderId?: string;
-      senderIsOwner?: boolean;
-      sessionKey?: string;
-      sessionId?: string;
-      inboundTurnKind?: "user_request" | "room_event";
-      agentId?: string;
-      toolContext?: MessageActionToolContext;
-      conversationReadOrigin?: "direct-operator";
-      idempotencyKey: string;
-    };
+    const request = materializeOutboundEffectData(p) as GatewayMessageActionRequest;
     const trustedContext = resolveTrustedAgentRuntimeMessageContext({ client });
     if (!trustedContext.ok) {
       respond(false, undefined, trustedContext.error);
@@ -630,12 +742,30 @@ export const sendHandlers: GatewayRequestHandlers = {
       client,
       requestedOrigin: request.conversationReadOrigin,
     });
+    const normalizedAgentId = normalizeOptionalString(request.agentId);
+    const requestFingerprint = resolveGatewayAuthorityBoundDedupeFingerprint({
+      client,
+      requestSemantics: {
+        channel: normalizeGatewayDedupeChannel(request.channel),
+        action: normalizeOptionalLowercaseString(request.action),
+        params: request.params,
+        accountId: normalizeOptionalString(request.accountId),
+        senderIsOwner: request.senderIsOwner === true,
+        sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined,
+        sessionId: normalizeOptionalString(request.sessionId),
+        inboundTurnKind: request.inboundTurnKind,
+        agentId: normalizedAgentId ? normalizeAgentId(normalizedAgentId) : undefined,
+        conversationReadOrigin,
+      },
+      trustedContext,
+    });
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "message.action",
       idempotencyKey: request.idempotencyKey,
       respond,
       conversationReadOrigin,
+      requestFingerprint,
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -693,18 +823,15 @@ export const sendHandlers: GatewayRequestHandlers = {
             defaultAccountId: accountId,
             requesterAccountId: trustedContext.requesterAccountId,
             requesterSenderId: trustedContext.requesterSenderId,
-            senderIsOwner:
-              authorization.principal.kind === "sender"
-                ? authorization.principal.senderIsOwner
-                : authorization.principal.kind === "operator"
-                  ? authorization.principal.isOwner
-                  : false,
+            senderIsOwner: isResolvedAuthorizationPrincipalOwner(authorization),
             messageActionAuthorization: {
+              authorization,
               requesterAccountId: trustedContext.requesterAccountId,
               requesterSenderId: trustedContext.requesterSenderId,
               requesterSenderIsOwner: trustedContext.requesterSenderIsOwner,
               requesterIsAuthorizedSender: trustedContext.requesterIsAuthorizedSender,
               requesterRoleIds: trustedContext.requesterRoleIds,
+              parentConversationId: trustedContext.parentConversationId,
               toolContext: trustedContext.toolContext,
             },
             authorization,
@@ -761,12 +888,22 @@ export const sendHandlers: GatewayRequestHandlers = {
             }),
           });
         }
+        const authorizedActionParams = materializeOutboundEffectData(request.params);
         const target =
-          normalizeOptionalString(request.params.to) ??
-          normalizeOptionalString(request.params.channelId);
+          normalizeOptionalString(authorizedActionParams.to) ??
+          normalizeOptionalString(authorizedActionParams.channelId);
         const threadId =
-          normalizeOptionalString(request.params.threadId) ??
-          normalizeOptionalString(request.params.threadTs);
+          normalizeOptionalString(authorizedActionParams.threadId) ??
+          normalizeOptionalString(authorizedActionParams.threadTs);
+        const authorization = resolveGatewayMessageActionAuthorizationContext({
+          client,
+          agentId,
+          sessionKey,
+          sessionId: request.sessionId,
+          targetConversationId: target,
+          threadId,
+          trustedContext,
+        });
         await authorizePreparedMessageAction({
           cfg,
           action: request.action as ChannelMessageActionName,
@@ -776,27 +913,19 @@ export const sendHandlers: GatewayRequestHandlers = {
           threadId,
           dryRun: false,
           input: {
-            ...request.params,
+            ...authorizedActionParams,
             channel,
             ...(accountId ? { accountId } : {}),
             ...(target ? { target, to: target } : {}),
             ...(threadId ? { threadId } : {}),
             dryRun: false,
           },
-          authorization: resolveGatewayMessageActionAuthorizationContext({
-            client,
-            agentId,
-            sessionKey,
-            sessionId: request.sessionId,
-            targetConversationId: target,
-            threadId,
-            trustedContext,
-          }),
+          authorization,
         });
         const sourceReplyMirror = {
           action: request.action,
           channel,
-          actionParams: request.params,
+          actionParams: authorizedActionParams,
           cfg,
           accountId,
           currentAccountId: trustedContext.requesterAccountId,
@@ -819,15 +948,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel,
           action: request.action as never,
           cfg,
-          params: request.params,
+          params: authorizedActionParams,
           accountId,
           requesterAccountId: trustedContext.requesterAccountId,
           requesterSenderId: trustedContext.requesterSenderId,
-          senderIsOwner: trustedContext.requesterSenderId
-            ? trustedContext.requesterSenderIsOwner === true
-            : gatewayClientScopes.includes(ADMIN_SCOPE)
-              ? request.senderIsOwner === true
-              : false,
+          senderIsOwner: isResolvedAuthorizationPrincipalOwner(authorization),
           conversationReadOrigin,
           sessionKey,
           sessionId: trustedContext.identityAgentId
@@ -893,27 +1018,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const request = p as {
-      to: string;
-      message?: string;
-      mediaUrl?: string;
-      mediaUrls?: string[];
-      buffer?: string;
-      filename?: string;
-      contentType?: string;
-      asVoice?: boolean;
-      gifPlayback?: boolean;
-      channel?: string;
-      accountId?: string;
-      agentId?: string;
-      replyToId?: string;
-      threadId?: string;
-      forceDocument?: boolean;
-      silent?: boolean;
-      parseMode?: "HTML";
-      sessionKey?: string;
-      idempotencyKey: string;
-    };
+    const request = materializeOutboundEffectData(p) as GatewaySendRequest;
     const trustedContext = resolveTrustedAgentRuntimeMessageContext({ client });
     if (!trustedContext.ok) {
       respond(false, undefined, trustedContext.error);
@@ -928,17 +1033,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, identityError);
       return;
     }
-    const inflight = resolveGatewayInflightRequest({
-      context,
-      prefix: "send",
-      idempotencyKey: request.idempotencyKey,
-      respond,
-    });
-    if (inflight.kind === "handled") {
-      await inflight.done;
-      return;
-    }
-    const { idem, dedupeKey, inflightMap } = inflight;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -956,9 +1050,48 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const filename = normalizeOptionalString(request.filename);
+    const contentType = normalizeOptionalString(request.contentType);
     const accountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
+    const requestAgentId = normalizeOptionalString(request.agentId);
+    const requestFingerprint = resolveGatewayAuthorityBoundDedupeFingerprint({
+      client,
+      requestSemantics: {
+        to,
+        message,
+        mediaUrl,
+        mediaUrls,
+        buffer,
+        filename,
+        contentType,
+        asVoice: request.asVoice,
+        gifPlayback: request.gifPlayback,
+        channel: normalizeGatewayDedupeChannel(request.channel),
+        accountId,
+        agentId: requestAgentId ? normalizeAgentId(requestAgentId) : undefined,
+        replyToId,
+        threadId,
+        forceDocument: request.forceDocument,
+        silent: request.silent,
+        parseMode: request.parseMode,
+        sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined,
+      },
+      trustedContext,
+    });
+    const inflight = resolveGatewayInflightRequest({
+      context,
+      prefix: "send",
+      idempotencyKey: request.idempotencyKey,
+      respond,
+      requestFingerprint,
+    });
+    if (inflight.kind === "handled") {
+      await inflight.done;
+      return;
+    }
+    const { idem, dedupeKey, inflightMap } = inflight;
 
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
@@ -1013,8 +1146,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           mediaUrl,
           mediaUrls,
           buffer,
-          filename: normalizeOptionalString(request.filename) ?? undefined,
-          contentType: normalizeOptionalString(request.contentType) ?? undefined,
+          filename,
+          contentType,
         };
         await hydrateAttachmentParamsForAction({
           cfg,
@@ -1104,8 +1237,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           threadId: resolvedThreadId,
           trustedContext,
         });
-        const authorizePayload = async (payload: ReplyPayload): Promise<boolean> => {
-          return await authorizePreparedMessageAction({
+        const authorizePayload = async (
+          payload: ReplyPayload,
+        ): Promise<{ policyActive: boolean; payload: ReplyPayload }> => {
+          const snapshot = materializeOutboundEffectPayload(payload);
+          const policyActive = await authorizePreparedMessageAction({
             cfg,
             action: "send",
             channel: outboundChannel,
@@ -1115,11 +1251,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             dryRun: false,
             input: buildCanonicalSendMessageActionInput({
               input: request,
-              payload,
-              message: payload.text,
-              mediaUrl: payload.mediaUrl,
-              mediaUrls: payload.mediaUrls,
-              audioAsVoice: payload.audioAsVoice,
+              payload: snapshot,
+              message: snapshot.text,
+              mediaUrl: snapshot.mediaUrl,
+              mediaUrls: snapshot.mediaUrls,
+              audioAsVoice: snapshot.audioAsVoice,
               fallbackReplyToId: replyToId,
               extra: {
                 channel: outboundChannel,
@@ -1132,9 +1268,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             }),
             authorization,
           });
+          return { policyActive, payload: snapshot };
         };
-        const authorizedPayload = outboundPayloads[0]!;
-        const enforceFinalPayloadAuthorization = await authorizePayload(authorizedPayload);
+        const initialAuthorization = await authorizePayload(outboundPayloads[0]!);
+        const authorizedPayload = materializeOutboundEffectPayload(initialAuthorization.payload);
+        const dispatchPayload = materializeOutboundEffectPayload(initialAuthorization.payload);
         if (outboundRoute) {
           await ensureOutboundSessionEntry({
             cfg,
@@ -1154,7 +1292,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel: outboundChannel,
           to: deliveryTarget,
           accountId,
-          payloads: outboundPayloads,
+          payloads: [dispatchPayload],
           replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
@@ -1165,13 +1303,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           silent: request.silent,
           formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
           effectAuthorizationScope: "message-action",
-          ...(enforceFinalPayloadAuthorization
+          ...(initialAuthorization.policyActive
             ? {
                 effectAuthorization: {
                   authorizedPayload,
                   enforceFinalPayloadAuthorization: true,
                   authorizeChangedPayload: async (payload: ReplyPayload) => {
-                    await authorizePayload(payload);
+                    return (await authorizePayload(payload)).payload;
                   },
                 },
               }
@@ -1222,30 +1360,35 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const request = p as {
-      to: string;
-      question: string;
-      options: string[];
-      maxSelections?: number;
-      durationSeconds?: number;
-      durationHours?: number;
-      silent?: boolean;
-      isAnonymous?: boolean;
-      threadId?: string;
-      channel?: string;
-      accountId?: string;
-      idempotencyKey: string;
-    };
+    const request = materializeOutboundEffectData(p) as GatewayPollRequest;
     const trustedContext = resolveTrustedAgentRuntimeMessageContext({ client });
     if (!trustedContext.ok) {
       respond(false, undefined, trustedContext.error);
       return;
     }
+    const requestFingerprint = resolveGatewayAuthorityBoundDedupeFingerprint({
+      client,
+      requestSemantics: {
+        to: request.to.trim(),
+        question: request.question.trim(),
+        options: request.options.map((option) => option.trim()).filter(Boolean),
+        maxSelections: request.maxSelections,
+        durationSeconds: request.durationSeconds,
+        durationHours: request.durationHours,
+        silent: request.silent,
+        isAnonymous: request.isAnonymous,
+        threadId: normalizeOptionalString(request.threadId),
+        channel: normalizeGatewayDedupeChannel(request.channel),
+        accountId: normalizeOptionalString(request.accountId),
+      },
+      trustedContext,
+    });
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "poll",
       idempotencyKey: request.idempotencyKey,
       respond,
+      requestFingerprint,
     });
     if (inflight.kind === "handled") {
       await inflight.done;

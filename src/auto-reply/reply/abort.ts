@@ -3,11 +3,17 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import {
+  type AcpSessionCancelTarget,
+  getAcpSessionManager,
+  type AcpSessionResolution,
+} from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedAgentRun,
+  captureActiveEmbeddedRunIdentity,
   resolveActiveEmbeddedRunSessionId,
+  type CapturedActiveEmbeddedRunIdentity,
 } from "../../agents/embedded-agent-runner/runs.js";
 import {
   getLatestSubagentRunByChildSessionKey,
@@ -37,6 +43,10 @@ import {
   normalizeAuthorizationCommandSource,
 } from "../../plugins/authorization-policy-context.js";
 import { runAuthorizationPolicies } from "../../plugins/authorization-policy.js";
+import {
+  classifyTurnAuthoritySnapshot,
+  type ClassifiedTurnAuthority,
+} from "../../plugins/turn-authority.js";
 import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -47,16 +57,18 @@ import {
 } from "./abort-cutoff.js";
 import { isAbortRequestText, isAbortTrigger, setAbortMemory } from "./abort-primitives.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { resolveCommandAuthorizationThreadId } from "./commands-authorization.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 
 export { isAbortRequestText, isAbortTrigger, setAbortMemory };
 
 const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedAgentRun,
+  captureActiveEmbeddedRunIdentity,
   resolveActiveEmbeddedRunSessionId,
   markSessionAbortTarget,
   resolveSessionAbortTarget,
@@ -75,6 +87,8 @@ const abortTestApi = {
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedAgentRun =
       deps?.abortEmbeddedAgentRun ?? defaultAbortDeps.abortEmbeddedAgentRun;
+    abortDeps.captureActiveEmbeddedRunIdentity =
+      deps?.captureActiveEmbeddedRunIdentity ?? defaultAbortDeps.captureActiveEmbeddedRunIdentity;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.markSessionAbortTarget =
@@ -92,6 +106,7 @@ const abortTestApi = {
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedAgentRun = defaultAbortDeps.abortEmbeddedAgentRun;
+    abortDeps.captureActiveEmbeddedRunIdentity = defaultAbortDeps.captureActiveEmbeddedRunIdentity;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.markSessionAbortTarget = defaultAbortDeps.markSessionAbortTarget;
@@ -165,15 +180,216 @@ function resolveStoredSessionId(params: {
   });
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   try {
-    return loadSessionEntry({
+    return abortDeps.resolveSessionAbortTarget({
       agentId,
-      clone: false,
       sessionKey: params.sessionKey,
       storePath,
     })?.sessionId;
   } catch {
     return undefined;
   }
+}
+
+type FastAbortSessionSnapshot = Readonly<{
+  key: string;
+  storedSessionId?: string;
+  activeSessionId?: string;
+  replySessionId?: string;
+  replyOperation?: ReplyOperation;
+  embeddedIdentity?: CapturedActiveEmbeddedRunIdentity;
+}>;
+
+type FastAbortAcpSnapshot = Readonly<{
+  key: string;
+  identity: string;
+  expectedTarget?: AcpSessionCancelTarget;
+}>;
+
+function captureFastAbortSessionSnapshot(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  storedSessionId?: string;
+}): FastAbortSessionSnapshot {
+  const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(params.key);
+  const replyOperation = replyRunRegistry.get(params.key);
+  const replySessionId = replyOperation?.sessionId;
+  const storedSessionId =
+    params.storedSessionId ?? resolveStoredSessionId({ cfg: params.cfg, sessionKey: params.key });
+  // ReplyOperation already owns exact cancellation for its backend. Only use a
+  // direct embedded handle when no operation owns the captured run.
+  const embeddedIdentityCandidate =
+    activeSessionId ?? (replyOperation ? undefined : storedSessionId);
+  const embeddedIdentity = embeddedIdentityCandidate
+    ? abortDeps.captureActiveEmbeddedRunIdentity(embeddedIdentityCandidate)
+    : undefined;
+  return Object.freeze({
+    key: params.key,
+    ...(storedSessionId ? { storedSessionId } : {}),
+    ...(activeSessionId ? { activeSessionId } : {}),
+    ...(replySessionId ? { replySessionId } : {}),
+    ...(replyOperation ? { replyOperation } : {}),
+    ...(embeddedIdentity ? { embeddedIdentity } : {}),
+  });
+}
+
+function fastAbortSessionSnapshotMatchesCurrent(
+  snapshot: FastAbortSessionSnapshot,
+  cfg: OpenClawConfig,
+  options: { allowEnded: boolean },
+): boolean {
+  const storedSessionId = resolveStoredSessionId({ cfg, sessionKey: snapshot.key });
+  if (storedSessionId !== snapshot.storedSessionId) {
+    return false;
+  }
+  const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(snapshot.key);
+  const replyOperation = replyRunRegistry.get(snapshot.key);
+  const replySessionId = replyOperation?.sessionId;
+  if (options.allowEnded) {
+    if (
+      (activeSessionId !== undefined && activeSessionId !== snapshot.activeSessionId) ||
+      (replySessionId !== undefined && replySessionId !== snapshot.replySessionId) ||
+      (replyOperation !== undefined && replyOperation !== snapshot.replyOperation)
+    ) {
+      return false;
+    }
+    if (
+      activeSessionId !== undefined &&
+      snapshot.embeddedIdentity &&
+      !snapshot.embeddedIdentity.isCurrent()
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return (
+    activeSessionId === snapshot.activeSessionId &&
+    replySessionId === snapshot.replySessionId &&
+    replyOperation === snapshot.replyOperation &&
+    (!snapshot.embeddedIdentity || snapshot.embeddedIdentity.isCurrent())
+  );
+}
+
+function abortFastSessionSnapshot(snapshot: FastAbortSessionSnapshot): {
+  active: boolean;
+  aborted: boolean;
+  replacementObserved: boolean;
+} {
+  if (snapshot.embeddedIdentity) {
+    const outcome = snapshot.embeddedIdentity.abortIfCurrent();
+    return {
+      active: outcome.status !== "not_active",
+      aborted: outcome.status === "aborted",
+      replacementObserved: outcome.replacementObserved,
+    };
+  }
+  if (snapshot.replyOperation) {
+    if (replyRunRegistry.get(snapshot.key) !== snapshot.replyOperation) {
+      return { active: false, aborted: false, replacementObserved: true };
+    }
+    const aborted = snapshot.replyOperation.abortByUser();
+    const current = replyRunRegistry.get(snapshot.key);
+    return {
+      active: true,
+      aborted,
+      replacementObserved: current !== undefined && current !== snapshot.replyOperation,
+    };
+  }
+  if (snapshot.activeSessionId || snapshot.replySessionId) {
+    // The run changed while its opaque identity was being captured. Never fall
+    // back to a key lookup that could cancel the replacement.
+    return { active: true, aborted: false, replacementObserved: true };
+  }
+  return { active: false, aborted: false, replacementObserved: false };
+}
+
+function serializeAcpAbortIdentity(resolution: AcpSessionResolution): string {
+  if (resolution.kind !== "ready") {
+    return `${resolution.kind}\u0000${resolution.sessionKey}`;
+  }
+  const identity = resolution.meta.identity;
+  return [
+    resolution.kind,
+    resolution.sessionKey,
+    resolution.entry?.sessionId ?? "",
+    resolution.meta.backend,
+    resolution.meta.agent,
+    resolution.meta.runtimeSessionName,
+    identity?.state ?? "",
+    identity?.acpxRecordId ?? "",
+    identity?.acpxSessionId ?? "",
+    identity?.agentSessionId ?? "",
+  ].join("\u0000");
+}
+
+function captureAcpCancelTarget(params: {
+  resolution: AcpSessionResolution;
+  sessionId?: string;
+}): AcpSessionCancelTarget | undefined {
+  if (params.resolution.kind !== "ready" || !params.sessionId) {
+    return undefined;
+  }
+  const identity = params.resolution.meta.identity;
+  return Object.freeze({
+    sessionId: params.sessionId,
+    backend: params.resolution.meta.backend,
+    agent: params.resolution.meta.agent,
+    runtimeSessionName: params.resolution.meta.runtimeSessionName,
+    ...(identity
+      ? {
+          identity: Object.freeze({
+            state: identity.state,
+            ...(identity.acpxRecordId !== undefined ? { acpxRecordId: identity.acpxRecordId } : {}),
+            ...(identity.acpxSessionId !== undefined
+              ? { acpxSessionId: identity.acpxSessionId }
+              : {}),
+            ...(identity.agentSessionId !== undefined
+              ? { agentSessionId: identity.agentSessionId }
+              : {}),
+          }),
+        }
+      : {}),
+  });
+}
+
+function captureFastAbortAcpSnapshot(params: {
+  acpManager: ReturnType<typeof getAcpSessionManager>;
+  cfg: OpenClawConfig;
+  session: FastAbortSessionSnapshot;
+}): FastAbortAcpSnapshot | undefined {
+  if (!isAcpSessionKey(params.session.key)) {
+    return undefined;
+  }
+  const resolution = params.acpManager.resolveSession({
+    cfg: params.cfg,
+    sessionKey: params.session.key,
+  });
+  if (resolution.kind === "none") {
+    return undefined;
+  }
+  const expectedTarget = captureAcpCancelTarget({
+    resolution,
+    sessionId: params.session.storedSessionId,
+  });
+  return Object.freeze({
+    key: params.session.key,
+    identity: serializeAcpAbortIdentity(resolution),
+    ...(expectedTarget ? { expectedTarget } : {}),
+  });
+}
+
+function fastAbortAcpSnapshotMatchesCurrent(params: {
+  acpManager: ReturnType<typeof getAcpSessionManager>;
+  cfg: OpenClawConfig;
+  snapshot: FastAbortAcpSnapshot;
+}): boolean {
+  return (
+    serializeAcpAbortIdentity(
+      params.acpManager.resolveSession({
+        cfg: params.cfg,
+        sessionKey: params.snapshot.key,
+      }),
+    ) === params.snapshot.identity
+  );
 }
 
 function resolveBoundAcpAbortTargetSessionKey(params: {
@@ -210,6 +426,70 @@ function normalizeRequesterSessionKey(
   }
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
+}
+
+function resolveFastAbortAuthorizationContext(params: {
+  turnAuthority: ClassifiedTurnAuthority;
+  agentId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  legacy: {
+    provider?: string;
+    accountId?: string;
+    senderId?: string;
+    senderName?: string;
+    senderUsername?: string;
+    senderE164?: string;
+    senderIsOwner: boolean;
+    isAuthorizedSender: boolean;
+    roleIds?: readonly string[];
+    conversationId?: string;
+    parentConversationId?: string;
+    threadId?: string | number;
+  };
+}) {
+  if (params.turnAuthority.kind === "invalid") {
+    return undefined;
+  }
+  const admitted =
+    params.turnAuthority.kind === "issued"
+      ? params.turnAuthority.snapshot.authorization
+      : undefined;
+  if (admitted) {
+    // Principal and conversation come only from the admitted turn. Rebind the
+    // execution scope and trigger to the command that /stop will actually run.
+    return createAuthorizationInvocationContext({
+      principal: admitted.principal,
+      agentId: params.sessionKey ? params.agentId : admitted.agentId,
+      sessionKey: params.sessionKey ?? admitted.sessionKey,
+      sessionId: params.sessionKey ? params.sessionId : admitted.sessionId,
+      runId: admitted.runId,
+      conversationId: admitted.conversationId,
+      parentConversationId: admitted.parentConversationId,
+      threadId: admitted.threadId,
+      trigger: "command",
+    });
+  }
+  return createAuthorizationInvocationContext({
+    principal: createAuthorizationPrincipal({
+      provider: params.legacy.provider,
+      accountId: params.legacy.accountId,
+      senderId: params.legacy.senderId,
+      senderName: params.legacy.senderName,
+      senderUsername: params.legacy.senderUsername,
+      senderE164: params.legacy.senderE164,
+      senderIsOwner: params.legacy.senderIsOwner,
+      isAuthorizedSender: params.legacy.isAuthorizedSender,
+      roleIds: params.legacy.roleIds,
+    }),
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    conversationId: params.legacy.conversationId,
+    parentConversationId: params.legacy.parentConversationId,
+    threadId: params.legacy.threadId,
+    trigger: "command",
+  });
 }
 
 function markSubagentRunTerminatedBestEffort(
@@ -354,6 +634,10 @@ export async function tryFastAbortFromMessage(params: {
   if (!abortRequested) {
     return { handled: false, aborted: false };
   }
+  const turnAuthority = classifyTurnAuthoritySnapshot(ctx.TurnAuthority);
+  if (turnAuthority.kind === "invalid") {
+    return { handled: true, aborted: false, rejectionReason: "policy-denied" };
+  }
 
   const commandAuthorized = ctx.CommandAuthorized;
   const auth = resolveCommandAuthorization({
@@ -384,12 +668,82 @@ export async function tryFastAbortFromMessage(params: {
       );
     }
   }
-  const policySessionKey = resolvedAbortTarget?.sessionKey ?? targetKey ?? ctx.SessionKey;
-  const policySessionId = policySessionKey
-    ? (resolvedAbortTarget?.sessionId ??
-      replyRunRegistry.resolveSessionId(policySessionKey) ??
-      resolveStoredSessionId({ cfg, sessionKey: policySessionKey }))
+  const resolvedTargetKey = resolvedAbortTarget?.sessionKey ?? targetKey ?? ctx.SessionKey;
+  const conversationBoundAcpTargetKey = commandSessionKey
+    ? resolveBoundAcpAbortTargetSessionKey({
+        ctx,
+        cfg,
+        activeSessionKey: commandSessionKey,
+      })
     : undefined;
+  const boundAcpTargetKey =
+    resolvedTargetKey && !isAcpSessionKey(resolvedTargetKey)
+      ? conversationBoundAcpTargetKey
+      : undefined;
+  const abortTargetKeys = resolvedTargetKey ? [resolvedTargetKey] : [];
+  if (boundAcpTargetKey && boundAcpTargetKey !== resolvedTargetKey) {
+    abortTargetKeys.push(boundAcpTargetKey);
+  }
+  const sourceAbortKey =
+    commandSessionKey &&
+    !abortTargetKeys.includes(commandSessionKey) &&
+    conversationBoundAcpTargetKey &&
+    abortTargetKeys.includes(conversationBoundAcpTargetKey)
+      ? commandSessionKey
+      : undefined;
+  const sessionSnapshots = new Map<string, FastAbortSessionSnapshot>();
+  for (const key of [...abortTargetKeys, sourceAbortKey]) {
+    if (!key || sessionSnapshots.has(key)) {
+      continue;
+    }
+    sessionSnapshots.set(
+      key,
+      captureFastAbortSessionSnapshot({
+        cfg,
+        key,
+        ...(key === resolvedAbortTarget?.sessionKey && resolvedAbortTarget.sessionId
+          ? { storedSessionId: resolvedAbortTarget.sessionId }
+          : {}),
+      }),
+    );
+  }
+  const primarySessionSnapshot = resolvedTargetKey
+    ? sessionSnapshots.get(resolvedTargetKey)
+    : undefined;
+  const policySessionKey = primarySessionSnapshot?.key ?? resolvedTargetKey;
+  const policySessionId =
+    primarySessionSnapshot?.activeSessionId ??
+    primarySessionSnapshot?.replySessionId ??
+    primarySessionSnapshot?.storedSessionId;
+  const acpManager = abortDeps.getAcpSessionManager();
+  const acpSnapshots = abortTargetKeys
+    .map((key) => sessionSnapshots.get(key))
+    .filter((snapshot): snapshot is FastAbortSessionSnapshot => snapshot !== undefined)
+    .map((session) => captureFastAbortAcpSnapshot({ acpManager, cfg, session }))
+    .filter((snapshot): snapshot is FastAbortAcpSnapshot => snapshot !== undefined);
+  const policyContext = resolveFastAbortAuthorizationContext({
+    turnAuthority,
+    agentId,
+    sessionKey: policySessionKey,
+    sessionId: policySessionId,
+    legacy: {
+      provider: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+      accountId: ctx.AccountId,
+      senderId: auth.senderId,
+      senderName: ctx.SenderName,
+      senderUsername: ctx.SenderUsername,
+      senderE164: ctx.SenderE164,
+      senderIsOwner: auth.senderIsOwner,
+      isAuthorizedSender: auth.isAuthorizedSender,
+      roleIds: ctx.MemberRoleIds,
+      conversationId: ctx.NativeChannelId ?? ctx.OriginatingTo ?? auth.to ?? auth.from,
+      parentConversationId: ctx.ThreadParentId,
+      threadId: resolveCommandAuthorizationThreadId(ctx),
+    },
+  });
+  if (!policyContext) {
+    return { handled: true, aborted: false, rejectionReason: "policy-denied" };
+  }
   const policyDenial = await runAuthorizationPolicies({
     request: {
       operation: "command.invoke",
@@ -398,27 +752,21 @@ export async function tryFastAbortFromMessage(params: {
       owner: { kind: "core" },
       source: normalizeAuthorizationCommandSource(ctx.CommandSource),
     },
-    context: createAuthorizationInvocationContext({
-      principal: createAuthorizationPrincipal({
-        provider: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
-        accountId: ctx.AccountId,
-        senderId: auth.senderId,
-        senderIsOwner: auth.senderIsOwner,
-        isAuthorizedSender: auth.isAuthorizedSender,
-        roleIds: ctx.MemberRoleIds,
-      }),
-      agentId,
-      sessionKey: policySessionKey,
-      sessionId: policySessionId,
-      conversationId: ctx.OriginatingTo ?? ctx.NativeChannelId ?? auth.to ?? auth.from,
-      parentConversationId: ctx.ThreadParentId,
-      threadId: ctx.MessageThreadId,
-      trigger: "command",
-    }),
+    context: policyContext,
     config: cfg,
   });
   if (policyDenial) {
     return { handled: true, aborted: false, rejectionReason: "policy-denied" };
+  }
+  const targetStillCurrent =
+    Array.from(sessionSnapshots.values()).every((snapshot) =>
+      fastAbortSessionSnapshotMatchesCurrent(snapshot, cfg, { allowEnded: false }),
+    ) &&
+    acpSnapshots.every((snapshot) =>
+      fastAbortAcpSnapshotMatchesCurrent({ acpManager, cfg, snapshot }),
+    );
+  if (!targetStillCurrent) {
+    return { handled: true, aborted: false, rejectionReason: "finalizing" };
   }
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
@@ -431,82 +779,47 @@ export async function tryFastAbortFromMessage(params: {
       })
         ? resolveAbortCutoffFromContext(ctx)
         : undefined;
-    const resolvedTargetKey = resolvedAbortTarget?.sessionKey ?? targetKey;
-    const conversationBoundAcpTargetKey = commandSessionKey
-      ? resolveBoundAcpAbortTargetSessionKey({
-          ctx,
-          cfg,
-          activeSessionKey: commandSessionKey,
-        })
-      : undefined;
-    const boundAcpTargetKey = !isAcpSessionKey(resolvedTargetKey)
-      ? conversationBoundAcpTargetKey
-      : undefined;
-    const abortTargetKeys = [resolvedTargetKey];
-    if (boundAcpTargetKey && boundAcpTargetKey !== resolvedTargetKey) {
-      abortTargetKeys.push(boundAcpTargetKey);
-    }
-    const acpManager = abortDeps.getAcpSessionManager();
-    for (const acpTargetKey of abortTargetKeys.filter(isAcpSessionKey)) {
-      const acpResolution = acpManager.resolveSession({
-        cfg,
-        sessionKey: acpTargetKey,
-      });
-      if (acpResolution.kind === "none") {
-        continue;
-      }
-      try {
-        await acpManager.cancelSession({
-          cfg,
-          sessionKey: acpTargetKey,
-          reason: "fast-abort",
-        });
-      } catch (error) {
-        logVerbose(`abort: ACP cancel failed for ${acpTargetKey}: ${formatErrorMessage(error)}`);
-      }
-    }
-    const sourceAbortKey =
-      commandSessionKey &&
-      !abortTargetKeys.includes(commandSessionKey) &&
-      conversationBoundAcpTargetKey &&
-      abortTargetKeys.includes(conversationBoundAcpTargetKey)
-        ? commandSessionKey
-        : undefined;
-    const sessionIdsByKey = new Map<string, string | undefined>(
-      abortTargetKeys.map((abortTargetKey) => [
-        abortTargetKey,
-        replyRunRegistry.resolveSessionId(abortTargetKey) ??
-          (abortTargetKey === resolvedTargetKey
-            ? resolvedAbortTarget?.sessionId
-            : resolveStoredSessionId({ cfg, sessionKey: abortTargetKey })),
-      ]),
-    );
     let aborted = false;
     let activeAbortRejected = false;
-    for (const abortTargetKey of abortTargetKeys) {
-      const outcome = abortSessionRunTargetWithOutcome({
-        key: abortTargetKey,
-        sessionId: sessionIdsByKey.get(abortTargetKey),
-      });
+    let exactReplacementObserved = false;
+    for (const abortTargetKey of [...abortTargetKeys, sourceAbortKey]) {
+      if (!abortTargetKey) {
+        continue;
+      }
+      const snapshot = sessionSnapshots.get(abortTargetKey);
+      if (!snapshot) {
+        exactReplacementObserved = true;
+        continue;
+      }
+      const outcome = abortFastSessionSnapshot(snapshot);
       activeAbortRejected ||= outcome.active && !outcome.aborted;
+      exactReplacementObserved ||= outcome.replacementObserved;
       aborted = outcome.aborted || aborted;
     }
-    const sourceSessionId = sourceAbortKey
-      ? (replyRunRegistry.resolveSessionId(sourceAbortKey) ??
-        resolveStoredSessionId({ cfg, sessionKey: sourceAbortKey }))
-      : undefined;
-    if (sourceAbortKey) {
-      const outcome = abortSessionRunTargetWithOutcome({
-        key: sourceAbortKey,
-        sessionId: sourceSessionId,
-      });
-      activeAbortRejected ||= outcome.active && !outcome.aborted;
-      aborted = outcome.aborted || aborted;
+    const replacementObserved =
+      exactReplacementObserved ||
+      Array.from(sessionSnapshots.values()).some(
+        (snapshot) =>
+          !fastAbortSessionSnapshotMatchesCurrent(snapshot, cfg, {
+            allowEnded: true,
+          }),
+      );
+    if (replacementObserved) {
+      // A captured sibling may already be stopped, but shared queue/store effects
+      // must not cross into a replacement. Report a retryable target change.
+      return {
+        handled: true,
+        aborted: false,
+        rejectionReason: "finalizing",
+      };
     }
     const cleared = clearSessionQueues(
-      abortTargetKeys
-        .flatMap((abortTargetKey) => [abortTargetKey, sessionIdsByKey.get(abortTargetKey)])
-        .concat(sourceAbortKey, sourceSessionId),
+      Array.from(sessionSnapshots.values()).flatMap((snapshot) => [
+        snapshot.key,
+        snapshot.activeSessionId,
+        snapshot.replySessionId,
+        snapshot.storedSessionId,
+      ]),
     );
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(
@@ -522,9 +835,31 @@ export async function tryFastAbortFromMessage(params: {
         stoppedSubagents: stopped,
       };
     }
+    for (const snapshot of acpSnapshots) {
+      if (!snapshot.expectedTarget) {
+        logVerbose(`abort: ACP cancel skipped for ${snapshot.key}: session identity unavailable`);
+        continue;
+      }
+      try {
+        const cancelled = await acpManager.cancelSession({
+          cfg,
+          sessionKey: snapshot.key,
+          reason: "fast-abort",
+          expectedTarget: snapshot.expectedTarget,
+        });
+        if (!cancelled) {
+          logVerbose(`abort: ACP cancel skipped for ${snapshot.key}: session changed`);
+        }
+      } catch (error) {
+        logVerbose(`abort: ACP cancel failed for ${snapshot.key}: ${formatErrorMessage(error)}`);
+      }
+    }
     let persistedAbortTarget: SessionAbortTargetResult | null = null;
     try {
       persistedAbortTarget = await abortDeps.markSessionAbortTarget({
+        ...(primarySessionSnapshot?.storedSessionId
+          ? { expectedSessionId: primarySessionSnapshot.storedSessionId }
+          : {}),
         scope: {
           agentId,
           sessionKey: targetKey,

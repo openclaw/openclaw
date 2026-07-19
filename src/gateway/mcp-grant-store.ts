@@ -12,6 +12,8 @@ import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 export type McpLoopbackRequestContext = {
   /** Immutable authenticated actor and resource context minted by the Gateway. */
   authorization?: AuthorizationInvocationContext;
+  /** Legacy permits supplemental sender aliases only when no turn authority was issued. */
+  requesterIdentitySource?: "authority" | "legacy";
   sessionKey: string;
   runtimePolicySessionKey?: string;
   agentId?: string;

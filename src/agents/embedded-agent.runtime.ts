@@ -15,3 +15,8 @@ export {
   resolveEmbeddedSessionLane,
   waitForEmbeddedAgentRunEnd,
 } from "./embedded-agent.js";
+
+export {
+  abortActiveRunWithSteeringAuthorization,
+  authorizedActiveRunAbortObservedReplacement,
+} from "./embedded-agent-runner/runs.js";

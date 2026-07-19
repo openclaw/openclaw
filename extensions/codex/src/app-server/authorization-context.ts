@@ -1,16 +1,24 @@
 import {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
+  hasAuthorizationPolicies,
+  resolveTurnAuthorityAuthorization,
   type AuthorizationInvocationContext,
+  type TurnAuthoritySnapshot,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type CodexAuthorizationContextParams = {
+  config?: Parameters<typeof hasAuthorizationPolicies>[1];
+  turnAuthority?: TurnAuthoritySnapshot;
   /** Model provider. Never a sender-authority source. */
   provider?: string | null;
   messageProvider?: string | null;
   messageChannel?: string | null;
   agentAccountId?: string | null;
   senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   senderIsOwner?: boolean;
   isAuthorizedSender?: boolean;
   memberRoleIds?: readonly string[] | null;
@@ -34,14 +42,22 @@ type CodexAuthorizationContextParams = {
 export function buildCodexAuthorizationContext(
   params: CodexAuthorizationContextParams,
 ): AuthorizationInvocationContext {
+  const admittedAuthorization = resolveTurnAuthorityAuthorization(params.turnAuthority);
+  if (admittedAuthorization) {
+    return admittedAuthorization;
+  }
+  const authorizationPolicyActive = hasAuthorizationPolicies(undefined, params.config);
   return createAuthorizationInvocationContext({
     principal: createAuthorizationPrincipal({
       provider: params.messageProvider ?? params.messageChannel,
       accountId: params.agentAccountId,
-      senderId: params.senderId,
-      senderIsOwner: params.senderIsOwner,
-      isAuthorizedSender: params.isAuthorizedSender,
-      roleIds: params.memberRoleIds,
+      senderId: authorizationPolicyActive ? undefined : params.senderId,
+      senderName: authorizationPolicyActive ? undefined : params.senderName,
+      senderUsername: authorizationPolicyActive ? undefined : params.senderUsername,
+      senderE164: authorizationPolicyActive ? undefined : params.senderE164,
+      senderIsOwner: authorizationPolicyActive ? undefined : params.senderIsOwner,
+      isAuthorizedSender: authorizationPolicyActive ? undefined : params.isAuthorizedSender,
+      roleIds: authorizationPolicyActive ? undefined : params.memberRoleIds,
     }),
     agentId: params.agentId,
     sessionKey: params.sessionKey,

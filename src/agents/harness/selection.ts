@@ -12,6 +12,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
+import { resolveTurnAuthorityAuthorization } from "../../plugins/turn-authority.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import {
@@ -143,6 +144,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderUsername"
   | "senderE164"
   | "senderIsOwner"
+  | "turnAuthority"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -600,6 +602,30 @@ function resolvePluginHarnessToolPolicies(
 ): ResolvedPluginHarnessToolPolicies {
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const admittedPrincipal = resolveTurnAuthorityAuthorization(params.turnAuthority)?.principal;
+  const admittedSender = admittedPrincipal?.kind === "sender" ? admittedPrincipal : undefined;
+  const admittedOperator = admittedPrincipal?.kind === "operator" ? admittedPrincipal : undefined;
+  const senderIdentity = admittedPrincipal
+    ? {
+        // An issued sender without an attested provider must not inherit the
+        // delivery route's provider-qualified grants.
+        messageProvider: admittedSender ? (admittedSender.provider ?? null) : undefined,
+        accountId: admittedSender?.accountId,
+        senderId: admittedSender?.senderId,
+        senderName: admittedSender?.aliases?.name,
+        senderUsername: admittedSender?.aliases?.username,
+        senderE164: admittedSender?.aliases?.e164,
+        senderIsOwner: admittedSender?.senderIsOwner === true || admittedOperator?.isOwner === true,
+      }
+    : {
+        messageProvider,
+        accountId: params.agentAccountId,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        senderIsOwner: params.senderIsOwner,
+      };
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: params.config,
     sessionKey: params.sessionKey,
@@ -608,31 +634,35 @@ function resolvePluginHarnessToolPolicies(
     modelProvider: params.provider,
     modelId: params.modelId,
     messageProvider,
+    senderMessageProvider: senderIdentity.messageProvider,
+    senderAccountId: senderIdentity.accountId,
+    requireSenderRouteBinding: admittedSender !== undefined,
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
+    senderId: senderIdentity.senderId,
+    senderName: senderIdentity.senderName,
+    senderUsername: senderIdentity.senderUsername,
+    senderE164: senderIdentity.senderE164,
+    senderIsOwner: senderIdentity.senderIsOwner,
   });
   const groupPolicyParams = {
     config: params.config,
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider,
+    senderMessageProvider: senderIdentity.messageProvider,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
+    senderId: senderIdentity.senderId,
+    senderName: senderIdentity.senderName,
+    senderUsername: senderIdentity.senderUsername,
+    senderE164: senderIdentity.senderE164,
   };
   const { policy } = capabilityProfile;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
@@ -643,7 +673,7 @@ function resolvePluginHarnessToolPolicies(
   return {
     senderPolicy: policy.senderPolicy,
     senderScopedGroupPolicy: resolveSenderScopedGroupToolPolicy(
-      params,
+      senderIdentity,
       groupPolicyParams,
       policy.groupPolicy,
     ),
@@ -663,7 +693,10 @@ function resolvePluginHarnessToolPolicies(
 }
 
 function resolveSenderScopedGroupToolPolicy(
-  params: PluginHarnessToolPolicyContext,
+  params: Pick<
+    PluginHarnessToolPolicyContext,
+    "senderId" | "senderName" | "senderUsername" | "senderE164"
+  >,
   groupPolicyParams: Parameters<typeof resolveGroupToolPolicy>[0],
   groupPolicy: { deny?: string[] } | undefined,
 ): { deny?: string[] } | undefined {
@@ -680,7 +713,12 @@ function resolveSenderScopedGroupToolPolicy(
   return policyDeniesAllTools(groupPolicyWithoutSender) ? undefined : groupPolicy;
 }
 
-function hasSenderIdentity(params: PluginHarnessToolPolicyContext): boolean {
+function hasSenderIdentity(
+  params: Pick<
+    PluginHarnessToolPolicyContext,
+    "senderId" | "senderName" | "senderUsername" | "senderE164"
+  >,
+): boolean {
   return Boolean(
     params.senderId?.trim() ||
     params.senderName?.trim() ||

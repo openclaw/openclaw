@@ -27,6 +27,9 @@ const gatewayQuestionMock = vi.hoisted(() => ({
   cancelError: undefined as Error | undefined,
   warn: vi.fn(),
 }));
+const activeRunRegistrationMocks = vi.hoisted(() => ({
+  setActiveEmbeddedRun: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
@@ -63,6 +66,12 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
         return result;
       }
       return await actual.callGatewayTool(...args);
+    },
+    setActiveEmbeddedRun: (
+      ...args: Parameters<typeof actual.setActiveEmbeddedRun>
+    ): ReturnType<typeof actual.setActiveEmbeddedRun> => {
+      activeRunRegistrationMocks.setActiveEmbeddedRun(...args);
+      return actual.setActiveEmbeddedRun(...args);
     },
   };
 });
@@ -1390,6 +1399,32 @@ describe("runCopilotAttempt", () => {
         expect.objectContaining({ error: expect.any(Error) }),
       ),
     );
+  });
+
+  it("copies the host-prepared steering authorization affinity onto the active handle", async () => {
+    activeRunRegistrationMocks.setActiveEmbeddedRun.mockClear();
+    const steeringAuthorizationAffinity = Object.freeze({ incomplete: true as const });
+    const sendDeferred = createDeferred<SessionEventShape | undefined>();
+    const sessionCreated = createDeferred<FakeSession>();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockReturnValue(sendDeferred.promise);
+        sessionCreated.resolve(session);
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const runPromise = runCopilotAttempt(makeParams({ steeringAuthorizationAffinity }), { pool });
+    const session = await sessionCreated.promise;
+    await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledTimes(1));
+
+    const handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+      (call) => call[0] === "session-1",
+    )?.[1] as { steeringAuthorizationAffinity?: unknown } | undefined;
+    expect(handle?.steeringAuthorizationAffinity).toBe(steeringAuthorizationAffinity);
+
+    sendDeferred.resolve(makeAssistantMessageEvent("done"));
+    await runPromise;
   });
 
   it("abort path (signal already aborted)", async () => {

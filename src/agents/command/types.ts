@@ -8,6 +8,7 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -59,6 +60,21 @@ export type AgentRunContext = {
   hasRepliedRef?: { value: boolean };
 };
 
+/** Authenticated channel facts that the host converts into immutable turn authority. */
+export type AgentCommandIngressAuthorityFacts = {
+  provider: string;
+  accountId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  roleIds?: readonly string[];
+  isAuthorizedSender?: boolean;
+  conversationId?: string;
+  parentConversationId?: string;
+  threadId?: string | number;
+};
+
 /** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
@@ -107,6 +123,8 @@ export type AgentCommandOpts = {
   runContext?: AgentRunContext;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
+  /** Immutable host-issued authority for this admitted turn. */
+  turnAuthority?: TurnAuthoritySnapshot;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
@@ -205,4 +223,6 @@ export type AgentCommandIngressOpts = Omit<
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
+  /** Host-attested channel facts for direct ingress paths that bypass message context dispatch. */
+  ingressAuthority?: AgentCommandIngressAuthorityFacts;
 };

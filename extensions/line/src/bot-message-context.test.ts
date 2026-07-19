@@ -300,6 +300,7 @@ describe("buildLineMessageContext", () => {
     });
 
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
+    expect(context?.ctxPayload.InboundAccessAuthorized).toBe(true);
   });
 
   it("sets CommandAuthorized=true when authorized", async () => {
@@ -328,6 +329,7 @@ describe("buildLineMessageContext", () => {
     });
 
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
+    expect(context?.ctxPayload.InboundAccessAuthorized).toBe(true);
   });
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {

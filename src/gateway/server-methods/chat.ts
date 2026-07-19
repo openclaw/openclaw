@@ -52,6 +52,7 @@ import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.j
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
+  attachChatAbortControllerTurnAuthority,
   boundInFlightRunSnapshotForChatHistory,
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
@@ -131,7 +132,11 @@ import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
-import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+import {
+  applyChatSendManagedMediaFields,
+  createChatSendTurnAuthority,
+  prepareChatSendUserTurn,
+} from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
   emitOperatorChatSendServerTiming,
@@ -1011,6 +1016,33 @@ export const chatHandlers: GatewayRequestHandlers = {
       restartSafeAdmission,
       setReleaseGatewayRootContinuation,
     } = admitted.value;
+    let turnAuthority: ReturnType<typeof createChatSendTurnAuthority>;
+    try {
+      turnAuthority = createChatSendTurnAuthority({
+        request: normalizedRequest.value,
+        session: preparedSession.value,
+        admission: admitted.value,
+        client,
+      });
+      if (gatewayWorkAdmission.setTurnAuthority(turnAuthority) !== true) {
+        throw new Error("conflicting Gateway turn authority");
+      }
+      if (
+        !activeRunAbort.entry ||
+        !attachChatAbortControllerTurnAuthority(activeRunAbort.entry, turnAuthority)
+      ) {
+        throw new Error("invalid Gateway run authority lineage");
+      }
+    } catch {
+      cleanupAdmittedRun({ force: true });
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid Gateway turn authority"),
+      );
+      return;
+    }
     const preparedAttachments = await prepareChatSendAttachments({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -1201,6 +1233,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         attachments: preparedAttachments.value,
         client,
         logGateway: context.logGateway,
+        turnAuthority,
         userTurn,
       });
       // Resolve the reply target from session history in parallel with the

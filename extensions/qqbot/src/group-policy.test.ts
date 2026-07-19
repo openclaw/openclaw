@@ -34,7 +34,7 @@ describe("qqbot group tool policy", () => {
             G1: {
               tools: { allow: ["read"] },
               toolsBySender: {
-                "id:alice": { deny: ["*"] },
+                "channel:discord:alice": { deny: ["*"] },
               },
             },
           },
@@ -46,9 +46,21 @@ describe("qqbot group tool policy", () => {
       resolveQQBotGroupToolPolicy({
         cfg,
         groupId: "G1",
+        senderMessageProvider: "discord",
         senderId: "alice",
       }),
     ).toStrictEqual({ deny: ["*"] });
+    expect(resolveQQBotGroupToolPolicy({ cfg, groupId: "G1", senderId: "alice" })).toStrictEqual({
+      allow: ["read"],
+    });
+    expect(
+      resolveQQBotGroupToolPolicy({
+        cfg,
+        groupId: "G1",
+        senderMessageProvider: null,
+        senderId: "alice",
+      }),
+    ).toStrictEqual({ allow: ["read"] });
   });
 
   it("uses a case-insensitive group key when no exact key exists", () => {

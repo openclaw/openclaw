@@ -12,6 +12,7 @@ import {
   resolveActiveReplyRunSessionId,
   type ReplyBackendQueueMessageOptions,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import type { SteeringAuthorizationAffinity } from "../../auto-reply/reply/steering-authorization-affinity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /**
@@ -35,6 +36,7 @@ export type EmbeddedAgentQueueHandle = {
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  steeringAuthorizationAffinity?: SteeringAuthorizationAffinity;
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;

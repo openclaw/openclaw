@@ -12,6 +12,12 @@ import type {
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginChannelRegistry,
@@ -41,6 +47,105 @@ import {
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
+
+type ReloadManifestFixture = {
+  id: string;
+  origin?: PluginManifestRecord["origin"];
+  enabledByDefault?: boolean;
+  authorizationPolicies?: readonly string[];
+  legacyPluginIds?: readonly string[];
+};
+
+function createReloadMetadataSnapshot(
+  fixtures: readonly ReloadManifestFixture[],
+): PluginMetadataSnapshot {
+  const plugins: PluginManifestRecord[] = fixtures.map((fixture) => {
+    const rootDir = `/test/plugins/${fixture.id}`;
+    return {
+      id: fixture.id,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: fixture.origin ?? "global",
+      rootDir,
+      source: `${rootDir}/index.js`,
+      manifestPath: `${rootDir}/openclaw.plugin.json`,
+      ...(fixture.legacyPluginIds?.length ? { legacyPluginIds: [...fixture.legacyPluginIds] } : {}),
+      ...(fixture.enabledByDefault !== undefined
+        ? { enabledByDefault: fixture.enabledByDefault }
+        : {}),
+      ...(fixture.authorizationPolicies?.length
+        ? { contracts: { authorizationPolicies: [...fixture.authorizationPolicies] } }
+        : {}),
+    };
+  });
+  const pluginIdAliases = new Map<string, string>();
+  for (const plugin of plugins) {
+    for (const alias of [plugin.id, ...(plugin.legacyPluginIds ?? [])]) {
+      pluginIdAliases.set(alias.trim().toLowerCase(), plugin.id);
+    }
+  }
+  const normalizePluginId = (pluginId: string) => {
+    const normalized = pluginId.trim().toLowerCase();
+    return pluginIdAliases.get(normalized) ?? normalized;
+  };
+  const policyHash = "reload-policy-test";
+  return {
+    policyHash,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: plugins.map((plugin) => ({
+        pluginId: plugin.id,
+        manifestPath: plugin.manifestPath,
+        manifestHash: "test",
+        rootDir: plugin.rootDir,
+        origin: plugin.origin,
+        enabled: true,
+        enabledByDefault: plugin.enabledByDefault,
+        startup: {
+          sidecar: false,
+          memory: false,
+          deferConfiguredChannelFullLoadUntilAfterListen: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      })),
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins, diagnostics: [] },
+    plugins,
+    diagnostics: [],
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: plugins.length,
+      manifestPluginCount: plugins.length,
+    },
+  };
+}
 
 describe("diffConfigPaths", () => {
   it("captures nested config changes", () => {
@@ -145,6 +250,77 @@ describe("diffConfigPaths", () => {
     expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
+
+  it.each([
+    {
+      prev: {},
+      next: {
+        plugins: {
+          entries: {
+            "sender-access": {
+              authorization: {
+                requiredPolicies: [{ id: "sender-access", operations: ["tool.call" as const] }],
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      prev: {
+        plugins: {
+          entries: {
+            "sender-access": {
+              authorization: {
+                requiredPolicies: [{ id: "sender-access", operations: ["tool.call" as const] }],
+              },
+            },
+          },
+        },
+      },
+      next: {},
+    },
+  ])(
+    "preserves the authorization restart boundary for whole plugin entry changes",
+    ({ prev, next }) => {
+      const changedPaths = diffGatewayReloadPaths(prev, next);
+
+      expect(changedPaths).toContain("plugins.entries.sender-access.authorization");
+      const plan = buildGatewayReloadPlan(changedPaths);
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toContain("plugins.entries.sender-access.authorization");
+    },
+  );
+
+  it("preserves a required policy boundary when only its handler config changes", () => {
+    const requiredPolicies = [{ id: "sender-access", operations: ["tool.call" as const] }];
+    const changedPaths = diffGatewayReloadPaths(
+      {
+        plugins: {
+          entries: {
+            "sender-access": {
+              authorization: { requiredPolicies },
+              config: { mode: "maintainers" },
+            },
+          },
+        },
+      },
+      {
+        plugins: {
+          entries: {
+            "sender-access": {
+              authorization: { requiredPolicies },
+              config: { mode: "owners" },
+            },
+          },
+        },
+      },
+    );
+
+    expect(changedPaths).toContain("plugins.entries.sender-access.config.mode");
+    expect(changedPaths).toContain("plugins.entries.sender-access.authorization");
+    expect(buildGatewayReloadPlan(changedPaths).restartGateway).toBe(true);
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {
@@ -205,6 +381,10 @@ describe("buildGatewayReloadPlan", () => {
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
     { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
+  registry.plugins.push({
+    id: "sender-access",
+    contracts: { authorizationPolicies: ["sender-access"] },
+  } as never);
   registry.reloads = [
     {
       pluginId: "browser",
@@ -216,6 +396,12 @@ describe("buildGatewayReloadPlan", () => {
       pluginId: "canvas",
       pluginName: "Canvas",
       registration: { restartPrefixes: ["plugins.entries.canvas"] },
+      source: "test",
+    },
+    {
+      pluginId: "sender-access",
+      pluginName: "Sender Access",
+      registration: { hotPrefixes: ["plugins.entries.sender-access.config"] },
       source: "test",
     },
   ];
@@ -292,6 +478,11 @@ describe("buildGatewayReloadPlan", () => {
     "browser.enabled",
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
+    "plugins.enabled",
+    "plugins.allow",
+    "plugins.deny",
+    "plugins.slots.memory",
+    "plugins.bundledDiscovery",
     "gateway.auth.mode",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
@@ -537,11 +728,296 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it("reloads loaded channel plugins when plugin entry state changes", () => {
-    const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
+    const previousConfig = { plugins: { entries: { telegram: { enabled: false } } } };
+    const nextConfig = { plugins: { entries: { telegram: { enabled: true } } } };
+    const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"], {
+      previousConfig,
+      nextConfig,
+      pluginMetadataSnapshot: createReloadMetadataSnapshot([{ id: "telegram" }]),
+    });
     expect(plan.restartGateway).toBe(false);
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.disposeMcpRuntimes).toBe(true);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it.each([
+    "plugins.entries.sender-access.authorization",
+    "plugins.entries.sender-access.authorization.requiredPolicies",
+    "plugins.entries.sender-access.authorization.requiredPolicies.0.scope.agentIds",
+    "plugins.entries.telegram.authorization.requiredPolicies",
+  ])("restarts for process-stable plugin authorization config: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([path]);
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(resolveConfigReloadMetadata(path).kind).toBe("restart");
+  });
+
+  it.each([
+    {
+      change: "disable",
+      prevEntry: { enabled: true },
+      nextEntry: { enabled: false },
+      expectedPath: "plugins.entries.sender-access.enabled",
+    },
+    {
+      change: "re-enable",
+      prevEntry: { enabled: false },
+      nextEntry: { enabled: true },
+      expectedPath: "plugins.entries.sender-access.enabled",
+    },
+    {
+      change: "handler config",
+      prevEntry: { enabled: true, config: { mode: "maintainers" } },
+      nextEntry: { enabled: true, config: { mode: "owners" } },
+      expectedPath: "plugins.entries.sender-access.config.mode",
+    },
+  ])(
+    "restarts when a declared policy plugin changes $change",
+    ({ prevEntry, nextEntry, expectedPath }) => {
+      const changedPaths = diffGatewayReloadPaths(
+        { plugins: { entries: { "sender-access": prevEntry } } },
+        { plugins: { entries: { "sender-access": nextEntry } } },
+      );
+      const plan = buildGatewayReloadPlan(changedPaths);
+
+      expect(changedPaths).toContain(expectedPath);
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toContain(expectedPath);
+      expect(plan.hotReasons).not.toContain(expectedPath);
+    },
+  );
+
+  it("keeps an ordinary non-policy plugin entry hot-reloadable", () => {
+    const previousConfig = {
+      plugins: { entries: { "ordinary-plugin": { enabled: false } } },
+    };
+    const nextConfig = {
+      plugins: { entries: { "ordinary-plugin": { enabled: true } } },
+    };
+    const changedPaths = diffGatewayReloadPaths(previousConfig, nextConfig);
+    const plan = buildGatewayReloadPlan(changedPaths, {
+      previousConfig,
+      nextConfig,
+      pluginMetadataSnapshot: createReloadMetadataSnapshot([{ id: "ordinary-plugin" }]),
+    });
+
+    expect(changedPaths).toContain("plugins.entries.ordinary-plugin.enabled");
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+  });
+
+  it("keeps a dotted ordinary plugin entry hot-reloadable", () => {
+    const previousConfig = {
+      plugins: { entries: { "com.acme.ordinary": { enabled: false } } },
+    };
+    const nextConfig = {
+      plugins: { entries: { "com.acme.ordinary": { enabled: true } } },
+    };
+    const changedPaths = diffGatewayReloadPaths(previousConfig, nextConfig);
+    const plan = buildGatewayReloadPlan(changedPaths, {
+      previousConfig,
+      nextConfig,
+      pluginMetadataSnapshot: createReloadMetadataSnapshot([{ id: "com.acme.ordinary" }]),
+    });
+
+    expect(changedPaths).toContain("plugins.entries.com.acme.ordinary.enabled");
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+  });
+
+  it("restarts when a configured alias resolves to an active policy plugin", () => {
+    const configuredId = "legacy.sender-access";
+    const previousConfig = {
+      plugins: { entries: { [configuredId]: { config: { mode: "maintainers" } } } },
+    };
+    const nextConfig = {
+      plugins: { entries: { [configuredId]: { config: { mode: "owners" } } } },
+    };
+    const changedPaths = diffGatewayReloadPaths(previousConfig, nextConfig);
+    const changedPath = `plugins.entries.${configuredId}.config.mode`;
+    const plan = buildGatewayReloadPlan(changedPaths, {
+      previousConfig,
+      nextConfig,
+      pluginMetadataSnapshot: createReloadMetadataSnapshot([
+        {
+          id: "sender-access",
+          legacyPluginIds: [configuredId],
+          authorizationPolicies: ["sender-access"],
+        },
+      ]),
+    });
+
+    expect(changedPaths).toContain(changedPath);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain(changedPath);
+    expect(plan.hotReasons).not.toContain(changedPath);
+    expect(plan.reloadPlugins).toBe(false);
+  });
+
+  it.each([
+    { direction: "activate", previousEnabled: false, nextEnabled: true },
+    { direction: "deactivate", previousEnabled: true, nextEnabled: false },
+  ])(
+    "restarts to $direction an inactive dotted policy plugin",
+    ({ previousEnabled, nextEnabled }) => {
+      setActivePluginRegistry(emptyRegistry);
+      const previousConfig = {
+        plugins: { entries: { "com.acme.authorization": { enabled: previousEnabled } } },
+      };
+      const nextConfig = {
+        plugins: { entries: { "com.acme.authorization": { enabled: nextEnabled } } },
+      };
+      const changedPaths = diffGatewayReloadPaths(previousConfig, nextConfig);
+      const plan = buildGatewayReloadPlan(changedPaths, {
+        previousConfig,
+        nextConfig,
+        pluginMetadataSnapshot: createReloadMetadataSnapshot([
+          {
+            id: "com.acme.authorization",
+            authorizationPolicies: ["maintainer-control"],
+          },
+        ]),
+      });
+
+      expect(changedPaths).toContain("plugins.entries.com.acme.authorization.enabled");
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toContain("plugins.entries.com.acme.authorization.enabled");
+      expect(plan.hotReasons).not.toContain("plugins.entries.com.acme.authorization.enabled");
+    },
+  );
+
+  it.each([
+    { nextPlugins: { enabled: false }, expectedPath: "plugins.enabled" },
+    { nextPlugins: { allow: ["sender-access"] }, expectedPath: "plugins.allow" },
+    { nextPlugins: { deny: ["sender-access"] }, expectedPath: "plugins.deny" },
+    { nextPlugins: { slots: { memory: "sender-access" } }, expectedPath: "plugins.slots" },
+    {
+      nextPlugins: { bundledDiscovery: "compat" as const },
+      expectedPath: "plugins.bundledDiscovery",
+    },
+  ])(
+    "preserves global plugin activation path hidden by a whole plugins change: $expectedPath",
+    ({ nextPlugins, expectedPath }) => {
+      const changedPaths = diffGatewayReloadPaths({}, { plugins: nextPlugins });
+      const plan = buildGatewayReloadPlan(changedPaths);
+
+      expect(changedPaths).toContain(expectedPath);
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toContain(expectedPath);
+    },
+  );
+
+  it("restarts global activation when a complete manifest snapshot is unavailable", () => {
+    setActivePluginRegistry(emptyRegistry);
+
+    const plan = buildGatewayReloadPlan(["plugins.allow"], {
+      previousConfig: {},
+      nextConfig: { plugins: { allow: ["ordinary-plugin"] } },
+      pluginMetadataSnapshot: null,
+    });
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["plugins.allow"]);
+    expect(plan.hotReasons).toStrictEqual([]);
+  });
+
+  it("keeps activation hot when complete manifests prove both sets policy-free", () => {
+    setActivePluginRegistry(emptyRegistry);
+    const previousConfig = {
+      plugins: {
+        allow: ["ordinary-plugin"],
+        entries: { "sender-access": { enabled: false } },
+      },
+    };
+    const nextConfig = {
+      plugins: {
+        allow: ["another-plugin"],
+        entries: { "sender-access": { enabled: false } },
+      },
+    };
+    const plan = buildGatewayReloadPlan(["plugins.allow"], {
+      previousConfig,
+      nextConfig,
+      pluginMetadataSnapshot: createReloadMetadataSnapshot([
+        { id: "ordinary-plugin" },
+        { id: "another-plugin" },
+        { id: "sender-access", authorizationPolicies: ["sender-access"] },
+      ]),
+    });
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual(["plugins.allow"]);
+    expect(plan.reloadPlugins).toBe(true);
+  });
+
+  it.each([
+    {
+      direction: "enable",
+      previousConfig: { plugins: { allow: ["ordinary-plugin"] } },
+      nextConfig: { plugins: { allow: ["sender-access"] } },
+      changedPath: "plugins.allow",
+    },
+    {
+      direction: "disable",
+      previousConfig: { plugins: { allow: ["sender-access"] } },
+      nextConfig: { plugins: { allow: ["ordinary-plugin"] } },
+      changedPath: "plugins.allow",
+    },
+    {
+      direction: "enable by entry",
+      previousConfig: { plugins: { entries: { "sender-access": { enabled: false } } } },
+      nextConfig: { plugins: { entries: { "sender-access": { enabled: true } } } },
+      changedPath: "plugins.entries.sender-access.enabled",
+    },
+  ])(
+    "restarts when activation can $direction a discovered policy plugin",
+    ({ previousConfig, nextConfig, changedPath }) => {
+      setActivePluginRegistry(emptyRegistry);
+      const plan = buildGatewayReloadPlan([changedPath], {
+        previousConfig,
+        nextConfig,
+        pluginMetadataSnapshot: createReloadMetadataSnapshot([
+          { id: "ordinary-plugin" },
+          { id: "sender-access", authorizationPolicies: ["sender-access"] },
+        ]),
+      });
+
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toEqual([changedPath]);
+      expect(plan.hotReasons).toStrictEqual([]);
+    },
+  );
+
+  it("restarts when the available manifest snapshot is activation-scoped", () => {
+    setActivePluginRegistry(emptyRegistry);
+    const snapshot = createReloadMetadataSnapshot([{ id: "ordinary-plugin" }]);
+    const plan = buildGatewayReloadPlan(["plugins.allow"], {
+      previousConfig: {},
+      nextConfig: { plugins: { allow: ["ordinary-plugin"] } },
+      pluginMetadataSnapshot: { ...snapshot, pluginIds: ["ordinary-plugin"] },
+    });
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["plugins.allow"]);
+  });
+
+  it("restarts entry changes for a registered policy missing manifest metadata", () => {
+    const registeredOnlyRegistry = createTestRegistry([]);
+    registeredOnlyRegistry.authorizationPolicies.push({ pluginId: "runtime-policy" } as never);
+    setActivePluginRegistry(registeredOnlyRegistry);
+
+    const path = "plugins.entries.runtime-policy.config.mode";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([path]);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("keeps restart-owned plugin paths ahead of the generic plugin hot rule", () => {
@@ -831,6 +1307,7 @@ describe("startGatewayConfigReloader", () => {
   });
 
   afterEach(() => {
+    clearCurrentPluginMetadataSnapshot();
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -3711,6 +4188,7 @@ describe("startGatewayConfigReloader", () => {
         installPath: "/tmp/openclaw/plugins/telegram",
       },
     } satisfies Record<string, PluginInstallRecord>;
+    setCurrentPluginMetadataSnapshot(createReloadMetadataSnapshot([{ id: "telegram" }]));
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({
         sourceConfig: nextConfig,
@@ -3834,9 +4312,17 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     const [plan, restartedConfig] = getOnlyRestartCall(harness);
-    expect(plan.changedPaths).toEqual(["plugins.entries", "plugins.installs.lossless-claw"]);
+    expect(plan.changedPaths).toEqual([
+      "plugins.entries",
+      "plugins.entries.lossless-claw",
+      "plugins.installs.lossless-claw",
+    ]);
     expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toEqual(["plugins.installs.lossless-claw"]);
+    expect(plan.restartReasons).toEqual([
+      "plugins.entries",
+      "plugins.entries.lossless-claw",
+      "plugins.installs.lossless-claw",
+    ]);
     expect(restartedConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

@@ -149,15 +149,14 @@ export function createPolicyRegistrars(state: PluginRegistryState) {
     const id = normalizePolicyString(policy.id);
     const description = normalizePolicyString(policy.description);
     const unhandled = policy.unhandled;
+    const timeoutMs = policy.timeoutMs;
     const handlers = snapshotAuthorizationPolicyHandlers(policy.handlers);
     const handlersValid =
       handlers !== undefined && (Reflect.ownKeys(handlers).length > 0 || unhandled === "deny");
     const unhandledValid = unhandled === undefined || unhandled === "pass" || unhandled === "deny";
     const timeoutValid =
-      policy.timeoutMs === undefined ||
-      (typeof policy.timeoutMs === "number" &&
-        Number.isFinite(policy.timeoutMs) &&
-        policy.timeoutMs > 0);
+      timeoutMs === undefined ||
+      (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0);
     if (!id || !description || !handlersValid || !unhandledValid || !timeoutValid) {
       pushDiagnostic({
         level: "error",
@@ -206,8 +205,8 @@ export function createPolicyRegistrars(state: PluginRegistryState) {
       policy: {
         id,
         description,
-        ...(policy.unhandled ? { unhandled: policy.unhandled } : {}),
-        ...(policy.timeoutMs !== undefined ? { timeoutMs: policy.timeoutMs } : {}),
+        ...(unhandled ? { unhandled } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         handlers: handlers!,
       },
       origin: record.origin,

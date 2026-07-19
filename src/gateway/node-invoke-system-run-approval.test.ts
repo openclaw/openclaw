@@ -29,15 +29,43 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       device: { id: "dev-1" },
     },
   };
-  const trustedBackendClient = {
-    connId: "backend-conn",
-    connect: {
-      scopes: ["operator.write", "operator.approvals"],
-      client: { id: "gateway-client", mode: "backend" },
-      device: null,
-    },
-  };
   type SanitizerOptions = Parameters<typeof sanitizeSystemRunParamsForForwarding>[0];
+  function verifiedAgentRuntimeClient(
+    params: {
+      agentId?: string;
+      sessionKey?: string;
+      scopes?: string[];
+    } = {},
+  ) {
+    return {
+      connId: "backend-conn",
+      connect: {
+        scopes: params.scopes ?? ["operator.write", "operator.approvals"],
+        client: { id: "gateway-client", mode: "backend" },
+        device: null,
+      },
+      internal: {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime" as const,
+          agentId: params.agentId ?? defaultChatContext.agentId,
+          sessionKey: params.sessionKey ?? defaultChatContext.sessionKey,
+          gatewayMethods: ["node.invoke"],
+        },
+      },
+    };
+  }
+
+  function wireSpoofedBackendClient() {
+    return {
+      connId: "spoofed-backend-conn",
+      connect: {
+        scopes: ["operator.write", "operator.approvals"],
+        client: { id: "gateway-client", mode: "backend" },
+        device: null,
+      },
+    };
+  }
+
   type ApprovedRunParamOverrides = {
     command: string[];
     rawCommand?: string;
@@ -260,11 +288,34 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     > = {},
   ) {
     const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    const { agentId, sessionKey } = defaultChatContext;
     record.requestedByConnId = overrides.requestedByConnId ?? "control-ui-conn";
     record.requestedByDeviceId = overrides.requestedByDeviceId ?? null;
     record.requestedByClientId = overrides.requestedByClientId ?? "openclaw-control-ui";
     record.requestedByDeviceTokenAuth = overrides.requestedByDeviceTokenAuth ?? false;
+    record.request = {
+      ...record.request,
+      agentId,
+      sessionKey,
+      systemRunPlan: {
+        argv: echoSafeArgv,
+        cwd: null,
+        commandText: echoSafeCommand,
+        agentId,
+        sessionKey,
+      },
+      systemRunBinding: systemRunApprovalBinding(echoSafeArgv, { agentId, sessionKey }),
+    };
     return record;
+  }
+
+  function approvedNoDeviceReplayParams(): ApprovedRunParamOverrides {
+    return {
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
+      agentId: defaultChatContext.agentId,
+      sessionKey: defaultChatContext.sessionKey,
+    };
   }
 
   function approvedChatReplayParams(
@@ -288,7 +339,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     return sanitizeSystemRunParamsForForwarding({
       rawParams: approvedChatReplayParams(opts.rawParams),
       nodeId: "node-1",
-      client: opts.client ?? trustedBackendClient,
+      client: opts.client ?? verifiedAgentRuntimeClient(),
       execApprovalManager: manager(opts.record ?? makeChatRecord()),
       nowMs: now,
     });
@@ -891,35 +942,52 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_DEVICE_MISMATCH", "not valid for this device");
   });
 
-  test("accepts trusted backend replay for no-device approval after the request connection changes", () => {
+  test("accepts verified agent-runtime replay for a bound no-device approval", () => {
     const result = sanitizeApprovedRun({
-      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
-      client: trustedBackendClient,
+      rawParams: approvedNoDeviceReplayParams(),
+      client: verifiedAgentRuntimeClient(),
       record: makeNoDeviceUiRecord(),
     });
 
     expectAllowOnceForwardingResult(result);
   });
 
-  test("rejects no-device approval replay from a backend client without approval scope", () => {
+  test("rejects wire-spoofed backend identity without verified agent-runtime metadata", () => {
     const result = sanitizeApprovedRun({
-      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
-      client: {
-        ...trustedBackendClient,
-        connect: {
-          ...trustedBackendClient.connect,
-          scopes: ["operator.write"],
-        },
-      },
+      rawParams: approvedNoDeviceReplayParams(),
+      client: wireSpoofedBackendClient(),
       record: makeNoDeviceUiRecord(),
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 
-  test("rejects no-device approval replay from a non-backend client on a different connection", () => {
+  test("rejects verified agent-runtime replay without approval scope", () => {
     const result = sanitizeApprovedRun({
-      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      rawParams: approvedNoDeviceReplayParams(),
+      client: verifiedAgentRuntimeClient({ scopes: ["operator.write"] }),
+      record: makeNoDeviceUiRecord(),
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test.each([
+    ["agent", { agentId: "other" }],
+    ["session", { sessionKey: "agent:main:telegram:direct:99999" }],
+  ])("rejects verified agent-runtime replay with a mismatched %s binding", (_label, identity) => {
+    const result = sanitizeApprovedRun({
+      rawParams: approvedNoDeviceReplayParams(),
+      client: verifiedAgentRuntimeClient(identity),
+      record: makeNoDeviceUiRecord(),
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects no-device approval replay from a client without verified runtime identity", () => {
+    const result = sanitizeApprovedRun({
+      rawParams: approvedNoDeviceReplayParams(),
       client: {
         connId: "other-control-ui-conn",
         connect: {
@@ -934,7 +1002,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 
-  test("accepts trusted backend chat replay when stable requester metadata matches", () => {
+  test("accepts verified agent-runtime chat replay when stable requester metadata matches", () => {
     const forwarded = expectAllowOnceForwardingResult(sanitizeApprovedChatReplay());
     expect(forwarded).not.toHaveProperty("turnSourceChannel");
     expect(forwarded).not.toHaveProperty("turnSourceTo");
@@ -942,14 +1010,20 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(forwarded).not.toHaveProperty("turnSourceThreadId");
   });
 
-  test("accepts trusted backend chat replay from a non-bridgeable agent client when stable requester metadata matches", () => {
+  test("rejects wire-spoofed backend chat replay without verified runtime metadata", () => {
+    const result = sanitizeApprovedChatReplay({ client: wireSpoofedBackendClient() });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("accepts verified agent-runtime chat replay from a non-bridgeable request client", () => {
     const record = makeChatRecord();
     record.requestedByClientId = "chat-agent";
 
     expectAllowOnceForwardingResult(sanitizeApprovedChatReplay({ record }));
   });
 
-  test("accepts trusted backend WeCom replay when the approved chat agent connection changes", () => {
+  test("accepts verified agent-runtime WeCom replay when the connection changes", () => {
     const wecomContext = {
       sessionKey: "agent:main:wecom:conversation:corp-42",
       turnSourceChannel: "wecom",
@@ -960,12 +1034,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const result = sanitizeApprovedChatReplay({
       record: makeChatRecord(wecomContext),
       rawParams: wecomContext,
+      client: verifiedAgentRuntimeClient({ sessionKey: wecomContext.sessionKey }),
     });
 
     expectAllowOnceForwardingResult(result);
   });
 
-  test("accepts trusted backend webchat replay when turnSourceTo is null on both sides (regression #82132)", () => {
+  test("accepts verified agent-runtime webchat replay with null turnSourceTo (regression #82132)", () => {
     const webchatContext = {
       sessionKey: "agent:main:main",
       turnSourceChannel: "webchat",
@@ -976,6 +1051,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const result = sanitizeApprovedChatReplay({
       record: makeChatRecord(webchatContext),
       rawParams: webchatContext,
+      client: verifiedAgentRuntimeClient({ sessionKey: webchatContext.sessionKey }),
     });
 
     expectAllowOnceForwardingResult(result);
@@ -987,7 +1063,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     ["agent binding casing changes", { agentId: "Main" }],
     ["channel target changes", { turnSourceTo: "telegram:67890" }],
   ] satisfies Array<[string, Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">]>)(
-    "rejects trusted backend chat replay when %s",
+    "rejects verified agent-runtime chat replay when %s",
     (_label, rawParams) => {
       const result = sanitizeApprovedChatReplay({ rawParams });
       expectRejectedForwardingResult(
@@ -998,15 +1074,9 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     },
   );
 
-  test("rejects trusted backend chat replay without matching approval scope", () => {
+  test("rejects verified agent-runtime chat replay without approval scope", () => {
     const result = sanitizeApprovedChatReplay({
-      client: {
-        ...trustedBackendClient,
-        connect: {
-          ...trustedBackendClient.connect,
-          scopes: ["operator.write"],
-        },
-      },
+      client: verifiedAgentRuntimeClient({ scopes: ["operator.write"] }),
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
@@ -1014,8 +1084,8 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects no-device approval replay when the original request used device-token auth", () => {
     const result = sanitizeApprovedRun({
-      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
-      client: trustedBackendClient,
+      rawParams: approvedNoDeviceReplayParams(),
+      client: verifiedAgentRuntimeClient(),
       record: makeNoDeviceUiRecord({ requestedByDeviceTokenAuth: true }),
     });
 

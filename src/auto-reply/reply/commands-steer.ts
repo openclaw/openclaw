@@ -6,6 +6,7 @@ import {
 } from "../../agents/tools/sessions-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { rebindTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
@@ -20,6 +21,7 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
+import { createSteeringAuthorizationAffinity } from "./steering-authorization-affinity.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -69,15 +71,15 @@ function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
   return [...new Set(candidates)];
 }
 
-function resolveSteerSessionId(params: {
+function resolveSteerSessionTarget(params: {
   commandParams: HandleCommandsParams;
   targetSessionKey: string;
-}): string | undefined {
+}): { sessionId: string; sessionKey: string } | undefined {
   const candidateKeys = listSteerCandidateSessionKeys(params.targetSessionKey);
   for (const candidateKey of candidateKeys) {
     const activeSessionId = resolveActiveEmbeddedRunSessionId(candidateKey);
     if (activeSessionId) {
-      return activeSessionId;
+      return { sessionId: activeSessionId, sessionKey: candidateKey };
     }
   }
 
@@ -89,7 +91,7 @@ function resolveSteerSessionId(params: {
     }
     const activeSessionId = resolveActiveEmbeddedRunSessionIdBySessionFile(sessionFile);
     if (activeSessionId) {
-      return activeSessionId;
+      return { sessionId: activeSessionId, sessionKey: candidateKey };
     }
   }
 
@@ -97,7 +99,7 @@ function resolveSteerSessionId(params: {
     const entry = resolveStoredSessionEntry(params.commandParams, candidateKey);
     const sessionId = normalizeOptionalString(entry?.sessionId);
     if (sessionId && isEmbeddedAgentRunActive(sessionId)) {
-      return sessionId;
+      return { sessionId, sessionKey: candidateKey };
     }
   }
 
@@ -161,18 +163,31 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
     );
   }
 
-  const sessionId = resolveSteerSessionId({ commandParams: params, targetSessionKey });
-  if (!sessionId) {
+  const steerTarget = resolveSteerSessionTarget({ commandParams: params, targetSessionKey });
+  if (!steerTarget) {
     return continueWithSteerFallback(
       params,
       message,
       `steer: no active run for ${targetSessionKey}; continuing with /steer payload as a normal prompt`,
     );
   }
+  const { sessionId, sessionKey: activeSessionKey } = steerTarget;
 
+  const targetTurnAuthority = params.agentId
+    ? rebindTurnAuthoritySnapshot(params.ctx.TurnAuthority, {
+        agentId: params.agentId,
+        sessionKey: activeSessionKey,
+        sessionId,
+        trigger: "command",
+      })
+    : undefined;
+  const steeringAuthorizationAffinity = createSteeringAuthorizationAffinity({
+    turnAuthority: targetTurnAuthority,
+  });
   const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
     isInboundUserMessage: true,
+    ...(steeringAuthorizationAffinity ? { steeringAuthorizationAffinity } : {}),
     debounceMs: 0,
     ...(params.opts?.sourceReplyDeliveryMode
       ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }

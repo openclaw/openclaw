@@ -13,6 +13,7 @@ import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOperatorTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
@@ -498,6 +499,21 @@ describe("Agent-specific tool filtering", () => {
 
     const ownerTools = createWebChatTools(true);
     const nonOwnerTools = createWebChatTools(false);
+    const operatorOwnerTools = createOpenClawCodingTools({
+      config: cfg,
+      messageProvider: "webchat",
+      senderIsOwner: false,
+      turnAuthority: createOperatorTurnAuthoritySnapshot({
+        scopes: ["operator.admin"],
+        connectionId: "owner-webchat",
+        isOwner: true,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        trigger: "gateway",
+      }),
+      workspaceDir: "/tmp/test-webchat-operator-owner-policy",
+      agentDir: "/tmp/agent-webchat-operator-owner-policy",
+    }).map((tool) => tool.name);
 
     expect(ownerTools).toContain("exec");
     expect(ownerTools).toContain("process");
@@ -508,6 +524,8 @@ describe("Agent-specific tool filtering", () => {
     expect(ownerTools).toContain("conversations_list");
     expect(ownerTools).toContain("conversations_send");
     expect(ownerTools).toContain("conversations_turn");
+    expect(operatorOwnerTools).toContain("exec");
+    expect(operatorOwnerTools).toContain("process");
     expect(nonOwnerTools).not.toContain("exec");
     expect(nonOwnerTools).not.toContain("process");
     expect(nonOwnerTools).not.toContain("cron");

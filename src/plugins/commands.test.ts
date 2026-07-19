@@ -1,12 +1,14 @@
 // Covers plugin CLI command behavior and output paths.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
   clearPluginCommands,
   executePluginCommand,
+  executePluginCommandWithTurnAuthority,
   listPluginCommands,
   matchPluginCommand,
   registerPluginCommand,
@@ -14,9 +16,10 @@ import {
 import { resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
+import { createOperatorTurnAuthoritySnapshot } from "./turn-authority.js";
 
 const completionMocks = vi.hoisted(() => ({
   prepareSimpleCompletionModelForAgent: vi.fn(),
@@ -124,6 +127,26 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
       detached: { removed: false },
     }),
   );
+}
+
+function createRequiredConversationPolicyConfig(): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        "conversation-access": {
+          authorization: {
+            requiredPolicies: [
+              {
+                id: "maintenance-pin",
+                operations: ["command.invoke"],
+                scope: { conversationIds: ["maintenance"] },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -754,7 +777,10 @@ describe("registerPluginCommand", () => {
     registerVoiceCommandForTest({ acceptsArgs: true, handler });
     const match = requirePluginCommandMatch("/voice hello");
     const seen: unknown[] = [];
-    const registry = createEmptyPluginRegistry();
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("missing active plugin registry");
+    }
     registry.authorizationPolicies.push({
       pluginId: "sender-access",
       source: "/plugins/sender-access/index.ts",
@@ -784,9 +810,12 @@ describe("registerPluginCommand", () => {
       commandBody: "/voice hello",
       commandSource: "native",
       config: {},
+      from: "discord:channel:routing-target",
+      to: "slash:maintainer-1",
       messageThreadId: "thread-1",
-      conversationId: "discord:channel:maintenance",
-      parentConversationId: "discord:channel:maintenance",
+      threadParentId: "routing-parent",
+      conversationId: "thread-1",
+      parentConversationId: "maintenance",
     });
 
     expect(handler).not.toHaveBeenCalled();
@@ -805,18 +834,371 @@ describe("registerPluginCommand", () => {
           principal: {
             kind: "sender",
             provider: "discord",
+            accountId: "default",
             senderId: "maintainer-1",
             senderIsOwner: false,
             isAuthorizedSender: true,
             roleIds: ["maintainers"],
           },
-          conversationId: "discord:channel:maintenance",
-          parentConversationId: "discord:channel:maintenance",
+          conversationId: "thread-1",
+          parentConversationId: "maintenance",
           threadId: "thread-1",
           trigger: "command",
         },
       },
     ]);
+  });
+
+  it.each([
+    { routeName: "to", route: { to: "slack:channel:routing-only" } },
+    { routeName: "from", route: { from: "slack:channel:routing-only" } },
+  ])(
+    "does not treat a $routeName-only route as canonical conversation provenance",
+    async ({ route }) => {
+      const handler = vi.fn(async () => ({ text: "executed" }));
+      registerVoiceCommandForTest({ handler });
+      const match = requirePluginCommandMatch("/voice");
+
+      const result = await executePluginCommand({
+        command: match.command,
+        channel: "slack",
+        isAuthorizedSender: true,
+        commandBody: "/voice",
+        config: createRequiredConversationPolicyConfig(),
+        ...route,
+      });
+
+      expect(result).toEqual({ text: "⚠️ Command blocked by authorization policy." });
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses the canonical admitted conversation instead of delivery routes", async () => {
+    const handler = vi.fn(async () => ({ text: "executed" }));
+    registerVoiceCommandForTest({ handler });
+    const match = requirePluginCommandMatch("/voice");
+    const seen: unknown[] = [];
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("missing active plugin registry");
+    }
+    registry.authorizationPolicies.push({
+      pluginId: "conversation-access",
+      source: "/plugins/conversation-access/index.ts",
+      policy: {
+        id: "maintenance-pin",
+        description: "Pin maintenance commands",
+        handlers: {
+          "command.invoke": (_request, context) => {
+            seen.push(context);
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    resetGlobalHookRunner();
+    setActivePluginRegistry(registry);
+
+    const result = await executePluginCommand({
+      command: match.command,
+      channel: "slack",
+      isAuthorizedSender: true,
+      commandBody: "/voice",
+      config: createRequiredConversationPolicyConfig(),
+      from: "slack:channel:source-route",
+      to: "slack:channel:destination-route",
+      conversationId: "maintenance",
+    });
+
+    expect(result).toEqual({ text: "executed" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      conversationId: "maintenance",
+      trigger: "command",
+    });
+  });
+
+  it("uses immutable operator identity for plugin policy and handler context", async () => {
+    const handlerContexts: Array<{
+      senderId?: string;
+      isAuthorizedSender: boolean;
+      gatewayClientScopes?: string[];
+    }> = [];
+    registerVoiceCommandForTest({
+      requiredScopes: ["operator.write"],
+      handler: async (ctx) => {
+        handlerContexts.push({
+          senderId: ctx.senderId,
+          isAuthorizedSender: ctx.isAuthorizedSender,
+          gatewayClientScopes: ctx.gatewayClientScopes,
+        });
+        return { text: "executed" };
+      },
+    });
+    const match = requirePluginCommandMatch("/voice");
+    const seen: unknown[] = [];
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("missing active plugin registry");
+    }
+    registry.authorizationPolicies.push({
+      pluginId: "operator-access",
+      source: "/plugins/operator-access/index.ts",
+      policy: {
+        id: "operator-actions",
+        description: "Capture operator authority",
+        handlers: {
+          "command.invoke": (_request, context) => {
+            seen.push(context);
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    resetGlobalHookRunner();
+    setActivePluginRegistry(registry);
+    const turnAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      pairedClientId: "control-ui",
+      connectionId: "connection-1",
+      isOwner: false,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "source-session",
+      runId: "gateway-run",
+      conversationId: "maintenance",
+      trigger: "gateway",
+    });
+
+    const result = await executePluginCommandWithTurnAuthority({
+      command: match.command,
+      senderId: "forged-sender",
+      memberRoleIds: ["forged-role"],
+      channel: "webchat",
+      isAuthorizedSender: false,
+      senderIsOwner: true,
+      gatewayClientScopes: ["operator.admin"],
+      agentId: "maintenance-agent",
+      sessionKey: "agent:maintenance-agent:discord:channel:maintenance",
+      sessionId: "target-session",
+      commandBody: "/voice",
+      config: {},
+      turnAuthority,
+    });
+
+    expect(result).toEqual({ text: "executed" });
+    expect(seen).toEqual([
+      {
+        ...turnAuthority.authorization,
+        agentId: "maintenance-agent",
+        sessionKey: "agent:maintenance-agent:discord:channel:maintenance",
+        sessionId: "target-session",
+        trigger: "command",
+      },
+    ]);
+    expect(handlerContexts).toEqual([
+      {
+        senderId: undefined,
+        isAuthorizedSender: true,
+        gatewayClientScopes: ["operator.write"],
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "agent id omitted",
+      agentId: undefined,
+      sessionKey: "agent:maintenance-agent:discord:channel:maintenance",
+      expectedAgentId: "maintenance-agent",
+      expectedSessionKey: "agent:maintenance-agent:discord:channel:maintenance",
+      expectedSessionId: undefined,
+    },
+    {
+      name: "session key omitted",
+      agentId: "main",
+      sessionKey: undefined,
+      expectedAgentId: "main",
+      expectedSessionKey: "agent:main:main",
+      expectedSessionId: "source-session",
+    },
+    {
+      name: "both target fields omitted",
+      agentId: undefined,
+      sessionKey: undefined,
+      expectedAgentId: "main",
+      expectedSessionKey: "agent:main:main",
+      expectedSessionId: "source-session",
+    },
+  ])("rebinds command authority when $name", async (testCase) => {
+    const handlerContexts: Array<{
+      agentId?: string;
+      sessionKey?: string;
+      sessionId?: string;
+    }> = [];
+    registerVoiceCommandForTest({
+      handler: async (ctx) => {
+        handlerContexts.push({
+          agentId: ctx.agentId,
+          sessionKey: ctx.sessionKey,
+          sessionId: ctx.sessionId,
+        });
+        return { text: "executed" };
+      },
+    });
+    const match = requirePluginCommandMatch("/voice");
+    const seen: unknown[] = [];
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("missing active plugin registry");
+    }
+    registry.authorizationPolicies.push({
+      pluginId: "operator-access",
+      source: "/plugins/operator-access/index.ts",
+      policy: {
+        id: "operator-actions",
+        description: "Capture command target authority",
+        handlers: {
+          "command.invoke": (_request, context) => {
+            seen.push(context);
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    resetGlobalHookRunner();
+    setActivePluginRegistry(registry);
+    const turnAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      pairedClientId: "control-ui",
+      connectionId: "connection-1",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "source-session",
+      runId: "gateway-run",
+      conversationId: "maintenance",
+      trigger: "gateway",
+    });
+
+    const result = await executePluginCommandWithTurnAuthority({
+      command: match.command,
+      channel: "webchat",
+      isAuthorizedSender: false,
+      agentId: testCase.agentId,
+      sessionKey: testCase.sessionKey,
+      commandBody: "/voice",
+      config: {},
+      turnAuthority,
+    });
+
+    expect(result).toEqual({ text: "executed" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      principal: turnAuthority.authorization.principal,
+      agentId: testCase.expectedAgentId,
+      sessionKey: testCase.expectedSessionKey,
+      runId: "gateway-run",
+      conversationId: "maintenance",
+      trigger: "command",
+    });
+    expect((seen[0] as { sessionId?: string }).sessionId).toBe(testCase.expectedSessionId);
+    expect(handlerContexts).toEqual([
+      {
+        agentId: testCase.expectedAgentId,
+        sessionKey: testCase.expectedSessionKey,
+        sessionId: testCase.expectedSessionId,
+      },
+    ]);
+  });
+
+  it("fails closed when an omitted session key cannot bind the requested command agent", async () => {
+    const handler = vi.fn(async () => ({ text: "executed" }));
+    registerVoiceCommandForTest({ handler });
+    const match = requirePluginCommandMatch("/voice");
+
+    const result = await executePluginCommandWithTurnAuthority({
+      command: match.command,
+      channel: "webchat",
+      isAuthorizedSender: false,
+      agentId: "maintenance-agent",
+      commandBody: "/voice",
+      config: {},
+      turnAuthority: createOperatorTurnAuthoritySnapshot({
+        scopes: ["operator.write"],
+        pairedClientId: "control-ui",
+        connectionId: "connection-1",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        trigger: "gateway",
+      }),
+    });
+
+    expect(result).toEqual({ text: "⚠️ This command requires authorization." });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("returns an authorization reply for an unissued turn authority", async () => {
+    const handler = vi.fn(async () => ({ text: "executed" }));
+    registerVoiceCommandForTest({ handler });
+    const match = requirePluginCommandMatch("/voice");
+    const authority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.admin"],
+      pairedClientId: "control-ui",
+      connectionId: "connection-1",
+      isOwner: true,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      trigger: "gateway",
+    });
+
+    const result = await executePluginCommandWithTurnAuthority({
+      command: match.command,
+      senderId: "legacy-owner",
+      channel: "webchat",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/voice",
+      config: {},
+      turnAuthority: structuredClone(authority),
+    });
+
+    expect(result).toEqual({ text: "⚠️ This command requires authorization." });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not let legacy admin scopes widen immutable operator authority", async () => {
+    const handler = vi.fn(async () => ({ text: "executed" }));
+    registerVoiceCommandForTest({
+      requiredScopes: ["operator.approvals"],
+      handler,
+    });
+    const match = requirePluginCommandMatch("/voice");
+
+    const result = await executePluginCommandWithTurnAuthority({
+      command: match.command,
+      senderId: "forged-owner",
+      channel: "webchat",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      gatewayClientScopes: ["operator.admin"],
+      commandBody: "/voice",
+      config: {},
+      turnAuthority: createOperatorTurnAuthoritySnapshot({
+        scopes: ["operator.write"],
+        pairedClientId: "control-ui",
+        connectionId: "connection-1",
+        isOwner: false,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        trigger: "gateway",
+      }),
+    });
+
+    expect(result).toEqual({
+      text: "⚠️ This command requires gateway scope: operator.approvals.",
+    });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("propagates cancellation during plugin command authorization", async () => {
@@ -1460,7 +1842,7 @@ describe("registerPluginCommand", () => {
     expect(result).toStrictEqual({});
   });
 
-  it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
+  it("uses the effective default ingress account for policy scope and handlers", async () => {
     let seenPolicyContext: unknown;
     const registry = createTestRegistry([
       {
@@ -1498,6 +1880,61 @@ describe("registerPluginCommand", () => {
         },
       },
     ]);
+    const config = {
+      plugins: {
+        entries: {
+          "sender-access": {
+            authorization: {
+              requiredPolicies: [
+                {
+                  id: "sender-access",
+                  operations: ["command.invoke" as const],
+                  scope: {
+                    providers: ["line"],
+                    accountIds: ["work"],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    resetGlobalHookRunner();
+    setActivePluginRegistry(registry);
+
+    let receivedCtx:
+      | {
+          accountId?: string;
+        }
+      | undefined;
+    const handler = vi.fn(async (ctx: { accountId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    });
+
+    const execute = () =>
+      executePluginCommand({
+        command: {
+          name: "accountcheck",
+          description: "Demo command",
+          acceptsArgs: false,
+          handler,
+          pluginId: "demo-plugin",
+        },
+        channel: "line",
+        senderId: "U123",
+        isAuthorizedSender: true,
+        commandBody: "/accountcheck",
+        config,
+        from: "line:user:U1234567890abcdef1234567890abcdef",
+      });
+
+    await expect(execute()).resolves.toEqual({
+      text: "⚠️ Command blocked by authorization policy.",
+    });
+    expect(handler).not.toHaveBeenCalled();
+
     registry.authorizationPolicies.push({
       pluginId: "sender-access",
       source: "test",
@@ -1512,45 +1949,23 @@ describe("registerPluginCommand", () => {
         },
       },
     });
+    resetGlobalHookRunner();
     setActivePluginRegistry(registry);
 
-    let receivedCtx:
-      | {
-          accountId?: string;
-        }
-      | undefined;
-    const handler = async (ctx: { accountId?: string }) => {
-      receivedCtx = ctx;
-      return { text: "ok" };
-    };
-
-    const result = await executePluginCommand({
-      command: {
-        name: "accountcheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
-      channel: "line",
-      senderId: "U123",
-      isAuthorizedSender: true,
-      commandBody: "/accountcheck",
-      config: {} as never,
-      from: "line:user:U1234567890abcdef1234567890abcdef",
-    });
+    const result = await execute();
 
     expect(result).toEqual({ text: "ok" });
+    expect(handler).toHaveBeenCalledTimes(1);
     expect(receivedCtx?.accountId).toBe("work");
     expect(seenPolicyContext).toMatchObject({
       principal: {
         kind: "sender",
         provider: "line",
+        accountId: "work",
         senderId: "U123",
         isAuthorizedSender: true,
       },
     });
-    expect(seenPolicyContext).not.toHaveProperty("principal.accountId");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

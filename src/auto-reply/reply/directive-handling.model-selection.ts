@@ -7,10 +7,28 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProfileOverride } from "./directive-handling.auth-profile.js";
+import {
+  applyModelRuntimeDirective,
+  resolveModelRuntimeDirective,
+  type ModelRuntimeDirectiveResolution,
+} from "./directive-handling.model-runtime.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
+
+export type PreparedModelDirectiveEffect =
+  | { kind: "none" }
+  | { kind: "invalid"; errorText: string }
+  | {
+      kind: "selection";
+      modelSelection: ModelDirectiveSelection;
+      profileOverride?: string;
+      runtimeResolution: Exclude<ModelRuntimeDirectiveResolution, { kind: "invalid" }>;
+      runtime: string;
+    };
 
 function resolveStoredNumericProfileModelDirective(params: { raw: string; agentDir: string }): {
   modelRaw: string;
@@ -110,17 +128,6 @@ export function resolveModelSelectionFromDirective(params: {
     useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
   let modelSelection: ModelDirectiveSelection | undefined;
 
-  if (/^[0-9]+$/.test(raw)) {
-    return {
-      errorText: [
-        "Numeric model selection is not supported in chat.",
-        "",
-        "Browse: /models or /models <provider>",
-        "Switch: /model <provider/model>",
-      ].join("\n"),
-    };
-  }
-
   const explicit = resolveModelRefFromString({
     raw: modelRaw,
     defaultProvider: params.defaultProvider,
@@ -141,6 +148,19 @@ export function resolveModelSelectionFromDirective(params: {
         ...(explicit.alias ? { alias: explicit.alias } : {}),
       };
     }
+  }
+
+  // Configured aliases may be numeric (for example a channel picker value).
+  // Reject only an unresolved bare number, never an alias already bound above.
+  if (!modelSelection && /^[0-9]+$/.test(raw)) {
+    return {
+      errorText: [
+        "Numeric model selection is not supported in chat.",
+        "",
+        "Browse: /models or /models <provider>",
+        "Switch: /model <provider/model>",
+      ].join("\n"),
+    };
   }
 
   if (!modelSelection) {
@@ -182,4 +202,73 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   return { modelSelection, profileOverride };
+}
+
+/** Resolves the exact model/profile/runtime effect before policy or session mutation. */
+export function prepareModelDirectiveEffect(params: {
+  directives: InlineDirectives;
+  effectiveModelDirective?: string;
+  cfg: OpenClawConfig;
+  agentDir: string;
+  agentId?: string;
+  sessionKey?: string;
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+  defaultProvider: string;
+  defaultModel: string;
+  aliasIndex: ModelAliasIndex;
+  allowedModelKeys: Set<string>;
+  allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
+  provider: string;
+}): PreparedModelDirectiveEffect {
+  if (!params.directives.hasModelDirective || !params.effectiveModelDirective) {
+    return { kind: "none" };
+  }
+  const modelResolution = resolveModelSelectionFromDirective({
+    directives: {
+      ...params.directives,
+      rawModelDirective: params.effectiveModelDirective,
+    },
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    agentId: params.agentId,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+    aliasIndex: params.aliasIndex,
+    allowedModelKeys: params.allowedModelKeys,
+    allowedModelCatalog: params.allowedModelCatalog,
+    provider: params.provider,
+  });
+  if (modelResolution.errorText) {
+    return { kind: "invalid", errorText: modelResolution.errorText };
+  }
+  if (!modelResolution.modelSelection) {
+    return { kind: "none" };
+  }
+  const runtimeResolution = resolveModelRuntimeDirective({
+    rawRuntime: params.directives.rawModelRuntime,
+    provider: modelResolution.modelSelection.provider,
+    cfg: params.cfg,
+    sessionEntry: params.sessionEntry,
+  });
+  if (runtimeResolution.kind === "invalid") {
+    return { kind: "invalid", errorText: runtimeResolution.errorText };
+  }
+  const prospectiveSessionEntry = { ...params.sessionEntry };
+  applyModelRuntimeDirective(prospectiveSessionEntry, runtimeResolution);
+  return {
+    kind: "selection",
+    modelSelection: modelResolution.modelSelection,
+    ...(modelResolution.profileOverride
+      ? { profileOverride: modelResolution.profileOverride }
+      : {}),
+    runtimeResolution,
+    runtime: resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: modelResolution.modelSelection.provider,
+      modelId: modelResolution.modelSelection.model,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: prospectiveSessionEntry,
+    }),
+  };
 }

@@ -2,6 +2,7 @@ import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/c
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { SavedMedia } from "../../media/store.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
@@ -10,6 +11,7 @@ import {
   type OffloadedRef,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
+import { createGatewayOperatorTurnAuthority } from "../operator-turn-authority.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -113,6 +115,7 @@ function buildChatSendMessageContext(params: {
   systemInputProvenance?: InputProvenance;
   systemProvenanceReceipt?: string;
   toolBindings?: Readonly<Record<string, unknown>>;
+  turnAuthority: TurnAuthoritySnapshot;
 }) {
   const commandBody = params.parsedMessage;
   const commandSource =
@@ -177,6 +180,7 @@ function buildChatSendMessageContext(params: {
     GatewayClientScopes: params.client?.connect?.scopes ?? [],
     GatewayClientCaps: params.client?.connect?.caps ?? [],
     GatewayRunToolBindings: params.toolBindings,
+    TurnAuthority: params.turnAuthority,
   };
   if (params.mediaPathOffloadPaths.length > 0) {
     // Pre-staged offloads must use the channel media fields and marker so the
@@ -196,6 +200,27 @@ function buildChatSendMessageContext(params: {
   };
 }
 
+/** Issue operator authority before attachment, transcript, ACK, or dispatch effects. */
+export function createChatSendTurnAuthority(params: {
+  request: Pick<NormalizedChatSendRequest, "toolBindings">;
+  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
+  admission: Pick<AdmittedChatSend, "admittedSessionId" | "originatingRoute">;
+  client: GatewayRequestHandlerOptions["client"];
+}): TurnAuthoritySnapshot {
+  const { originatingTo, messageThreadId } = params.admission.originatingRoute;
+  return createGatewayOperatorTurnAuthority({
+    client: params.client,
+    agentId: params.session.agentId,
+    sessionKey: params.session.sessionKey,
+    sessionId: params.admission.admittedSessionId,
+    runId: params.session.clientRunId,
+    conversationId: originatingTo ?? params.session.sessionKey,
+    threadId: messageThreadId,
+    trigger: "gateway",
+    capability: params.request.toolBindings ?? null,
+  });
+}
+
 /** Assemble transcript media and the portable inbound context after chat.send ACK. */
 export function prepareChatSendUserTurn(params: {
   request: Pick<
@@ -212,9 +237,11 @@ export function prepareChatSendUserTurn(params: {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
+  turnAuthority: TurnAuthoritySnapshot;
   userTurn: ChatSendUserTurnInputController;
 }) {
-  const { request, session, admission, attachments, client, logGateway, userTurn } = params;
+  const { request, session, admission, attachments, client, logGateway, turnAuthority, userTurn } =
+    params;
   const persistedImagesPromise = persistChatSendImages({
     images: attachments.parsedImages,
     imageOrder: attachments.imageOrder,
@@ -263,6 +290,7 @@ export function prepareChatSendUserTurn(params: {
     systemInputProvenance: request.systemInputProvenance,
     systemProvenanceReceipt: request.systemProvenanceReceipt,
     toolBindings: request.toolBindings,
+    turnAuthority,
   });
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
     type.startsWith("image/"),

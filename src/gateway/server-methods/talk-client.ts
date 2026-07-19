@@ -20,6 +20,7 @@ import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } from "../../talk/describe-view-tool.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import { createGatewayOperatorTurnAuthority } from "../operator-turn-authority.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -267,6 +268,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         sessionKey: params.sessionKey,
         text: params.text,
         mode: params.mode,
+        turnAuthority: createGatewayOperatorTurnAuthority({
+          client,
+          config: context.getRuntimeConfig(),
+          sessionKey: params.sessionKey,
+          conversationId: params.sessionKey,
+          trigger: "talk.client.steer",
+        }),
       });
       respond(true, result, undefined);
     } catch (err) {

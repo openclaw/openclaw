@@ -22,6 +22,7 @@ import {
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 
+const resolveTurnAuthorityAuthorizationMock = vi.hoisted(() => vi.fn());
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
 const getSharedCodexAppServerClientMock = vi.fn();
@@ -91,6 +92,11 @@ vi.mock("./provider-capabilities.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  resolveTurnAuthorityAuthorization: resolveTurnAuthorityAuthorizationMock,
 }));
 
 const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
@@ -510,6 +516,7 @@ async function runSideQuestionWithManagedWebSearchCall(
 
 describe("runCodexAppServerSideQuestion", () => {
   beforeEach(() => {
+    resolveTurnAuthorityAuthorizationMock.mockReset();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
@@ -577,6 +584,9 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     const client = createFakeClient();
+    const authorization = { principal: { kind: "operator" } } as const;
+    const turnAuthority = { authorization } as never;
+    resolveTurnAuthorityAuthorizationMock.mockReturnValueOnce(authorization);
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const result = await runCodexAppServerSideQuestion(
@@ -601,6 +611,7 @@ describe("runCodexAppServerSideQuestion", () => {
         senderUsername: "rosita",
         senderE164: "+15550001",
         senderIsOwner: true,
+        turnAuthority,
       }),
     );
 
@@ -733,6 +744,7 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+    expect(toolOptions?.turnAuthority).toBe(turnAuthority);
   });
 
   it("rebinds side-question handlers when selection retry replaces the client", async () => {
@@ -1431,7 +1443,7 @@ describe("runCodexAppServerSideQuestion", () => {
     ).toBeUndefined();
   });
 
-  it("forces side-thread PreToolUse authorization when the optional relay is disabled", async () => {
+  it("disables Codex-native side questions while authorization policy is active", async () => {
     const registry = createMockPluginRegistry([]);
     registry.authorizationPolicies.push({
       pluginId: "sender-access",
@@ -1444,46 +1456,6 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     initializeGlobalHookRunner(registry);
     const client = createFakeClient();
-    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
-      if (method === "thread/fork") {
-        const config = (requestParams as { config?: Record<string, unknown> }).config;
-        expect(config?.["hooks.PreToolUse"]).not.toEqual([]);
-        const relayId = extractRelayIdFromThreadConfig(config);
-        expect(
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-        ).toMatchObject({
-          allowedEvents: ["pre_tool_use", "post_tool_use"],
-          authorization: {
-            principal: {
-              kind: "sender",
-              provider: "discord",
-              accountId: "molty",
-              senderId: "maintainer-1",
-              senderIsOwner: false,
-              isAuthorizedSender: true,
-              roleIds: ["maintainers", "write"],
-            },
-            conversationId: "maintenance",
-            threadId: "thread-1",
-          },
-        });
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        queueMicrotask(() => {
-          client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
-          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-        });
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     await expect(
@@ -1501,7 +1473,8 @@ describe("runCodexAppServerSideQuestion", () => {
         }),
         { nativeHookRelay: { enabled: false, events: ["post_tool_use"] } },
       ),
-    ).resolves.toEqual({ text: "Side answer." });
+    ).rejects.toThrow("effective tool policy restricts Codex native tools");
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("omits the loop-detection PreToolUse subprocess for side threads when disabled", async () => {

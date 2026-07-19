@@ -363,6 +363,7 @@ async function finalizeLineInboundContext(params: {
     MediaTypes: params.media.types,
     ...params.locationContext,
     CommandAuthorized: params.commandAuthorized,
+    InboundAccessAuthorized: true,
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
     GroupSystemPrompt: params.source.isGroup

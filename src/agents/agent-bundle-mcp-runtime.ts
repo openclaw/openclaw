@@ -27,6 +27,7 @@ import {
   peekSessionMcpRuntime,
   rememberAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForAgentSessionKey,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-manager-api.js";
 import {
@@ -960,6 +961,7 @@ export {
   rememberAdvertisedScopedMcpCatalog,
   resolveSessionMcpConfigSummary,
   retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForAgentSessionKey,
   retireSessionMcpRuntimeForSessionKey,
 };
 export { createSessionMcpRuntimeManager };

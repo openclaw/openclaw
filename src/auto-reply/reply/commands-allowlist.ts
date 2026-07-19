@@ -23,6 +23,7 @@ import {
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
+  resolveGatewayOperatorScopes,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { applyAllowlistConfigMutation, AutoReplyConfigMutationError } from "./config-mutations.js";
@@ -516,7 +517,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       channel: params.command.channel,
       originChannelId,
       originAccountId,
-      gatewayClientScopes: params.ctx.GatewayClientScopes,
+      gatewayClientScopes: resolveGatewayOperatorScopes(params.ctx),
       target: editResult.writeTarget,
       fallbackChannelId: channelId,
     });
@@ -592,7 +593,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     channel: params.command.channel,
     originChannelId,
     originAccountId,
-    gatewayClientScopes: params.ctx.GatewayClientScopes,
+    gatewayClientScopes: resolveGatewayOperatorScopes(params.ctx),
     target: resolveExplicitConfigWriteTarget({ channelId, accountId }),
     fallbackChannelId: channelId,
   });

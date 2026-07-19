@@ -57,6 +57,7 @@ export type VoiceRealtimeSession = {
 };
 
 export type VoiceSessionEntry = {
+  accountId?: string;
   guildId: string;
   guildName?: string;
   channelId: string;

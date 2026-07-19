@@ -2,6 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import { createOperatorTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import {
   expectObjectFields,
   mockCall,
@@ -120,6 +121,16 @@ describe("handleBtwCommand", () => {
 
   it("delegates to the side-question runner", async () => {
     const params = buildParams("/btw what changed?");
+    const admittedAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.admin"],
+      connectionId: "operator-connection",
+      isOwner: true,
+      agentId: "main",
+      sessionKey: "agent:main:original",
+      runId: "original-run",
+      trigger: "gateway",
+    });
+    params.ctx.TurnAuthority = admittedAuthority;
     params.command.senderId = "sender-1";
     params.command.senderIsOwner = true;
     params.command.isAuthorizedSender = true;
@@ -185,14 +196,29 @@ describe("handleBtwCommand", () => {
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
     expect(runnerArgs.opts).toMatchObject({ runId: expect.any(String) });
+    expect(runnerArgs.turnAuthority).not.toBe(admittedAuthority);
+    expect(runnerArgs.turnAuthority).toMatchObject({
+      authorization: {
+        principal: { kind: "operator", scopes: ["operator.admin"], isOwner: true },
+        agentId: "main",
+        sessionKey: "agent:main:runtime-policy",
+        sessionId: "session-1",
+        runId: (runnerArgs.opts as { runId: string }).runId,
+        trigger: "user",
+      },
+      controllerKey: "connection:operator-connection",
+    });
+    expect(resolvedTurnContext?.turnAuthority).toBe(runnerArgs.turnAuthority);
     expect(resolvedTurnContext).toMatchObject({
-      requesterAccountId: "account-1",
-      requesterSenderId: "sender-1",
-      requesterRoleIds: ["maintainers", "write"],
+      requesterSenderIsOwner: true,
       toolContext: {
         currentChannelProvider: "whatsapp",
       },
     });
+    expect(resolvedTurnContext?.requesterAccountId).toBeUndefined();
+    expect(resolvedTurnContext?.requesterSenderId).toBeUndefined();
+    expect(resolvedTurnContext?.requesterIsAuthorizedSender).toBeUndefined();
+    expect(resolvedTurnContext?.requesterRoleIds).toBeUndefined();
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "nothing important", btw: { question: "what changed?" } },

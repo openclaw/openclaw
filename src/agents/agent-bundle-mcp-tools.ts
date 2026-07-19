@@ -6,6 +6,7 @@ export {
   peekSessionMcpRuntime,
   resolveSessionMcpConfigSummary,
   retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForAgentSessionKey,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-runtime.js";
 export {

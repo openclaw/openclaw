@@ -444,10 +444,65 @@ describe("runReplyAgent media path normalization", () => {
       {
         steeringMode: "all",
         isInboundUserMessage: true,
+        steeringAuthorizationAffinity: { incomplete: true },
         taskSuggestionDeliveryMode: "gateway",
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("queues a separate turn when active-run authorization affinity differs", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "authorization_affinity_mismatch",
+      gatewayHealth: "live",
+    }));
+    const sessionKey = "agent:molty:discord:channel:maintenance";
+    const followupRun = createMockFollowupRun({
+      prompt: "check the deployment",
+      originatingChannel: "discord",
+      originatingAccountId: "molty",
+      originatingChatId: "thread-1",
+      originatingParentConversationId: "maintenance",
+      originatingThreadId: "thread-1",
+      run: {
+        agentId: "molty",
+        sessionKey,
+        messageProvider: "discord",
+        agentAccountId: "molty",
+        senderId: "maintainer",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        memberRoleIds: ["writers", "maintainers"],
+      },
+    });
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        sessionKey,
+        queueKey: sessionKey,
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        isRunActive: () => true,
+        followupRun,
+      }),
+    );
+
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+      "session",
+      "check the deployment",
+      {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        steeringAuthorizationAffinity: { incomplete: true },
+        taskSuggestionDeliveryMode: undefined,
+      },
+    );
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock.mock.calls[0]?.[1]).toBe(followupRun);
   });
 
   it("steers ordered current-turn images with the active prompt", async () => {
@@ -480,6 +535,7 @@ describe("runReplyAgent media path normalization", () => {
       {
         steeringMode: "all",
         isInboundUserMessage: true,
+        steeringAuthorizationAffinity: { incomplete: true },
         images,
         taskSuggestionDeliveryMode: undefined,
       },
@@ -549,6 +605,7 @@ describe("runReplyAgent media path normalization", () => {
       {
         steeringMode: "all",
         isInboundUserMessage: true,
+        steeringAuthorizationAffinity: { incomplete: true },
         taskSuggestionDeliveryMode: undefined,
       },
     );

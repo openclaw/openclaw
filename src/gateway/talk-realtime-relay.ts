@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -124,6 +125,11 @@ type RelayAgentControlProviderSubmission = {
   providerResponseStarted: boolean;
 };
 
+type RelayAgentRun = {
+  sessionKey: string;
+  turnAuthority?: TurnAuthoritySnapshot;
+};
+
 type RelaySession = {
   id: string;
   connId: string;
@@ -133,7 +139,7 @@ type RelaySession = {
   sessionKey?: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
-  activeAgentRuns: Map<string, string>;
+  activeAgentRuns: Map<string, RelayAgentRun>;
   activeAgentToolCalls: Map<string, string>;
   completedAgentToolCalls: Set<string>;
   // Cancelled calls retain their original turn long enough to terminally satisfy
@@ -261,10 +267,10 @@ function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload): { drop
 }
 
 function abortRelayAgentRuns(session: RelaySession, reason: string): void {
-  for (const [runId, sessionKey] of session.activeAgentRuns) {
+  for (const [runId, run] of session.activeAgentRuns) {
     abortChatRunById(session.context, {
       runId,
-      sessionKey,
+      sessionKey: run.sessionKey,
       stopReason: reason,
     });
   }
@@ -1343,15 +1349,44 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   sessionKey: string;
   runId: string;
   callId?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  session.activeAgentRuns.set(params.runId, params.sessionKey);
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    throw new Error("Realtime relay agent run requires a session key");
+  }
+  if (session.sessionKey && session.sessionKey !== sessionKey) {
+    throw new Error("Realtime relay agent run session key does not match the relay session");
+  }
+  // Authority belongs to this exact consult. Recording an unattributed successor
+  // must not inherit an earlier run's operator authority.
+  session.activeAgentRuns.set(params.runId, {
+    sessionKey,
+    ...(params.turnAuthority ? { turnAuthority: params.turnAuthority } : {}),
+  });
   if (params.callId?.trim()) {
     session.activeAgentToolCalls.set(params.callId.trim(), params.runId);
   }
   if (!session.sessionKey) {
-    session.sessionKey = params.sessionKey;
+    session.sessionKey = sessionKey;
   }
+}
+
+function resolveRelayAgentRunTurnAuthority(
+  session: RelaySession,
+  sessionKey: string,
+): { matched: boolean; turnAuthority?: TurnAuthoritySnapshot } {
+  let matched = false;
+  let turnAuthority: TurnAuthoritySnapshot | undefined;
+  for (const run of session.activeAgentRuns.values()) {
+    if (run.sessionKey !== sessionKey) {
+      continue;
+    }
+    matched = true;
+    turnAuthority = run.turnAuthority;
+  }
+  return { matched, turnAuthority };
 }
 
 /** Applies realtime voice-control text to the active agent-consult chat run. */
@@ -1361,6 +1396,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   sessionKey?: string;
   text: string;
   mode?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
 }): Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const sessionKey = session.sessionKey;
@@ -1371,11 +1407,15 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   if (requestedSessionKey && requestedSessionKey !== sessionKey) {
     throw new Error("Realtime relay steering session key does not match the relay session");
   }
+  const runAuthority = resolveRelayAgentRunTurnAuthority(session, sessionKey);
   const result = await controlRealtimeVoiceAgentRun({
     sessionKey,
     text: params.text,
     mode: params.mode,
     recentEvents: session.talk.recentEvents,
+    // Relay-owned automatic transcript controls use the exact active consult's
+    // authority. An explicitly unattributed consult stays unattributed.
+    turnAuthority: runAuthority.matched ? runAuthority.turnAuthority : params.turnAuthority,
   });
   if (relaySessions.get(session.id) !== session) {
     throw new Error("Realtime relay session closed while steering the agent run");

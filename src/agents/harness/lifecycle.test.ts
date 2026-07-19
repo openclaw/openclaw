@@ -1,6 +1,7 @@
 // Verifies harness lifecycle capability checks, diagnostics, and trace scoping.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSteeringAuthorizationAffinity } from "../../auto-reply/reply/steering-authorization-affinity.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
@@ -36,9 +37,10 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
+    steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({}),
     messageChannel: "qa",
     trigger: "manual",
-  } as AgentHarnessAttemptParams;
+  };
 }
 
 function createDiagnosticTrace() {

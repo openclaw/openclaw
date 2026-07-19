@@ -9,18 +9,28 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  abortEmbeddedAgentRun,
+  abortActiveRunWithSteeringAuthorization,
+  authorizedActiveRunAbortObservedReplacement,
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearSessionQueuesByAuthorizationAffinity } from "../../auto-reply/reply/queue/cleanup.js";
+import {
+  createSteeringAuthorizationAffinity,
+  resolveSteeringAuthorizationAffinityKey,
+} from "../../auto-reply/reply/steering-authorization-affinity.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { createGatewayOperatorTurnAuthority } from "../operator-turn-authority.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import {
+  resolveAuthorizedRunsForSessionKeys,
+  resolveChatAbortRequester,
+} from "./chat-abort-authorization.js";
 import { chatHandlers } from "./chat.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -146,6 +156,91 @@ export async function interruptSessionRunIfActive(params: {
     return { interrupted: false };
   }
 
+  // Preflight every non-embedded owner before mutating any run. Worker
+  // cancellation remains admin-only; worker-only runs expose no queue lineage,
+  // so their queues stay untouched while chat.abort performs the admin cancel.
+  const requester = resolveChatAbortRequester(params.client);
+  if (hasWorkerRun && !requester.isAdmin) {
+    return {
+      interrupted: true,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
+    };
+  }
+  const controlledAuthorizationAffinityKeys = new Set<string>();
+  if (hasTrackedRun) {
+    const tracked = resolveAuthorizedRunsForSessionKeys({
+      chatAbortControllers: params.context.chatAbortControllers,
+      sessionKeys: [params.requestedKey, params.canonicalKey],
+      sessionIds: [params.sessionId],
+      agentId: params.agentId,
+      defaultAgentId: resolveDefaultAgentId(cfg),
+      requester,
+    });
+    if (
+      tracked.matchedSessionRuns === 0 ||
+      tracked.authorizedRuns.length !== tracked.matchedSessionRuns
+    ) {
+      return {
+        interrupted: true,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
+      };
+    }
+    for (const run of tracked.authorizedRuns) {
+      const affinityKey = resolveSteeringAuthorizationAffinityKey(
+        run.steeringAuthorizationAffinity,
+      );
+      if (!affinityKey) {
+        return {
+          interrupted: true,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
+        };
+      }
+      controlledAuthorizationAffinityKeys.add(affinityKey);
+    }
+  }
+
+  const requesterSteeringAuthorizationAffinity = createSteeringAuthorizationAffinity({
+    turnAuthority: createGatewayOperatorTurnAuthority({
+      client: params.client,
+      agentId: params.agentId,
+      sessionKey: params.canonicalKey,
+      sessionId: params.sessionId,
+      conversationId: params.canonicalKey,
+      trigger: "sessions.steer",
+    }),
+  });
+
+  const embeddedAbortOutcome =
+    hasEmbeddedRun && params.sessionId
+      ? abortActiveRunWithSteeringAuthorization({
+          sessionId: params.sessionId,
+          steeringAuthorizationAffinity: requesterSteeringAuthorizationAffinity,
+          policy: "operator-owner-or-admin",
+        })
+      : undefined;
+  if (embeddedAbortOutcome?.status === "unauthorized") {
+    return {
+      interrupted: true,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
+    };
+  }
+  if (
+    embeddedAbortOutcome &&
+    embeddedAbortOutcome.status !== "aborted" &&
+    embeddedAbortOutcome.status !== "not_active"
+  ) {
+    return {
+      interrupted: true,
+      error: errorShape(ErrorCodes.UNAVAILABLE, "failed to interrupt active session"),
+    };
+  }
+  const embeddedControlledAffinityKey = resolveSteeringAuthorizationAffinityKey(
+    embeddedAbortOutcome?.controlledAuthorizationAffinity,
+  );
+  if (embeddedControlledAffinityKey) {
+    controlledAuthorizationAffinityKeys.add(embeddedControlledAffinityKey);
+  }
+
   if (hasTrackedRun || hasWorkerRun) {
     let abortOk = true;
     let abortError: ReturnType<typeof errorShape> | undefined;
@@ -182,12 +277,24 @@ export async function interruptSessionRunIfActive(params: {
     }
   }
 
-  if (hasEmbeddedRun && params.sessionId) {
-    abortEmbeddedAgentRun(params.sessionId);
+  if (embeddedAbortOutcome && authorizedActiveRunAbortObservedReplacement(embeddedAbortOutcome)) {
+    return {
+      interrupted: true,
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Session ${params.requestedKey} changed while being interrupted; try again.`,
+      ),
+    };
   }
 
-  // Clear queued follow-up work for both requested aliases and the canonical session id.
-  clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
+  // Session aliases can share queues containing turns from multiple controllers.
+  // Remove the controlled run's work even when an owner/admin performed the abort.
+  for (const affinityKey of controlledAuthorizationAffinityKeys) {
+    clearSessionQueuesByAuthorizationAffinity(
+      [params.requestedKey, params.canonicalKey, params.sessionId],
+      affinityKey,
+    );
+  }
 
   if (hasEmbeddedRun && params.sessionId) {
     const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);

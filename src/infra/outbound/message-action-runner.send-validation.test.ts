@@ -127,6 +127,52 @@ describe("runMessageAction send validation", () => {
     },
   );
 
+  it("allows cross-context location-only sends without incompatible marker content", async () => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "channel:C99999999",
+        location: { latitude: 48.858844, longitude: 2.294351 },
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "C99999999",
+      dryRun: true,
+    });
+  });
+
+  it("still enforces cross-context policy for location-only sends", async () => {
+    await expect(
+      runDrySend({
+        cfg: {
+          ...workspaceConfig,
+          tools: {
+            message: {
+              crossContext: { allowWithinProvider: false },
+            },
+          },
+        } as OpenClawConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "channel:C99999999",
+          location: { latitude: 48.858844, longitude: 2.294351 },
+        },
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "workspace",
+        },
+      }),
+    ).rejects.toThrow(/Cross-context messaging denied/);
+  });
+
   it("uses the current internal UI source as the message-tool-only send sink", async () => {
     const result = await runMessageAction({
       cfg: emptyConfig,

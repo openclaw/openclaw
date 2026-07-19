@@ -1,6 +1,7 @@
 // Tests runtime-loaded fast-path command behavior for get-reply.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { classifyTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import {
   createReplyRuntimeMocks,
   createTempHomeHarness,
@@ -9,6 +10,7 @@ import {
   makeReplyConfig,
   resetReplyRuntimeMocks,
 } from "../reply.test-harness.js";
+import type { MsgContext } from "../templating.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
@@ -16,6 +18,35 @@ const agentMocks = createReplyRuntimeMocks();
 const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-getreply-fast-" });
 
 installReplyRuntimeMocks(agentMocks);
+
+function makeLineReplyContext(senderId: string): MsgContext {
+  return {
+    Body: "hello",
+    BodyForAgent: "hello",
+    RawBody: "hello",
+    CommandBody: "hello",
+    From: `line:${senderId}`,
+    To: `line:${senderId}`,
+    SenderId: senderId,
+    AccountId: "default",
+    SessionKey: `agent:main:line:${senderId}`,
+    Provider: "line",
+    Surface: "line",
+    OriginatingChannel: "line",
+    OriginatingTo: `line:${senderId}`,
+    ChatType: "direct",
+    InboundAccessAuthorized: false,
+    CommandAuthorized: false,
+  };
+}
+
+function requireIssuedTurnAuthority(ctx: MsgContext) {
+  const authority = classifyTurnAuthoritySnapshot(ctx.TurnAuthority);
+  if (authority.kind !== "issued") {
+    throw new Error("expected issued turn authority");
+  }
+  return authority.snapshot;
+}
 
 describe("getReplyFromConfig fast-path runtime", () => {
   beforeAll(async () => {
@@ -85,6 +116,51 @@ describe("getReplyFromConfig fast-path runtime", () => {
       expect(text).toBe("ok");
       expect(seenPrompt).toContain("[media attached: 2 files]");
       expect(seenPrompt).toContain("hello");
+    });
+  });
+
+  it("preserves LINE sender identity authorized through commands.allowFrom", async () => {
+    await withTempHome(async (home) => {
+      const senderId = "U1234567890abcdef1234567890abcdef";
+      const ctx = makeLineReplyContext(senderId);
+      const cfg = makeReplyConfig(home) as OpenClawConfig;
+      cfg.commands = { allowFrom: { line: [senderId] } };
+      agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
+
+      await getReplyFromConfig(ctx, {}, cfg);
+
+      const authority = requireIssuedTurnAuthority(ctx);
+      expect(authority.authorization.principal).toEqual({
+        kind: "sender",
+        provider: "line",
+        accountId: "default",
+        senderId,
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+      });
+      expect(authority.controllerKey).toBe(`sender:line:default:${senderId}`);
+    });
+  });
+
+  it("does not preserve unmatched LINE sender identity from commands.allowFrom", async () => {
+    await withTempHome(async (home) => {
+      const senderId = "U00000000000000000000000000000000";
+      const ctx = makeLineReplyContext(senderId);
+      const cfg = makeReplyConfig(home) as OpenClawConfig;
+      cfg.commands = {
+        allowFrom: { line: ["U1234567890abcdef1234567890abcdef"] },
+      };
+      agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
+
+      await getReplyFromConfig(ctx, {}, cfg);
+
+      const authority = requireIssuedTurnAuthority(ctx);
+      expect(authority.authorization.principal).toEqual({
+        kind: "unknown",
+        provider: "line",
+        accountId: "default",
+      });
+      expect(authority.controllerKey).toBeUndefined();
     });
   });
 

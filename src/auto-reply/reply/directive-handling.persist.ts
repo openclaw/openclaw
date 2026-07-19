@@ -25,11 +25,11 @@ import {
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
+import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import {
-  applyModelRuntimeDirective,
-  resolveModelRuntimeDirective,
-} from "./directive-handling.model-runtime.js";
-import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
+  prepareModelDirectiveEffect,
+  type PreparedModelDirectiveEffect,
+} from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
   canPersistSessionDirectiveDefaults,
@@ -76,6 +76,7 @@ export async function persistInlineDirectives(params: {
   markLiveSwitchPending?: boolean;
   modelCatalog?: ModelCatalogEntry[];
   thinkingCatalog?: ModelCatalogEntry[];
+  modelDirectiveEffect?: PreparedModelDirectiveEffect;
 }): Promise<{
   provider: string;
   model: string;
@@ -137,36 +138,35 @@ export async function persistInlineDirectives(params: {
     directives.hasModelDirective && params.effectiveModelDirective
       ? params.effectiveModelDirective
       : undefined;
-  const modelResolution = modelDirective
-    ? resolveModelSelectionFromDirective({
-        directives: {
-          ...directives,
-          hasModelDirective: true,
-          rawModelDirective: modelDirective,
-        },
-        cfg,
-        agentDir,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        allowedModelKeys,
-        allowedModelCatalog: params.modelCatalog ?? [],
-        provider,
-        agentId: activeAgentId,
-      })
-    : undefined;
-  const modelRuntimeResolution = modelResolution?.modelSelection
-    ? resolveModelRuntimeDirective({
-        rawRuntime: directives.rawModelRuntime,
-        provider: modelResolution.modelSelection.provider,
-        cfg,
-        sessionEntry,
-      })
-    : ({ kind: "unchanged" } as const);
+  const modelDirectiveEffect =
+    params.modelDirectiveEffect ??
+    prepareModelDirectiveEffect({
+      directives,
+      effectiveModelDirective: modelDirective,
+      cfg,
+      agentDir,
+      agentId: activeAgentId,
+      sessionKey,
+      sessionEntry,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys,
+      allowedModelCatalog: params.modelCatalog ?? [],
+      provider,
+    });
+  const modelSelection =
+    modelDirectiveEffect.kind === "selection" ? modelDirectiveEffect.modelSelection : undefined;
+  const profileOverride =
+    modelDirectiveEffect.kind === "selection" ? modelDirectiveEffect.profileOverride : undefined;
+  const modelRuntimeResolution =
+    modelDirectiveEffect.kind === "selection"
+      ? modelDirectiveEffect.runtimeResolution
+      : ({ kind: "unchanged" } as const);
   let thinkingErrorText: string | undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
-    const resolvedProvider = modelResolution?.modelSelection?.provider ?? provider;
-    const resolvedModel = modelResolution?.modelSelection?.model ?? model;
+    const resolvedProvider = modelSelection?.provider ?? provider;
+    const resolvedModel = modelSelection?.model ?? model;
     const prospectiveSessionEntry = { ...sessionEntry };
     applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
     const prospectiveThinkingRuntime = resolveEffectiveAgentRuntime({
@@ -190,8 +190,7 @@ export async function persistInlineDirectives(params: {
     }
   }
   const errorText =
-    modelResolution?.errorText ??
-    (modelRuntimeResolution.kind === "invalid" ? modelRuntimeResolution.errorText : undefined) ??
+    (modelDirectiveEffect.kind === "invalid" ? modelDirectiveEffect.errorText : undefined) ??
     thinkingErrorText;
   let modelRuntimeApplied = false;
 
@@ -291,11 +290,11 @@ export async function persistInlineDirectives(params: {
     let modelUpdated = false;
     let modelApplied = true;
     let modelSwitchEvent: { alias?: string; label: string } | undefined;
-    if (modelDirective && modelResolution?.modelSelection) {
+    if (modelDirective && modelSelection) {
       const appliedModelOverride = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
-        selection: modelResolution.modelSelection,
-        profileOverride: modelResolution.profileOverride,
+        selection: modelSelection,
+        profileOverride,
         markLiveSwitchPending: params.markLiveSwitchPending,
       });
       const appliedRuntimeOverride = applyModelRuntimeDirective(
@@ -303,8 +302,8 @@ export async function persistInlineDirectives(params: {
         modelRuntimeResolution,
       );
       modelUpdated = appliedModelOverride.updated || appliedRuntimeOverride.updated;
-      provider = modelResolution.modelSelection.provider;
-      model = modelResolution.modelSelection.model;
+      provider = modelSelection.provider;
+      model = modelSelection.model;
       const thinkingRuntime = resolveEffectiveAgentRuntime({
         cfg,
         provider,
@@ -346,9 +345,7 @@ export async function persistInlineDirectives(params: {
       if (nextLabel !== initialModelLabel) {
         modelSwitchEvent = {
           label: nextLabel,
-          ...(modelResolution.modelSelection.alias
-            ? { alias: modelResolution.modelSelection.alias }
-            : {}),
+          ...(modelSelection.alias ? { alias: modelSelection.alias } : {}),
         };
       }
       // Explicit model selections must still perform the atomic persisted

@@ -1,3 +1,4 @@
+import { createSteeringAuthorizationAffinity } from "../../../auto-reply/reply/steering-authorization-affinity.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
@@ -160,7 +161,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
+  const steeringAuthorizationAffinity = createSteeringAuthorizationAffinity({
+    turnAuthority: params.turnAuthority,
+  });
   const rawAttempt = await runEmbeddedAttemptWithBackend({
+    steeringAuthorizationAffinity,
+    turnAuthority: params.turnAuthority,
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
     conversationRecall: params.conversationRecall,
@@ -187,8 +193,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    isAuthorizedSender: params.isAuthorizedSender,
     approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     currentChannelId: params.currentChannelId,
+    parentConversationId: params.parentConversationId,
     chatId: params.chatId,
     channelContext: params.channelContext,
     currentMessagingTarget: params.currentMessagingTarget,

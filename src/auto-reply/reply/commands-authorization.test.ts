@@ -3,12 +3,14 @@ import type { AuthorizationPolicyHandler } from "../../plugins/authorization-pol
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOperatorTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { MsgContext } from "../templating.js";
 import {
   authorizeCoreCommand,
   authorizeCoreCommandName,
   shouldAuthorizeCoreCommandTurn,
 } from "./commands-authorization.js";
+import { buildCommandContext } from "./commands-context.js";
 import type { CommandContext } from "./commands-types.js";
 
 function command(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -36,6 +38,7 @@ function context(): MsgContext {
     AccountId: "default",
     SenderId: "maintainer-1",
     NativeChannelId: "maintenance",
+    OriginatingTo: "channel:maintenance",
     MessageThreadId: "thread-1",
     ThreadParentId: "maintenance",
     CommandSource: "native",
@@ -48,6 +51,172 @@ afterEach(() => {
 });
 
 describe("core command authorization", () => {
+  it("uses the immutable Gateway operator authority for admin and write callers", async () => {
+    const seen: unknown[] = [];
+    const handler = vi.fn<AuthorizationPolicyHandler<"command.invoke">>((_request, auth) => {
+      seen.push(auth.principal);
+      return { effect: "pass" };
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "operator-access",
+      source: "test",
+      policy: {
+        id: "operator-access",
+        description: "Capture operator authority",
+        handlers: { "command.invoke": handler },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    for (const [scope, connectionId] of [
+      ["operator.admin", "admin-conn"],
+      ["operator.write", "write-conn"],
+    ] as const) {
+      const ctx = context();
+      ctx.TurnAuthority = createOperatorTurnAuthoritySnapshot({
+        scopes: [scope],
+        pairedClientId: "paired-ui",
+        connectionId,
+        isOwner: scope === "operator.admin",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        trigger: "gateway",
+      });
+      await authorizeCoreCommand({ command: command(), ctx, agentId: "main" });
+    }
+
+    expect(seen).toEqual([
+      {
+        kind: "operator",
+        scopes: ["operator.admin"],
+        clientId: "paired-ui",
+        isOwner: true,
+      },
+      {
+        kind: "operator",
+        scopes: ["operator.write"],
+        clientId: "paired-ui",
+        isOwner: false,
+      },
+    ]);
+  });
+
+  it("rebinds immutable authority to the canonical command target", async () => {
+    const seen: unknown[] = [];
+    const handler = vi.fn<AuthorizationPolicyHandler<"command.invoke">>((_request, auth) => {
+      seen.push(auth);
+      return { effect: "pass" };
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "operator-access",
+      source: "test",
+      policy: {
+        id: "operator-access",
+        description: "Capture canonical command target",
+        handlers: { "command.invoke": handler },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const ctx = context();
+    const sourceAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      pairedClientId: "paired-ui",
+      connectionId: "writer-conn",
+      agentId: "source-agent",
+      sessionKey: "agent:source-agent:source",
+      sessionId: "source-session",
+      runId: "source-run",
+      conversationId: "maintenance",
+      parentConversationId: "maintenance-parent",
+      threadId: "thread-1",
+      trigger: "gateway",
+    });
+    ctx.TurnAuthority = sourceAuthority;
+
+    await authorizeCoreCommandName({
+      command: command(),
+      ctx,
+      commandName: "restart",
+      agentId: "target-agent",
+      sessionKey: "agent:target-agent:maintenance",
+      sessionId: "target-session",
+      runId: "command-run",
+    });
+
+    expect(seen).toEqual([
+      {
+        ...sourceAuthority.authorization,
+        agentId: "target-agent",
+        sessionKey: "agent:target-agent:maintenance",
+        sessionId: "target-session",
+        runId: "command-run",
+        trigger: "command",
+      },
+    ]);
+    expect(sourceAuthority.authorization).toMatchObject({
+      agentId: "source-agent",
+      sessionKey: "agent:source-agent:source",
+      sessionId: "source-session",
+      runId: "source-run",
+      trigger: "gateway",
+    });
+  });
+
+  it("does not fall back to mutable sender facts for an unissued authority snapshot", async () => {
+    const handler = vi.fn<AuthorizationPolicyHandler<"command.invoke">>(() => ({
+      effect: "pass",
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "sender-access",
+        description: "Capture any legacy fallback",
+        handlers: { "command.invoke": handler },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const ctx = context();
+    ctx.TurnAuthority = {
+      authorization: {
+        principal: {
+          kind: "operator",
+          scopes: ["operator.write"],
+        },
+      },
+    };
+
+    const result = await authorizeCoreCommand({
+      command: command({ senderIsOwner: true }),
+      ctx,
+      agentId: "main",
+    });
+
+    expect(result).toMatchObject({
+      matched: true,
+      allowed: false,
+      denial: { code: "turn-authority-invalid" },
+    });
+    expect(
+      buildCommandContext({
+        ctx,
+        cfg: {},
+        agentId: "main",
+        isGroup: false,
+        triggerBodyNormalized: "/restart",
+        commandAuthorized: true,
+      }),
+    ).toMatchObject({
+      senderId: undefined,
+      senderIsOwner: false,
+      isAuthorizedSender: false,
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("skips disabled ordinary text commands but keeps host-handled controls protected", () => {
     expect(
       shouldAuthorizeCoreCommandTurn({
@@ -118,6 +287,57 @@ describe("core command authorization", () => {
         threadId: "thread-1",
         trigger: "command",
       },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("denies an ordinary Slack command scoped to a transport-only thread", async () => {
+    const handler = vi.fn<AuthorizationPolicyHandler<"command.invoke">>((_request, auth) =>
+      auth.principal.kind === "sender" &&
+      auth.principal.provider === "slack" &&
+      auth.threadId === "1712345678.000100"
+        ? { effect: "deny", code: "thread-denied" }
+        : { effect: "pass" },
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "thread-access",
+        description: "Deny commands in one Slack thread",
+        handlers: { "command.invoke": handler },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const ctx = context();
+    ctx.Provider = "slack";
+    ctx.NativeChannelId = "CMAINTENANCE";
+    ctx.OriginatingTo = "channel:CMAINTENANCE";
+    ctx.MessageThreadId = undefined;
+    ctx.TransportThreadId = "1712345678.000100";
+
+    const result = await authorizeCoreCommand({
+      command: command({
+        surface: "slack",
+        channel: "slack",
+        channelId: "slack",
+        from: "slack:channel:CMAINTENANCE",
+        to: "slack:channel:CMAINTENANCE",
+      }),
+      ctx,
+      agentId: "main",
+    });
+
+    expect(result).toMatchObject({
+      matched: true,
+      allowed: false,
+      commandKey: "restart",
+      denial: { code: "thread-denied" },
+    });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ commandName: "restart" }),
+      expect.objectContaining({ threadId: "1712345678.000100" }),
       expect.any(AbortSignal),
     );
   });

@@ -2,7 +2,9 @@
 import { isCommandFlagEnabled, type CommandFlagKey } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { classifyTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 
@@ -53,7 +55,7 @@ export function requireGatewayClientScope(
     missingText: string;
   },
 ): CommandHandlerResult | null {
-  const scopes = params.ctx.GatewayClientScopes;
+  const scopes = resolveGatewayOperatorScopes(params.ctx);
   if (!Array.isArray(scopes)) {
     return null;
   }
@@ -67,6 +69,23 @@ export function requireGatewayClientScope(
     shouldContinue: false,
     reply: { text: config.missingText },
   };
+}
+
+/** Immutable operator scopes win over mutable compatibility fields. */
+export function resolveGatewayOperatorScopes(ctx: MsgContext): string[] | undefined {
+  const classifiedAuthority = classifyTurnAuthoritySnapshot(ctx.TurnAuthority);
+  if (classifiedAuthority.kind === "invalid") {
+    return [];
+  }
+  if (classifiedAuthority.kind === "issued") {
+    const principal = classifiedAuthority.snapshot.authorization.principal;
+    return principal.kind === "operator" ? [...principal.scopes] : undefined;
+  }
+  return Array.isArray(ctx.GatewayClientScopes) ? [...ctx.GatewayClientScopes] : undefined;
+}
+
+export function hasGatewayOperatorScope(ctx: MsgContext, scope: string): boolean {
+  return resolveGatewayOperatorScopes(ctx)?.includes(scope) === true;
 }
 
 export function buildDisabledCommandReply(params: {

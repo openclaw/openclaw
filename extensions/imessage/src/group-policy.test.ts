@@ -72,15 +72,33 @@ describe("imessage group policy", () => {
           groups: {
             exact: {
               tools: { deny: ["exec"] },
-              toolsBySender: { "channel:imessage:alice": { allow: ["message.send"] } },
+              toolsBySender: { "channel:discord:alice": { allow: ["message.send"] } },
             },
           },
         },
       },
     } as OpenClawConfig;
 
-    expect(resolveIMessageGroupToolPolicy({ cfg, groupId: "exact", senderId: "alice" })).toEqual({
+    expect(
+      resolveIMessageGroupToolPolicy({
+        cfg,
+        groupId: "exact",
+        senderMessageProvider: "discord",
+        senderId: "alice",
+      }),
+    ).toEqual({
       allow: ["message.send"],
     });
+    expect(resolveIMessageGroupToolPolicy({ cfg, groupId: "exact", senderId: "alice" })).toEqual({
+      deny: ["exec"],
+    });
+    expect(
+      resolveIMessageGroupToolPolicy({
+        cfg,
+        groupId: "exact",
+        senderMessageProvider: null,
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
   });
 });

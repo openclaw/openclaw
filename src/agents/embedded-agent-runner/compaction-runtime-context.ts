@@ -5,6 +5,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -42,8 +43,14 @@ type EmbeddedCompactionRuntimeContext = {
   agentDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  turnAuthority?: TurnAuthoritySnapshot;
   senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
+  memberRoleIds?: string[];
   senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
   provider?: string;
   runtimeProvider?: string;
   model?: string;
@@ -283,8 +290,14 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   agentDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  turnAuthority?: TurnAuthoritySnapshot;
   senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
+  memberRoleIds?: string[];
   senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   provider?: string | null;
   modelId?: string | null;
   harnessRuntime?: string | null;
@@ -343,8 +356,14 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     agentDir: params.agentDir,
     config: params.config,
     skillsSnapshot: params.skillsSnapshot,
+    turnAuthority: params.turnAuthority,
     senderIsOwner: params.senderIsOwner,
+    isAuthorizedSender: params.isAuthorizedSender,
+    memberRoleIds: params.memberRoleIds,
     senderId: params.senderId ?? undefined,
+    senderName: params.senderName ?? undefined,
+    senderUsername: params.senderUsername ?? undefined,
+    senderE164: params.senderE164 ?? undefined,
     provider: resolved.provider,
     runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,

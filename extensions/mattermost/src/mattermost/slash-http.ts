@@ -857,6 +857,7 @@ async function handleSlashCommandAsync(params: {
     Timestamp: Date.now(),
     WasMentioned: true,
     CommandAuthorized: commandAuthorized,
+    InboundAccessAuthorized: true,
     CommandSource: "native" as const,
     OriginatingChannel: "mattermost" as const,
     OriginatingTo: to,

@@ -17,7 +17,10 @@ import {
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
-import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
+import {
+  resolveRouteBoundSenderToolPolicyIdentity,
+  resolveSenderToolPolicy,
+} from "../agents/sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -58,6 +61,10 @@ import {
 } from "../security/dangerous-tools.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import {
+  resolveAuthorizationRequesterIdentity,
+  type AuthorizationRequesterIdentity,
+} from "./authorization-requester-identity.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -109,6 +116,8 @@ export function resolveGatewayScopedTools(params: {
   spawnedBy?: string;
   /** Authenticated caller identity forwarded into tools with nested effects. */
   authorization?: AuthorizationInvocationContext;
+  /** Legacy permits supplemental sender aliases only when no turn authority was issued. */
+  requesterIdentitySource?: "authority" | "legacy";
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const {
@@ -132,6 +141,47 @@ export function resolveGatewayScopedTools(params: {
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const surface = params.surface ?? "http";
   const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
+  const authorizationRequester = resolveAuthorizationRequesterIdentity(params.authorization);
+  // An issued principal is authoritative even if a stale legacy hint survives
+  // transport. Only a host-built unknown principal may keep separately marked
+  // legacy sender selectors; those selectors never confer ownership or roles.
+  const useAuthorizationRequester =
+    authorizationRequester !== undefined &&
+    (params.requesterIdentitySource !== "legacy" || authorizationRequester.kind !== "unknown");
+  const requester: AuthorizationRequesterIdentity =
+    useAuthorizationRequester && authorizationRequester
+      ? authorizationRequester
+      : {
+          kind: "sender" as const,
+          messageProvider: params.messageProvider,
+          accountId: params.accountId,
+          senderId: params.channelContext?.sender?.id,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          senderIsOwner: params.authorization ? false : params.senderIsOwner === true,
+        };
+  const senderPolicyIdentity = resolveRouteBoundSenderToolPolicyIdentity({
+    routeMessageProvider: params.messageProvider,
+    routeAccountId: params.accountId,
+    senderMessageProvider: requester.messageProvider,
+    senderAccountId: requester.accountId,
+    requireRouteBinding: useAuthorizationRequester && requester.kind === "sender",
+    senderId: requester.senderId,
+    senderName: requester.senderName,
+    senderUsername: requester.senderUsername,
+    senderE164: requester.senderE164,
+  });
+  // Route chat metadata remains transport-owned. Authenticated authority owns
+  // every sender field and strips unattested aliases before policy/tool use.
+  const requesterChannelContext = useAuthorizationRequester
+    ? requester.senderId || params.channelContext?.chat
+      ? {
+          ...(requester.senderId ? { sender: { id: requester.senderId } } : {}),
+          ...(params.channelContext?.chat ? { chat: params.channelContext.chat } : {}),
+        }
+      : undefined
+    : params.channelContext;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
   const messageProvider = params.messageProvider?.trim().toLowerCase();
   const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
@@ -150,39 +200,42 @@ export function resolveGatewayScopedTools(params: {
     ...gatewayRequestedTools,
     ...runtimeAlsoAllow,
   ]);
-  const senderId = params.channelContext?.sender?.id;
+  const senderId = requester.senderId;
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
     sessionKey: runtimePolicySessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
+    senderMessageProvider: senderPolicyIdentity.messageProvider,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.accountId ?? null,
-    senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
+    senderId: senderPolicyIdentity.senderId,
+    senderName: senderPolicyIdentity.senderName,
+    senderUsername: senderPolicyIdentity.senderUsername,
+    senderE164: senderPolicyIdentity.senderE164,
   });
   // Only immutable Gateway-launched grants can opt into node exec. Match the
   // embedded runner's wildcard sender policy while preserving owner WebChat.
   const isOwnerInternalSession =
     nodeExecSurface &&
-    params.senderIsOwner === true &&
+    requester.senderIsOwner &&
     normalizeMessageChannel(params.messageProvider) === INTERNAL_MESSAGE_CHANNEL;
   const shouldResolveSenderPolicy = nodeExecSurface ? !isOwnerInternalSession : Boolean(senderId);
-  const senderPolicy = shouldResolveSenderPolicy
-    ? resolveSenderToolPolicy({
-        config: params.cfg,
-        agentId,
-        messageProvider: params.messageProvider,
-        senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      })
-    : undefined;
+  const senderPolicy = !senderPolicyIdentity.routeBound
+    ? { deny: ["*"] }
+    : shouldResolveSenderPolicy
+      ? resolveSenderToolPolicy({
+          config: params.cfg,
+          agentId,
+          messageProvider: senderPolicyIdentity.messageProvider,
+          senderId: senderPolicyIdentity.senderId,
+          senderName: senderPolicyIdentity.senderName,
+          senderUsername: senderPolicyIdentity.senderUsername,
+          senderE164: senderPolicyIdentity.senderE164,
+        })
+      : undefined;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: runtimePolicySessionKey,
@@ -211,10 +264,7 @@ export function resolveGatewayScopedTools(params: {
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
-  const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
-      ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
-      : [];
+  const ownerOnlyGatewayDeny = requester.senderIsOwner ? [] : [...GATEWAY_OWNER_ONLY_CORE_TOOLS];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
@@ -277,7 +327,8 @@ export function resolveGatewayScopedTools(params: {
     sessionId: params.sessionId,
     onYield: params.onYield,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    senderIsOwner: params.senderIsOwner,
+    senderIsOwner: requester.senderIsOwner,
+    requesterSenderId: requester.senderId,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
@@ -307,6 +358,14 @@ export function resolveGatewayScopedTools(params: {
       : undefined,
     inheritedToolAllowlist,
     inheritedToolDenylist,
+    agentMemberRoleIds: requester.roleIds ? [...requester.roleIds] : undefined,
+    authorization: params.authorization
+      ? {
+          ...params.authorization,
+          agentId,
+          sessionKey: params.sessionKey,
+        }
+      : undefined,
     beforeToolCallHookContext: params.authorization
       ? {
           authorization: {
@@ -374,7 +433,7 @@ export function resolveGatewayScopedTools(params: {
             messageProvider: params.messageProvider,
             currentChannelId: params.currentChannelId ?? params.agentTo,
             currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
-            channelContext: params.channelContext,
+            channelContext: requesterChannelContext,
             accountId: params.accountId,
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             backgroundMs: execConfig?.backgroundMs,

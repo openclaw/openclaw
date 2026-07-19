@@ -1,6 +1,12 @@
 /** Session MCP runtime manager: get-or-create and requester-scoped install orchestration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  normalizeAgentId,
+  normalizeOptionalAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
+import {
   createCombinedSessionMcpRuntime,
   isCombinedSessionMcpRuntime,
 } from "./agent-bundle-mcp-combined.js";
@@ -43,6 +49,40 @@ function resolveCreateSessionMcpRuntime(
   return resolved;
 }
 
+/** Qualifies unscoped keys and rejects conflicting scoped owners before runtime lookup. */
+function resolveAgentBoundSessionKey(agentId: string, sessionKey: string): string | undefined {
+  const normalizedAgentId = normalizeOptionalAgentId(agentId);
+  if (!normalizedAgentId) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed && normalizeAgentId(parsed.agentId) !== normalizedAgentId) {
+    return undefined;
+  }
+  if (!parsed && sessionKey.trim().toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  return toAgentStoreSessionKey({ agentId: normalizedAgentId, requestKey: sessionKey });
+}
+
+function resolveAgentBoundSessionKeyForCreation(
+  agentId: string | undefined,
+  sessionKey: string,
+): string | undefined {
+  const normalizedAgentId = normalizeOptionalAgentId(agentId);
+  if (!normalizedAgentId) {
+    const parsed = parseAgentSessionKey(sessionKey);
+    return parsed ? resolveAgentBoundSessionKey(parsed.agentId, sessionKey) : undefined;
+  }
+  const bindingKey = resolveAgentBoundSessionKey(normalizedAgentId, sessionKey);
+  if (!bindingKey) {
+    throw new Error(
+      `Session MCP runtime agent "${normalizedAgentId}" does not match session key "${sessionKey}"`,
+    );
+  }
+  return bindingKey;
+}
+
 export function createSessionMcpRuntimeManager(
   opts: SessionMcpRuntimeManagerOpts = {},
 ): SessionMcpRuntimeManager {
@@ -52,16 +92,74 @@ export function createSessionMcpRuntimeManager(
   );
   const lifecycle = createSessionMcpRuntimeManagerLifecycle(store);
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
+  const rememberSessionKeyOwnerBinding = (params: {
+    sessionKey: string;
+    ownerKey: string;
+    sessionId: string;
+  }) => {
+    const bindings =
+      store.sessionIdsBySessionKeyOwner.get(params.sessionKey) ?? new Map<string, string>();
+    bindings.set(params.ownerKey, params.sessionId);
+    store.sessionIdsBySessionKeyOwner.set(params.sessionKey, bindings);
+  };
+  const resolveUniqueSessionId = (sessionKey: string): string | undefined => {
+    const bindings = store.sessionIdsBySessionKeyOwner.get(sessionKey);
+    if (!bindings) {
+      return undefined;
+    }
+    const sessionIds = new Set(bindings.values());
+    return sessionIds.size === 1 ? sessionIds.values().next().value : undefined;
+  };
+  const rememberSessionBinding = (params: {
+    sessionKey: string;
+    sessionId: string;
+    agentBoundSessionKey?: string;
+  }) => {
+    const ownerKey = params.agentBoundSessionKey ?? `session-id:${params.sessionId}`;
+    rememberSessionKeyOwnerBinding({
+      sessionKey: params.sessionKey,
+      ownerKey,
+      sessionId: params.sessionId,
+    });
+    if (params.agentBoundSessionKey && params.agentBoundSessionKey !== params.sessionKey) {
+      rememberSessionKeyOwnerBinding({
+        sessionKey: params.agentBoundSessionKey,
+        ownerKey,
+        sessionId: params.sessionId,
+      });
+    }
+  };
+  const rememberSuccessfulSessionBinding = (params: {
+    sessionId: string;
+    sessionKey?: string;
+    agentBoundSessionKey?: string;
+    runtime: SessionMcpRuntime;
+  }): SessionMcpRuntime => {
+    if (!params.sessionKey) {
+      return params.runtime;
+    }
+    // Disposal can race a completed create/reuse. Commit synchronously only
+    // while this session still owns a managed runtime, or stale keys resurrect.
+    if (lifecycle.runtimeKeysForSessionId(params.sessionId).length === 0) {
+      return params.runtime;
+    }
+    rememberSessionBinding({
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      ...(params.agentBoundSessionKey ? { agentBoundSessionKey: params.agentBoundSessionKey } : {}),
+    });
+    return params.runtime;
+  };
 
   const manager: SessionMcpRuntimeManager = {
     async getOrCreate(params) {
+      const agentBoundSessionKey = params.sessionKey
+        ? resolveAgentBoundSessionKeyForCreation(params.agentId, params.sessionKey)
+        : undefined;
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
       await lifecycle.sweepIdleRuntimes();
       if (idleTtlMs > 0) {
         lifecycle.ensureIdleSweepTimer();
-      }
-      if (params.sessionKey) {
-        store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
 
       const fullConfig = loadSessionMcpConfig({
@@ -80,7 +178,7 @@ export function createSessionMcpRuntimeManager(
       const hasRequesterScoped = requesterScopedServerNames.length > 0;
 
       if (!hasRequesterScoped) {
-        return await install.getOrCreateRuntimeEntry({
+        const runtime = await install.getOrCreateRuntimeEntry({
           runtimeKey: params.sessionId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
@@ -90,6 +188,12 @@ export function createSessionMcpRuntimeManager(
           manifestRegistry: params.manifestRegistry,
           idleTtlMs,
           safeServerNamesByServer,
+        });
+        return rememberSuccessfulSessionBinding({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentBoundSessionKey,
+          runtime,
         });
       }
 
@@ -180,7 +284,7 @@ export function createSessionMcpRuntimeManager(
       }
 
       if (parts.length === 0) {
-        return (
+        const runtime =
           emptyStaticRuntime ??
           (await install.getOrCreateRuntimeEntry({
             runtimeKey: params.sessionId,
@@ -193,28 +297,39 @@ export function createSessionMcpRuntimeManager(
             idleTtlMs,
             includeServerNames: new Set(),
             safeServerNamesByServer,
-          }))
-        );
+          }));
+        return rememberSuccessfulSessionBinding({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentBoundSessionKey,
+          runtime,
+        });
       }
 
-      return createCombinedSessionMcpRuntime({
+      const runtime = createCombinedSessionMcpRuntime({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         parts,
       });
+      return rememberSuccessfulSessionBinding({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentBoundSessionKey,
+        runtime,
+      });
     },
     async getOrCreateRequesterScoped(params) {
       // Scoped-only path for shared-thread harnesses: never open static transports
       // (those stay harness-native) so we do not double-connect.
+      const agentBoundSessionKey = params.sessionKey
+        ? resolveAgentBoundSessionKeyForCreation(params.agentId, params.sessionKey)
+        : undefined;
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
       await lifecycle.sweepIdleRuntimes();
       if (idleTtlMs > 0) {
         lifecycle.ensureIdleSweepTimer();
-      }
-      if (params.sessionKey) {
-        store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
       const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
       if (!requesterSenderId) {
@@ -282,21 +397,31 @@ export function createSessionMcpRuntimeManager(
       );
       if (scopedRuntime) {
         await lifecycle.enforceRequesterRuntimeCap(params.sessionId, runtimeKey);
+        return rememberSuccessfulSessionBinding({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentBoundSessionKey,
+          runtime: scopedRuntime,
+        });
       }
-      return scopedRuntime;
+      return undefined;
     },
     rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,
     bindSessionKey(sessionKey, sessionId) {
-      store.sessionIdBySessionKey.set(sessionKey, sessionId);
+      rememberSessionBinding({ sessionKey, sessionId });
     },
     resolveSessionId(sessionKey) {
-      return store.sessionIdBySessionKey.get(sessionKey);
+      return resolveUniqueSessionId(sessionKey);
+    },
+    resolveAgentSessionId(agentId, sessionKey) {
+      const bindingKey = resolveAgentBoundSessionKey(agentId, sessionKey);
+      return bindingKey ? resolveUniqueSessionId(bindingKey) : undefined;
     },
     peekSession(params) {
       const sessionId =
         params.sessionId ??
-        (params.sessionKey ? store.sessionIdBySessionKey.get(params.sessionKey) : undefined);
+        (params.sessionKey ? resolveUniqueSessionId(params.sessionKey) : undefined);
       return sessionId ? store.runtimesBySessionId.get(sessionId) : undefined;
     },
     async disposeSession(sessionId) {
@@ -362,7 +487,7 @@ export function createSessionMcpRuntimeManager(
       store.createInFlight.clear();
       const runtimes = Array.from(store.runtimesBySessionId.values());
       store.runtimesBySessionId.clear();
-      store.sessionIdBySessionKey.clear();
+      store.sessionIdsBySessionKeyOwner.clear();
       store.idleTtlMsBySessionId.clear();
       store.deferredRetirementSessionIds.clear();
       store.requiredRetirementSessionIds.clear();
@@ -399,7 +524,7 @@ export function createSessionMcpRuntimeManager(
       connectionMeta: store.connectionMetaByRuntimeKey.size,
       createInFlight: store.createInFlight.size,
       requesterWorkChains: store.requesterWorkChains.size,
-      sessionKeys: store.sessionIdBySessionKey.size,
+      sessionKeys: store.sessionIdsBySessionKeyOwner.size,
       idleTtl: store.idleTtlMsBySessionId.size,
       deferredRetirement: store.deferredRetirementSessionIds.size,
       advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,

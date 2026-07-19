@@ -1698,11 +1698,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           requesterAccountId: trustedTurnContext?.requesterAccountId,
           requesterSenderId: trustedTurnContext?.requesterSenderId,
           messageActionAuthorization: {
+            authorization: trustedTurnContext?.turnAuthority?.authorization,
             requesterAccountId: trustedTurnContext?.requesterAccountId,
             requesterSenderId: trustedTurnContext?.requesterSenderId,
             requesterSenderIsOwner: trustedTurnContext?.requesterSenderIsOwner,
             requesterIsAuthorizedSender: trustedTurnContext?.requesterIsAuthorizedSender,
             requesterRoleIds: trustedTurnContext?.requesterRoleIds,
+            parentConversationId: trustedTurnContext?.parentConversationId,
             toolContext: trustedTurnContext?.toolContext,
           },
           authorization: options?.authorization,

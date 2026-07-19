@@ -50,6 +50,10 @@ import {
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
 } from "./audio.js";
+import {
+  copyDiscordVoiceIngressAuthorityFacts,
+  resolveDiscordVoiceIngressAuthorityFacts,
+} from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { mergeRealtimePartialTranscript } from "./realtime-transcript.js";
@@ -606,15 +610,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
     this.resetPartialWakeNameTracking();
-    const turn = this.speakerTurns.open(
-      { ...context, userId },
-      {
-        inputDiscordBytes: 0,
-        inputRealtimeBytes: 0,
-        inputChunks: 0,
-        interruptedPlayback: false,
-      },
-    );
+    const speakerContext = { ...context, userId };
+    copyDiscordVoiceIngressAuthorityFacts(context, speakerContext);
+    const turn = this.speakerTurns.open(speakerContext, {
+      inputDiscordBytes: 0,
+      inputRealtimeBytes: 0,
+      inputChunks: 0,
+      interruptedPlayback: false,
+    });
     return {
       sendInputAudio: (discordPcm48kStereo) =>
         this.sendInputAudioForTurn(turn, discordPcm48kStereo),
@@ -1203,10 +1206,22 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     let result: RealtimeVoiceAgentControlResult;
     try {
       const parsed = parseRealtimeVoiceAgentControlToolArgs(event.args);
+      const speakerContext = this.peekPendingSpeakerTurn()?.context;
       result = await controlRealtimeVoiceAgentRun({
         sessionKey: this.params.entry.route.sessionKey,
         text: parsed.text,
         mode: parsed.mode,
+        ...(speakerContext
+          ? {
+              ingressAuthority: resolveDiscordVoiceIngressAuthorityFacts({
+                context: speakerContext,
+                entry: this.params.entry,
+                userId: speakerContext.userId,
+              }),
+              agentId: this.params.entry.route.agentId,
+              senderIsOwner: speakerContext.senderIsOwner,
+            }
+          : {}),
       });
     } catch (error) {
       await session.submitToolResult(callId, { error: formatErrorMessage(error) });
@@ -1279,6 +1294,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         : undefined;
     const control = await maybeControlDiscordVoiceAgentRun({
       entry: this.params.entry,
+      context: forcedSpeakerContext ?? transcriptAttribution?.context,
+      userId: (forcedSpeakerContext ?? transcriptAttribution?.context)?.userId,
       text: acceptedText,
     }).catch((error: unknown) => {
       logger.warn(

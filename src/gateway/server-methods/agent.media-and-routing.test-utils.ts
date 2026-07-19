@@ -8,6 +8,8 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
+import { isIssuedTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
@@ -1400,6 +1402,7 @@ describe("gateway agent handler", () => {
       };
       allowModelOverride?: boolean;
       senderIsOwner?: boolean;
+      turnAuthority?: TurnAuthoritySnapshot;
     }>();
     expect(callArgs.sessionId).toBe("run-1");
     expect(callArgs.provider).toBe("claude-cli");
@@ -1415,7 +1418,20 @@ describe("gateway agent handler", () => {
       requireExplicitMessageTarget: true,
     });
     expect(callArgs.allowModelOverride).toBe(true);
-    expect(callArgs.senderIsOwner).toBe(true);
+    expect(isIssuedTurnAuthoritySnapshot(callArgs.turnAuthority)).toBe(true);
+    expect(callArgs.turnAuthority).toMatchObject({
+      authorization: {
+        principal: { kind: "service", serviceId: "cron" },
+        agentId: "main",
+        sessionKey,
+        sessionId: "run-1",
+        runId: "cron-media-continuation",
+        conversationId: sessionKey,
+        trigger: "cron",
+      },
+      controllerKey: "service:cron:job-1",
+    });
+    expect(callArgs.senderIsOwner).toBe(false);
   });
 
   it.each([

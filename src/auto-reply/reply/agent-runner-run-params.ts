@@ -1,5 +1,6 @@
-/** Builds embedded-agent run parameters from queued follow-up run state. */
+/** Builds agent run parameters from queued follow-up run state. */
 import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
+import { resolveTurnAuthorityAuthorization } from "../../plugins/turn-authority.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -12,6 +13,27 @@ type ReasoningTagProviderResolver = (
     modelId: string;
   },
 ) => boolean;
+
+/** Preserves host-admitted identity and tool facts across deferred execution. */
+export function buildHostAdmittedRunParams(run: FollowupRun["run"]) {
+  const principal = resolveTurnAuthorityAuthorization(run.turnAuthority)?.principal;
+  const sender = principal?.kind === "sender" ? principal : undefined;
+  const operator = principal?.kind === "operator" ? principal : undefined;
+  const admittedRoleIds = sender?.roleIds ? [...sender.roleIds] : undefined;
+  return {
+    clientCaps: run.clientCaps,
+    turnAuthority: run.turnAuthority,
+    toolBindings: run.toolBindings,
+    senderId: principal ? sender?.senderId : run.senderId,
+    senderName: principal ? sender?.aliases?.name : run.senderName,
+    senderUsername: principal ? sender?.aliases?.username : run.senderUsername,
+    senderE164: principal ? sender?.aliases?.e164 : run.senderE164,
+    senderIsOwner: principal ? (sender?.senderIsOwner ?? operator?.isOwner) : run.senderIsOwner,
+    isAuthorizedSender: principal ? sender?.isAuthorizedSender : run.isAuthorizedSender,
+    memberRoleIds: principal ? admittedRoleIds : run.memberRoleIds,
+    approvalReviewerDeviceId: run.approvalReviewerDeviceId,
+  };
+}
 
 /** Builds model fallback options for an embedded follow-up run. */
 export function resolveModelFallbackOptions(
@@ -97,17 +119,13 @@ export function buildEmbeddedRunBaseParams(params: {
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
-    senderIsOwner: params.run.senderIsOwner,
-    isAuthorizedSender: params.run.isAuthorizedSender,
     channelContext: params.run.channelContext,
-    approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
     silentExpected: params.run.silentExpected,
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
-    clientCaps: params.run.clientCaps,
-    toolBindings: params.run.toolBindings,
+    ...buildHostAdmittedRunParams(params.run),
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     provider: params.provider,
     model: params.model,

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "./config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveChannelGroupToolsPolicy,
   resolveToolsBySender,
 } from "./group-policy.js";
 
@@ -263,6 +264,50 @@ describe("resolveToolsBySender", () => {
         senderId: "user:alice",
       }),
     ).toEqual({ allow: ["exec"] });
+  });
+
+  it("requires an authenticated sender provider for channel-scoped keys", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            room: {
+              tools: { deny: ["exec"] },
+              toolsBySender: {
+                "channel:whatsapp:alice": { allow: ["exec"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupToolsPolicy({
+        cfg,
+        channel: "whatsapp",
+        groupId: "room",
+        messageProvider: "whatsapp",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+    expect(
+      resolveChannelGroupToolsPolicy({
+        cfg,
+        channel: "whatsapp",
+        groupId: "room",
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveChannelGroupToolsPolicy({
+        cfg,
+        channel: "whatsapp",
+        groupId: "room",
+        messageProvider: null,
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
   });
 
   it("keeps legacy colon sender IDs as sender IDs, not channel keys", () => {

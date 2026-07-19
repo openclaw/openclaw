@@ -670,6 +670,12 @@ describe("plugins.entries.*.authorization", () => {
                   {
                     id: "maintainer-control",
                     operations: ["tool.call", "message.action", "command.invoke"],
+                    scope: {
+                      agentIds: ["molty"],
+                      providers: ["discord"],
+                      accountIds: ["molty"],
+                      conversationIds: ["maintenance"],
+                    },
                   },
                 ],
               },
@@ -684,11 +690,42 @@ describe("plugins.entries.*.authorization", () => {
     [{ id: "", operations: ["tool.call"] }],
     [{ id: "maintainer-control", operations: [] }],
     [{ id: "maintainer-control", operations: ["unknown"] }],
+    [{ id: "maintainer-control", operations: ["tool.call"], scope: {} }],
+    [{ id: "maintainer-control", operations: ["tool.call"], scope: { agentIds: [] } }],
+    [{ id: "maintainer-control", operations: ["tool.call"], scope: { unknown: ["value"] } }],
   ])("rejects invalid required policy entries", (requiredPolicies) => {
     expect(
       OpenClawSchema.safeParse({
         plugins: {
           entries: { "sender-access": { authorization: { requiredPolicies } } },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(["__proto__", "constructor", "prototype"])(
+    "rejects blocked plugin entry key %s before parsing",
+    (pluginId) => {
+      const config = JSON.parse(
+        `{"plugins":{"entries":{"${pluginId}":{"authorization":{"requiredPolicies":[{"id":"guard","operations":["tool.call"]}]}}}}}`,
+      );
+
+      expect(OpenClawSchema.safeParse(config).success).toBe(false);
+    },
+  );
+
+  it("rejects plugin entry ids that collide after canonicalization", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        plugins: {
+          entries: {
+            " Sender-Access ": {
+              authorization: {
+                requiredPolicies: [{ id: "guard", operations: ["tool.call"] }],
+              },
+            },
+            "sender-access": { authorization: { requiredPolicies: [] } },
+          },
         },
       }).success,
     ).toBe(false);

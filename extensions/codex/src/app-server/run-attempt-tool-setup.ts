@@ -1,8 +1,12 @@
 import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
   embeddedAgentLog,
+  hasAuthorizationPolicies,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
+  resolveTurnAuthorityAuthorization,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildDynamicTools,
@@ -145,17 +149,62 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ignoreDisableMessageTool: true,
     ignoreRuntimePlan: true,
   });
+  const admittedAuthorization = resolveTurnAuthorityAuthorization(params.turnAuthority);
+  const authorizationPolicyActive = hasAuthorizationPolicies(undefined, params.config);
+  const effectiveAuthorization =
+    admittedAuthorization ??
+    (authorizationPolicyActive
+      ? createAuthorizationInvocationContext({
+          principal: createAuthorizationPrincipal({
+            provider: params.messageProvider ?? params.messageChannel,
+            accountId: params.agentAccountId,
+          }),
+          agentId: authorization.agentId ?? sessionAgentId,
+          sessionKey: authorization.sessionKey ?? sandboxSessionKey,
+          sessionId: authorization.sessionId ?? params.sessionId,
+          runId: authorization.runId ?? params.runId,
+          conversationId: authorization.conversationId ?? hookChannelId,
+          parentConversationId: authorization.parentConversationId,
+          threadId: authorization.threadId,
+          trigger: authorization.trigger,
+        })
+      : authorization);
+  const requesterPrincipal = effectiveAuthorization.principal;
+  const requesterSender = requesterPrincipal.kind === "sender" ? requesterPrincipal : undefined;
+  const requesterOperator = requesterPrincipal.kind === "operator" ? requesterPrincipal : undefined;
+  const requesterSourcePrincipal =
+    requesterPrincipal.kind === "sender" || requesterPrincipal.kind === "unknown"
+      ? requesterPrincipal
+      : undefined;
+  const useLegacySenderFields = admittedAuthorization === undefined && !authorizationPolicyActive;
+  const requesterSourceProvider =
+    requesterSourcePrincipal?.provider ??
+    (useLegacySenderFields ? (params.messageProvider ?? params.messageChannel) : undefined);
+  const requesterSourceAccountId =
+    requesterSourcePrincipal?.accountId ??
+    (useLegacySenderFields ? params.agentAccountId : undefined);
+  const requesterSenderId =
+    requesterSender?.senderId ?? (useLegacySenderFields ? params.senderId : undefined);
+  const requesterSenderName =
+    requesterSender?.aliases?.name ?? (useLegacySenderFields ? params.senderName : undefined);
+  const requesterSenderUsername =
+    requesterSender?.aliases?.username ??
+    (useLegacySenderFields ? params.senderUsername : undefined);
+  const requesterSenderE164 =
+    requesterSender?.aliases?.e164 ?? (useLegacySenderFields ? params.senderE164 : undefined);
   // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
   // Specs come from the session advertised-catalog cache so fingerprints stay stable.
+  // Its account/channel identify the receiving source, while policyContext below
+  // keeps the target delivery route separate.
   const scopedMcpTools = await materializeRequesterScopedMcpToolsForHarnessRun({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: effectiveWorkspace,
     agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
     cfg: params.config,
-    requesterSenderId: params.senderId,
-    agentAccountId: params.agentAccountId,
-    messageChannel: params.messageChannel ?? params.messageProvider,
+    requesterSenderId,
+    agentAccountId: requesterSourceAccountId,
+    messageChannel: requesterSourceProvider,
     reservedToolNames: [
       ...tools.map((tool) => tool.name),
       ...registeredTools.map((tool) => tool.name),
@@ -174,6 +223,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
       agentAccountId: params.agentAccountId,
       messageProvider: params.messageProvider ?? params.messageChannel,
+      senderMessageProvider: requesterSourceProvider,
+      senderAccountId: requesterSourceAccountId,
+      requireSenderRouteBinding:
+        requesterSender !== undefined && admittedAuthorization !== undefined,
       messageChannel: params.messageChannel,
       chatType: params.chatType,
       messageTo: params.messageTo,
@@ -185,13 +238,20 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
-      memberRoleIds: params.memberRoleIds,
+      memberRoleIds:
+        requesterSender?.roleIds ?? (useLegacySenderFields ? params.memberRoleIds : undefined),
       spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
+      senderId: requesterSenderId,
+      senderName: requesterSenderName,
+      senderUsername: requesterSenderUsername,
+      senderE164: requesterSenderE164,
+      senderIsOwner:
+        requesterSender?.senderIsOwner ??
+        requesterOperator?.isOwner ??
+        (useLegacySenderFields ? params.senderIsOwner : undefined),
+      isAuthorizedSender:
+        requesterSender?.isAuthorizedSender ??
+        (useLegacySenderFields ? params.isAuthorizedSender : undefined),
       modelProvider: params.provider,
       modelId: params.modelId,
       modelApi: params.model.api,
@@ -228,7 +288,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       isHostScopedAgentToolActive("openclaw"),
     ),
     hookContext: {
-      authorization,
+      authorization: effectiveAuthorization,
       agentId: sessionAgentId,
       config: params.config,
       workspaceDir: effectiveWorkspace,

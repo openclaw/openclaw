@@ -811,6 +811,35 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("does not steer a restored completion without its process-local parent capability", async () => {
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: true,
+      }),
+      queueEmbeddedAgentMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: { queue: { mode: "steer", debounceMs: 0 } },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-restored-no-capability",
+      requireOriginatingRequesterRunSteeringTarget: true,
+    });
+
+    expectRecordFields(result, { delivered: false, path: "direct" });
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
+
   it("steers active announces with channel-only origins", async () => {
     const callGateway = await deliverSteeredAnnouncement({
       requesterOrigin: {

@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { createOperatorTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
@@ -13,12 +14,30 @@ import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
-  registerTalkRealtimeRelayAgentRun,
+  registerTalkRealtimeRelayAgentRun as registerTalkRealtimeRelayAgentRunRaw,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
+
+const TEST_TALK_CONTROL_AUTHORITY = createOperatorTurnAuthoritySnapshot({
+  scopes: ["operator.admin"],
+  connectionId: "conn-1",
+  agentId: "main",
+  sessionKey: "main",
+  conversationId: "main",
+  trigger: "talk-test",
+});
+
+function registerTalkRealtimeRelayAgentRun(
+  params: Parameters<typeof registerTalkRealtimeRelayAgentRunRaw>[0],
+): void {
+  registerTalkRealtimeRelayAgentRunRaw({
+    ...params,
+    turnAuthority: params.turnAuthority ?? TEST_TALK_CONTROL_AUTHORITY,
+  });
+}
 
 const activeRelaySessions = new Map<string, string>();
 
@@ -2282,6 +2301,78 @@ describe("talk realtime gateway relay", () => {
       type: "tool.progress",
       final: true,
     });
+  });
+
+  it("does not reuse an earlier consult authority for an unattributed successor", async () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun(
+      "embedded-session-1",
+      {
+        queueMessage: vi.fn(async () => undefined),
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort,
+      },
+      "main",
+    );
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn(), chatAbortControllers: new Map() } as never,
+      connId: "conn-1",
+      provider: createIdleRelayProvider(),
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "main",
+    });
+    registerTalkRealtimeRelayAgentRunRaw({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-attributed",
+      turnAuthority: TEST_TALK_CONTROL_AUTHORITY,
+    });
+    registerTalkRealtimeRelayAgentRunRaw({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-unattributed",
+    });
+
+    const result = await steerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      text: "cancel",
+      mode: "cancel",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      aborted: false,
+      reason: "authorization_affinity_mismatch",
+    });
+    expect(abort).not.toHaveBeenCalled();
+  });
+
+  it("rejects an agent run from a different relay session key", () => {
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider: createIdleRelayProvider(),
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:main",
+    });
+
+    expect(() =>
+      registerTalkRealtimeRelayAgentRunRaw({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-1",
+        sessionKey: "agent:other:main",
+        runId: "run-other",
+        turnAuthority: TEST_TALK_CONTROL_AUTHORITY,
+      }),
+    ).toThrow("Realtime relay agent run session key does not match the relay session");
   });
 
   it.each([

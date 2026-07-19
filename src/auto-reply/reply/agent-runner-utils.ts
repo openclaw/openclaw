@@ -42,6 +42,7 @@ type EmbeddedReplyRoute = Pick<
   | "originatingChatType"
   | "originatingThreadId"
   | "originatingReplyToId"
+  | "originatingParentConversationId"
 >;
 
 /** Selects the freshest runtime config usable by queued reply execution. */
@@ -260,6 +261,8 @@ function buildEmbeddedContextFromTemplate(params: {
       normalizeChatType(params.sessionCtx.ChatType) ??
       params.run.chatType,
     MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
+    ThreadParentId:
+      params.replyRoute?.originatingParentConversationId ?? params.sessionCtx.ThreadParentId,
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
   };
   return {
@@ -281,6 +284,7 @@ function buildEmbeddedContextFromTemplate(params: {
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
+    parentConversationId: normalizeOptionalString(sessionCtx.ThreadParentId),
     memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({

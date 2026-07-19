@@ -2,6 +2,7 @@
  * Shared result and attempt types for embedded-agent run internals.
  */
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
+import type { SteeringAuthorizationAffinity } from "../../../auto-reply/reply/steering-authorization-affinity.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
   SessionContextBudgetStatus,
@@ -91,6 +92,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Opaque host-issued authority copied verbatim onto native and embedded active-run handles. */
+  steeringAuthorizationAffinity: SteeringAuthorizationAffinity;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;

@@ -1,29 +1,35 @@
 /**
  * Nested agent-step executor.
  *
- * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
+ * Sends annotated inter-session messages through Gateway admission and reads the assistant reply.
  */
 import crypto from "node:crypto";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
+import { isIssuedTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
+import {
+  normalizeAgentId,
+  normalizeOptionalAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
-import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import { retireSessionMcpRuntimeForAgentSessionKey } from "../agent-bundle-mcp-tools.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
+import { resolveSessionsSendNestedLane } from "./sessions-send-helpers.js";
 
 type GatewayCaller = typeof callGateway;
-type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
 
 const defaultAgentStepDeps = {
-  agentCommandFromIngress: (async (...args) => {
-    const { agentCommandFromIngress } = await import("../../commands/agent.js");
-    return await agentCommandFromIngress(...args);
-  }) as AgentCommandRunner,
   callGateway,
 };
 
 let agentStepDeps: {
-  agentCommandFromIngress: AgentCommandRunner;
   callGateway: GatewayCaller;
 } = defaultAgentStepDeps;
 
@@ -58,6 +64,7 @@ function extractAgentCommandReply(result: unknown): string | undefined {
 /** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(params: {
   sessionKey: string;
+  targetAgentId?: string;
   message: string;
   extraSystemPrompt: string;
   timeoutMs: number;
@@ -67,7 +74,30 @@ export async function runAgentStep(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
 }): Promise<string | undefined> {
+  if (!isIssuedTurnAuthoritySnapshot(params.turnAuthority)) {
+    throw new Error("nested sessions_send agent step requires trusted turn authority");
+  }
+  const sourceAgentId = params.turnAuthority.authorization.agentId;
+  const sourceSessionKey = params.turnAuthority.authorization.sessionKey;
+  if (!sourceAgentId || !sourceSessionKey) {
+    throw new Error("nested sessions_send agent step requires bound source authority");
+  }
+  const targetSessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  const explicitTargetAgentId = normalizeOptionalAgentId(params.targetAgentId);
+  const targetNeedsAgentBinding = !targetSessionAgentId;
+  if (targetNeedsAgentBinding && !explicitTargetAgentId) {
+    throw new Error("nested sessions_send unscoped target requires an explicit agent id");
+  }
+  const targetAgentId = explicitTargetAgentId ?? normalizeAgentId(targetSessionAgentId);
+  if (
+    targetSessionAgentId &&
+    explicitTargetAgentId &&
+    targetAgentId !== normalizeAgentId(targetSessionAgentId)
+  ) {
+    throw new Error("nested sessions_send target agent does not match its session key");
+  }
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
     kind: "inter_session" as const,
@@ -77,44 +107,55 @@ export async function runAgentStep(params: {
   };
   // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
   const message = annotateInterSessionPromptText(params.message, inputProvenance);
-  const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
+  const lane = params.lane ?? resolveSessionsSendNestedLane(params.sessionKey, targetAgentId);
   const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
-  if (params.transcriptMessage !== undefined) {
-    // Transcript-message mode must use the in-process command path to preserve transcript text.
-    const result = await agentStepDeps.agentCommandFromIngress({
-      message,
-      transcriptMessage: params.transcriptMessage,
-      sessionKey: params.sessionKey,
-      deliver: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      channel,
-      lane,
-      runId: stepIdem,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance,
-      allowModelOverride: false,
-    });
-    await retireSessionMcpRuntimeForSessionKey({
+  const transcriptMessage = params.transcriptMessage;
+  const request = {
+    message,
+    sessionKey: params.sessionKey,
+    idempotencyKey: stepIdem,
+    deliver: false,
+    sourceReplyDeliveryMode: "message_tool_only" as const,
+    channel,
+    lane,
+    extraSystemPrompt: params.extraSystemPrompt,
+    inputProvenance,
+    ...(targetNeedsAgentBinding ? { agentId: targetAgentId } : {}),
+    ...(transcriptMessage === "" ? { suppressPromptPersistence: true } : {}),
+  };
+  const agentRuntimeIdentityToken = await mintAgentRuntimeIdentityToken({
+    agentId: sourceAgentId,
+    sessionKey: sourceSessionKey,
+    gatewayMethods: ["agent"],
+    sessionsSendDelegation: {
+      targetAgentId,
+      targetSessionKey: params.sessionKey,
+      request,
+      turnAuthority: params.turnAuthority,
+      ...(transcriptMessage !== undefined && transcriptMessage !== "" ? { transcriptMessage } : {}),
+    },
+  });
+  const response = await agentStepDeps.callGateway({
+    method: "agent",
+    params: request,
+    timeoutMs: transcriptMessage !== undefined ? params.timeoutMs : 10_000,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    clientDisplayName: "agent",
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    scopes: ["operator.write"],
+    requireLocalBackendSharedAuth: true,
+    agentRuntimeIdentityToken,
+    ...(transcriptMessage !== undefined ? { expectFinal: true } : {}),
+  });
+
+  if (transcriptMessage !== undefined) {
+    await retireSessionMcpRuntimeForAgentSessionKey({
+      agentId: targetAgentId,
       sessionKey: params.sessionKey,
       reason: "nested-agent-step-complete",
     });
-    return extractAgentCommandReply(result);
+    return extractAgentCommandReply(response?.result);
   }
-  const response = await agentStepDeps.callGateway({
-    method: "agent",
-    params: {
-      message,
-      sessionKey: params.sessionKey,
-      idempotencyKey: stepIdem,
-      deliver: false,
-      sourceReplyDeliveryMode: "message_tool_only",
-      channel,
-      lane,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance,
-    },
-    timeoutMs: 10_000,
-  });
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
@@ -122,10 +163,12 @@ export async function runAgentStep(params: {
   const result = await waitForAgentRunAndReadUpdatedAssistantReply({
     runId: resolvedRunId,
     sessionKey: params.sessionKey,
+    agentId: targetAgentId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
   });
   if (result.status === "ok" || result.status === "error") {
-    await retireSessionMcpRuntimeForSessionKey({
+    await retireSessionMcpRuntimeForAgentSessionKey({
+      agentId: targetAgentId,
       sessionKey: params.sessionKey,
       reason: "nested-agent-step-complete",
     });
@@ -140,7 +183,6 @@ export async function runAgentStep(params: {
 const testing = {
   setDepsForTest(
     overrides?: Partial<{
-      agentCommandFromIngress: AgentCommandRunner;
       callGateway: GatewayCaller;
     }>,
   ) {

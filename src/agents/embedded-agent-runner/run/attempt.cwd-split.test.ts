@@ -3,6 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createAuthorizationPrincipal } from "../../../plugins/authorization-policy-context.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  createOperatorTurnAuthoritySnapshot,
+  createTurnAuthoritySnapshot,
+} from "../../../plugins/turn-authority.js";
+import type { ResolvedConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -22,11 +30,13 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("uses workspace for bootstrap and cwd for runtime tools", async () => {
@@ -90,6 +100,152 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       currentMessagingTarget: "user:U123",
       nativeChannelId: "oc_native_chat",
     });
+  });
+
+  it("keeps a delegated run profile on the target route and the admitted source sender", async () => {
+    const sessionKey = "agent:main:whatsapp:group:team";
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: createAuthorizationPrincipal({
+        provider: "discord",
+        accountId: "source-account",
+        senderId: "maintainer",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["clawtributors"],
+      }),
+      agentId: "main",
+      sessionKey,
+      trigger: "sessions_send",
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        messageProvider: "whatsapp",
+        agentAccountId: "route-account",
+        senderId: "conflicting-legacy-sender",
+        senderIsOwner: true,
+        memberRoleIds: ["guest"],
+        turnAuthority,
+        disableTools: false,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
+      | { conversationCapabilityProfile?: ResolvedConversationCapabilityProfile }
+      | undefined;
+    const profile = toolsCall?.conversationCapabilityProfile;
+    expect(profile?.serviceIdentity.accountId).toBe("route-account");
+    expect(profile?.conversation.messageProvider).toBe("whatsapp");
+    expect(profile?.conversation.memberRoleIds).toEqual(["clawtributors"]);
+    expect(profile?.sender).toMatchObject({
+      provider: "discord",
+      id: "maintainer",
+      isOwner: false,
+      isAuthorized: true,
+    });
+  });
+
+  it("keeps owner WebChat policy for admitted operator turns", async () => {
+    const sessionKey = "agent:main:main";
+    const turnAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.admin"],
+      connectionId: "owner-webchat",
+      isOwner: true,
+      agentId: "main",
+      sessionKey,
+      trigger: "gateway",
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          tools: { toolsBySender: { "*": { deny: ["exec", "process"] } } },
+        },
+        messageProvider: "webchat",
+        senderIsOwner: false,
+        turnAuthority,
+        disableTools: false,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
+      | { conversationCapabilityProfile?: ResolvedConversationCapabilityProfile }
+      | undefined;
+    const profile = toolsCall?.conversationCapabilityProfile;
+    expect(profile?.conversation.messageProvider).toBe("webchat");
+    expect(profile?.sender).toMatchObject({ provider: "webchat", isOwner: true });
+    expect(profile?.policy.senderPolicy).toBeUndefined();
+  });
+
+  it("keeps late client-tool policy authorization unknown without issued authority", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:discord:channel:maintenance",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        messageProvider: "discord",
+        senderId: "legacy-owner",
+        senderName: "Legacy Owner",
+        senderUsername: "legacy_owner",
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        memberRoleIds: ["admins"],
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "late_policy_probe",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      },
+    });
+
+    const sessionOptions = hoisted.createAgentSessionMock.mock.calls[0]?.[0] as
+      | {
+          customTools?: Array<{
+            name?: string;
+            execute?: (...args: unknown[]) => Promise<unknown>;
+          }>;
+        }
+      | undefined;
+    const clientTool = sessionOptions?.customTools?.find(
+      (tool) => tool.name === "late_policy_probe",
+    );
+    if (!clientTool?.execute) {
+      throw new Error("missing late policy client tool");
+    }
+
+    const principals: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "sender-access",
+        description: "Capture late client authority",
+        handlers: {
+          "tool.call": (_request, context) => {
+            principals.push(context.principal);
+            return { effect: "deny", code: "captured" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const result = await clientTool.execute("call-late-client", {}, undefined, undefined);
+
+    expect(result).toMatchObject({ details: { deniedReason: "authorization-policy" } });
+    expect(principals).toEqual([{ kind: "unknown" }]);
   });
 
   it("skips runtime tool construction when the selected model does not support tools", async () => {

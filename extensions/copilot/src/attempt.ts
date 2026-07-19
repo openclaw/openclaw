@@ -930,6 +930,7 @@ export async function runCopilotAttempt(
       isStreaming: () => !settled && !aborted,
       isCompacting: () => bridge?.isCompacting() ?? false,
       sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+      steeringAuthorizationAffinity: input.steeringAuthorizationAffinity,
       cancel: () => {
         cancelGatewayQuestionBestEffort("run-cancel");
         userInputBridge.cancelPending();

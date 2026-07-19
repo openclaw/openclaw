@@ -1,14 +1,17 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
+  clearActiveEmbeddedRun,
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  queueAgentHarnessMessage,
+  setActiveEmbeddedRun,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
@@ -20,6 +23,14 @@ import type {
 const { loadResearchAutocapture } = vi.hoisted(() => ({
   loadResearchAutocapture: vi.fn(),
 }));
+
+type ActiveHarnessHandle = Parameters<typeof setActiveEmbeddedRun>[1];
+const activeHarnessRuns: Array<{ sessionId: string; handle: ActiveHarnessHandle }> = [];
+
+function registerHarnessRun(sessionId: string, handle: ActiveHarnessHandle): void {
+  activeHarnessRuns.push({ sessionId, handle });
+  setActiveEmbeddedRun(sessionId, handle);
+}
 
 vi.mock("../skills/research/autocapture.js", () => {
   loadResearchAutocapture();
@@ -156,6 +167,12 @@ describe("agent harness runtime SDK facade", () => {
     loadResearchAutocapture.mockClear();
   });
 
+  afterEach(() => {
+    for (const { sessionId, handle } of activeHarnessRuns.splice(0)) {
+      clearActiveEmbeddedRun(sessionId, handle);
+    }
+  });
+
   it("does not load research autocapture when the SDK facade is imported", async () => {
     await import("./agent-harness-runtime.js");
 
@@ -180,6 +197,38 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<
       NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
     >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
+  });
+
+  it("preserves trusted native harness queueing for legacy unattributed handles", () => {
+    const queueMessage = vi.fn(async () => {});
+    const handle: ActiveHarnessHandle = {
+      queueMessage,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    };
+    registerHarnessRun("legacy-harness-run", handle);
+
+    expect(queueAgentHarnessMessage("legacy-harness-run", "continue")).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("bypasses only affinity while retaining native harness input checks", () => {
+    const queueMessage = vi.fn(async () => {});
+    const handle: ActiveHarnessHandle = {
+      queueMessage,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    };
+    registerHarnessRun("harness-input-check", handle);
+
+    expect(
+      queueAgentHarnessMessage("harness-input-check", "inspect", {
+        images: [{ type: "image", data: "png", mimeType: "image/png" }],
+      }),
+    ).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 });
 

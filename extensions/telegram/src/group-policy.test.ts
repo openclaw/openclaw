@@ -156,8 +156,47 @@ describe("resolveTelegramGroupToolPolicy", () => {
       resolveTelegramGroupToolPolicy({
         cfg,
         groupId: "-1001:topic:77",
+        senderMessageProvider: "telegram",
         senderId: "42",
       }),
     ).toEqual({ allow: ["channel-sender"] });
+  });
+
+  it("uses the admitted source provider and rejects channel matches when it is missing", () => {
+    const cfg = createCfg({
+      groups: {
+        "-1001": {
+          tools: { deny: ["exec"] },
+          toolsBySender: {
+            "channel:discord:42": { allow: ["source-sender"] },
+            "channel:telegram:42": { allow: ["route-sender"] },
+          },
+        },
+      },
+    });
+
+    expect(
+      resolveTelegramGroupToolPolicy({
+        cfg,
+        groupId: "-1001:topic:77",
+        senderMessageProvider: "discord",
+        senderId: "42",
+      }),
+    ).toEqual({ allow: ["source-sender"] });
+    expect(
+      resolveTelegramGroupToolPolicy({
+        cfg,
+        groupId: "-1001:topic:77",
+        senderId: "42",
+      }),
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveTelegramGroupToolPolicy({
+        cfg,
+        groupId: "-1001:topic:77",
+        senderMessageProvider: null,
+        senderId: "42",
+      }),
+    ).toEqual({ deny: ["exec"] });
   });
 });

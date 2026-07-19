@@ -9,6 +9,7 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
   buildMcpToolSchema,
@@ -35,6 +36,8 @@ type CachedScopedTools = {
 
 type McpLoopbackScopeParams = {
   cfg: OpenClawConfig;
+  authorization?: AuthorizationInvocationContext;
+  requesterIdentitySource?: "authority" | "legacy";
   sessionKey: string;
   runtimePolicySessionKey?: string;
   agentId?: string;
@@ -122,6 +125,9 @@ export class McpLoopbackToolCache {
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
     // Callers differing only in capabilities must not share cached tool lists.
     const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
+    const authorizationCacheKey = buildAuthorizationCacheKey(params.authorization);
+    const useLegacyRequesterIdentity =
+      !params.authorization || params.requesterIdentitySource === "legacy";
     const cacheKey = [
       params.sessionKey,
       params.runtimePolicySessionKey ?? "",
@@ -129,6 +135,8 @@ export class McpLoopbackToolCache {
       params.sessionId ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
+      authorizationCacheKey,
+      params.requesterIdentitySource ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,
@@ -165,20 +173,22 @@ export class McpLoopbackToolCache {
       params.bashElevated?.fullAccessBlockedReason ?? "",
       params.trigger ?? "",
       params.approvalReviewerDeviceId ?? "",
-      params.channelContext?.sender?.id ?? "",
+      useLegacyRequesterIdentity ? (params.channelContext?.sender?.id ?? "") : "",
       params.channelContext?.chat?.id ?? "",
-      params.senderName ?? "",
-      params.senderUsername ?? "",
-      params.senderE164 ?? "",
+      useLegacyRequesterIdentity ? (params.senderName ?? "") : "",
+      useLegacyRequesterIdentity ? (params.senderUsername ?? "") : "",
+      useLegacyRequesterIdentity ? (params.senderE164 ?? "") : "",
       params.groupId ?? "",
       params.groupChannel ?? "",
       params.groupSpace ?? "",
       params.spawnedBy ?? "",
-      params.senderIsOwner === true
-        ? "owner"
-        : params.senderIsOwner === false
-          ? "non-owner"
-          : "unknown-owner",
+      useLegacyRequesterIdentity
+        ? params.senderIsOwner === true
+          ? "owner"
+          : params.senderIsOwner === false
+            ? "non-owner"
+            : "unknown-owner"
+        : "",
     ].join("\u0000");
     const now = Date.now();
     for (const [key, entry] of this.#entries) {
@@ -211,4 +221,47 @@ export class McpLoopbackToolCache {
     }
     return nextEntry;
   }
+}
+
+function buildAuthorizationCacheKey(
+  authorization: AuthorizationInvocationContext | undefined,
+): string {
+  if (!authorization) {
+    return "";
+  }
+  const principal = authorization.principal;
+  const principalKey =
+    principal.kind === "sender"
+      ? {
+          kind: principal.kind,
+          provider: principal.provider,
+          accountId: principal.accountId,
+          senderId: principal.senderId,
+          senderName: principal.aliases?.name,
+          senderUsername: principal.aliases?.username,
+          senderE164: principal.aliases?.e164,
+          senderIsOwner: principal.senderIsOwner,
+          isAuthorizedSender: principal.isAuthorizedSender,
+          roleIds: principal.roleIds ? [...principal.roleIds].toSorted() : undefined,
+        }
+      : principal.kind === "operator"
+        ? {
+            kind: principal.kind,
+            scopes: [...principal.scopes].toSorted(),
+            clientId: principal.clientId,
+            deviceId: principal.deviceId,
+            isOwner: principal.isOwner,
+          }
+        : { ...principal };
+  return JSON.stringify({
+    principal: principalKey,
+    agentId: authorization.agentId,
+    sessionKey: authorization.sessionKey,
+    sessionId: authorization.sessionId,
+    runId: authorization.runId,
+    conversationId: authorization.conversationId,
+    parentConversationId: authorization.parentConversationId,
+    threadId: authorization.threadId,
+    trigger: authorization.trigger,
+  });
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
 
@@ -7,6 +8,8 @@ export type SessionWorkAdmissionLease = {
   release: () => void;
   released: Promise<void>;
   run: <T>(run: () => Promise<T>) => Promise<T>;
+  /** Attach canonical turn authority once it becomes available after early admission. */
+  setTurnAuthority: (turnAuthority: TurnAuthoritySnapshot) => boolean;
 };
 
 export type HandoffSessionWorkAdmission = {
@@ -14,6 +17,7 @@ export type HandoffSessionWorkAdmission = {
   identities: ReadonlySet<string>;
   interrupt?: () => void;
   interrupted: boolean;
+  turnAuthority?: TurnAuthoritySnapshot;
 };
 
 type SessionWorkAdmissionHandoff = {

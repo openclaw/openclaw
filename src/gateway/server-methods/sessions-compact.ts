@@ -23,6 +23,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
+import { createGatewayOperatorTurnAuthority } from "../operator-turn-authority.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { migrateAndPruneGatewaySessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
@@ -42,7 +43,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionCompactHandlers: GatewayRequestHandlers = {
-  "sessions.compact": async ({ params, respond, context }) => {
+  "sessions.compact": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
@@ -381,6 +382,15 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               sessionKey: target.canonicalKey,
               sessionStoreKey: compactTarget.primaryKey,
               storePath,
+              turnAuthority: createGatewayOperatorTurnAuthority({
+                client,
+                config: cfg,
+                agentId: target.agentId,
+                sessionKey: target.canonicalKey,
+                sessionId,
+                conversationId: target.canonicalKey,
+                trigger: "sessions.compact",
+              }),
             });
           } catch (err) {
             emitCompactionEnd(false, formatErrorMessage(err));

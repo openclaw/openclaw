@@ -21,6 +21,13 @@ import type {
 } from "../get-reply-options.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
+import {
+  steeringAuthorizationAffinityAllowsControl,
+  steeringAuthorizationAffinitiesMatch,
+  type AuthorizedActiveRunAbortOutcome,
+  type SteeringAuthorizationControlPolicy,
+  type SteeringAuthorizationAffinity,
+} from "./steering-authorization-affinity.js";
 
 type ReplyRunKey = string;
 
@@ -41,12 +48,16 @@ export type ReplyBackendQueueMessageOptions = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Identity and policy scope of the human turn requesting active-run injection. */
+  steeringAuthorizationAffinity?: SteeringAuthorizationAffinity;
 };
 
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  /** Immutable identity and policy scope that minted this run's tool capability. */
+  readonly steeringAuthorizationAffinity?: SteeringAuthorizationAffinity;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
   cancel(reason?: ReplyBackendCancelReason): void;
@@ -64,16 +75,28 @@ export type ReplyBackendHandle = {
 type ReplyBackendQueueMessageMismatch =
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
-  | "task_suggestion_delivery_mode_mismatch";
+  | "task_suggestion_delivery_mode_mismatch"
+  | "authorization_affinity_mismatch";
 
 /** Prevents steering a turn into a run that cannot preserve its model-facing input. */
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
     ReplyBackendHandle,
-    "sourceReplyDeliveryMode" | "supportsQueueMessageImages" | "taskSuggestionDeliveryMode"
+    | "sourceReplyDeliveryMode"
+    | "steeringAuthorizationAffinity"
+    | "supportsQueueMessageImages"
+    | "taskSuggestionDeliveryMode"
   >,
   options?: ReplyBackendQueueMessageOptions,
 ): ReplyBackendQueueMessageMismatch | undefined {
+  if (
+    !steeringAuthorizationAffinitiesMatch(
+      backend.steeringAuthorizationAffinity,
+      options?.steeringAuthorizationAffinity,
+    )
+  ) {
+    return "authorization_affinity_mismatch";
+  }
   if (options?.images?.length && backend.supportsQueueMessageImages !== true) {
     return "image_input_unsupported";
   }
@@ -1170,6 +1193,45 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
     return false;
   }
   return operation.abortByUser();
+}
+
+/** Abort the exact reply operation only when its captured turn authority permits control. */
+export function abortReplyRunBySessionIdWithAuthorization(params: {
+  sessionId: string;
+  steeringAuthorizationAffinity?: SteeringAuthorizationAffinity;
+  policy: SteeringAuthorizationControlPolicy;
+}): AuthorizedActiveRunAbortOutcome {
+  const operation = resolveReplyRunForCurrentSessionId(params.sessionId);
+  if (!operation) {
+    return { status: "not_active", replacementObserved: false };
+  }
+  const backend = getAttachedBackend(operation);
+  if (
+    !steeringAuthorizationAffinityAllowsControl({
+      expected: backend?.steeringAuthorizationAffinity,
+      incoming: params.steeringAuthorizationAffinity,
+      policy: params.policy,
+    })
+  ) {
+    return { status: "unauthorized", replacementObserved: false };
+  }
+  if (!isReplyOperationAbortable(operation)) {
+    return { status: "not_abortable", replacementObserved: false };
+  }
+  try {
+    const aborted = operation.abortByUser();
+    const current = resolveReplyRunForCurrentSessionId(params.sessionId);
+    return {
+      status: aborted ? "aborted" : "not_abortable",
+      replacementObserved: current !== undefined && current !== operation,
+      ...(aborted && backend?.steeringAuthorizationAffinity
+        ? { controlledAuthorizationAffinity: backend.steeringAuthorizationAffinity }
+        : {}),
+    };
+  } catch (error) {
+    diag.warn(`authorized abort failed: sessionId=${params.sessionId} err=${String(error)}`);
+    return { status: "failed", replacementObserved: false };
+  }
 }
 
 export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {

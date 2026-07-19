@@ -167,6 +167,7 @@ import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
+import { createSteeringAuthorizationAffinity } from "./steering-authorization-affinity.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   buildStrandedReplyRetryFollowupRun,
@@ -1173,6 +1174,8 @@ export async function runReplyAgent(params: {
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
   shouldFollowup: boolean;
+  /** Authority mismatch/replacement safety may force even reset turns behind the active run. */
+  forceFollowup?: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
   isStreaming: boolean;
@@ -1211,6 +1214,7 @@ export async function runReplyAgent(params: {
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
+    forceFollowup,
     isActive,
     isRunActive,
     opts,
@@ -1260,7 +1264,8 @@ export async function runReplyAgent(params: {
       attributes: traceAttributes,
     });
   const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
-  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
+  const effectiveShouldFollowup =
+    forceFollowup === true || (!effectiveResetTriggered && shouldFollowup);
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -1373,6 +1378,9 @@ export async function runReplyAgent(params: {
         normalizeOptionalString(opts?.runId),
       "steered turn id",
     );
+    const steeringAuthorizationAffinity = createSteeringAuthorizationAffinity({
+      turnAuthority: followupRun.run.turnAuthority,
+    });
     const trigger = "user";
     const hookResult = await runBeforeAgentReplyForTurn({
       runId: steerRunId,
@@ -1414,6 +1422,7 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         isInboundUserMessage: true,
+        ...(steeringAuthorizationAffinity ? { steeringAuthorizationAffinity } : {}),
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
         ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
@@ -1471,7 +1480,7 @@ export async function runReplyAgent(params: {
     isHeartbeat,
     shouldFollowup: effectiveShouldFollowup || shouldQueueAfterSteerRejection,
     queueMode: activeRunQueueMode,
-    resetTriggered: effectiveResetTriggered,
+    resetTriggered: forceFollowup ? false : effectiveResetTriggered,
   });
 
   const baseQueuedRunFollowupTurn = createFollowupRunner({
@@ -1632,6 +1641,7 @@ export async function runReplyAgent(params: {
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,
+      turnAuthority: sessionCtx.TurnAuthority,
       upstreamAbortSignal: opts?.abortSignal,
       onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });

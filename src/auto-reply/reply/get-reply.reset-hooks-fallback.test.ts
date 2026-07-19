@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { AuthorizationPolicyHandler } from "../../plugins/types.js";
 import {
   buildNativeResetContext,
@@ -13,6 +14,14 @@ import {
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+import {
+  REPLY_SESSION_RESET_CONTROL_BUSY_REPLY,
+  ReplySessionResetControlError,
+} from "./session-reset-control.js";
+import {
+  REPLY_SESSION_RESET_TARGET_CHANGED_REPLY,
+  ReplySessionResetTargetChangedError,
+} from "./session-reset-target.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -114,6 +123,93 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
   });
 
+  it("pins the reset identity authorized before session initialization", async () => {
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+
+    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.initSessionState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedResetTarget: {
+          sessionKey: "agent:main:telegram:direct:123",
+          sessionId: "existing-session",
+        },
+        prepareExplicitResetControl: expect.any(Function),
+      }),
+    );
+  });
+
+  it("preflights configured hard reset triggers through the same mutation gate", async () => {
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    const policy = vi.fn<AuthorizationPolicyHandler<"command.invoke">>(() => ({
+      effect: "pass",
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect session rollover",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const ctx = {
+      ...buildNativeResetContext(),
+      Body: "/fresh KeepCase",
+      RawBody: "/fresh KeepCase",
+      CommandBody: "/fresh KeepCase",
+    };
+
+    await getReplyFromConfig(ctx, undefined, {
+      session: { resetTriggers: ["/fresh"] },
+    });
+
+    expect(policy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "command.invoke",
+        phase: "session-mutation",
+        commandName: "new",
+        arguments: { raw: "KeepCase" },
+      }),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123",
+        sessionId: "existing-session",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(mocks.initSessionState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedResetTarget: {
+          sessionKey: "agent:main:telegram:direct:123",
+          sessionId: "existing-session",
+        },
+        prepareExplicitResetControl: expect.any(Function),
+      }),
+    );
+  });
+
+  it("fails closed when the authorized reset target changes before initialization", async () => {
+    mocks.initSessionState.mockRejectedValueOnce(new ReplySessionResetTargetChangedError());
+
+    const reply = await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(reply).toMatchObject({ text: REPLY_SESSION_RESET_TARGET_CHANGED_REPLY });
+    expect(mocks.handleInlineActions).not.toHaveBeenCalled();
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("returns a safe busy reply when active-run reset control cannot complete", async () => {
+    mocks.initSessionState.mockRejectedValueOnce(new ReplySessionResetControlError("busy"));
+
+    const reply = await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(reply).toMatchObject({ text: REPLY_SESSION_RESET_CONTROL_BUSY_REPLY });
+    expect(mocks.handleInlineActions).not.toHaveBeenCalled();
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
   it("denies reset session mutation before session initialization", async () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
     const policy = vi.fn<AuthorizationPolicyHandler<"command.invoke">>((request) =>
@@ -151,6 +247,107 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     expect(reply).toMatchObject({ text: "Command blocked by authorization policy." });
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("rejects a cloned turn authority before session or policy work", async () => {
+    const authority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "telegram",
+        senderId: "123",
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+      },
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:123",
+      conversationId: "123",
+      trigger: "channel",
+    });
+    const policy = vi.fn<AuthorizationPolicyHandler<"command.invoke">>(() => ({
+      effect: "pass",
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect session rollover",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const reply = await getReplyFromConfig(
+      { ...buildNativeResetContext(), TurnAuthority: structuredClone(authority) },
+      undefined,
+      {},
+    );
+
+    expect(reply).toMatchObject({ text: "Command blocked by authorization policy." });
+    expect(policy).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.handleInlineActions).not.toHaveBeenCalled();
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["agent", { agentId: "other" }],
+    ["session", { sessionKey: "agent:main:telegram:direct:other" }],
+    ["conversation", { conversationId: "telegram:other" }],
+  ] as const)("rejects issued authority bound to another %s", async (_label, override) => {
+    const targetSessionKey = "agent:main:telegram:direct:123";
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "telegram",
+        senderId: "123",
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+      },
+      agentId: "main",
+      sessionKey: targetSessionKey,
+      conversationId: targetSessionKey,
+      trigger: "channel",
+      ...override,
+    });
+
+    const reply = await getReplyFromConfig(
+      { ...buildNativeResetContext(), TurnAuthority: turnAuthority },
+      undefined,
+      {},
+    );
+
+    expect(reply).toMatchObject({ text: "Command blocked by authorization policy." });
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(mocks.handleInlineActions).not.toHaveBeenCalled();
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("accepts issued authority already rebound to the resolved reply target", async () => {
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+    const targetSessionKey = "agent:main:telegram:direct:123";
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "telegram",
+        senderId: "123",
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+      },
+      agentId: "main",
+      sessionKey: targetSessionKey,
+      conversationId: targetSessionKey,
+      trigger: "command",
+    });
+    const ctx = { ...buildNativeResetContext(), TurnAuthority: turnAuthority };
+
+    await getReplyFromConfig(ctx, undefined, {});
+
+    expect(ctx.TurnAuthority).toBe(turnAuthority);
+    expect(mocks.initSessionState).toHaveBeenCalledOnce();
+    expect(mocks.handleInlineActions).toHaveBeenCalledOnce();
   });
 
   it("does not use the session-mutation phase for soft reset", async () => {
@@ -192,5 +389,8 @@ describe("getReplyFromConfig reset-hook fallback", () => {
 
     expect(policy).not.toHaveBeenCalled();
     expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
+    expect(mocks.initSessionState).toHaveBeenCalledWith(
+      expect.not.objectContaining({ expectedResetTarget: expect.anything() }),
+    );
   });
 });

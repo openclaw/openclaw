@@ -257,6 +257,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
+    memberRoleIds: params.command.memberRoleIds,
+    senderIsOwner: params.command.senderIsOwner,
+    isAuthorizedSender: params.command.isAuthorizedSender,
+    turnAuthority: params.ctx.TurnAuthority,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       targetSessionEntry,

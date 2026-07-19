@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  hasAuthorizationPolicies,
   isHostScopedAgentToolActive,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
@@ -127,15 +128,17 @@ export async function startOrResumeThread(
       params.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw");
     const ringZeroActive =
       hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
-    if (ringZeroActive && params.nativeCodeModeEnabled !== false) {
-      throw new Error("Codex ring-zero requires native code mode to be disabled");
+    const authorizationPolicyActive = hasAuthorizationPolicies(undefined, params.params.config);
+    const nativeMcpRestrictionActive = ringZeroActive || authorizationPolicyActive;
+    if (nativeMcpRestrictionActive && params.nativeCodeModeEnabled !== false) {
+      throw new Error("Codex native authorization restriction requires native code mode disabled");
     }
-    const ringZeroInheritedMcpServerNames = ringZeroActive
+    const ringZeroInheritedMcpServerNames = nativeMcpRestrictionActive
       ? await lifecycleTiming.measure("ring-zero-mcp-config-read", () =>
           readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal),
         )
       : [];
-    if (ringZeroActive) {
+    if (nativeMcpRestrictionActive) {
       await lifecycleTiming.measure("ring-zero-config-requirements-read", () =>
         assertCodexRingZeroHasNoManagedHooks(params.client, params.signal),
       );

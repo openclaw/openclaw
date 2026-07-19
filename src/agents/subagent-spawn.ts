@@ -39,6 +39,7 @@ import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
+import type { ActiveEmbeddedRunSteeringTarget } from "./embedded-agent-runner/runs.js";
 import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
@@ -187,6 +188,8 @@ type SpawnSubagentContext = {
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /** Exact process-local requester attempt allowed to receive completion. */
+  requesterSteeringTarget?: ActiveEmbeddedRunSteeringTarget;
 };
 
 type SpawnSubagentResult = {
@@ -1659,6 +1662,9 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      ...(ctx.requesterSteeringTarget
+        ? { requesterSteeringTarget: ctx.requesterSteeringTarget }
+        : {}),
     });
   } catch (err) {
     await rollbackPreparedContextEngine(contextEnginePreparation);

@@ -57,7 +57,10 @@ import {
   hasVisibleAgentPayload,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
+import type {
+  ActiveEmbeddedRunSteeringTarget,
+  EmbeddedAgentQueueMessageOutcome,
+} from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { wakeSessionForGeneratedMediaDirectDelivery } from "./generated-media-direct-delivery-wake.js";
 import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
@@ -263,6 +266,11 @@ async function resolveActiveWakeWithRetries(
   message: string,
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
+  queueMessageWithOutcome: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<EmbeddedAgentQueueMessageOutcome> = async (text, options) =>
+    await resolveQueueEmbeddedAgentMessageOutcome(sessionId, text, options),
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
   // Bound the whole active wake by the caller's delivery window. Each retry
   // passes only the remaining window into transcript-commit waiting so a
@@ -285,7 +293,7 @@ async function resolveActiveWakeWithRetries(
       deliveryTimeoutMs: remainingDeliveryTimeoutMs,
     };
   };
-  let outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+  let outcome = await queueMessageWithOutcome(message, currentOptions);
   const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
   let compactionRetryIndex = 0;
   for (;;) {
@@ -299,7 +307,7 @@ async function resolveActiveWakeWithRetries(
       const bestEffortOptions = { ...currentOptions };
       delete bestEffortOptions.waitForTranscriptCommit;
       currentOptions = bestEffortOptions;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      outcome = await queueMessageWithOutcome(message, currentOptions);
       continue;
     }
     if (
@@ -311,7 +319,7 @@ async function resolveActiveWakeWithRetries(
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
       currentOptions = activeRunOptions;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      outcome = await queueMessageWithOutcome(message, currentOptions);
       continue;
     }
     if (outcome.reason === "compacting") {
@@ -349,7 +357,7 @@ async function resolveActiveWakeWithRetries(
       if (!retryOptions) {
         break;
       }
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, retryOptions);
+      outcome = await queueMessageWithOutcome(message, retryOptions);
       continue;
     }
     break;
@@ -761,11 +769,19 @@ async function maybeSteerSubagentAnnounce(params: {
   deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
+  originatingRequesterRunSteeringTarget?: ActiveEmbeddedRunSteeringTarget;
+  requireOriginatingRequesterRunSteeringTarget?: boolean;
   signal?: AbortSignal;
 }): Promise<
   { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
 > {
   if (params.signal?.aborted) {
+    return { status: "none" };
+  }
+  if (
+    params.requireOriginatingRequesterRunSteeringTarget === true &&
+    !params.originatingRequesterRunSteeringTarget
+  ) {
     return { status: "none" };
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
@@ -775,6 +791,13 @@ async function maybeSteerSubagentAnnounce(params: {
     return { status: "none" };
   }
   if (!sessionId || !isActive) {
+    return { status: "none" };
+  }
+  const originatingRequesterRunSteeringTarget = params.originatingRequesterRunSteeringTarget;
+  if (
+    originatingRequesterRunSteeringTarget &&
+    originatingRequesterRunSteeringTarget.sessionId !== sessionId
+  ) {
     return { status: "none" };
   }
 
@@ -797,6 +820,7 @@ async function maybeSteerSubagentAnnounce(params: {
     params.steerMessage,
     queueOptions,
     params.signal,
+    originatingRequesterRunSteeringTarget?.queueMessageWithOutcome,
   );
   if (queueOutcome.queued) {
     return {
@@ -810,6 +834,9 @@ async function maybeSteerSubagentAnnounce(params: {
   // drain its steer queue, so "dropped" would discard the handoff. Report
   // not-active so dispatch takes the direct fallback instead.
   if (queueOutcome.reason === "stale_run") {
+    return { status: "none" };
+  }
+  if (queueOutcome.reason === "authorization_affinity_mismatch") {
     return { status: "none" };
   }
   const currentActivity = resolveRequesterSessionActivity(canonicalKey);
@@ -2184,6 +2211,10 @@ export async function deliverSubagentAnnouncement(params: {
   bestEffortDeliver?: boolean;
   durableGeneratedMediaHandoff?: boolean;
   directIdempotencyKey: string;
+  /** Exact process-local requester attempt that originated the child run. */
+  originatingRequesterRunSteeringTarget?: ActiveEmbeddedRunSteeringTarget;
+  /** Fail closed instead of steering by session lineage when the capability is absent. */
+  requireOriginatingRequesterRunSteeringTarget?: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const durableGeneratedMediaHandoff =
@@ -2311,6 +2342,9 @@ export async function deliverSubagentAnnouncement(params: {
         ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
+        originatingRequesterRunSteeringTarget: params.originatingRequesterRunSteeringTarget,
+        requireOriginatingRequesterRunSteeringTarget:
+          params.requireOriginatingRequesterRunSteeringTarget,
         signal: params.signal,
       }),
     direct: async () =>

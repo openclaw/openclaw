@@ -9,6 +9,10 @@ import {
   type ThinkingCatalogEntry,
 } from "../../thinking.js";
 import {
+  createSteeringAuthorizationAffinity,
+  resolveSteeringAuthorizationAffinityKey,
+} from "../steering-authorization-affinity.js";
+import {
   completeFollowupRunLifecycle,
   type FollowupRun,
   type QueueDropPolicy,
@@ -175,6 +179,140 @@ export function clearFollowupQueue(key: string): number {
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
+  return cleared;
+}
+
+function followupRunMatchesAuthorizationAffinity(
+  run: FollowupRun,
+  authorizationAffinityKey: string,
+): boolean {
+  return (
+    resolveSteeringAuthorizationAffinityKey(
+      createSteeringAuthorizationAffinity({ turnAuthority: run.run.turnAuthority }),
+    ) === authorizationAffinityKey
+  );
+}
+
+/**
+ * Clear only pending work issued to one exact turn authority. In-flight work
+ * stays owned by its drain; the active-run controller is responsible for aborting it.
+ */
+export function clearFollowupQueueByAuthorizationAffinity(
+  key: string,
+  authorizationAffinityKey: string | undefined,
+): number {
+  const cleaned = key.trim();
+  const affinityKey = authorizationAffinityKey?.trim();
+  if (!cleaned || !affinityKey) {
+    return 0;
+  }
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return 0;
+  }
+
+  let cleared = 0;
+  const removeSource = (source: FollowupRun) => {
+    completeFollowupRunLifecycle(source);
+    cleared += 1;
+  };
+  for (let index = queue.items.length - 1; index >= 0; index -= 1) {
+    const item = queue.items[index];
+    if (
+      !item ||
+      queue.inFlight.has(item) ||
+      !followupRunMatchesAuthorizationAffinity(item, affinityKey)
+    ) {
+      continue;
+    }
+    queue.items.splice(index, 1);
+    removeSource(item);
+  }
+  for (let index = queue.summarySources.length - 1; index >= 0; index -= 1) {
+    const source = queue.summarySources[index];
+    if (
+      !source ||
+      queue.activeSummarySources.has(source) ||
+      !followupRunMatchesAuthorizationAffinity(source, affinityKey)
+    ) {
+      continue;
+    }
+    queue.summarySources.splice(index, 1);
+    queue.summaryLines.splice(index, 1);
+    queue.droppedCount = Math.max(0, queue.droppedCount - 1);
+    removeSource(source);
+  }
+  for (let entryIndex = queue.summaryElisions.length - 1; entryIndex >= 0; entryIndex -= 1) {
+    const entry = queue.summaryElisions[entryIndex];
+    if (!entry) {
+      continue;
+    }
+    const matchingSources = entry.sources.filter((source) =>
+      followupRunMatchesAuthorizationAffinity(source, affinityKey),
+    );
+    if (matchingSources.length === 0) {
+      continue;
+    }
+    // Delivery-context elisions are authority-homogeneous. `count` tracks logical
+    // dropped work; retained sources are lifecycle handles and may be capped separately.
+    if (
+      matchingSources.length === entry.sources.length &&
+      matchingSources.every((source) => !queue.activeSummarySources.has(source))
+    ) {
+      queue.summaryElisions.splice(entryIndex, 1);
+      queue.droppedCount = Math.max(0, queue.droppedCount - entry.count);
+      for (const source of entry.sources) {
+        completeFollowupRunLifecycle(source);
+      }
+      cleared += entry.count;
+      continue;
+    }
+    let removedCount = 0;
+    for (let sourceIndex = entry.sources.length - 1; sourceIndex >= 0; sourceIndex -= 1) {
+      const source = entry.sources[sourceIndex];
+      if (
+        !source ||
+        queue.activeSummarySources.has(source) ||
+        !followupRunMatchesAuthorizationAffinity(source, affinityKey)
+      ) {
+        continue;
+      }
+      entry.sources.splice(sourceIndex, 1);
+      completeFollowupRunLifecycle(source);
+      removedCount += 1;
+    }
+    entry.count = Math.max(0, entry.count - removedCount);
+    queue.droppedCount = Math.max(0, queue.droppedCount - removedCount);
+    cleared += removedCount;
+    if (entry.count === 0) {
+      queue.summaryElisions.splice(entryIndex, 1);
+    }
+  }
+
+  if (cleared === 0) {
+    return 0;
+  }
+  const remainingSources = [
+    ...queue.items,
+    ...queue.summarySources,
+    ...queue.summaryElisions.flatMap((entry) => entry.sources),
+  ];
+  const newestRemainingSource = remainingSources.reduce<FollowupRun | undefined>(
+    (newest, source) => (!newest || source.enqueuedAt > newest.enqueuedAt ? source : newest),
+    undefined,
+  );
+  queue.lastRun = newestRemainingSource?.run;
+  queue.lastEnqueuedAt = newestRemainingSource?.enqueuedAt ?? 0;
+
+  if (
+    !queue.draining &&
+    queue.items.length === 0 &&
+    queue.droppedCount === 0 &&
+    queue.inFlight.size === 0
+  ) {
+    queue.abortController.abort();
+    FOLLOWUP_QUEUES.delete(cleaned);
+  }
   return cleared;
 }
 

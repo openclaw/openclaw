@@ -25,6 +25,8 @@ vi.mock("./tool-activity-heartbeat.js", () => ({
 
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 
+const STEERING_AUTHORIZATION_AFFINITY = Object.freeze({ incomplete: true as const });
+
 function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjection[]) {
   const runAbortController = new AbortController();
   return prepareEmbeddedAttemptStream({
@@ -32,6 +34,7 @@ function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjectio
       runId: "run-output-schema",
       sessionId: "session-output-schema",
       sessionKey: "agent:main:main",
+      steeringAuthorizationAffinity: STEERING_AUTHORIZATION_AFFINITY,
     } as never,
     activeSession: { agent: {}, isStreaming: false } as never,
     hookRunner: undefined as never,
@@ -68,6 +71,22 @@ describe("prepareEmbeddedAttemptStream", () => {
       runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
       isCompacting: vi.fn(() => false),
     });
+  });
+
+  it("copies the prepared steering authorization affinity onto the active handle", () => {
+    const prepared = prepareCatalogExecutor([]);
+
+    expect(prepared.queueHandle.steeringAuthorizationAffinity).toBe(
+      STEERING_AUTHORIZATION_AFFINITY,
+    );
+    expect(mocks.setActiveRun).toHaveBeenCalledWith(
+      "session-output-schema",
+      expect.objectContaining({
+        steeringAuthorizationAffinity: STEERING_AUTHORIZATION_AFFINITY,
+      }),
+      "agent:main:main",
+      undefined,
+    );
   });
 
   it("validates hidden tool results before queuing transcript projections", async () => {

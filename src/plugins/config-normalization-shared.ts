@@ -6,6 +6,7 @@ import {
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
@@ -26,6 +27,12 @@ export type NormalizedPluginsConfig = {
         requiredPolicies?: Array<{
           id: string;
           operations: Array<"tool.call" | "message.action" | "command.invoke">;
+          scope?: {
+            agentIds?: string[];
+            providers?: string[];
+            accountIds?: string[];
+            conversationIds?: string[];
+          };
         }>;
       };
       hooks?: {
@@ -104,6 +111,32 @@ function normalizeHookTimeouts(value: unknown): Record<string, number> | undefin
 }
 
 const AUTHORIZATION_OPERATIONS = new Set(["tool.call", "message.action", "command.invoke"]);
+const AUTHORIZATION_OPERATION_ORDER = new Map(
+  [...AUTHORIZATION_OPERATIONS].map((operation, index) => [operation, index]),
+);
+
+type NormalizedAuthorizationPolicyScope = NonNullable<
+  NonNullable<
+    NonNullable<NormalizedPluginsConfig["entries"][string]["authorization"]>["requiredPolicies"]
+  >[number]["scope"]
+>;
+
+function normalizeAuthorizationPolicyScope(
+  value: unknown,
+): NormalizedAuthorizationPolicyScope | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const scope: NormalizedAuthorizationPolicyScope = {};
+  for (const key of ["agentIds", "providers", "accountIds", "conversationIds"] as const) {
+    const entries = [...new Set(normalizeArrayBackedTrimmedStringList(record[key]))].toSorted();
+    if (entries.length > 0) {
+      scope[key] = entries;
+    }
+  }
+  return Object.keys(scope).length > 0 ? scope : undefined;
+}
 
 function normalizeRequiredAuthorizationPolicies(value: unknown) {
   if (!Array.isArray(value)) {
@@ -112,8 +145,14 @@ function normalizeRequiredAuthorizationPolicies(value: unknown) {
   const normalized: Array<{
     id: string;
     operations: Array<"tool.call" | "message.action" | "command.invoke">;
+    scope?: {
+      agentIds?: string[];
+      providers?: string[];
+      accountIds?: string[];
+      conversationIds?: string[];
+    };
   }> = [];
-  const byId = new Map<string, (typeof normalized)[number]>();
+  const byIdAndScope = new Map<string, (typeof normalized)[number]>();
   for (const entry of value) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
@@ -128,17 +167,52 @@ function normalizeRequiredAuthorizationPolicies(value: unknown) {
         typeof operation === "string" && AUTHORIZATION_OPERATIONS.has(operation),
     );
     if (operations.length > 0) {
-      const existing = byId.get(id);
+      const normalizedScope = normalizeAuthorizationPolicyScope(
+        (entry as { scope?: unknown }).scope,
+      );
+      const scopeKey = JSON.stringify(normalizedScope ?? null);
+      const existing = byIdAndScope.get(`${id}\u0000${scopeKey}`);
       if (existing) {
         existing.operations = [...new Set([...existing.operations, ...operations])];
       } else {
-        const policy = { id, operations };
+        const policy = {
+          id,
+          operations,
+          ...(normalizedScope && Object.keys(normalizedScope).length > 0
+            ? { scope: normalizedScope }
+            : {}),
+        };
         normalized.push(policy);
-        byId.set(id, policy);
+        byIdAndScope.set(`${id}\u0000${scopeKey}`, policy);
       }
     }
   }
   return normalized;
+}
+
+function mergeRequiredAuthorizationPolicies(
+  previous: ReturnType<typeof normalizeRequiredAuthorizationPolicies>,
+  next: ReturnType<typeof normalizeRequiredAuthorizationPolicies>,
+) {
+  if (previous === undefined) {
+    return next;
+  }
+  if (next === undefined) {
+    return previous;
+  }
+  const merged = normalizeRequiredAuthorizationPolicies([...previous, ...next]) ?? [];
+  for (const policy of merged) {
+    policy.operations.sort(
+      (left, right) =>
+        (AUTHORIZATION_OPERATION_ORDER.get(left) ?? Number.MAX_SAFE_INTEGER) -
+        (AUTHORIZATION_OPERATION_ORDER.get(right) ?? Number.MAX_SAFE_INTEGER),
+    );
+  }
+  return merged.toSorted((left, right) => {
+    const leftKey = `${left.id}\u0000${JSON.stringify(left.scope ?? null)}`;
+    const rightKey = `${right.id}\u0000${JSON.stringify(right.scope ?? null)}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
 }
 
 function normalizePluginEntries(
@@ -148,14 +222,14 @@ function normalizePluginEntries(
   if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
     return {};
   }
-  const normalized: NormalizedPluginsConfig["entries"] = {};
+  const normalized = Object.create(null) as NormalizedPluginsConfig["entries"];
   for (const [key, value] of Object.entries(entries)) {
     const normalizedKey = normalizePluginId(key);
-    if (!normalizedKey) {
+    if (!normalizedKey || isBlockedObjectKey(normalizedKey)) {
       continue;
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      normalized[normalizedKey] = {};
+      normalized[normalizedKey] ??= {};
       continue;
     }
     const entry = value as Record<string, unknown>;
@@ -173,6 +247,17 @@ function normalizePluginEntries(
     const authorization = hasRequiredAuthorizationPoliciesConfig
       ? { requiredPolicies: requiredAuthorizationPolicies ?? [] }
       : undefined;
+    const previousAuthorization = normalized[normalizedKey]?.authorization;
+    const mergedAuthorization =
+      authorization && previousAuthorization
+        ? {
+            requiredPolicies:
+              mergeRequiredAuthorizationPolicies(
+                previousAuthorization.requiredPolicies,
+                authorization.requiredPolicies,
+              ) ?? [],
+          }
+        : (authorization ?? previousAuthorization);
     const hooksRaw = entry.hooks;
     const hooks =
       hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
@@ -273,7 +358,7 @@ function normalizePluginEntries(
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
-      authorization: authorization ?? normalized[normalizedKey]?.authorization,
+      authorization: mergedAuthorization,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
       llm: normalizedLlm ?? normalized[normalizedKey]?.llm,

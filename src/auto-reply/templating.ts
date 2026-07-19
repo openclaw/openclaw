@@ -5,6 +5,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -304,6 +305,8 @@ export type MsgContext = {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Canonical host-issued authority for this Gateway turn. */
+  TurnAuthority?: TurnAuthoritySnapshot;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */
   GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
   /** Gateway device id allowed to review approvals initiated by this turn. */

@@ -89,6 +89,8 @@ import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { authorizeSealedDeliveryEffects } from "./delivery-queue.js";
 import {
   isOutboundEffectAuthorizationError,
+  materializeOutboundEffectData,
+  materializeOutboundEffectPayload,
   type OutboundEffectAuthorizationBarrierOutcome,
   type OutboundEffectAuthorizationInput,
 } from "./effect-authorization.js";
@@ -168,6 +170,12 @@ const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 const BROADCAST_RESOLVED_TARGET = Symbol("broadcastResolvedTarget");
+const BROADCAST_SINGLE_SEND_OWNERSHIP_FIELDS = [
+  "deliveryIntentId",
+  "deliveryCompletion",
+  "preparedMessageId",
+  "transcriptMirror",
+] as const;
 
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
@@ -186,11 +194,13 @@ export type RunMessageActionParams = {
    * Presence means ambient routing fields must not be used as identity.
    */
   messageActionAuthorization?: {
+    authorization?: AuthorizationInvocationContext;
     requesterAccountId?: string;
     requesterSenderId?: string;
     requesterSenderIsOwner?: boolean;
     requesterIsAuthorizedSender?: boolean;
     requesterRoleIds?: readonly string[];
+    parentConversationId?: string;
     toolContext?: InternalChannelThreadingToolContext;
   };
   /** Host-authenticated principal and source-conversation facts for authorization policies. */
@@ -364,7 +374,7 @@ function buildMessageActionAuthorizationInput(
 ): Record<string, PluginJsonValue> {
   let copied: PluginJsonValue | undefined;
   try {
-    copied = copyAuthorizationJsonValue(input);
+    copied = copyAuthorizationJsonValue(materializeOutboundEffectData(input));
   } catch {
     throw new ToolAuthorizationError(MESSAGE_ACTION_AUTHORIZATION_DENIAL);
   }
@@ -379,32 +389,85 @@ function buildMessageActionAuthorizationInput(
   return copied;
 }
 
+function assertMessageActionAuthorizationBinding(params: {
+  authorization: AuthorizationInvocationContext;
+  resolvedAgentId: string | undefined;
+  sessionKey: string | undefined;
+  sessionId: string | undefined;
+}): void {
+  if (
+    params.authorization.agentId !== params.resolvedAgentId ||
+    params.authorization.sessionKey !== params.sessionKey ||
+    params.authorization.sessionId !== params.sessionId
+  ) {
+    throw new ToolAuthorizationError(MESSAGE_ACTION_AUTHORIZATION_DENIAL);
+  }
+}
+
 function resolveMessageActionAuthorizationContext(
   input: RunMessageActionParams,
+  resolvedAgentId: string | undefined = input.agentId,
 ): AuthorizationInvocationContext {
+  const trusted = input.messageActionAuthorization;
+  if (trusted !== undefined) {
+    if (trusted.authorization) {
+      assertMessageActionAuthorizationBinding({
+        authorization: trusted.authorization,
+        resolvedAgentId,
+        sessionKey: input.sessionKey,
+        sessionId: input.sessionId,
+      });
+      return trusted.authorization;
+    }
+    const toolContext = trusted.toolContext;
+    return createAuthorizationInvocationContext({
+      principal: createAuthorizationPrincipal({
+        provider: toolContext?.currentChannelProvider,
+        accountId: trusted.requesterAccountId,
+        senderId: trusted.requesterSenderId,
+        senderIsOwner: trusted.requesterSenderIsOwner,
+        isAuthorizedSender: trusted.requesterIsAuthorizedSender,
+        roleIds: trusted.requesterRoleIds,
+      }),
+      agentId: resolvedAgentId,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
+      conversationId: toolContext?.currentChannelId ?? toolContext?.currentMessagingTarget,
+      parentConversationId: trusted.parentConversationId,
+      threadId: toolContext?.currentThreadTs,
+    });
+  }
   if (input.authorization) {
+    assertMessageActionAuthorizationBinding({
+      authorization: input.authorization,
+      resolvedAgentId,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
+    });
     return input.authorization;
   }
-  const trusted = input.messageActionAuthorization;
-  const toolContext = trusted?.toolContext;
   return createAuthorizationInvocationContext({
-    principal: createAuthorizationPrincipal({
-      provider: toolContext?.currentChannelProvider,
-      accountId: trusted?.requesterAccountId,
-      senderId: trusted?.requesterSenderId,
-      senderIsOwner: trusted?.requesterSenderIsOwner,
-      isAuthorizedSender: trusted?.requesterIsAuthorizedSender,
-      roleIds: trusted?.requesterRoleIds,
-    }),
-    agentId: input.agentId,
+    principal: createAuthorizationPrincipal({}),
+    agentId: resolvedAgentId,
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
-    conversationId: toolContext?.currentChannelId ?? toolContext?.currentMessagingTarget,
-    threadId: toolContext?.currentThreadTs,
   });
 }
 
 function resolveMessageActionSenderIsOwner(input: RunMessageActionParams): boolean | undefined {
+  if (input.messageActionAuthorization !== undefined) {
+    const principal = input.messageActionAuthorization.authorization?.principal;
+    if (principal?.kind === "sender") {
+      return principal.senderIsOwner;
+    }
+    if (principal?.kind === "operator") {
+      return principal.isOwner;
+    }
+    if (principal) {
+      return false;
+    }
+    return input.messageActionAuthorization.requesterSenderIsOwner;
+  }
   const principal = input.authorization?.principal;
   if (principal?.kind === "sender") {
     return principal.senderIsOwner;
@@ -416,7 +479,258 @@ function resolveMessageActionSenderIsOwner(input: RunMessageActionParams): boole
     // An explicit non-human principal is authoritative. Never merge legacy sender ownership into it.
     return false;
   }
-  return input.messageActionAuthorization?.requesterSenderIsOwner ?? input.senderIsOwner;
+  return input.senderIsOwner;
+}
+
+type CanonicalMessageActionRequesterIdentity = {
+  requesterAccountId?: string;
+  requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
+  requesterSenderIsOwner?: boolean;
+  requesterIsAuthorizedSender?: boolean;
+  requesterRoleIds?: readonly string[];
+};
+
+function projectCanonicalMessageActionRequesterIdentity(
+  authorization: AuthorizationInvocationContext,
+): CanonicalMessageActionRequesterIdentity {
+  const principal = authorization.principal;
+  if (principal.kind === "sender") {
+    return {
+      ...(principal.accountId !== undefined ? { requesterAccountId: principal.accountId } : {}),
+      requesterSenderId: principal.senderId,
+      ...(principal.aliases?.name !== undefined
+        ? { requesterSenderName: principal.aliases.name }
+        : {}),
+      ...(principal.aliases?.username !== undefined
+        ? { requesterSenderUsername: principal.aliases.username }
+        : {}),
+      ...(principal.aliases?.e164 !== undefined
+        ? { requesterSenderE164: principal.aliases.e164 }
+        : {}),
+      ...(principal.senderIsOwner !== undefined
+        ? { requesterSenderIsOwner: principal.senderIsOwner }
+        : {}),
+      ...(principal.isAuthorizedSender !== undefined
+        ? { requesterIsAuthorizedSender: principal.isAuthorizedSender }
+        : {}),
+      ...(principal.roleIds !== undefined ? { requesterRoleIds: principal.roleIds } : {}),
+    };
+  }
+  if (principal.kind === "operator") {
+    return principal.isOwner === undefined ? {} : { requesterSenderIsOwner: principal.isOwner };
+  }
+  if (principal.kind === "unknown") {
+    return {
+      ...(principal.accountId !== undefined ? { requesterAccountId: principal.accountId } : {}),
+      requesterSenderIsOwner: false,
+    };
+  }
+  return { requesterSenderIsOwner: false };
+}
+
+function projectCanonicalMessageActionToolContext(
+  authorization: AuthorizationInvocationContext,
+): InternalChannelThreadingToolContext | undefined {
+  const principal = authorization.principal;
+  const currentChannelProvider =
+    principal.kind === "sender" || principal.kind === "unknown"
+      ? normalizeOptionalLowercaseString(principal.provider)
+      : undefined;
+  const currentChannelId = normalizeOptionalString(authorization.conversationId);
+  const currentThreadTs =
+    typeof authorization.threadId === "number"
+      ? String(authorization.threadId)
+      : normalizeOptionalString(authorization.threadId);
+  if (!currentChannelProvider && !currentChannelId && !currentThreadTs) {
+    return undefined;
+  }
+  return {
+    ...(currentChannelProvider ? { currentChannelProvider } : {}),
+    ...(currentChannelId ? { currentChannelId } : {}),
+    ...(currentThreadTs ? { currentThreadTs } : {}),
+  };
+}
+
+function mergeCanonicalMessageActionToolContext(params: {
+  authorization: AuthorizationInvocationContext;
+  legacy?: InternalChannelThreadingToolContext;
+}): InternalChannelThreadingToolContext | undefined {
+  const canonical = projectCanonicalMessageActionToolContext(params.authorization);
+  if (!params.legacy) {
+    return canonical;
+  }
+
+  const merged = { ...params.legacy };
+  // Canonical absence is meaningful. Start from metadata that has no route
+  // equivalent, then add only route facts present in canonical authority.
+  delete merged.currentChannelProvider;
+  delete merged.currentChannelId;
+  delete merged.currentMessagingTarget;
+  delete merged.currentGraphChannelId;
+  delete merged.currentThreadTs;
+  if (canonical?.currentChannelProvider !== undefined) {
+    merged.currentChannelProvider = canonical.currentChannelProvider;
+  }
+  if (canonical?.currentChannelId !== undefined) {
+    merged.currentChannelId = canonical.currentChannelId;
+  }
+  if (canonical?.currentThreadTs !== undefined) {
+    merged.currentThreadTs = canonical.currentThreadTs;
+  }
+  return merged;
+}
+
+function resolveMessageActionExecutionInput(
+  input: RunMessageActionParams,
+  resolvedAgentId: string | undefined,
+): RunMessageActionParams {
+  const authorizationEnvelope = input.messageActionAuthorization;
+  if (authorizationEnvelope === undefined && input.authorization === undefined) {
+    return input;
+  }
+  const resolved = { ...input };
+  // Host authority is canonical even without a capability envelope. Missing
+  // facts mean unknown; ambient runner and destination fields cannot fill gaps.
+  delete resolved.requesterAccountId;
+  delete resolved.requesterSenderId;
+  delete resolved.requesterSenderName;
+  delete resolved.requesterSenderUsername;
+  delete resolved.requesterSenderE164;
+  delete resolved.senderIsOwner;
+  delete resolved.toolContext;
+  delete resolved.authorization;
+  delete resolved.conversationReadOrigin;
+  const topLevelAuthorization =
+    authorizationEnvelope === undefined ? input.authorization : undefined;
+  const capabilityAuthorization = authorizationEnvelope?.authorization;
+  const canonicalAuthorization = capabilityAuthorization ?? topLevelAuthorization;
+  if (canonicalAuthorization) {
+    // Host-issued authority is bound to one exact execution identity. It may
+    // never be repaired or rebound from ambient runner fields.
+    assertMessageActionAuthorizationBinding({
+      authorization: canonicalAuthorization,
+      resolvedAgentId,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
+    });
+  }
+  if (canonicalAuthorization === undefined) {
+    if (authorizationEnvelope?.requesterAccountId !== undefined) {
+      resolved.requesterAccountId = authorizationEnvelope.requesterAccountId;
+    }
+    if (authorizationEnvelope?.requesterSenderId !== undefined) {
+      resolved.requesterSenderId = authorizationEnvelope.requesterSenderId;
+    }
+    if (authorizationEnvelope?.requesterSenderIsOwner !== undefined) {
+      resolved.senderIsOwner = authorizationEnvelope.requesterSenderIsOwner;
+    }
+    if (authorizationEnvelope?.toolContext !== undefined) {
+      resolved.toolContext = authorizationEnvelope.toolContext;
+    }
+    return resolved;
+  }
+
+  const requester = projectCanonicalMessageActionRequesterIdentity(canonicalAuthorization);
+  const toolContext = mergeCanonicalMessageActionToolContext({
+    authorization: canonicalAuthorization,
+    legacy: authorizationEnvelope?.toolContext,
+  });
+  const parentConversationId =
+    normalizeOptionalString(canonicalAuthorization.parentConversationId) ??
+    normalizeOptionalString(authorizationEnvelope?.parentConversationId);
+  // Canonical authority and legacy signed siblings can coexist during capability
+  // transport. Rebuild both effect-facing views from the principal so they cannot diverge.
+  resolved.messageActionAuthorization = {
+    authorization: canonicalAuthorization,
+    ...(requester.requesterAccountId !== undefined
+      ? { requesterAccountId: requester.requesterAccountId }
+      : {}),
+    ...(requester.requesterSenderId !== undefined
+      ? { requesterSenderId: requester.requesterSenderId }
+      : {}),
+    ...(requester.requesterSenderIsOwner !== undefined
+      ? { requesterSenderIsOwner: requester.requesterSenderIsOwner }
+      : {}),
+    ...(requester.requesterIsAuthorizedSender !== undefined
+      ? { requesterIsAuthorizedSender: requester.requesterIsAuthorizedSender }
+      : {}),
+    ...(requester.requesterRoleIds !== undefined
+      ? { requesterRoleIds: requester.requesterRoleIds }
+      : {}),
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+    ...(toolContext !== undefined ? { toolContext } : {}),
+  };
+  resolved.authorization = canonicalAuthorization;
+  if (requester.requesterAccountId !== undefined) {
+    resolved.requesterAccountId = requester.requesterAccountId;
+  }
+  if (requester.requesterSenderId !== undefined) {
+    resolved.requesterSenderId = requester.requesterSenderId;
+  }
+  if (requester.requesterSenderName !== undefined) {
+    resolved.requesterSenderName = requester.requesterSenderName;
+  }
+  if (requester.requesterSenderUsername !== undefined) {
+    resolved.requesterSenderUsername = requester.requesterSenderUsername;
+  }
+  if (requester.requesterSenderE164 !== undefined) {
+    resolved.requesterSenderE164 = requester.requesterSenderE164;
+  }
+  if (requester.requesterSenderIsOwner !== undefined) {
+    resolved.senderIsOwner = requester.requesterSenderIsOwner;
+  }
+  if (toolContext !== undefined) {
+    resolved.toolContext = toolContext;
+  }
+  return resolved;
+}
+
+function resolveMessageActionMediaPolicyAccountId(
+  input: RunMessageActionParams,
+  outboundAccountId: string | null | undefined,
+): string | undefined {
+  if (input.messageActionAuthorization !== undefined) {
+    // A signed capability keeps missing requester identity unknown. The
+    // outbound account belongs to the destination and cannot fill that gap.
+    return input.requesterAccountId ?? undefined;
+  }
+  if (!input.sessionKey) {
+    return outboundAccountId ?? undefined;
+  }
+  if (input.requesterAccountId != null) {
+    return input.requesterAccountId;
+  }
+  // Legacy callers without a host capability historically used the outbound account.
+  return outboundAccountId ?? undefined;
+}
+
+function assertBroadcastOwnershipIsSingleTarget(
+  input: RunMessageActionParams,
+  leafCount: number,
+): void {
+  if (leafCount <= 1) {
+    return;
+  }
+  const reusedFields = BROADCAST_SINGLE_SEND_OWNERSHIP_FIELDS.filter(
+    (field) => input[field] !== undefined,
+  );
+  if (reusedFields.length === 0) {
+    return;
+  }
+  throw new Error(
+    `Multi-target broadcast cannot reuse single-send ownership fields: ${reusedFields.join(", ")}.`,
+  );
+}
+
+function requiresCoreOwnedMessageAction(input: RunMessageActionParams): boolean {
+  return (
+    input.forceCoreDelivery === true ||
+    input.requireQueuePersistence === true ||
+    BROADCAST_SINGLE_SEND_OWNERSHIP_FIELDS.some((field) => input[field] !== undefined)
+  );
 }
 
 async function resolveGatewayAgentRuntimeIdentityToken(params: {
@@ -428,9 +742,12 @@ async function resolveGatewayAgentRuntimeIdentityToken(params: {
     sourceReplyToolCallId: params.input.sourceReplyToolCallId,
   });
   const principal = resolveMessageActionAuthorizationContext(params.input).principal;
-  // The Gateway will otherwise authenticate the transport client as an operator,
-  // which would silently replace sender/service authority at the final boundary.
-  if ((principal.kind === "sender" || principal.kind === "service") && !agentRuntimeIdentityToken) {
+  // Explicit authority stays authoritative even when its principal is unknown.
+  // Only legacy callers with no authority context retain unsigned delegation.
+  const hasExplicitAuthority =
+    params.input.messageActionAuthorization !== undefined ||
+    params.input.authorization !== undefined;
+  if ((hasExplicitAuthority || principal.kind !== "unknown") && !agentRuntimeIdentityToken) {
     throw new ToolAuthorizationError(MESSAGE_ACTION_AUTHORIZATION_DENIAL);
   }
   return agentRuntimeIdentityToken;
@@ -659,6 +976,37 @@ function buildPreparedSendActionInput(params: {
   });
 }
 
+function materializePreparedSendAction(params: {
+  prepared: PreparedSendAction;
+  actionParams: Record<string, unknown>;
+  payload: ReplyPayload;
+}): PreparedSendAction {
+  const execution: ExecuteSendActionParams = {
+    ...params.prepared.params,
+    payload: params.payload,
+    ctx: {
+      ...params.prepared.params.ctx,
+      params: params.actionParams,
+    },
+  };
+  if (params.prepared.kind === "core") {
+    return {
+      ...params.prepared,
+      params: execution,
+      payload: params.payload,
+    };
+  }
+  return {
+    ...params.prepared,
+    params: execution,
+    payload: params.payload,
+    pluginCtx: {
+      ...params.prepared.pluginCtx,
+      params: materializeOutboundEffectData(params.prepared.pluginCtx.params),
+    },
+  };
+}
+
 function buildPreparedPollActionInput(params: {
   actionParams: Record<string, unknown>;
   prepared: PreparedPollAction;
@@ -827,6 +1175,8 @@ async function callGatewayMessageAction<T>(params: {
   agentRuntimeIdentityToken?: string;
   abortSignal?: AbortSignal;
   onUnknownDeliveryOutcome?: () => void;
+  /** False when the caller owns its one allowed reconciliation stage. */
+  reattachOnTimeout?: boolean;
 }): Promise<T> {
   const { callGatewayLeastPrivilege, isGatewayTransportError } =
     await loadMessageActionGatewayRuntime();
@@ -852,17 +1202,16 @@ async function callGatewayMessageAction<T>(params: {
   try {
     return await callGatewayLeastPrivilege<T>(call);
   } catch (error) {
-    if (
-      !isGatewayTransportError(error) ||
-      error.kind !== "timeout" ||
-      params.actionParams.action !== "send"
-    ) {
+    if (!isGatewayTransportError(error) || error.kind !== "timeout") {
       throw error;
     }
     // The Gateway may still finish the first request after the local timer.
     // Nothing learned by a later reattach can prove that attempt did not send.
     params.onUnknownDeliveryOutcome?.();
     throwIfAborted(params.abortSignal);
+    if (params.reattachOnTimeout === false) {
+      throw error;
+    }
   }
 
   const reconciliationSignal = params.abortSignal
@@ -899,6 +1248,7 @@ async function callGatewayBroadcast<T>(params: {
     return await callGatewayMessageAction<T>({
       ...params,
       gateway: { ...gateway, timeoutMs: initialTimeoutMs },
+      reattachOnTimeout: false,
     });
   } catch (error) {
     if (!isGatewayTransportError(error) || error.kind !== "timeout") {
@@ -911,6 +1261,7 @@ async function callGatewayBroadcast<T>(params: {
   // unchanged broadcast idempotency key and a wait bounded inside the tool run.
   return await callGatewayMessageAction<T>({
     ...params,
+    reattachOnTimeout: false,
     gateway: {
       ...gateway,
       timeoutMs: params.abortSignal
@@ -955,18 +1306,20 @@ function applyCrossContextMessageDecoration({
   message,
   decoration,
   preferPresentation,
+  messageParam = "message",
 }: {
   params: Record<string, unknown>;
   message: string;
   decoration: CrossContextDecoration;
   preferPresentation: boolean;
+  messageParam?: "message" | "pollQuestion";
 }): string {
   const applied = applyCrossContextDecoration({
     message,
     decoration,
     preferPresentation,
   });
-  params.message = applied.message;
+  params[messageParam] = applied.message;
   if (applied.presentation) {
     const existing = normalizeMessagePresentation(params.presentation);
     params.presentation = existing
@@ -990,6 +1343,7 @@ async function maybeApplyCrossContextMarker(params: {
   args: Record<string, unknown>;
   message: string;
   preferPresentation: boolean;
+  messageParam?: "message" | "pollQuestion";
 }): Promise<string> {
   if (!shouldApplyCrossContextMarker(params.action) || !params.toolContext) {
     return params.message;
@@ -1010,6 +1364,7 @@ async function maybeApplyCrossContextMarker(params: {
     message: params.message,
     decoration,
     preferPresentation: params.preferPresentation,
+    messageParam: params.messageParam,
   });
 }
 
@@ -1537,6 +1892,8 @@ async function runGatewayOwnedBroadcast(params: {
   actionParams: Record<string, unknown>;
   routingChannel: ChannelId;
   targetChannels: readonly ChannelId[];
+  agentId?: string;
+  accountId?: string;
 }): Promise<MessageActionRunResult> {
   const gateway = params.input.gateway;
   const idempotencyKey = await resolveGatewayActionIdempotencyKey(
@@ -1562,11 +1919,12 @@ async function runGatewayOwnedBroadcast(params: {
         ...params.actionParams,
         channel: params.targetChannels.length === 1 ? params.routingChannel : "all",
       },
+      accountId: params.accountId,
       senderIsOwner: resolveMessageActionSenderIsOwner(params.input),
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
       inboundTurnKind: params.input.inboundEventKind,
-      agentId: params.input.agentId,
+      agentId: params.agentId,
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       idempotencyKey,
     },
@@ -1581,14 +1939,47 @@ async function runGatewayOwnedBroadcast(params: {
   };
 }
 
+function createBroadcastPreparationAbortScope(parent?: AbortSignal): {
+  signal?: AbortSignal;
+  detach: () => void;
+} {
+  if (!parent) {
+    return { detach: () => {} };
+  }
+  const controller = new AbortController();
+  const relay = () => controller.abort(parent.reason);
+  let listening = false;
+  if (parent.aborted) {
+    relay();
+  } else {
+    parent.addEventListener("abort", relay, { once: true });
+    listening = true;
+  }
+  return {
+    signal: controller.signal,
+    detach: () => {
+      if (!listening) {
+        return;
+      }
+      listening = false;
+      parent.removeEventListener("abort", relay);
+    },
+  };
+}
+
 async function handleBroadcastAction(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
 ): Promise<MessageActionRunResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  const resolvedAgentId =
+    input.agentId ??
+    (input.sessionKey
+      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
+      : undefined);
   const broadcastEnabled =
-    resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: input.agentId })?.broadcast
+    resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: resolvedAgentId })?.broadcast
       ?.enabled !== false;
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
@@ -1608,37 +1999,8 @@ async function handleBroadcastAction(
           }
           return configured;
         })();
-  await authorizePreparedMessageAction({
-    cfg: input.cfg,
-    action: "broadcast",
-    channel: targetChannels.length === 1 ? targetChannels[0]! : "multiple",
-    targets: rawTargets,
-    dryRun,
-    input: buildPreparedMessageActionInput({
-      input: params,
-      channel: targetChannels.length === 1 ? targetChannels[0]! : "multiple",
-      targets: rawTargets,
-      dryRun,
-      extra: { channels: targetChannels },
-    }),
-    authorization: resolveMessageActionAuthorizationContext(input),
-    signal: input.abortSignal,
-  });
-  const gateway = resolveGateway(input);
-  if (
-    !dryRun &&
-    input.gatewayOwnedDelivery !== true &&
-    targetChannels.some((channel) =>
-      requiresGatewayOwnedBroadcastExecution({ cfg: input.cfg, channel, gateway }),
-    )
-  ) {
-    return await runGatewayOwnedBroadcast({
-      input,
-      actionParams: params,
-      routingChannel: targetChannels[0]!,
-      targetChannels,
-    });
-  }
+  assertBroadcastOwnershipIsSingleTarget(input, targetChannels.length * rawTargets.length);
+  const defaultAccountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   type BroadcastResult = {
     channel: ChannelId;
     to: string;
@@ -1655,6 +2017,7 @@ async function handleBroadcastAction(
     resolved: ResolvedMessagingTarget;
     resultIndex: number;
   };
+  type BroadcastAuthorizationLeaf = Omit<ResolvedBroadcastLeaf, "resolved">;
   type BroadcastBarrierArrival =
     | { kind: "barrier"; outcome: OutboundEffectAuthorizationBarrierOutcome }
     | { kind: "completed"; result: MessageActionRunResult }
@@ -1665,15 +2028,9 @@ async function handleBroadcastAction(
     barrierReached: () => boolean;
     run: Promise<MessageActionRunResult>;
   };
-  const leaves: ResolvedBroadcastLeaf[] = [];
+  const authorizationLeaves: BroadcastAuthorizationLeaf[] = [];
   const results: Array<BroadcastResult | undefined> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
-  const resolvedAgentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-      : undefined);
-  const defaultAccountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   for (const targetChannel of targetChannels) {
     throwIfAborted(input.abortSignal);
     for (const rawTarget of rawTargets) {
@@ -1691,17 +2048,10 @@ async function handleBroadcastAction(
                 agentId: resolvedAgentId,
               })
             : undefined);
-        const resolved = await resolveResolvedTargetOrThrow({
-          cfg: input.cfg,
-          channel: targetChannel,
-          input: rawTarget,
-          accountId,
-        });
-        leaves.push({
+        authorizationLeaves.push({
           channel: targetChannel,
           rawTarget,
           accountId,
-          resolved,
           resultIndex,
         });
       } catch (error) {
@@ -1717,8 +2067,90 @@ async function handleBroadcastAction(
       }
     }
   }
+
+  const authorization = resolveMessageActionAuthorizationContext(input, resolvedAgentId);
+  for (const leaf of authorizationLeaves) {
+    throwIfAborted(input.abortSignal);
+    const {
+      targets: _targets,
+      channel: _channel,
+      target: _target,
+      to: _to,
+      accountId: _accountId,
+      ...leafInput
+    } = params;
+    const preparedLeafInput = {
+      ...leafInput,
+      channel: leaf.channel,
+      target: leaf.rawTarget,
+      ...(leaf.accountId ? { accountId: leaf.accountId } : {}),
+    };
+    await authorizePreparedMessageAction({
+      cfg: input.cfg,
+      action: "broadcast",
+      channel: leaf.channel,
+      accountId: leaf.accountId,
+      target: leaf.rawTarget,
+      dryRun,
+      input: buildPreparedMessageActionInput({
+        input: preparedLeafInput,
+        channel: leaf.channel,
+        accountId: leaf.accountId,
+        target: leaf.rawTarget,
+        dryRun,
+      }),
+      authorization,
+      signal: input.abortSignal,
+    });
+  }
+
+  const gateway = resolveGateway(input);
+  const requiresCoreDelivery = requiresCoreOwnedMessageAction(input);
+  if (
+    authorizationLeaves.length === targetChannels.length * rawTargets.length &&
+    !dryRun &&
+    !requiresCoreDelivery &&
+    input.gatewayOwnedDelivery !== true &&
+    targetChannels.some((channel) =>
+      requiresGatewayOwnedBroadcastExecution({ cfg: input.cfg, channel, gateway }),
+    )
+  ) {
+    return await runGatewayOwnedBroadcast({
+      input,
+      actionParams: params,
+      routingChannel: targetChannels[0]!,
+      targetChannels,
+      agentId: resolvedAgentId,
+      accountId: defaultAccountId ?? undefined,
+    });
+  }
+  const leaves: ResolvedBroadcastLeaf[] = [];
+  for (const leaf of authorizationLeaves) {
+    throwIfAborted(input.abortSignal);
+    try {
+      const resolved = await resolveResolvedTargetOrThrow({
+        cfg: input.cfg,
+        channel: leaf.channel,
+        input: leaf.rawTarget,
+        accountId: leaf.accountId,
+      });
+      leaves.push({ ...leaf, resolved });
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      results[leaf.resultIndex] = {
+        channel: leaf.channel,
+        to: leaf.rawTarget,
+        ok: false,
+        error: formatErrorMessage(error),
+      };
+    }
+  }
   const prepared: PreparedBroadcastLeaf[] = [];
+  const preparationAbort = createBroadcastPreparationAbortScope(input.abortSignal);
   const cancelPrepared = async (error: unknown): Promise<void> => {
+    preparationAbort.detach();
     for (const entry of prepared) {
       if (entry.barrierReached()) {
         entry.permit.reject(error);
@@ -1736,6 +2168,7 @@ async function handleBroadcastAction(
     const { targets: _targets, ...leafParams } = params;
     const run = runMessageAction({
       ...input,
+      ...(preparationAbort.signal ? { abortSignal: preparationAbort.signal } : {}),
       dryRun,
       action: "send",
       params: {
@@ -1775,7 +2208,7 @@ async function handleBroadcastAction(
 
   const arrivals = await Promise.all(prepared.map((entry) => entry.arrival.promise));
   try {
-    throwIfAborted(input.abortSignal);
+    throwIfAborted(preparationAbort.signal);
   } catch (error) {
     await cancelPrepared(error);
     throw error;
@@ -1817,10 +2250,11 @@ async function handleBroadcastAction(
       : [],
   );
   try {
-    throwIfAborted(input.abortSignal);
+    throwIfAborted(preparationAbort.signal);
     authorizeSealedDeliveryEffects(sealHandles);
-    // Release every authorized leaf in one synchronous turn. Once the first
-    // permit resolves, cancellation can no longer guarantee zero effects.
+    // Durable authorization is the point of no return. Caller cancellation
+    // owns preparation only; every promoted leaf must now finish transport.
+    preparationAbort.detach();
     for (const [index, entry] of prepared.entries()) {
       if (arrivals[index]?.kind === "barrier") {
         entry.permit.resolve();
@@ -1843,12 +2277,6 @@ async function handleBroadcastAction(
         result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
       };
     } catch (err) {
-      try {
-        throwIfAborted(input.abortSignal);
-      } catch (abortError) {
-        await cancelPrepared(abortError);
-        throw abortError;
-      }
       if (isAbortError(err) || isOutboundEffectAuthorizationError(err)) {
         const terminalError = findMessageActionPolicyDenial(err) ?? err;
         await cancelPrepared(terminalError);
@@ -1885,15 +2313,16 @@ async function handleInternalSourceReplySendAction(
 ): Promise<MessageActionRunResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  const resolvedAgentId =
+    input.agentId ??
+    (input.sessionKey
+      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
+      : undefined);
   const sourceReply = await buildSendPayloadParts({
     cfg: input.cfg,
     actionParams: params,
     input,
-    agentId:
-      input.agentId ??
-      (input.sessionKey
-        ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-        : undefined),
+    agentId: resolvedAgentId,
   });
   const payload = {
     status: "ok",
@@ -1923,7 +2352,7 @@ async function handleInternalSourceReplySendAction(
       dryRun,
       extra: { sourceReply: sourceReply.payload },
     }),
-    authorization: resolveMessageActionAuthorizationContext(input),
+    authorization: resolveMessageActionAuthorizationContext(input, resolvedAgentId),
     signal: input.abortSignal,
   });
   return {
@@ -2084,14 +2513,9 @@ async function buildSendPayloadParts(params: {
   }
   actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
-  if (
-    location &&
-    (message.trim() || mergedMediaUrls.length > 0 || hasPresentation || hasInteractive)
-  ) {
-    throw new Error("Location sends cannot be combined with message text or media.");
-  }
-
-  if (params.channel && params.target) {
+  // Portable locations are standalone payloads. Cross-context policy already
+  // ran before payload construction; adding marker text here would invalidate them.
+  if (params.channel && params.target && !location) {
     message = await maybeApplyCrossContextMarker({
       cfg: params.cfg,
       channel: params.channel,
@@ -2104,6 +2528,16 @@ async function buildSendPayloadParts(params: {
       message,
       preferPresentation: true,
     });
+  }
+
+  if (
+    location &&
+    (message.trim() ||
+      mergedMediaUrls.length > 0 ||
+      hasMessagePresentationBlocks(actionParams.presentation) ||
+      hasInteractive)
+  ) {
+    throw new Error("Location sends cannot be combined with message text or media.");
   }
 
   const mediaUrl = readStringParam(actionParams, "media", { trim: false });
@@ -2284,7 +2718,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+    accountId: resolveMessageActionMediaPolicyAccountId(input, accountId),
     requesterSenderId: input.requesterSenderId,
     requesterSenderName: input.requesterSenderName,
     requesterSenderUsername: input.requesterSenderUsername,
@@ -2293,8 +2727,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 
   // Required queue persistence is itself an ownership decision: neither the
   // remote gateway action nor a provider-native action may bypass core queueing.
-  const requiresCoreDelivery =
-    input.forceCoreDelivery === true || input.requireQueuePersistence === true;
+  const requiresCoreDelivery = requiresCoreOwnedMessageAction(input);
   const willUseGateway =
     !requiresCoreDelivery &&
     willRunGatewayPluginMessageAction({ cfg, channel, action, dryRun, gateway });
@@ -2391,7 +2824,29 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const preparedSend = willUseGateway ? undefined : await prepareSendAction(sendExecution);
   throwIfAborted(abortSignal);
 
-  const authorization = resolveMessageActionAuthorizationContext(input);
+  // Detach execution from caller and plugin-preparation aliases before policy
+  // evaluation. Policy and the later transport then consume the same bytes.
+  const authorizationActionParams = materializeOutboundEffectData(preparedActionParams);
+  const authorizationPayload = materializeOutboundEffectPayload(
+    preparedSend?.payload ?? sendPayload.payload,
+  );
+  const authorizationExecution: ExecuteSendActionParams = {
+    ...sendExecution,
+    payload: authorizationPayload,
+    ctx: {
+      ...sendExecution.ctx,
+      params: authorizationActionParams,
+    },
+  };
+  const authorizationPreparedSend = preparedSend
+    ? materializePreparedSendAction({
+        prepared: preparedSend,
+        actionParams: authorizationActionParams,
+        payload: authorizationPayload,
+      })
+    : undefined;
+
+  const authorization = resolveMessageActionAuthorizationContext(input, agentId);
   const authorizePayload = async (finalPayload?: ReplyPayload): Promise<boolean> => {
     return await authorizePreparedMessageAction({
       cfg,
@@ -2402,9 +2857,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       threadId: resolvedThreadId,
       dryRun,
       input: buildPreparedSendActionInput({
-        actionParams: preparedActionParams,
-        execution: sendExecution,
-        prepared: preparedSend,
+        actionParams: authorizationActionParams,
+        execution: authorizationExecution,
+        prepared: authorizationPreparedSend,
         ...(finalPayload ? { finalPayload } : {}),
         channel,
         accountId,
@@ -2430,15 +2885,23 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     throw error;
   }
 
+  // Keep the authorization baseline independent from the prepared object that
+  // hooks and adapters receive. Later mutation must produce a changed digest.
+  const authorizedPayload = materializeOutboundEffectPayload(
+    authorizationPreparedSend?.payload ?? authorizationPayload,
+  );
+
   const effectAuthorization: OutboundEffectAuthorizationInput | undefined =
     enforceFinalPayloadAuthorization || input.waitForSendAuthorizationBarrier
       ? {
-          authorizedPayload: preparedSend?.payload ?? sendPayload.payload,
+          authorizedPayload,
           enforceFinalPayloadAuthorization,
           ...(enforceFinalPayloadAuthorization
             ? {
                 authorizeChangedPayload: async (finalPayload: ReplyPayload) => {
-                  await authorizePayload(finalPayload);
+                  const snapshot = materializeOutboundEffectPayload(finalPayload);
+                  await authorizePayload(snapshot);
+                  return snapshot;
                 },
               }
             : {}),
@@ -2460,7 +2923,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       // outbound adapter; credentials and account selection may exist only remotely.
       const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
         cfg,
-        params: preparedActionParams,
+        params: authorizationActionParams,
         channel,
         action,
         accountId,
@@ -2485,10 +2948,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       return gatewayPluginAction;
     }
 
-    if (!preparedSend) {
+    if (!authorizationPreparedSend) {
       throw new Error("Prepared local message action lost its execution plan.");
     }
-    const send = await executePreparedSendAction(preparedSend, {
+    const send = await executePreparedSendAction(authorizationPreparedSend, {
       effectAuthorizationScope: "message-action",
       ...(effectAuthorization ? { effectAuthorization } : {}),
     });
@@ -2510,7 +2973,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     const result = await executeAuthorizedSendEffect();
     return markDeliveredCurrentSourceReply(result, {
       cfg,
-      actionParams: preparedActionParams,
+      actionParams: authorizationActionParams,
       channel,
       accountId,
       input,
@@ -2523,33 +2986,44 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
 }
 
+function normalizeSharedPollActionParams(params: Record<string, unknown>): {
+  question: string;
+  options: string[];
+  allowMultiselect: boolean;
+  durationHours?: number;
+} {
+  const question = readStringParam(params, "pollQuestion", { required: true });
+  const options = readStringArrayParam(params, "pollOption", { required: true });
+  if (options.length < 2) {
+    throw new Error("pollOption requires at least two values");
+  }
+  const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
+  const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
+    message: "pollDurationHours must be a positive integer",
+  });
+
+  params.pollQuestion = question;
+  params.pollOption = options;
+  params.pollMulti = allowMultiselect;
+  if (durationHours === undefined) {
+    delete params.pollDurationHours;
+  } else {
+    params.pollDurationHours = durationHours;
+  }
+  return { question, options, allowMultiselect, durationHours };
+}
+
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const { cfg, params, channel, accountId, dryRun, gateway, input, agentId, abortSignal } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
   const to = readStringParam(params, "to", { required: true });
-  const silent = readBooleanParam(params, "silent");
-
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
     to,
     accountId,
     toolContext: input.toolContext,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
-  });
-
-  const base = typeof params.message === "string" ? params.message : "";
-  await maybeApplyCrossContextMarker({
-    cfg,
-    channel,
-    action,
-    target: to,
-    toolContext: input.toolContext,
-    accountId,
-    agentId,
-    args: params,
-    message: base,
-    preferPresentation: false,
   });
   const threadId = resolvedThreadId ?? readMessageActionAuthorizationThreadId(params);
   const authorizePoll = async (prepared: PreparedPollAction): Promise<void> => {
@@ -2570,7 +3044,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
         threadId,
         dryRun,
       }),
-      authorization: resolveMessageActionAuthorizationContext(input),
+      authorization: resolveMessageActionAuthorizationContext(input, agentId),
       signal: abortSignal,
     });
   };
@@ -2621,6 +3095,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     agentId,
     requesterAccountId: input.requesterAccountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
+    senderIsOwner: resolveMessageActionSenderIsOwner(input),
     conversationReadOrigin: normalizeConversationReadInvocationOrigin(input.conversationReadOrigin),
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
@@ -2628,31 +3103,44 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     gateway,
     toolContext: input.toolContext,
     dryRun,
-    silent: silent ?? undefined,
+    silent: undefined as boolean | undefined,
   };
-  const preparedPoll = preparePollAction({
+  const preparedPoll = await preparePollAction({
     ctx: pollContext,
-    resolveCorePoll: (): CorePollAction => {
-      const question = readStringParam(params, "pollQuestion", {
-        required: true,
-      });
-      const options = readStringArrayParam(params, "pollOption", { required: true });
-      if (options.length < 2) {
-        throw new Error("pollOption requires at least two values");
+    resolveCorePoll: async () => {
+      const silent = readBooleanParam(params, "silent");
+      if (silent === undefined) {
+        delete params.silent;
+      } else {
+        params.silent = silent;
       }
-      const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-      const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
-        message: "pollDurationHours must be a positive integer",
-      });
+      pollContext.silent = silent;
 
+      const sharedPoll = normalizeSharedPollActionParams(params);
+      await maybeApplyCrossContextMarker({
+        cfg,
+        channel,
+        action,
+        target: to,
+        toolContext: input.toolContext,
+        accountId,
+        agentId,
+        args: params,
+        message: sharedPoll.question,
+        preferPresentation: false,
+        messageParam: "pollQuestion",
+      });
       return {
         to,
-        question,
-        options,
-        maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
-        durationHours: durationHours ?? undefined,
+        question: readStringParam(params, "pollQuestion", { required: true }),
+        options: sharedPoll.options,
+        maxSelections: resolvePollMaxSelections(
+          sharedPoll.options.length,
+          sharedPoll.allowMultiselect,
+        ),
+        durationHours: sharedPoll.durationHours,
         threadId: resolvedThreadId ?? undefined,
-      };
+      } satisfies CorePollAction;
     },
   });
   await authorizePoll(preparedPoll);
@@ -2720,7 +3208,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
       threadId: readMessageActionAuthorizationThreadId(params),
       dryRun,
     }),
-    authorization: resolveMessageActionAuthorizationContext(input),
+    authorization: resolveMessageActionAuthorizationContext(input, agentId),
     signal: abortSignal,
   });
 
@@ -2805,15 +3293,16 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
 }
 
 export async function runMessageAction(
-  input: RunMessageActionParams,
+  rawInput: RunMessageActionParams,
 ): Promise<MessageActionRunResult> {
-  const cfg = input.cfg;
-  let params = { ...input.params };
+  const cfg = rawInput.cfg;
   const resolvedAgentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
+    rawInput.agentId ??
+    (rawInput.sessionKey
+      ? resolveSessionAgentId({ sessionKey: rawInput.sessionKey, config: cfg })
       : undefined);
+  const input = resolveMessageActionExecutionInput(rawInput, resolvedAgentId);
+  let params = materializeOutboundEffectData(input.params);
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "delivery");
   parseInteractiveParam(params);
@@ -2910,7 +3399,7 @@ export async function runMessageAction(
     }),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+    accountId: resolveMessageActionMediaPolicyAccountId(input, accountId),
     requesterSenderId: input.requesterSenderId,
     requesterSenderName: input.requesterSenderName,
     requesterSenderUsername: input.requesterSenderUsername,
@@ -2997,6 +3486,7 @@ export async function runMessageAction(
       dryRun,
       gateway,
       input,
+      agentId: resolvedAgentId,
       abortSignal: input.abortSignal,
     });
   }

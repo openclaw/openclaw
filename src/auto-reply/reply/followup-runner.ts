@@ -86,6 +86,7 @@ import {
   buildTerminalAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { buildHostAdmittedRunParams } from "./agent-runner-run-params.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
   resolveQueuedReplyExecutionConfig,
@@ -696,6 +697,7 @@ export function createFollowupRunner(params: {
         kind: "queued_followup",
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
+        turnAuthority: run.turnAuthority,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
         onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
@@ -1339,12 +1341,8 @@ export function createFollowupRunner(params: {
                           originatingChannel: queued.originatingChannel,
                           provider: run.messageProvider,
                         }),
-                        clientCaps: run.clientCaps,
                         currentChannelId: queued.originatingTo,
-                        senderId: run.senderId,
-                        senderName: run.senderName,
-                        senderUsername: run.senderUsername,
-                        senderE164: run.senderE164,
+                        parentConversationId: queued.originatingParentConversationId,
                         groupId: run.groupId,
                         groupChannel: run.groupChannel,
                         groupSpace: run.groupSpace,
@@ -1357,7 +1355,7 @@ export function createFollowupRunner(params: {
                             : undefined,
                         currentMessageId: followupCurrentMessageId,
                         agentAccountId: run.agentAccountId,
-                        senderIsOwner: run.senderIsOwner,
+                        ...buildHostAdmittedRunParams(run),
                         disableTools: opts?.disableTools,
                         abortSignal: runAbortSignal,
                       },
@@ -1406,14 +1404,12 @@ export function createFollowupRunner(params: {
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
-                // Queued turns must keep the originating client's declared caps or
-                // capability-gated tools vanish between the live turn and its drain.
-                clientCaps: run.clientCaps,
                 chatType: run.chatType,
                 agentAccountId: run.agentAccountId,
                 messageTo: queued.originatingTo,
                 messageThreadId: queued.originatingThreadId,
                 currentChannelId: queued.originatingTo,
+                parentConversationId: queued.originatingParentConversationId,
                 chatId: queued.originatingChatId,
                 currentThreadTs:
                   queued.originatingThreadId != null
@@ -1423,11 +1419,8 @@ export function createFollowupRunner(params: {
                 groupId: run.groupId,
                 groupChannel: run.groupChannel,
                 groupSpace: run.groupSpace,
-                senderId: run.senderId,
-                senderName: run.senderName,
-                senderUsername: run.senderUsername,
-                senderE164: run.senderE164,
                 channelContext: run.channelContext,
+                ...buildHostAdmittedRunParams(run),
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,

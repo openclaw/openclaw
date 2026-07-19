@@ -56,6 +56,7 @@ import {
 } from "../talk-transcription-relay.js";
 import { formatForLog } from "../ws-log.js";
 import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
+import { createTalkSessionSteerAuthority } from "./talk-session-steer-authority.js";
 import {
   broadcastTalkRoomEvents,
   buildRealtimeInstructions,
@@ -636,7 +637,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respondUnavailable(respond, err);
     }
   },
-  "talk.session.steer": async ({ params, respond, client }) => {
+  "talk.session.steer": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateTalkSessionSteerParams, "talk.session.steer", respond)) {
       return;
     }
@@ -644,12 +645,14 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+        const sessionKey = normalizeOptionalString(params.sessionKey);
         const result = await steerTalkRealtimeRelayAgentRun({
           relaySessionId: session.relaySessionId,
           connId,
-          sessionKey: normalizeOptionalString(params.sessionKey),
+          sessionKey,
           text: params.text,
           mode: normalizeOptionalString(params.mode),
+          turnAuthority: createTalkSessionSteerAuthority(client, context, sessionKey),
         });
         respondOk(respond, result);
         return;
@@ -681,6 +684,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         text: params.text,
         mode: params.mode,
         recentEvents: handoff?.room.talk.recentEvents,
+        turnAuthority: createTalkSessionSteerAuthority(client, context, sessionKey),
       });
       respondOk(respond, result);
     } catch (err) {

@@ -1255,6 +1255,7 @@ export const registerTelegramNativeCommands = ({
         const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
         const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
         const originatingTo = buildTelegramRoutingTarget(chatId, threadSpec);
+        const parentConversationId = threadSpec.id != null ? `telegram:${chatId}` : undefined;
         const commandDefinition = findCommandByNativeName(command.name, "telegram");
         const rawText = ctx.match?.trim() ?? "";
         const commandArgs = commandDefinition
@@ -1290,13 +1291,14 @@ export const registerTelegramNativeCommands = ({
             provider: "telegram",
             accountId: route.accountId,
             senderId,
+            senderUsername,
             senderIsOwner,
             isAuthorizedSender: commandAuthorized,
             agentId: route.agentId,
             sessionKey: policySessionKey,
             sessionId: policySessionEntry?.sessionId,
             conversationId: originatingTo,
-            parentConversationId: `telegram:${chatId}`,
+            parentConversationId,
             threadId: threadSpec.id,
             rawArguments: commandArgs?.raw,
           });
@@ -1677,6 +1679,7 @@ export const registerTelegramNativeCommands = ({
           Timestamp: msg.date ? msg.date * 1000 : undefined,
           WasMentioned: true,
           CommandAuthorized: commandAuthorized,
+          InboundAccessAuthorized: true,
           CommandTurn: {
             kind: "native" as const,
             source: "native" as const,
@@ -1688,7 +1691,7 @@ export const registerTelegramNativeCommands = ({
           AccountId: route.accountId,
           CommandTargetSessionKey: commandTargetSessionKey,
           MessageThreadId: threadSpec.id,
-          ThreadParentId: `telegram:${chatId}`,
+          ThreadParentId: parentConversationId,
           IsForum: isForum,
           TopicName: isForum && topicName ? topicName : undefined,
           // Originating context for sub-agent announce routing
@@ -1824,8 +1827,15 @@ export const registerTelegramNativeCommands = ({
         if (!auth) {
           return;
         }
-        const { senderId, commandAuthorized, senderIsOwner, isGroup, isForum, resolvedThreadId } =
-          auth;
+        const {
+          senderId,
+          senderUsername,
+          commandAuthorized,
+          senderIsOwner,
+          isGroup,
+          isForum,
+          resolvedThreadId,
+        } = auth;
         const runtimeContext = await resolveCommandRuntimeContext({
           msg,
           runtimeCfg,
@@ -1872,6 +1882,7 @@ export const registerTelegramNativeCommands = ({
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;
+        const parentConversationId = threadSpec.id != null ? `telegram:${chatId}` : undefined;
         const { deliverReplies, emitTelegramMessageSentHooks } =
           await loadTelegramNativeCommandDeliveryRuntime();
         let progressMessageId: number | undefined;
@@ -1913,6 +1924,7 @@ export const registerTelegramNativeCommands = ({
             command: match.command,
             args: match.args,
             senderId,
+            senderUsername,
             channel: "telegram",
             isAuthorizedSender: commandAuthorized,
             senderIsOwner,
@@ -1930,7 +1942,7 @@ export const registerTelegramNativeCommands = ({
             accountId,
             messageThreadId: threadSpec.id,
             conversationId: buildTelegramRoutingTarget(chatId, threadSpec),
-            parentConversationId: `telegram:${chatId}`,
+            parentConversationId,
             onAuthorized: sendProgressPlaceholder,
           }),
         );

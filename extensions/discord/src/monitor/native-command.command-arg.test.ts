@@ -103,5 +103,6 @@ describe("discord command argument fallback", () => {
     expect(dispatchCall?.accountId).toBe("default");
     expect(dispatchCall?.sessionPrefix).toBe("discord:slash");
     expect(dispatchCall?.preferFollowUp).toBe(true);
+    expect(dispatchCall?.requireCoreCommandAuthorization).toBe(true);
   });
 });

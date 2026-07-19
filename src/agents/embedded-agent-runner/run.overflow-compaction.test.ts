@@ -18,6 +18,7 @@ import {
   rotateAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
@@ -96,6 +97,20 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     scope: "same-agent-private" as const,
     corpus: "sessions" as const,
   };
+  const turnAuthority = createTurnAuthoritySnapshot({
+    principal: {
+      kind: "sender",
+      provider: "discord",
+      senderId: "maintainer",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      roleIds: ["maintainers"],
+    },
+    agentId: "main",
+    sessionKey: "agent:main:discord:channel:maintenance",
+    conversationId: "maintenance",
+    trigger: "message",
+  });
   return {
     runId: "forward-attempt-params",
     params: {
@@ -109,6 +124,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       requireExplicitMessageTarget: true,
       chatType: "channel",
       senderIsOwner: true,
+      turnAuthority,
       internalEvents,
       onAgentToolResult,
     },
@@ -123,6 +139,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       requireExplicitMessageTarget: true,
       chatType: "channel",
       senderIsOwner: true,
+      turnAuthority,
       onAgentToolResult,
     },
   } satisfies {
@@ -3280,12 +3297,34 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("passes trigger=overflow when retrying compaction after context overflow", async () => {
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        senderId: "overflow-maintainer",
+        aliases: { name: "Overflow Maintainer", username: "overflow_user" },
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+      agentId: "main",
+      sessionKey: "test-key",
+      trigger: "message",
+    });
     mockOverflowRetrySuccess({
       runEmbeddedAttempt: mockedRunEmbeddedAttempt,
       compactDirect: mockedCompactDirect,
     });
 
-    await runEmbeddedAgent(overflowBaseRunParams);
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      turnAuthority,
+      senderId: "legacy-sender",
+      senderName: "Legacy Sender",
+      senderUsername: "legacy_user",
+      memberRoleIds: ["legacy-role"],
+      isAuthorizedSender: false,
+      senderIsOwner: true,
+    });
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactParams = expectMockCallFields(mockedCompactDirect, {
@@ -3295,10 +3334,17 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         sessionKey: "test-key",
       }),
     });
-    expectRecordFields(compactParams.runtimeContext, {
+    const runtimeContext = expectRecordFields(compactParams.runtimeContext, {
       trigger: "overflow",
       authProfileId: "test-profile",
+      senderId: "legacy-sender",
+      senderName: "Legacy Sender",
+      senderUsername: "legacy_user",
+      memberRoleIds: ["legacy-role"],
+      isAuthorizedSender: false,
+      senderIsOwner: true,
     });
+    expect(runtimeContext.turnAuthority).toBe(turnAuthority);
   });
 
   it("keeps implicit Codex overflow recovery out of generic compaction without a native compactor", async () => {

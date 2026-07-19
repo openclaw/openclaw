@@ -304,7 +304,7 @@ describe("googlechat monitor inbound space classification", () => {
       expectedThread: "spaces/CLASSIFY/threads/root",
     },
   ])("targets typing messages according to $name", async ({ replyToMode, expectedThread }) => {
-    const { core } = createInboundClassificationHarness();
+    const { buildContext, core } = createInboundClassificationHarness();
     const account = {
       accountId: "work",
       config: { replyToMode },
@@ -344,6 +344,16 @@ describe("googlechat monitor inbound space classification", () => {
       text: "_OpenClaw is typing..._",
       thread: expectedThread,
     });
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation: expect.objectContaining({
+          threadId: "spaces/CLASSIFY/threads/root",
+        }),
+        reply: expect.objectContaining({
+          messageThreadId: "spaces/CLASSIFY/threads/root",
+        }),
+      }),
+    );
   });
 });
 

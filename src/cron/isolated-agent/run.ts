@@ -135,6 +135,7 @@ import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { loadCronSessionEntryLatest, resolveCronSession } from "./session.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
+import { createCronTurnAuthoritySnapshot } from "./turn-authority.js";
 
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
@@ -1783,6 +1784,13 @@ export async function runCronIsolatedAgentTurn(params: {
       },
     );
     const { executeCronRun } = await loadCronExecutorRuntime();
+    const turnAuthority = createCronTurnAuthoritySnapshot({
+      jobId: params.job.id,
+      agentId: prepared.context.agentId,
+      sessionKey: prepared.context.runSessionKey,
+      sessionId: initialSessionId,
+      runId: initialSessionId,
+    });
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,
       cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
@@ -1791,6 +1799,7 @@ export async function runCronIsolatedAgentTurn(params: {
       agentDir: prepared.context.agentDir,
       agentSessionKey: prepared.context.agentSessionKey,
       runSessionKey: prepared.context.runSessionKey,
+      turnAuthority,
       usesDetachedRunSession: prepared.context.usesDetachedRunSession,
       workspaceDir: prepared.context.workspaceDir,
       lane: params.lane,

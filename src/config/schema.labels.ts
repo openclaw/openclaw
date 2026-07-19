@@ -1131,6 +1131,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.authorization.requiredPolicies": "Required Authorization Policies",
   "plugins.entries.*.authorization.requiredPolicies.*.id": "Authorization Policy ID",
   "plugins.entries.*.authorization.requiredPolicies.*.operations": "Protected Operations",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope": "Authorization Policy Scope",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.agentIds": "Scoped Agent IDs",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.providers": "Scoped Providers",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.accountIds": "Scoped Account IDs",
+  "plugins.entries.*.authorization.requiredPolicies.*.scope.conversationIds":
+    "Scoped Conversation IDs",
   "plugins.entries.*.hooks": "Plugin Hook Policy",
   "plugins.entries.*.hooks.allowConversationAccess": "Allow Conversation Access Hooks",
   "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",

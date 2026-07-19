@@ -11,6 +11,7 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { TurnAuthoritySnapshot } from "../../../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
@@ -110,6 +111,8 @@ export type FollowupRun = {
   originatingTo?: string;
   /** Transport-native chat/conversation ID for hook identity context. */
   originatingChatId?: string;
+  /** Transport-native parent conversation ID when the queued turn originated in a thread. */
+  originatingParentConversationId?: string;
   /** Provider account id (multi-account). */
   originatingAccountId?: string;
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
@@ -128,6 +131,8 @@ export type FollowupRun = {
     runtimePolicySessionKey?: string;
     messageProvider?: string;
     clientCaps?: string[];
+    /** Immutable host-issued authority for this admitted turn. */
+    turnAuthority?: TurnAuthoritySnapshot;
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;

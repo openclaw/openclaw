@@ -47,6 +47,7 @@ import {
   sessionAbortCompactionMock,
   sessionMessages,
   sessionCompactImpl,
+  splitSdkToolsMock,
   triggerInternalHook,
 } from "./compact.hooks.harness.js";
 import {
@@ -63,6 +64,9 @@ let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 let withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
+let createTurnAuthoritySnapshot: typeof import("../../plugins/turn-authority.js").createTurnAuthoritySnapshot;
+let isIssuedTurnAuthoritySnapshot: typeof import("../../plugins/turn-authority.js").isIssuedTurnAuthoritySnapshot;
+let resolveTurnAuthorityAuthorization: typeof import("../../plugins/turn-authority.js").resolveTurnAuthorityAuthorization;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -310,6 +314,11 @@ beforeAll(async () => {
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
   withOwnedSessionTranscriptWrites = loaded.withOwnedSessionTranscriptWrites;
+  ({
+    createTurnAuthoritySnapshot,
+    isIssuedTurnAuthoritySnapshot,
+    resolveTurnAuthorityAuthorization,
+  } = await import("../../plugins/turn-authority.js"));
 });
 
 beforeEach(() => {
@@ -976,6 +985,140 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       senderUsername: "alice_u",
       senderE164: "+15551234567",
     });
+  });
+
+  it("uses issued sender authority for compaction tool policy and hooks", async () => {
+    const sourceAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "discord-account",
+        senderId: "authority-sender",
+        aliases: { name: "authority name", username: "authority_user" },
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+      agentId: "stale-agent",
+      sessionKey: "agent:stale:main",
+      trigger: "message",
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      messageChannel: "discord",
+      agentAccountId: "discord-account",
+      senderId: "legacy-sender",
+      senderName: "Legacy Name",
+      senderUsername: "legacy_user",
+      memberRoleIds: ["legacy-role"],
+      senderIsOwner: true,
+      isAuthorizedSender: false,
+      turnAuthority: sourceAuthority,
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:authority-sender": { deny: ["exec"] },
+            "id:legacy-sender": { allow: ["exec"] },
+            "*": { deny: ["write"] },
+          },
+        },
+      },
+    });
+
+    const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {});
+    expect(isIssuedTurnAuthoritySnapshot(toolOptions.turnAuthority)).toBe(true);
+    const authorization = resolveTurnAuthorityAuthorization(toolOptions.turnAuthority);
+    expect(authorization).toMatchObject({
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      sessionId: "session-1",
+      trigger: "manual",
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "discord-account",
+        senderId: "authority-sender",
+        aliases: { name: "authority name", username: "authority_user" },
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+    });
+    const capabilityProfile = expectRecordFields(toolOptions.conversationCapabilityProfile, {});
+    expect(capabilityProfile.sender).toMatchObject({
+      provider: "discord",
+      accountId: "discord-account",
+      id: "authority-sender",
+      name: "authority name",
+      username: "authority_user",
+      isOwner: false,
+      isAuthorized: true,
+    });
+    expect(capabilityProfile.conversation).toMatchObject({
+      memberRoleIds: ["maintainers", "write"],
+    });
+    expect(capabilityProfile.policy).toMatchObject({ senderPolicy: { deny: ["exec"] } });
+    const splitOptions = expectRecordFields(mockCallArg(splitSdkToolsMock), {});
+    const hookContext = expectRecordFields(splitOptions.toolHookContext, {});
+    expect(hookContext.authorization).toBe(authorization);
+  });
+
+  it("keeps compaction plugin authorization unknown without issued authority", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      messageChannel: "discord",
+      agentAccountId: "discord-account",
+      senderId: "legacy-owner",
+      senderName: "Legacy Owner",
+      senderUsername: "legacy_owner",
+      memberRoleIds: ["admins"],
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      config: {
+        tools: {
+          toolsBySender: {
+            "id:legacy-owner": { deny: ["write"] },
+          },
+        },
+      },
+    });
+
+    const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {});
+    const capabilityProfile = expectRecordFields(toolOptions.conversationCapabilityProfile, {});
+    expect(capabilityProfile.policy).toMatchObject({ senderPolicy: { deny: ["write"] } });
+    const splitOptions = expectRecordFields(mockCallArg(splitSdkToolsMock), {});
+    const hookContext = expectRecordFields(splitOptions.toolHookContext, {});
+    expect(hookContext.authorization).toBeUndefined();
+  });
+
+  it("rejects invalid compaction authority before materializing tools", async () => {
+    const invalidAuthority = structuredClone(
+      createTurnAuthoritySnapshot({
+        principal: { kind: "sender", provider: "discord", senderId: "sender" },
+        agentId: "main",
+        sessionKey: TEST_SESSION_KEY,
+        trigger: "message",
+      }),
+    );
+
+    await expect(
+      compactEmbeddedAgentSessionDirect({
+        sessionId: "session-1",
+        sessionKey: TEST_SESSION_KEY,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        turnAuthority: invalidAuthority,
+      }),
+    ).rejects.toThrow("turn-authority-invalid");
+    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+    expect(splitSdkToolsMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2975,6 +3118,19 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("uses explicit Codex runtime policy for queued native compaction", async () => {
+    const sourceAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        senderId: "native-maintainer",
+        aliases: { username: "native_user" },
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      trigger: "message",
+    });
     resolveAgentHarnessPolicyMock.mockReturnValue({
       runtime: "codex",
       runtimeSource: "model",
@@ -2993,6 +3149,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       wrappedCompactionArgs({
         provider: "openai",
         model: "gpt-5.5",
+        turnAuthority: sourceAuthority,
+        senderId: "legacy-sender",
+        senderUsername: "legacy_user",
         config: {
           models: {
             providers: {
@@ -3013,14 +3172,31 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       }),
       { nativeCompactionRequest: "after_context_engine" },
     );
+    const nativeParams = expectRecordFields(mockCallArg(maybeCompactAgentHarnessSessionMock), {});
+    expect(isIssuedTurnAuthoritySnapshot(nativeParams.turnAuthority)).toBe(true);
+    expect(resolveTurnAuthorityAuthorization(nativeParams.turnAuthority)).toMatchObject({
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      sessionId: TEST_SESSION_ID,
+      trigger: "manual",
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        senderId: "native-maintainer",
+        aliases: { username: "native_user" },
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+    });
     const compactArg = mockCallArg(contextEngineCompactMock) as {
       runtimeContext?: Record<string, unknown>;
     };
-    expectRecordFields(compactArg.runtimeContext, {
+    const runtimeContext = expectRecordFields(compactArg.runtimeContext, {
       provider: "openai",
       runtimeProvider: undefined,
       model: "gpt-5.5",
     });
+    expect(runtimeContext.turnAuthority).toBe(nativeParams.turnAuthority);
   });
 
   it("normalizes an omitted manual target before native harness compaction", async () => {

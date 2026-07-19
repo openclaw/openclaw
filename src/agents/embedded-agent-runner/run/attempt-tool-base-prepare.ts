@@ -1,6 +1,7 @@
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { resolveTurnAuthorityAuthorization } from "../../../plugins/turn-authority.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { getActiveAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
@@ -123,6 +124,33 @@ export function prepareEmbeddedAttemptToolBase(params: {
           sandbox: params.sandbox,
           resolvedWorkspace: params.resolvedWorkspace,
         });
+  const admittedAuthorization = resolveTurnAuthorityAuthorization(attempt.turnAuthority);
+  const admittedPrincipal = admittedAuthorization?.principal;
+  const admittedSender = admittedPrincipal?.kind === "sender" ? admittedPrincipal : undefined;
+  const admittedOperator = admittedPrincipal?.kind === "operator" ? admittedPrincipal : undefined;
+  const senderPolicyIdentity = admittedAuthorization
+    ? {
+        messageProvider: admittedSender ? (admittedSender.provider ?? null) : undefined,
+        accountId: admittedSender?.accountId,
+        memberRoleIds: admittedSender?.roleIds,
+        senderId: admittedSender?.senderId,
+        senderName: admittedSender?.aliases?.name,
+        senderUsername: admittedSender?.aliases?.username,
+        senderE164: admittedSender?.aliases?.e164,
+        senderIsOwner: admittedSender?.senderIsOwner === true || admittedOperator?.isOwner === true,
+        isAuthorizedSender: admittedSender?.isAuthorizedSender,
+      }
+    : {
+        messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+        accountId: attempt.agentAccountId,
+        memberRoleIds: attempt.memberRoleIds,
+        senderId: attempt.senderId,
+        senderName: attempt.senderName,
+        senderUsername: attempt.senderUsername,
+        senderE164: attempt.senderE164,
+        senderIsOwner: attempt.senderIsOwner,
+        isAuthorizedSender: attempt.isAuthorizedSender,
+      };
   const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
     config: toolSearchRuntimeConfig,
     sessionKey: params.sandboxSessionKey,
@@ -136,6 +164,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
     agentDir: params.agentDir,
     agentAccountId: attempt.agentAccountId,
     messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+    senderMessageProvider: senderPolicyIdentity.messageProvider,
+    senderAccountId: senderPolicyIdentity.accountId,
+    requireSenderRouteBinding: admittedSender !== undefined,
     messageChannel: attempt.messageChannel,
     chatType: attempt.chatType,
     messageTo: attempt.messageTo,
@@ -147,13 +178,14 @@ export function prepareEmbeddedAttemptToolBase(params: {
     groupId: attempt.groupId,
     groupChannel: attempt.groupChannel,
     groupSpace: attempt.groupSpace,
-    memberRoleIds: attempt.memberRoleIds,
+    memberRoleIds: senderPolicyIdentity.memberRoleIds,
     spawnedBy: attempt.spawnedBy,
-    senderId: attempt.senderId,
-    senderName: attempt.senderName,
-    senderUsername: attempt.senderUsername,
-    senderE164: attempt.senderE164,
-    senderIsOwner: attempt.senderIsOwner,
+    senderId: senderPolicyIdentity.senderId,
+    senderName: senderPolicyIdentity.senderName,
+    senderUsername: senderPolicyIdentity.senderUsername,
+    senderE164: senderPolicyIdentity.senderE164,
+    senderIsOwner: senderPolicyIdentity.senderIsOwner,
+    isAuthorizedSender: senderPolicyIdentity.isAuthorizedSender,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
     modelApi: attempt.model.api,
@@ -205,6 +237,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
+          turnAuthority: attempt.turnAuthority,
           toolBindings: attempt.toolBindings,
           chatType: attempt.chatType,
           exec: {
@@ -265,6 +298,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             workspaceDir: params.effectiveWorkspace,
           }),
           currentChannelId: attempt.currentChannelId,
+          parentConversationId: attempt.parentConversationId,
           currentMessagingTarget: attempt.currentMessagingTarget,
           currentThreadTs: attempt.currentThreadTs,
           currentMessageId: attempt.currentMessageId,

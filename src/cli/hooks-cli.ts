@@ -551,6 +551,10 @@ export function registerHooksCli(program: Command): void {
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
     .option(
+      "--fail-closed-pre-tool-use",
+      "Convert local PreToolUse relay failures into a blocking exit",
+    )
+    .option(
       "--pre-tool-use-unavailable <mode>",
       "PreToolUse fallback mode when the originating relay is unavailable",
     )

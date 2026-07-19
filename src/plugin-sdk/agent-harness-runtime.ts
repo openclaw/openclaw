@@ -14,7 +14,7 @@ import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcome,
+  queueEmbeddedAgentHarnessMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
   type AbortAndDrainEmbeddedAgentRunResult,
@@ -118,12 +118,16 @@ export type {
   NativeHookRelayProvider,
   NativeHookRelayRegistrationHandle,
 } from "../agents/harness/native-hook-relay.js";
-export type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
+export type {
+  AuthorizationInvocationContext,
+  TurnAuthoritySnapshot,
+} from "../plugins/authorization-policy.types.js";
 export {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
 } from "../plugins/authorization-policy-context.js";
 export { hasAuthorizationPolicies } from "../plugins/authorization-policy.js";
+export { resolveTurnAuthorityAuthorization } from "../plugins/turn-authority.js";
 
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
@@ -223,13 +227,19 @@ export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRu
  * boolean API only reports immediate queue eligibility and cannot observe async
  * runtime rejection; runtime-owned delivery paths should use acceptance-aware
  * steering instead of public SDK queueing.
+ *
+ * Installed native harness plugins already run inside the trusted host process
+ * and can register, clear, and abort active handles through this SDK surface.
+ * For compatibility, this wrapper may queue into the exact active handle that
+ * core captures for the call; it does not grant the same bypass to general
+ * message, command, inter-session, or subagent queue paths.
  */
 export function queueAgentHarnessMessage(
   sessionId: string,
   text: string,
   options?: EmbeddedAgentQueueMessageOptions,
 ): boolean {
-  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
+  return queueEmbeddedAgentHarnessMessageWithOutcome(sessionId, text, options).queued;
 }
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {

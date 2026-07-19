@@ -20,10 +20,11 @@ function resolveIrcGroupScope(params: {
   target: string;
 }) {
   const { "*": wildcard, ...groups } = params.groups ?? {};
-  // This adapter historically reads tools only; do not widen it to toolsBySender.
+  // Keep sender policy in the same exact/wildcard scope projection as group tools.
   const project = (entry: IrcChannelConfig) => ({
     requireMention: entry.requireMention,
     tools: entry.tools,
+    toolsBySender: entry.toolsBySender,
   });
   const tree: ScopeTree = {
     defaults: wildcard ? project(wildcard) : undefined,
@@ -62,7 +63,20 @@ export function resolveIrcGroupRequireMention(params: {
 export function resolveIrcGroupToolPolicy(params: {
   groups?: Record<string, IrcChannelConfig>;
   target: string;
+  senderMessageProvider?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
 }): GroupToolPolicyConfig | undefined {
   const { tree, path } = resolveIrcGroupScope(params);
-  return resolveScopeToolsPolicy({ tree, path });
+  return resolveScopeToolsPolicy({
+    tree,
+    path,
+    messageProvider: params.senderMessageProvider,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
 }

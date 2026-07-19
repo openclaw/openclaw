@@ -6,6 +6,13 @@ export type PluginEntryConfig = {
     requiredPolicies?: Array<{
       id: string;
       operations: Array<"tool.call" | "message.action" | "command.invoke">;
+      /** Optional invocation scope. Omitted fields match every value. */
+      scope?: {
+        agentIds?: string[];
+        providers?: string[];
+        accountIds?: string[];
+        conversationIds?: string[];
+      };
     }>;
   };
   hooks?: {

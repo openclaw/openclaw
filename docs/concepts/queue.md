@@ -39,7 +39,9 @@ Same-turn steering is the default. A prompt that arrives mid-run is injected int
 - `steer`: inject messages into the active runtime. OpenClaw delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
 - `followup`: do not steer. Enqueue each message for a later agent turn after the current run ends.
 - `collect`: do not steer. Coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
-- `interrupt`: abort the active run for that session, then run the newest message.
+- `interrupt`: abort the active run only when the incoming turn has the same
+  authenticated controller authority (or an explicit owner/admin override),
+  then run the newest message. A different sender queues separately.
 
 For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 

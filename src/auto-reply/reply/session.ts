@@ -1,7 +1,6 @@
 // Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -11,7 +10,6 @@ import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistry,
@@ -41,11 +39,10 @@ import {
   isRecoverableTerminalSessionStatus,
   recoverTerminalSessionEntryForVisibleTurn,
 } from "../../config/sessions/terminal-status.js";
-import {
-  DEFAULT_RESET_TRIGGERS,
-  type GroupKeyResolution,
-  type SessionEntry,
-  type SessionScope,
+import type {
+  GroupKeyResolution,
+  SessionEntry,
+  SessionScope,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -83,13 +80,10 @@ import {
 } from "../../sessions/session-state-events.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
-import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
-import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -109,6 +103,13 @@ import {
 } from "./session-init-conflict-retry.js";
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
+import { resolveSessionResetCommand } from "./session-reset-command.js";
+import {
+  ReplySessionResetControlError,
+  type PrepareReplySessionResetControl,
+  type PreparedReplySessionResetControl,
+} from "./session-reset-control.js";
+import { ReplySessionResetTargetChangedError } from "./session-reset-target.js";
 import {
   stripThreadFromSessionRoute,
   stripThreadIdFromDeliveryContext,
@@ -187,6 +188,10 @@ type InitSessionStateParams = {
   commandAuthorized: boolean;
   ctx: MsgContext;
   expectedExistingSessionId?: string;
+  /** Exact session identity authorized for a hard /new or /reset mutation. */
+  expectedResetTarget?: Readonly<{ sessionKey: string; sessionId: string | undefined }>;
+  /** Active-run authority gate. Called under the lifecycle fence before any interruption. */
+  prepareExplicitResetControl?: PrepareReplySessionResetControl;
   pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
@@ -203,7 +208,12 @@ type InitSessionStateAttemptContext = {
 
 type InitSessionStateAttemptOutcome =
   | { kind: "complete"; result: SessionInitResult }
-  | { kind: "lifecycle-mutation"; sessionId: string; sessionKey: string };
+  | {
+      explicitReset: boolean;
+      kind: "lifecycle-mutation";
+      sessionId: string;
+      sessionKey: string;
+    };
 
 function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
@@ -372,6 +382,7 @@ async function initSessionStateAttempt(
     const candidate = rollover;
     const identities = [candidate.sessionKey, candidate.sessionId];
     let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
+    let preparedResetControl: PreparedReplySessionResetControl | undefined;
     // Drain foreign owners before the rollover takes the writer lane. Holding
     // that lane while waiting would deadlock owners that release after a write.
     const outcome = await runExclusiveSessionLifecycleMutation({
@@ -393,16 +404,27 @@ async function initSessionStateAttempt(
           preparedOutcome = revalidated;
           return;
         }
+        if (candidate.explicitReset) {
+          preparedResetControl = await params.prepareExplicitResetControl?.({
+            scope: attemptContext.storePath,
+            sessionId: candidate.sessionId,
+            sessionKey: candidate.sessionKey,
+          });
+        }
         const drained = await interruptSessionWorkAdmissions({
           scope: attemptContext.storePath,
           identities,
           timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
         });
         if (!drained) {
+          if (candidate.explicitReset) {
+            throw new ReplySessionResetControlError("busy");
+          }
           throw new Error(
             `timed out draining work before reply session rollover: ${candidate.sessionKey}`,
           );
         }
+        await preparedResetControl?.afterInterrupt();
       },
       run: async () => {
         if (preparedOutcome) {
@@ -436,9 +458,6 @@ async function initSessionStateAttemptLocked(
   const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
-  const resetTriggers = sessionCfg?.resetTriggers?.length
-    ? sessionCfg.resetTriggers
-    : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const ingressTimingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
 
@@ -474,68 +493,19 @@ async function initSessionStateAttemptLocked(
   let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
   let persistedDisplayName: SessionEntry["displayName"];
 
-  const normalizedChatType = normalizeChatType(ctx.ChatType);
-  const isGroup =
-    normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
-  // Prefer CommandBody/RawBody (clean message) for command detection; fall back
-  // to Body which may contain structural context (history, sender labels).
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
-  // IMPORTANT: do NOT lowercase the entire command body.
-  // Users often pass case-sensitive arguments (e.g. filesystem paths on Linux).
-  // Command parsing downstream lowercases only the command token for matching.
-  const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim();
-
-  // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
-  const rawBody = commandSource;
-  const trimmedBody = rawBody.trim();
+  const resetCommand = resolveSessionResetCommand({ agentId, cfg, ctx });
+  const { isGroup, softReset, triggerBodyNormalized } = resetCommand;
   const resetAuthorized = isResetAuthorizedForContext({
     ctx,
     cfg,
     commandAuthorized,
   });
-  // Timestamp/message prefixes (e.g. "[Dec 4 17:35] ") are added by the
-  // web inbox before we get here. They prevented reset triggers like "/new"
-  // from matching, so strip structural wrappers when checking for resets.
-  const strippedForReset = isGroup
-    ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
-    : triggerBodyNormalized;
-  const normalizedResetBody = normalizeCommandBody(strippedForReset, {
-    botUsername: ctx.BotUsername,
-  });
-  const softReset = parseSoftResetCommand(normalizedResetBody);
-  // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
-  // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
-  const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
-  const strippedForResetLower = normalizeLowercaseStringOrEmpty(normalizedResetBody);
   let matchedResetTriggerLower: string | undefined;
-
-  for (const trigger of resetTriggers) {
-    if (!trigger) {
-      continue;
-    }
-    if (!resetAuthorized) {
-      break;
-    }
-    const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
-    if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
-      isNewSession = true;
-      bodyStripped = "";
-      resetTriggered = true;
-      matchedResetTriggerLower = triggerLower;
-      break;
-    }
-    const triggerPrefixLower = `${triggerLower} `;
-    if (
-      !softReset.matched &&
-      (trimmedBodyLower.startsWith(triggerPrefixLower) ||
-        strippedForResetLower.startsWith(triggerPrefixLower))
-    ) {
-      isNewSession = true;
-      bodyStripped = normalizedResetBody.slice(trigger.length).trimStart();
-      resetTriggered = true;
-      matchedResetTriggerLower = triggerLower;
-      break;
-    }
+  if (resetAuthorized && resetCommand.hardReset) {
+    isNewSession = true;
+    bodyStripped = resetCommand.hardReset.bodyStripped;
+    resetTriggered = true;
+    matchedResetTriggerLower = resetCommand.hardReset.matchedTriggerLower;
   }
 
   // Canonicalize so the written key matches what all read paths produce.
@@ -576,6 +546,14 @@ async function initSessionStateAttemptLocked(
     ctx,
   });
   const entry = initializationSnapshot.currentEntry;
+  if (
+    resetTriggered &&
+    params.expectedResetTarget &&
+    (sessionKey !== params.expectedResetTarget.sessionKey ||
+      entry?.sessionId !== params.expectedResetTarget.sessionId)
+  ) {
+    throw new ReplySessionResetTargetChangedError();
+  }
   const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
@@ -717,6 +695,7 @@ async function initSessionStateAttemptLocked(
   );
   if (previousSessionEntry && !lifecycleMutationMatches) {
     return {
+      explicitReset: resetTriggered,
       kind: "lifecycle-mutation",
       sessionId: previousSessionEntry.sessionId,
       sessionKey,

@@ -9,6 +9,7 @@ import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import {
+  adoptToolCallParamsSnapshot,
   finalizeToolCallParams,
   prepareToolCallParams,
   ToolInputError,
@@ -23,8 +24,10 @@ import { resolveSessionEntryAccessTarget } from "../config/sessions/session-acce
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../infra/plain-object.js";
 import { logWarn } from "../logger.js";
+import { materializeAuthorizationToolInput } from "../plugins/authorization-policy-input.js";
 import {
   AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  hasAuthorizationPoliciesForOperation,
   runAuthorizationPolicies,
 } from "../plugins/authorization-policy.js";
 import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
@@ -341,13 +344,51 @@ export async function invokeGatewayTool(params: {
         },
       };
     }
+    const authorizationPolicyActive = hasAuthorizationPoliciesForOperation({
+      operation: "tool.call",
+      config: params.cfg,
+    });
+    let finalizationInput = hookResult.params;
+    if (authorizationPolicyActive) {
+      const detachedArgs = materializeAuthorizationToolInput(finalizationInput);
+      if (!detachedArgs) {
+        return {
+          ok: false,
+          status: 403,
+          toolName,
+          error: {
+            type: "tool_call_blocked",
+            message: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+          },
+        };
+      }
+      finalizationInput = detachedArgs;
+    }
     const finalizedArgs = await finalizeToolCallParams(
       gatewayTool,
-      hookResult.params,
+      finalizationInput,
       preparedArgs,
     );
-    const finalAction = isPlainObject(finalizedArgs)
-      ? normalizeOptionalString(finalizedArgs.action)
+    let executableArgs = finalizedArgs;
+    if (authorizationPolicyActive) {
+      const detachedArgs = materializeAuthorizationToolInput(finalizedArgs);
+      if (!detachedArgs) {
+        return {
+          ok: false,
+          status: 403,
+          toolName,
+          error: {
+            type: "tool_call_blocked",
+            message: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+          },
+        };
+      }
+      adoptToolCallParamsSnapshot(gatewayTool, detachedArgs, finalizedArgs, preparedArgs);
+      executableArgs = detachedArgs;
+    }
+    const authorizationInput = executableArgs as Record<string, PluginJsonValue>;
+    const finalAction = isPlainObject(authorizationInput)
+      ? normalizeOptionalString(authorizationInput.action)
       : undefined;
     const authorizationDenial = await runAuthorizationPolicies({
       request: {
@@ -355,7 +396,7 @@ export async function invokeGatewayTool(params: {
         toolName,
         phase: "final",
         ...(finalAction ? { action: finalAction } : {}),
-        input: finalizedArgs as Record<string, PluginJsonValue>,
+        input: authorizationInput,
       },
       context: authorization,
       config: params.cfg,
@@ -376,7 +417,7 @@ export async function invokeGatewayTool(params: {
       status: 200,
       toolName,
       source: resolveToolSource(gatewayTool),
-      result: await gatewayTool.execute?.(toolCallId, finalizedArgs),
+      result: await gatewayTool.execute?.(toolCallId, executableArgs),
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

@@ -1,5 +1,8 @@
 /** Builds normalized host-owned context for authorization policy evaluation. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   AuthorizationInvocationContext,
@@ -10,6 +13,9 @@ export function createAuthorizationPrincipal(params: {
   provider?: string | null;
   accountId?: string | null;
   senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   senderIsOwner?: boolean;
   isAuthorizedSender?: boolean;
   roleIds?: readonly string[] | null;
@@ -23,12 +29,21 @@ export function createAuthorizationPrincipal(params: {
   const accountId = normalizeOptionalString(params.accountId);
   const senderId = normalizeOptionalString(params.senderId);
   if (senderId) {
+    const name = normalizeLowercaseStringOrEmpty(params.senderName);
+    const username = normalizeLowercaseStringOrEmpty(params.senderUsername).replace(/^@/u, "");
+    const e164 = normalizeLowercaseStringOrEmpty(params.senderE164);
+    const aliases = {
+      ...(name ? { name } : {}),
+      ...(username ? { username } : {}),
+      ...(e164 ? { e164 } : {}),
+    };
     const roleIds = normalizeSortedUniqueStringEntries(params.roleIds ?? []);
     return {
       kind: "sender",
       ...(provider ? { provider } : {}),
       ...(accountId ? { accountId } : {}),
       senderId,
+      ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
       ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
       ...(params.isAuthorizedSender !== undefined
         ? { isAuthorizedSender: params.isAuthorizedSender }

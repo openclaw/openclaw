@@ -6,7 +6,10 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "./agent-tools.policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
-import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
+import {
+  resolveRouteBoundSenderToolPolicyIdentity,
+  resolveSenderToolPolicy,
+} from "./sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -23,6 +26,9 @@ export type WebSearchToolPolicyParams = {
   sandboxToolPolicy?: SandboxToolPolicy;
   messageProvider?: string;
   agentAccountId?: string | null;
+  senderMessageProvider?: string | null;
+  senderAccountId?: string | null;
+  requireSenderRouteBinding?: boolean;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
@@ -42,6 +48,21 @@ type WebSearchToolPolicyResolution = {
 export function resolveWebSearchToolPolicy(
   params: WebSearchToolPolicyParams,
 ): WebSearchToolPolicyResolution {
+  const senderPolicyIdentity = resolveRouteBoundSenderToolPolicyIdentity({
+    routeMessageProvider: params.messageProvider,
+    routeAccountId: params.agentAccountId,
+    senderMessageProvider:
+      params.senderMessageProvider === undefined
+        ? params.messageProvider
+        : params.senderMessageProvider,
+    senderAccountId:
+      params.senderAccountId === undefined ? params.agentAccountId : params.senderAccountId,
+    requireRouteBinding: params.requireSenderRouteBinding,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
   const {
     agentId,
     globalPolicy,
@@ -76,10 +97,11 @@ export function resolveWebSearchToolPolicy(
   };
   const groupPolicy = resolveGroupToolPolicy({
     ...groupPolicyParams,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
+    senderMessageProvider: senderPolicyIdentity.messageProvider,
+    senderId: senderPolicyIdentity.senderId,
+    senderName: senderPolicyIdentity.senderName,
+    senderUsername: senderPolicyIdentity.senderUsername,
+    senderE164: senderPolicyIdentity.senderE164,
   });
   const persistentGroupPolicy = resolveGroupToolPolicy(groupPolicyParams);
   const senderPolicyParams = {
@@ -87,13 +109,16 @@ export function resolveWebSearchToolPolicy(
     agentId,
     messageProvider: params.messageProvider,
   };
-  const senderPolicy = resolveSenderToolPolicy({
-    ...senderPolicyParams,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const senderPolicy = senderPolicyIdentity.routeBound
+    ? resolveSenderToolPolicy({
+        ...senderPolicyParams,
+        messageProvider: senderPolicyIdentity.messageProvider,
+        senderId: senderPolicyIdentity.senderId,
+        senderName: senderPolicyIdentity.senderName,
+        senderUsername: senderPolicyIdentity.senderUsername,
+        senderE164: senderPolicyIdentity.senderE164,
+      })
+    : { deny: ["*"] };
   const persistentSenderPolicy = resolveSenderToolPolicy(senderPolicyParams);
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
     cfg: params.config,

@@ -11,10 +11,14 @@ import type {
   LegacyInteractiveReply,
   MessagePresentationAction,
 } from "../../interactive/payload.js";
-import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
+import {
+  executePluginCommandWithTurnAuthority,
+  matchPluginCommand,
+} from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
+import { resolveCommandAuthorizationThreadId } from "./commands-authorization.js";
 import {
   buildCurrentOpenClawCliCommand,
   buildCurrentOpenClawCliExecEnv,
@@ -428,7 +432,7 @@ async function executeCodexDiagnosticsAddon(
   if (!match || match.command.pluginId !== "codex") {
     return undefined;
   }
-  return await executePluginCommand({
+  return await executePluginCommandWithTurnAuthority({
     command: match.command,
     args: match.args,
     senderId: params.command.senderId,
@@ -446,19 +450,16 @@ async function executeCodexDiagnosticsAddon(
     commandBody,
     commandSource: params.ctx.CommandSource,
     abortSignal: params.opts?.abortSignal,
+    turnAuthority: params.ctx.TurnAuthority,
     config: params.cfg,
     from: params.command.from,
     to: params.command.to,
     accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof params.ctx.MessageThreadId === "string" ||
-      typeof params.ctx.MessageThreadId === "number"
-        ? params.ctx.MessageThreadId
-        : undefined,
+    messageThreadId: resolveCommandAuthorizationThreadId(params.ctx),
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     conversationId:
-      normalizeOptionalString(params.ctx.OriginatingTo) ??
       normalizeOptionalString(params.ctx.NativeChannelId) ??
+      normalizeOptionalString(params.ctx.OriginatingTo) ??
       params.command.to ??
       params.command.from,
     parentConversationId: normalizeOptionalString(params.ctx.ThreadParentId),
@@ -506,10 +507,8 @@ function buildCodexDiagnosticsSessions(
         entry.deliveryContext?.threadId ??
         entry.origin?.threadId ??
         entry.lastThreadId ??
-        (sessionKey === params.sessionKey &&
-        (typeof params.ctx.MessageThreadId === "string" ||
-          typeof params.ctx.MessageThreadId === "number")
-          ? params.ctx.MessageThreadId
+        (sessionKey === params.sessionKey
+          ? resolveCommandAuthorizationThreadId(params.ctx)
           : undefined),
       threadParentId:
         sessionKey === params.sessionKey

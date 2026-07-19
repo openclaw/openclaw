@@ -1880,6 +1880,94 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("authorizes a detached native hook result while a retained alias mutates", async () => {
+    const retainedInput = { action: "reply", text: "approved" };
+    const beforeToolCall = vi.fn(async () => ({ params: retainedInput }));
+    let releasePolicy: (() => void) | undefined;
+    let notifyPolicyStarted: (() => void) | undefined;
+    const policyStarted = new Promise<void>((resolve) => {
+      notifyPolicyStarted = resolve;
+    });
+    const authorizationHandler = vi.fn(async () => {
+      notifyPolicyStarted?.();
+      await new Promise<void>((resolve) => {
+        releasePolicy = resolve;
+      });
+      return { effect: "pass" as const };
+    });
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: beforeToolCall },
+    ]);
+    registry.authorizationPolicies.push({
+      pluginId: "native-policy",
+      source: "/plugins/native-policy/index.ts",
+      policy: {
+        id: "native-policy",
+        description: "Wait before allowing",
+        handlers: { "tool.call": authorizationHandler },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      config: {},
+      preToolUseLoopDetection: false,
+    });
+
+    const pending = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "message",
+        tool_input: { action: "reply", text: "approved" },
+      },
+    });
+    await policyStarted;
+    retainedInput.action = "delete";
+    retainedInput.text = "mutated";
+    releasePolicy?.();
+    const response = await pending;
+
+    expect(getMockCallArg(authorizationHandler, 0, 0, "authorization request")).toMatchObject({
+      input: { action: "reply", text: "approved" },
+    });
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
+  it("rejects native payload accessors without evaluating them", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const readToolInput = vi.fn(() => ({ command: "rm -rf /" }));
+    const rawPayload = Object.defineProperty(
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+      },
+      "tool_input",
+      {
+        enumerable: true,
+        get: readToolInput,
+      },
+    );
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload,
+      }),
+    ).rejects.toThrow("native hook relay payload must be JSON-compatible");
+    expect(readToolInput).not.toHaveBeenCalled();
+  });
+
   it("does not expose native authorization policy codes in hook output", async () => {
     const registry = createMockPluginRegistry([]);
     registry.authorizationPolicies.push({
@@ -3774,6 +3862,26 @@ describe("native hook relay command builder", () => {
     ).toBe(
       "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 5000",
     );
+  });
+
+  it("wraps authorization PreToolUse relays with fail-closed child execution", () => {
+    const command = buildNativeHookRelayCommand({
+      provider: "codex",
+      relayId: "relay-1",
+      generation: "generation-1",
+      event: "pre_tool_use",
+      executable: "/opt/Open Claw/openclaw.mjs",
+      nodeExecutable: "/usr/local/bin/node",
+      failClosedPreToolUse: true,
+      nice: 10,
+      timeoutMs: 900,
+    });
+
+    expect(command.startsWith("/usr/local/bin/node ")).toBe(true);
+    expect(command).toContain(" 1000 nice -n 10 /usr/local/bin/node ");
+    expect(command).toContain("--fail-closed-pre-tool-use");
+    expect(command).toContain("spawnSync");
+    expect(command).toContain("refusing native tool call");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

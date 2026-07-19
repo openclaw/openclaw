@@ -4,16 +4,13 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
@@ -37,21 +34,17 @@ import {
   resolveConfiguredDirectiveAliases,
 } from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
-import { authorizeReplyDirectiveCommands } from "./get-reply-directives-authorization.js";
+import { authorizeReplyDirectiveCommandsBeforeModelResolution } from "./get-reply-directives-authorization.js";
+import { resolveDirectiveCommandText } from "./get-reply-directives-input.js";
 import {
-  canUseFastExplicitModelDirective,
-  resolveDirectiveCommandText,
-} from "./get-reply-directives-input.js";
+  prepareReplyDirectiveModel,
+  type ReplyDirectiveModelState,
+} from "./get-reply-directives-model.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import {
-  createFastTestModelSelectionState,
-  createModelSelectionState,
-  resolveContextTokens,
-} from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -105,7 +98,7 @@ type ReplyDirectiveContinuation = {
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   provider: string;
   model: string;
-  modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
+  modelState: ReplyDirectiveModelState;
   contextTokens: number;
   inlineStatusRequested: boolean;
   directiveAck?: ReplyPayload;
@@ -310,7 +303,7 @@ export async function resolveReplyDirectives(params: {
       }
     }
   }
-  const directiveAuthorizationDenial = await authorizeReplyDirectiveCommands({
+  const directiveAuthorizationDenial = await authorizeReplyDirectiveCommandsBeforeModelResolution({
     command,
     ctx,
     directives: parsedDirectives,
@@ -318,7 +311,7 @@ export async function resolveReplyDirectives(params: {
     allowTextCommands,
     agentId,
     sessionKey,
-    sessionId: sessionEntry.sessionId,
+    sessionId: targetSessionEntry.sessionId,
     signal: opts?.abortSignal,
   });
   if (directiveAuthorizationDenial) {
@@ -493,85 +486,45 @@ export async function resolveReplyDirectives(params: {
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
   });
 
-  const useFastModelSelection =
-    useFastReplyRuntime &&
-    !hasResolvedHeartbeatModelOverride &&
-    !(agentCfg?.models && Object.keys(agentCfg.models).length > 0) &&
-    !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
-    !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
-    (!directives.hasModelDirective ||
-      canUseFastExplicitModelDirective({
-        directives,
-        defaultProvider,
-        aliasIndex: params.aliasIndex,
-      }));
-
-  let modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
-  try {
-    modelState = useFastModelSelection
-      ? createFastTestModelSelectionState({
-          agentCfg,
-          provider,
-          model,
-        })
-      : await createModelSelectionState({
-          cfg,
-          agentId,
-          agentCfg,
-          sessionEntry: targetSessionEntry,
-          sessionStore,
-          sessionKey,
-          parentSessionKey:
-            targetSessionEntry?.parentSessionKey ??
-            ctx.ModelParentSessionKey ??
-            ctx.ParentSessionKey,
-          storePath,
-          defaultProvider,
-          defaultModel,
-          primaryProvider,
-          primaryModel,
-          provider,
-          model,
-          hasModelDirective: directives.hasModelDirective,
-          hasOneTurnModelOverride,
-          skipStoredModelOverride,
-          hasResolvedHeartbeatModelOverride,
-          isHeartbeat: opts?.isHeartbeat === true,
-        });
-  } catch (error) {
-    if (error instanceof ModelSelectionLockedError) {
-      typing.cleanup();
-      return { kind: "reply", reply: { text: error.message } };
-    }
-    if (!isSessionWorkStartInvalidatedError(error)) {
-      throw error;
-    }
+  const preparedModel = await prepareReplyDirectiveModel({
+    cfg,
+    ctx,
+    agentId,
+    agentDir,
+    agentCfg,
+    sessionEntry: targetSessionEntry,
+    sessionStore,
+    sessionKey,
+    runtimePolicySessionKey: resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey }),
+    storePath,
+    defaultProvider,
+    defaultModel,
+    primaryProvider,
+    primaryModel,
+    aliasIndex: params.aliasIndex,
+    provider,
+    model,
+    directives,
+    allowTextCommands,
+    command,
+    useFastReplyRuntime,
+    hasOneTurnModelOverride,
+    skipStoredModelOverride,
+    hasResolvedHeartbeatModelOverride,
+    isHeartbeat: opts?.isHeartbeat === true,
+    signal: opts?.abortSignal,
+  });
+  if (preparedModel.kind === "reply") {
     typing.cleanup();
-    return { kind: "reply", reply: { text: error.message } };
+    return { kind: "reply", reply: preparedModel.reply };
   }
-  provider = modelState.provider;
-  model = modelState.model;
-
-  let contextTokens = useFastReplyRuntime
-    ? (agentCfg?.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
-    : resolveContextTokens({
-        cfg,
-        agentCfg,
-        provider,
-        model,
-        modelContextWindow: modelState.modelContextWindow,
-        modelContextTokens: modelState.modelContextTokens,
-      });
-
+  const { modelState, effectiveModelDirective, modelDirectiveEffect } = preparedModel;
+  provider = preparedModel.provider;
+  model = preparedModel.model;
+  let contextTokens = preparedModel.contextTokens;
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>
     alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
-  const isModelListAlias =
-    directives.hasModelDirective &&
-    ["status", "list"].includes(
-      normalizeLowercaseStringOrEmpty(normalizeOptionalString(directives.rawModelDirective)),
-    );
-  const effectiveModelDirective = isModelListAlias ? undefined : directives.rawModelDirective;
 
   const inlineStatusRequested = hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
 
@@ -608,6 +561,7 @@ export async function resolveReplyDirectives(params: {
     defaultActivation: () => defaultActivation,
     contextTokens,
     effectiveModelDirective,
+    modelDirectiveEffect,
     typing,
   });
   if (applyResult.kind === "reply") {

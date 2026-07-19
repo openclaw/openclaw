@@ -1,8 +1,6 @@
 /** Tests directive handling for target-session command turns. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
-import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -11,404 +9,24 @@ import {
 } from "../../sessions/model-overrides.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import { resolveReplyDirectives } from "./get-reply-directives.js";
+import {
+  cleanupTargetSessionDirectiveMocks,
+  expectContinueResult,
+  getTargetSessionDirectiveMocks,
+  makeSessionEntry,
+  makeTypingController,
+  mockCallInput,
+  resetTargetSessionDirectiveMocks,
+  resolveHelloWithModelDefaults,
+  resolveReplyDirectives,
+} from "./get-reply-directives.target-session.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-const mocks = vi.hoisted(() => ({
-  createModelSelectionState: vi.fn(),
-  applyInlineDirectiveOverrides: vi.fn(),
-  listAgentEntries: vi.fn(),
-  resolveFastModeState: vi.fn(),
-  resolveReplyExecOverrides: vi.fn(),
-}));
-
-function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-id",
-    updatedAt: Date.now(),
-    ...overrides,
-  };
-}
-
-function makeTypingController() {
-  return {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
-}
-
-function parseInlineDirectivesForTest(body: string) {
-  const normalized = body.trim();
-  const modelDirective = normalized.match(/(?:^|\n)\/model\s+(\S+)/)?.[1];
-  if (modelDirective) {
-    return {
-      cleaned: normalized.replace(/(?:^|\n)\/model\s+\S+/, "").trim(),
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: false,
-      traceLevel: undefined,
-      rawTraceLevel: undefined,
-      hasFastDirective: false,
-      hasReasoningDirective: false,
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: true,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      reasoningLevel: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: modelDirective,
-      execSecurity: undefined,
-    };
-  }
-  if (normalized === "/reasoning stream") {
-    return {
-      cleaned: "",
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: false,
-      traceLevel: undefined,
-      rawTraceLevel: undefined,
-      hasFastDirective: false,
-      hasReasoningDirective: true,
-      reasoningLevel: "stream",
-      rawReasoningLevel: "stream",
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: false,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: undefined,
-      execSecurity: undefined,
-    };
-  }
-  if (normalized === "/trace on") {
-    return {
-      cleaned: "",
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: true,
-      traceLevel: "on",
-      rawTraceLevel: "on",
-      hasFastDirective: false,
-      hasReasoningDirective: false,
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: false,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      reasoningLevel: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: undefined,
-      execSecurity: undefined,
-    };
-  }
-  return {
-    cleaned: body,
-    hasThinkDirective: false,
-    hasVerboseDirective: false,
-    hasTraceDirective: false,
-    traceLevel: undefined,
-    rawTraceLevel: undefined,
-    hasFastDirective: false,
-    hasReasoningDirective: false,
-    hasElevatedDirective: false,
-    hasExecDirective: false,
-    hasModelDirective: false,
-    hasQueueDirective: false,
-    hasStatusDirective: false,
-    queueReset: false,
-    thinkLevel: undefined,
-    verboseLevel: undefined,
-    fastMode: undefined,
-    reasoningLevel: undefined,
-    elevatedLevel: undefined,
-    rawElevatedLevel: undefined,
-    rawModelDirective: undefined,
-    execSecurity: undefined,
-  };
-}
-
-function mockCallInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  const input = call[0];
-  if (!input || typeof input !== "object") {
-    throw new Error(`expected mock input ${index}`);
-  }
-  return input as Record<string, unknown>;
-}
-
-function expectContinueResult(
-  value: Awaited<ReturnType<typeof resolveReplyDirectives>>,
-  fields: Record<string, unknown>,
-) {
-  expect(value.kind).toBe("continue");
-  if (value.kind !== "continue") {
-    throw new Error(`expected continue result, got ${value.kind}`);
-  }
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(value.result[key as keyof typeof value.result]).toEqual(expected);
-  }
-}
-
-async function resolveHelloWithModelDefaults(params: {
-  defaultThinking: "off" | "low" | "medium";
-  defaultThinkingByModel?: Record<string, "off" | "low" | "medium">;
-  defaultReasoning: "on";
-  cfg?: Parameters<typeof resolveReplyDirectives>[0]["cfg"];
-  body?: string;
-  sessionEntry?: SessionEntry;
-  agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
-  agentEntries?: Array<{ id?: string; thinkingDefault?: "off" | "low" }>;
-  hasConfiguredThinkingDefault?: boolean;
-  commandAuthorized?: boolean;
-  hasOneTurnModelOverride?: boolean;
-  selectedProvider?: string;
-  selectedModel?: string;
-  provider?: string;
-  model?: string;
-  ctx?: Parameters<typeof buildTestCtx>[0];
-  opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
-  modelError?: unknown;
-}) {
-  const resolveDefaultThinkingLevel = vi.fn(
-    async (selection?: { model?: string }) =>
-      (selection?.model ? params.defaultThinkingByModel?.[selection.model] : undefined) ??
-      params.defaultThinking,
-  );
-  const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
-  mocks.listAgentEntries.mockReturnValue(params.agentEntries ?? []);
-  if (params.modelError) {
-    mocks.createModelSelectionState.mockRejectedValueOnce(params.modelError);
-  } else {
-    mocks.createModelSelectionState.mockResolvedValueOnce({
-      provider: params.selectedProvider ?? "openai",
-      model: params.selectedModel ?? "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
-      resolveDefaultThinkingLevel,
-      hasConfiguredThinkingDefault: params.hasConfiguredThinkingDefault,
-      resolveDefaultReasoningLevel,
-    });
-  }
-  const typing = makeTypingController();
-
-  const result = await resolveReplyDirectives({
-    ctx: buildTestCtx({
-      Body: params.body ?? "hello",
-      CommandBody: params.body ?? "hello",
-      ...params.ctx,
-    }),
-    cfg: params.cfg ?? {},
-    agentId: "main",
-    agentDir: "/tmp/main-agent",
-    workspaceDir: "/tmp",
-    agentCfg: params.agentCfg ?? {},
-    sessionCtx: {
-      Body: params.body ?? "hello",
-      BodyStripped: params.body ?? "hello",
-      BodyForAgent: params.body ?? "hello",
-      CommandBody: params.body ?? "hello",
-      Provider: "whatsapp",
-    } as TemplateContext,
-    sessionEntry: params.sessionEntry ?? makeSessionEntry(),
-    sessionStore: {},
-    sessionKey: "agent:main:whatsapp:+2000",
-    storePath: "/tmp/sessions.json",
-    sessionScope: "per-sender",
-    groupResolution: undefined,
-    isGroup: false,
-    triggerBodyNormalized: "hello",
-    resetTriggered: false,
-    commandAuthorized: params.commandAuthorized ?? false,
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: params.provider ?? "openai",
-    model: params.model ?? "gpt-4o-mini",
-    hasOneTurnModelOverride: params.hasOneTurnModelOverride,
-    hasResolvedHeartbeatModelOverride: false,
-    typing,
-    opts: params.opts,
-    skillFilter: undefined,
-  });
-
-  return { result, resolveDefaultThinkingLevel, resolveDefaultReasoningLevel, typing };
-}
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentEntries: (...args: unknown[]) => mocks.listAgentEntries(...args),
-}));
-
-vi.mock("../../agents/defaults.js", () => ({
-  DEFAULT_CONTEXT_TOKENS: 8192,
-}));
-
-vi.mock("../../agents/fast-mode.js", () => ({
-  resolveFastModeState: (...args: unknown[]) => mocks.resolveFastModeState(...args),
-}));
-
-vi.mock("../../agents/sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
-}));
-
-vi.mock("../../agents/thinking-runtime.js", () => ({
-  resolveEffectiveAgentRuntime: ({
-    cfg,
-    provider,
-    modelId,
-  }: {
-    cfg: Parameters<typeof resolveReplyDirectives>[0]["cfg"];
-    provider: string;
-    modelId: string;
-  }) =>
-    cfg.agents?.defaults?.models?.[`${provider}/${modelId}`]?.agentRuntime?.id ??
-    (provider === "openai" ? "codex" : "openclaw"),
-}));
-
-vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: (value: string) => value,
-}));
-
-vi.mock("../commands-text-routing.js", () => ({
-  shouldHandleTextCommands: vi.fn(() => false),
-}));
-
-vi.mock("./commands-context.js", () => ({
-  buildCommandContext: vi.fn(
-    (params: { commandAuthorized?: boolean; ctx?: { CommandBody?: string; Body?: string } }) => {
-      const commandBodyNormalized = params.ctx?.CommandBody ?? params.ctx?.Body ?? "hello";
-      return {
-        surface: "whatsapp",
-        channel: "whatsapp",
-        channelId: "whatsapp",
-        ownerList: [],
-        senderIsOwner: false,
-        isAuthorizedSender: params.commandAuthorized === true,
-        senderId: undefined,
-        abortKey: "abort-key",
-        rawBodyNormalized: commandBodyNormalized,
-        commandBodyNormalized,
-        from: "whatsapp:+1000",
-        to: "whatsapp:+2000",
-      };
-    },
-  ),
-}));
-
-vi.mock("./directive-handling.parse.js", () => ({
-  parseInlineDirectives: vi.fn(parseInlineDirectivesForTest),
-}));
-
-vi.mock("./get-reply-directive-aliases.js", () => ({
-  reserveSkillCommandNames: vi.fn(),
-  resolveConfiguredDirectiveAliases: vi.fn(() => []),
-}));
-
-vi.mock("./get-reply-directives-apply.js", () => ({
-  applyInlineDirectiveOverrides: (...args: unknown[]) =>
-    mocks.applyInlineDirectiveOverrides(...args),
-}));
-
-vi.mock("./runtime-policy-session-key.js", () => ({
-  resolveRuntimePolicySessionKey: ({ sessionKey }: { sessionKey?: string }) => sessionKey,
-}));
-
-vi.mock("./get-reply-exec-overrides.js", () => ({
-  resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
-}));
-
-vi.mock("./get-reply-fast-path.js", () => ({
-  shouldUseReplyFastTestRuntime: vi.fn(() => false),
-}));
-
-vi.mock("./groups.js", () => ({
-  defaultGroupActivation: vi.fn(() => "always"),
-  resolveGroupRequireMention: vi.fn(async () => false),
-}));
-
-vi.mock("./model-selection.js", () => ({
-  createFastTestModelSelectionState: vi.fn(),
-  createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
-  resolveContextTokens: vi.fn(() => 4096),
-}));
-
-vi.mock("./reply-elevated.js", () => ({
-  formatElevatedUnavailableMessage: vi.fn(() => "elevated unavailable"),
-  resolveElevatedPermissions: vi.fn(() => ({
-    enabled: true,
-    allowed: true,
-    failures: [],
-  })),
-}));
+const mocks = getTargetSessionDirectiveMocks();
 
 describe("resolveReplyDirectives", () => {
-  beforeEach(() => {
-    resetGlobalHookRunner();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    mocks.createModelSelectionState.mockReset();
-    mocks.applyInlineDirectiveOverrides.mockReset();
-    mocks.listAgentEntries.mockReset();
-    mocks.resolveFastModeState.mockReset();
-    mocks.resolveReplyExecOverrides.mockReset();
-
-    mocks.listAgentEntries.mockReturnValue([]);
-    mocks.createModelSelectionState.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
-      resolveThinkingCatalog: vi.fn(async () => []),
-      resolveDefaultThinkingLevel: vi.fn(async () => "off"),
-      resolveDefaultReasoningLevel: vi.fn(async () => "off"),
-    });
-    mocks.applyInlineDirectiveOverrides.mockImplementation(async (params) => ({
-      kind: "continue",
-      directives: params.directives,
-      provider: params.provider,
-      model: params.model,
-      contextTokens: params.contextTokens,
-    }));
-    mocks.resolveFastModeState.mockImplementation(({ sessionEntry }) => ({
-      mode: sessionEntry?.sessionId === "target-session",
-      enabled: sessionEntry?.sessionId === "target-session",
-      source: "session",
-      fastAutoOnSeconds: 60,
-    }));
-    mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
-  });
-
-  afterEach(() => {
-    resetGlobalHookRunner();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
+  beforeEach(resetTargetSessionDirectiveMocks);
+  afterEach(cleanupTargetSessionDirectiveMocks);
 
   it("passes one-turn model override state into model selection", async () => {
     await resolveHelloWithModelDefaults({
@@ -496,7 +114,7 @@ describe("resolveReplyDirectives", () => {
         owner: { kind: "core" },
         arguments: {
           raw: "openai/gpt-5.5",
-          values: { model: "openai/gpt-5.5" },
+          values: { provider: "openai", model: "gpt-5.5", runtime: "codex" },
         },
       }),
       expect.objectContaining({ sessionId: sessionEntry.sessionId }),
@@ -506,6 +124,191 @@ describe("resolveReplyDirectives", () => {
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
     expect(sessionEntry).toEqual(before);
     expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["/model openai/gpt-5.5", "model"],
+    ["/reasoning stream", "reasoning"],
+  ])("authorizes %s against the target session", async (body, commandName) => {
+    const wrapperSessionEntry = makeSessionEntry({ sessionId: "wrapper-session" });
+    const targetSessionEntry = makeSessionEntry({ sessionId: "target-session" });
+    const policy = vi.fn((request: { commandName: string }, context: { sessionId?: string }) =>
+      request.commandName === commandName && context.sessionId === targetSessionEntry.sessionId
+        ? ({ effect: "deny", code: "target-session-denied" } as const)
+        : ({ effect: "pass" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "target-session-actions",
+        description: "Protect the command target session",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const { result } = await resolveHelloWithModelDefaults({
+      body,
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: wrapperSessionEntry,
+      sessionStore: {
+        "agent:main:whatsapp:+2000": targetSessionEntry,
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: "Command blocked by authorization policy." },
+    });
+    expect(policy).toHaveBeenCalledWith(
+      expect.objectContaining({ commandName }),
+      expect.objectContaining({
+        sessionId: targetSessionEntry.sessionId,
+        sessionKey: "agent:main:whatsapp:+2000",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
+  });
+
+  it("authorizes a numeric model alias as its concrete selection before mutation", async () => {
+    const sessionEntry = makeSessionEntry({
+      modelOverride: "gpt-4o-mini",
+      providerOverride: "openai",
+    });
+    const before = structuredClone(sessionEntry);
+    const policy = vi.fn((request: { arguments?: { values?: Record<string, unknown> } }) => {
+      const values = request.arguments?.values;
+      return values?.provider === "anthropic" &&
+        values.model === "claude-opus-4-6" &&
+        values.runtime === "openclaw"
+        ? ({ effect: "deny", code: "model-denied" } as const)
+        : ({ effect: "pass" } as const);
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect concrete model selections",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const { result } = await resolveHelloWithModelDefaults({
+      body: "/model 3",
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry,
+      aliasIndex: {
+        byAlias: new Map([
+          [
+            "3",
+            {
+              alias: "3",
+              ref: { provider: "anthropic", model: "claude-opus-4-6" },
+            },
+          ],
+        ]),
+        byKey: new Map([["anthropic/claude-opus-4-6", ["3"]]]),
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: "Command blocked by authorization policy." },
+    });
+    expect(policy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "model",
+        arguments: {
+          raw: "3",
+          values: {
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            runtime: "openclaw",
+          },
+        },
+      }),
+      expect.any(Object),
+      expect.any(AbortSignal),
+    );
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
+    expect(sessionEntry).toEqual(before);
+  });
+
+  it("authorizes a runtime alias as its canonical runtime before mutation", async () => {
+    const sessionEntry = makeSessionEntry({
+      modelOverride: "gpt-4o-mini",
+      providerOverride: "openai",
+      agentRuntimeOverride: "openclaw",
+    });
+    const before = structuredClone(sessionEntry);
+    const policy = vi.fn((request: { arguments?: { values?: Record<string, unknown> } }) =>
+      request.arguments?.values?.runtime === "codex"
+        ? ({ effect: "deny", code: "runtime-denied" } as const)
+        : ({ effect: "pass" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect concrete runtime selections",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const { result } = await resolveHelloWithModelDefaults({
+      body: "/model openai/gpt-5.5 --runtime codex-app-server",
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry,
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: "Command blocked by authorization policy." },
+    });
+    expect(policy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "model",
+        arguments: {
+          raw: "openai/gpt-5.5 --runtime codex-app-server",
+          values: {
+            provider: "openai",
+            model: "gpt-5.5",
+            runtime: "codex",
+          },
+        },
+      }),
+      expect.any(Object),
+      expect.any(AbortSignal),
+    );
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
+    expect(sessionEntry).toEqual(before);
   });
 
   it("marks terminal directive replies for delivery under source suppression", async () => {

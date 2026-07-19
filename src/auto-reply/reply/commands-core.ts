@@ -58,16 +58,19 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
+  const authorizationCtx = params.rootCtx ?? params.ctx;
   if (
     shouldAuthorizeCoreCommandTurn({
       allowTextCommands,
       commandBodyNormalized: params.command.commandBodyNormalized,
     }) &&
-    (params.command.isAuthorizedSender || params.ctx.CommandAuthorized === true)
+    (params.command.isAuthorizedSender ||
+      params.ctx.CommandAuthorized === true ||
+      authorizationCtx.TurnAuthority !== undefined)
   ) {
     const authorization = await authorizeCoreCommand({
       command: params.command,
-      ctx: params.rootCtx ?? params.ctx,
+      ctx: authorizationCtx,
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,

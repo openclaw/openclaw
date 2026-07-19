@@ -4,6 +4,7 @@
  * specific XML suffix and Office-extension corruption seen in path arguments.
  */
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { composeToolCallParamFinalizer } from "./tools/common.js";
 
 export type RequiredParamGroup = {
   keys: readonly string[];
@@ -227,18 +228,23 @@ export function wrapToolParamValidation(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],
 ): AnyAgentTool {
+  const finalizeParams = (params: unknown): unknown => {
+    const record = getToolParamsRecord(params);
+    const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
+    const normalizedParams =
+      record && pathKeys.length > 0
+        ? normalizeFileToolPathParamsFromKeys(record, pathKeys)
+        : params;
+    if (requiredParamGroups?.length) {
+      assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
+    }
+    return normalizedParams;
+  };
   return {
     ...tool,
+    finalizeBeforeToolCallParams: composeToolCallParamFinalizer(tool, finalizeParams),
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const record = getToolParamsRecord(params);
-      const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
-      const normalizedParams =
-        record && pathKeys.length > 0
-          ? normalizeFileToolPathParamsFromKeys(record, pathKeys)
-          : params;
-      if (requiredParamGroups?.length) {
-        assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
-      }
+      const normalizedParams = finalizeParams(params);
       return tool.execute(toolCallId, normalizedParams, signal, onUpdate);
     },
   };

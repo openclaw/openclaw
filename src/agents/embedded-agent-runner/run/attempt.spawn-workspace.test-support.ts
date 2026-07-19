@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi, type Mock } from "vitest";
+import { createSteeringAuthorizationAffinity } from "../../../auto-reply/reply/steering-authorization-affinity.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -20,6 +21,7 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { createTurnAuthoritySnapshot } from "../../../plugins/turn-authority.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
@@ -420,6 +422,7 @@ vi.mock("../../embedded-agent-subscribe.js", () => ({
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: hoisted.getGlobalHookRunnerMock,
+  getGlobalHookRunnerRegistry: () => undefined,
   initializeGlobalHookRunner: hoisted.initializeGlobalHookRunnerMock,
 }));
 
@@ -1360,6 +1363,19 @@ export async function createContextEngineAttemptRunner(params: {
     delete process.env.OPENCLAW_TRAJECTORY;
     process.env.OPENCLAW_TRAJECTORY_DIR = workspaceDir;
   }
+  const steeringAuthorizationAffinity =
+    params.attemptOverrides?.steeringAuthorizationAffinity ??
+    createSteeringAuthorizationAffinity({
+      turnAuthority:
+        params.attemptOverrides?.turnAuthority ??
+        createTurnAuthoritySnapshot({
+          principal: { kind: "service", serviceId: "spawn-workspace-test" },
+          agentId: "main",
+          sessionKey: params.sessionKey,
+          conversationId: params.sessionKey,
+          controllerKey: "service:spawn-workspace-test",
+        }),
+    });
   try {
     return await (
       await loadRunEmbeddedAttempt()
@@ -1406,6 +1422,7 @@ export async function createContextEngineAttemptRunner(params: {
         },
       },
       ...params.attemptOverrides,
+      steeringAuthorizationAffinity,
     });
   } finally {
     if (previousTrajectoryEnv === undefined) {

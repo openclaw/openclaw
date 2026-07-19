@@ -193,11 +193,22 @@ describe("discord native /status", () => {
     const authorizationHandler = installCommandDenialPolicy();
     const cfg = createConfig();
     const command = await createStatusCommand(cfg);
-    const interaction = createInteraction();
+    const interaction = createInteraction({
+      channelType: ChannelType.PublicThread,
+      channelId: "thread-1",
+      threadParentId: "chan1",
+      guildId: "guild1",
+      guildName: "Guild",
+    });
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(authorizationHandler).toHaveBeenCalledTimes(1);
+    expect(authorizationHandler.mock.calls[0]?.[1]).toMatchObject({
+      conversationId: "thread-1",
+      parentConversationId: "chan1",
+      threadId: "thread-1",
+    });
     expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).not.toHaveBeenCalled();
     expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledWith({

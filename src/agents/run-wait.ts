@@ -15,6 +15,7 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-idempotency.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
   isOpenClawInternalSourceReplyMirrorAssistantMessage,
@@ -33,6 +34,13 @@ import {
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
+
+const DEFAULT_ASSISTANT_REPLY_HISTORY_LIMIT = 50;
+// Match the gateway's maximum chat.history message request while bounding the
+// number of round trips needed to find an older persisted run boundary.
+const MAX_ATTRIBUTED_REPLY_HISTORY_MESSAGES = 1_000;
+const MAX_ATTRIBUTED_REPLY_HISTORY_PAGES =
+  MAX_ATTRIBUTED_REPLY_HISTORY_MESSAGES / DEFAULT_ASSISTANT_REPLY_HISTORY_LIMIT;
 
 function resolveRunWaitTimeoutMs(value: number | undefined): number {
   return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
@@ -86,6 +94,14 @@ type RawAgentWaitResponse = {
   pendingError?: unknown;
   timeoutPhase?: unknown;
   providerStarted?: unknown;
+};
+
+type RawChatHistoryResponse = {
+  messages?: unknown;
+  offset?: unknown;
+  nextOffset?: unknown;
+  hasMore?: unknown;
+  totalMessages?: unknown;
 };
 
 function normalizeAgentWaitResult(
@@ -189,6 +205,19 @@ function isWaitedReplyTurnBoundary(message: unknown): boolean {
   return (message as { role?: unknown }).role === "user" || isInterSessionInputMessage(message);
 }
 
+function isProjectedTurnBoundary(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const meta = (message as { __openclaw?: unknown })["__openclaw"];
+  return (
+    Boolean(meta) &&
+    typeof meta === "object" &&
+    !Array.isArray(meta) &&
+    (meta as { turnBoundary?: unknown }).turnBoundary === true
+  );
+}
+
 function snapshotAssistantReply(message: unknown): AssistantReplySnapshot | undefined {
   const text = extractAssistantText(message);
   if (!text?.trim()) {
@@ -214,6 +243,158 @@ function readTranscriptMessageSeq(message: unknown): number | undefined {
   return asPositiveSafeInteger((meta as { seq?: unknown }).seq);
 }
 
+function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const record = message as Record<string, unknown>;
+  const direct = record.idempotencyKey;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+  const meta = record["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  const projected = (meta as { idempotencyKey?: unknown }).idempotencyKey;
+  return typeof projected === "string" && projected.trim() ? projected.trim() : undefined;
+}
+
+function resolveRunScopedTranscriptTurn(messages: unknown[], runId: string): unknown[] | undefined {
+  const userTurnIdempotencyKey = buildRunUserTurnIdempotencyKey(runId);
+  let startIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      isWaitedReplyTurnBoundary(message) &&
+      readTranscriptMessageIdempotencyKey(message) === userTurnIdempotencyKey
+    ) {
+      startIndex = index;
+      break;
+    }
+  }
+  if (startIndex < 0) {
+    return undefined;
+  }
+  let endIndex = messages.length;
+  for (let index = startIndex + 1; index < messages.length; index += 1) {
+    if (isWaitedReplyTurnBoundary(messages[index]) || isProjectedTurnBoundary(messages[index])) {
+      endIndex = index;
+      break;
+    }
+  }
+  return messages.slice(startIndex, endIndex);
+}
+
+function containsRunScopedTranscriptBoundary(messages: unknown[], runId: string): boolean {
+  const userTurnIdempotencyKey = buildRunUserTurnIdempotencyKey(runId);
+  return messages.some(
+    (message) =>
+      isWaitedReplyTurnBoundary(message) &&
+      readTranscriptMessageIdempotencyKey(message) === userTurnIdempotencyKey,
+  );
+}
+
+function readNonNegativeSafeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+async function readAssistantReplyHistory(params: {
+  sessionKey: string;
+  agentId?: string;
+  limit: number;
+  attributableToRunId?: string;
+  deadlineAtMs?: number;
+  callGateway: GatewayCaller;
+}): Promise<unknown[] | undefined> {
+  const historyPages: unknown[][] = [];
+  let offset: number | undefined;
+  let totalMessagesCeiling: number | undefined;
+  let pageCount = 0;
+  let messageCount = 0;
+
+  for (;;) {
+    if (
+      params.attributableToRunId &&
+      (pageCount >= MAX_ATTRIBUTED_REPLY_HISTORY_PAGES ||
+        messageCount >= MAX_ATTRIBUTED_REPLY_HISTORY_MESSAGES)
+    ) {
+      return undefined;
+    }
+    const remainingMs =
+      params.deadlineAtMs === undefined ? undefined : params.deadlineAtMs - Date.now();
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      return undefined;
+    }
+    const history = await params.callGateway<RawChatHistoryResponse>({
+      method: "chat.history",
+      params: {
+        sessionKey: params.sessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        limit: params.limit,
+        ...(offset !== undefined ? { offset } : {}),
+      },
+      ...(remainingMs !== undefined ? { timeoutMs: resolveRunWaitTimeoutMs(remainingMs) } : {}),
+    });
+    if (params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs) {
+      return undefined;
+    }
+    if (offset !== undefined) {
+      const responseOffset = readNonNegativeSafeInteger(history.offset);
+      const responseTotalMessages = readNonNegativeSafeInteger(history.totalMessages);
+      if (responseOffset !== offset || responseTotalMessages !== totalMessagesCeiling) {
+        return undefined;
+      }
+    }
+    const pageMessages = Array.isArray(history?.messages) ? history.messages : [];
+    pageCount += 1;
+    if (
+      params.attributableToRunId &&
+      messageCount + pageMessages.length > MAX_ATTRIBUTED_REPLY_HISTORY_MESSAGES
+    ) {
+      return undefined;
+    }
+    messageCount += pageMessages.length;
+    // Offset pages walk newest-to-oldest while each page remains chronological.
+    // Retain every page so newer rows still delimit the attributed run once its boundary appears.
+    historyPages.push(pageMessages);
+
+    if (
+      params.attributableToRunId &&
+      containsRunScopedTranscriptBoundary(pageMessages, params.attributableToRunId)
+    ) {
+      break;
+    }
+    if (!params.attributableToRunId) {
+      break;
+    }
+    if (history?.hasMore !== true) {
+      return undefined;
+    }
+
+    const currentOffset = offset ?? 0;
+    const responseOffset = readNonNegativeSafeInteger(history.offset);
+    if (history.offset !== undefined && responseOffset !== currentOffset) {
+      return undefined;
+    }
+    const nextOffset = readNonNegativeSafeInteger(history.nextOffset);
+    const totalMessages = readNonNegativeSafeInteger(history.totalMessages);
+    if (
+      nextOffset === undefined ||
+      nextOffset <= currentOffset ||
+      totalMessages === undefined ||
+      nextOffset > totalMessages ||
+      (totalMessagesCeiling !== undefined && totalMessages !== totalMessagesCeiling)
+    ) {
+      return undefined;
+    }
+    totalMessagesCeiling = totalMessages;
+    offset = nextOffset;
+  }
+
+  return historyPages.toReversed().flat();
+}
+
 function readInternalSourceReplyMessageSeq(message: unknown): number | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
@@ -227,16 +408,24 @@ function readInternalSourceReplyMessageSeq(message: unknown): number | undefined
 
 function resolveLatestAssistantReplySnapshot(
   messages: unknown[],
-  opts?: { stopAtTranscriptArtifact?: boolean },
+  opts?: { stopAtTranscriptArtifact?: boolean; attributableToRunId?: string },
 ): AssistantReplySnapshot {
+  const scopedMessages = opts?.attributableToRunId
+    ? resolveRunScopedTranscriptTurn(messages, opts.attributableToRunId)
+    : messages;
+  // The run's persisted `<runId>:user` boundary is the attribution source.
+  // Missing or truncated metadata must fail closed instead of borrowing another turn's reply.
+  if (!scopedMessages) {
+    return {};
+  }
   let latestReply: AssistantReplySnapshot = {};
   const internalSourceReplies: Array<{
     snapshot: AssistantReplySnapshot;
     sourceMessageSeq?: number;
   }> = [];
   let sawTranscriptArtifact = false;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const candidate = messages[i];
+  for (let i = scopedMessages.length - 1; i >= 0; i -= 1) {
+    const candidate = scopedMessages[i];
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
@@ -325,33 +514,53 @@ export function hasUpdatedAssistantReplySnapshot(
 /** Read the latest non-tool assistant message for a session. */
 export async function readLatestAssistantReplySnapshot(params: {
   sessionKey: string;
+  agentId?: string;
   limit?: number;
   // Waited reply paths stop at transcript artifacts so they do not resurrect
   // an older assistant message as a fresh post-run reply.
   stopAtTranscriptArtifact?: boolean;
+  // Restrict reply extraction to the transcript turn persisted for this run.
+  attributableToRunId?: string;
+  // Waited reply reads share the agent.wait deadline instead of starting a new timeout window.
+  deadlineAtMs?: number;
   callGateway?: GatewayCaller;
 }): Promise<AssistantReplySnapshot> {
-  const history = await (params.callGateway ?? callGateway)<{
-    messages: Array<unknown>;
-  }>({
-    method: "chat.history",
-    params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+  let messages: unknown[] | undefined;
+  try {
+    messages = await readAssistantReplyHistory({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      limit: params.limit ?? DEFAULT_ASSISTANT_REPLY_HISTORY_LIMIT,
+      attributableToRunId: params.attributableToRunId,
+      deadlineAtMs: params.deadlineAtMs,
+      callGateway: params.callGateway ?? callGateway,
+    });
+  } catch (error) {
+    if (!params.attributableToRunId) {
+      throw error;
+    }
+    return {};
+  }
+  if (!messages) {
+    return {};
+  }
+  return resolveLatestAssistantReplySnapshot(stripToolMessages(messages), {
+    stopAtTranscriptArtifact: params.stopAtTranscriptArtifact,
+    attributableToRunId: params.attributableToRunId,
   });
-  return resolveLatestAssistantReplySnapshot(
-    stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
-    { stopAtTranscriptArtifact: params.stopAtTranscriptArtifact },
-  );
 }
 
 /** Read only the latest assistant text for call sites that do not need fingerprints. */
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
+  agentId?: string;
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
   return (
     await readLatestAssistantReplySnapshot({
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       limit: params.limit,
       callGateway: params.callGateway,
     })
@@ -397,11 +606,13 @@ export async function waitForAgentRun(params: {
 export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   timeoutMs: number;
   limit?: number;
   baseline?: AssistantReplySnapshot;
   callGateway?: GatewayCaller;
 }): Promise<AgentWaitResult & { replyText?: string }> {
+  const deadlineAtMs = resolveRunWaitDeadlineAtMs({ timeoutMs: params.timeoutMs });
   const wait = await waitForAgentRun({
     runId: params.runId,
     timeoutMs: params.timeoutMs,
@@ -410,11 +621,17 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   if (wait.status !== "ok") {
     return wait;
   }
+  if (Date.now() >= deadlineAtMs) {
+    return { ...wait, replyText: undefined };
+  }
 
   const latestReply = await readLatestAssistantReplySnapshot({
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     limit: params.limit,
     stopAtTranscriptArtifact: true,
+    attributableToRunId: params.runId,
+    deadlineAtMs,
     callGateway: params.callGateway,
   });
   const replyText = hasUpdatedAssistantReplySnapshot(latestReply, params.baseline)

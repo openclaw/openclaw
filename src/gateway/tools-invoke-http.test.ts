@@ -38,6 +38,7 @@ const runAuthorizationPoliciesMock = vi.hoisted(() =>
       undefined,
   ),
 );
+const hasAuthorizationPoliciesForOperationMock = vi.hoisted(() => vi.fn(() => false));
 const toolExecutionMocks = vi.hoisted(() => ({
   agentsList: vi.fn(async (_toolCallId: string, _params: unknown) => ({ ok: true, result: [] })),
 }));
@@ -252,6 +253,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 
 vi.mock("../plugins/authorization-policy.js", () => ({
   AUTHORIZATION_POLICY_DENIED_MESSAGE: "Operation blocked by authorization policy.",
+  hasAuthorizationPoliciesForOperation: hasAuthorizationPoliciesForOperationMock,
   runAuthorizationPolicies: runAuthorizationPoliciesMock,
 }));
 
@@ -327,6 +329,8 @@ beforeEach(() => {
   );
   runAuthorizationPoliciesMock.mockClear();
   runAuthorizationPoliciesMock.mockResolvedValue(undefined);
+  hasAuthorizationPoliciesForOperationMock.mockClear();
+  hasAuthorizationPoliciesForOperationMock.mockReturnValue(false);
   toolExecutionMocks.agentsList.mockClear();
   vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true });
 });
@@ -452,7 +456,13 @@ const firstHookCallArg = () => {
 const invokeToolsRpc = async (
   params: Record<string, unknown>,
   scopes = ["operator.write"],
-  clientInfo?: { id: string; mode: string; deviceId?: string },
+  clientInfo?: {
+    id: string;
+    mode: string;
+    deviceId?: string;
+    pairedClientId?: string;
+    agentRuntimeIdentity?: { agentId: string; sessionKey: string };
+  },
   caps?: string[],
 ) => {
   const respond = vi.fn();
@@ -467,7 +477,7 @@ const invokeToolsRpc = async (
       connect: {
         role: "operator",
         scopes,
-        ...(clientInfo ? { client: clientInfo } : {}),
+        ...(clientInfo ? { client: { id: clientInfo.id, mode: clientInfo.mode } } : {}),
         ...(clientInfo?.deviceId
           ? {
               device: {
@@ -481,6 +491,17 @@ const invokeToolsRpc = async (
           : {}),
         ...(caps ? { caps } : {}),
       },
+      ...(clientInfo?.pairedClientId ? { pairedClientId: clientInfo.pairedClientId } : {}),
+      ...(clientInfo?.agentRuntimeIdentity
+        ? {
+            internal: {
+              agentRuntimeIdentity: {
+                kind: "agentRuntime",
+                ...clientInfo.agentRuntimeIdentity,
+              },
+            },
+          }
+        : {}),
     } as never,
     req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
     isWebchatConnect: () => false,
@@ -632,6 +653,41 @@ describe("POST /tools/invoke", () => {
     }
     expect(request.input).toBe(finalizedInput);
     expect(toolExecutionMocks.agentsList.mock.calls[0]?.[1]).toBe(finalizedInput);
+  });
+
+  it("executes the detached hook input approved by an async policy", async () => {
+    allowAgentsListForMain();
+    hasAuthorizationPoliciesForOperationMock.mockReturnValue(true);
+    const retainedInput = { action: "approved", nested: { target: "channel" } };
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: retainedInput,
+    });
+    let releasePolicy: (() => void) | undefined;
+    let notifyPolicyStarted: (() => void) | undefined;
+    const policyStarted = new Promise<void>((resolve) => {
+      notifyPolicyStarted = resolve;
+    });
+    runAuthorizationPoliciesMock.mockImplementationOnce(async () => {
+      notifyPolicyStarted?.();
+      await new Promise<void>((resolve) => {
+        releasePolicy = resolve;
+      });
+      return undefined;
+    });
+
+    const pending = invokeAgentsListAuthed();
+    await policyStarted;
+    retainedInput.action = "mutated";
+    retainedInput.nested.target = "mutated";
+    releasePolicy?.();
+    const res = await pending;
+
+    expect(res.status).toBe(200);
+    const approvedInput = runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.request.input;
+    expect(approvedInput).toEqual({ action: "approved", nested: { target: "channel" } });
+    expect(toolExecutionMocks.agentsList.mock.calls[0]?.[1]).toBe(approvedInput);
+    expect(approvedInput).not.toBe(retainedInput);
   });
 
   it("returns a generic denial and never executes a policy-blocked tool", async () => {
@@ -1296,7 +1352,48 @@ describe("POST /tools/invoke", () => {
 });
 
 describe("tools.invoke Gateway RPC", () => {
-  it("uses authenticated scopes and device identity, never client feature caps", async () => {
+  it.each([
+    { scope: "operator.write", isOwner: false },
+    { scope: "operator.admin", isOwner: true },
+  ])(
+    "rejects agent runtime connections carrying $scope while preserving ordinary operators",
+    async ({ scope, isOwner }) => {
+      allowAgentsListForMain();
+      const request = {
+        name: "agents_list",
+        args: {},
+        sessionKey: "main",
+      };
+
+      const runtimeCall = await invokeToolsRpc(request, [scope], {
+        id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        agentRuntimeIdentity: {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      });
+
+      expect(runtimeCall?.[0]).toBe(false);
+      expect(runtimeCall?.[1]).toBeUndefined();
+      expect(runtimeCall?.[2]).toMatchObject({
+        code: "FORBIDDEN",
+        message: "tools.invoke is not available to agent runtimes",
+      });
+      expect(runAuthorizationPoliciesMock).not.toHaveBeenCalled();
+      expect(lastCreateOpenClawToolsContext).toBeUndefined();
+
+      const operatorCall = await invokeToolsRpc(request, [scope]);
+      expect(operatorCall?.[1]?.ok).toBe(true);
+      expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.context?.principal).toEqual({
+        kind: "operator",
+        scopes: [scope],
+        isOwner,
+      });
+    },
+  );
+
+  it("uses authenticated scopes and device identity, never advertised client id or feature caps", async () => {
     allowAgentsListForMain();
 
     const call = await invokeToolsRpc(
@@ -1320,7 +1417,6 @@ describe("tools.invoke Gateway RPC", () => {
     expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.context?.principal).toEqual({
       kind: "operator",
       scopes: ["operator.write"],
-      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       deviceId: "device-1",
       isOwner: false,
     });
@@ -1338,6 +1434,67 @@ describe("tools.invoke Gateway RPC", () => {
       "operator.admin",
       "inline-widgets",
     ]);
+  });
+
+  it("uses only a paired client id for client-specific tool policy", async () => {
+    allowAgentsListForMain();
+    const trustedClientId = GATEWAY_CLIENT_NAMES.CONTROL_UI;
+    runAuthorizationPoliciesMock.mockImplementation(async ({ request, context }) => {
+      const principal = context.principal;
+      if (
+        request.operation === "tool.call" &&
+        principal.kind === "operator" &&
+        principal.clientId === trustedClientId
+      ) {
+        return undefined;
+      }
+      return {
+        denied: true,
+        kind: "deny",
+        pluginId: "test-plugin",
+        policyId: "trusted-client-only",
+        code: "client-not-trusted",
+      };
+    });
+
+    const spoofed = await invokeToolsRpc(
+      { name: "agents_list", args: {}, sessionKey: "main" },
+      ["operator.write"],
+      {
+        id: trustedClientId,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        deviceId: "device-1",
+      },
+    );
+    expect(spoofed?.[1]).toMatchObject({
+      ok: false,
+      error: { code: "forbidden" },
+    });
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.context?.principal).toEqual({
+      kind: "operator",
+      scopes: ["operator.write"],
+      deviceId: "device-1",
+      isOwner: false,
+    });
+
+    const paired = await invokeToolsRpc(
+      { name: "agents_list", args: {}, sessionKey: "main" },
+      ["operator.write"],
+      {
+        id: "advertised-client",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        deviceId: "device-1",
+        pairedClientId: trustedClientId,
+      },
+    );
+    expect(paired?.[1]?.ok).toBe(true);
+    expect(runAuthorizationPoliciesMock.mock.calls[1]?.[0]?.context?.principal).toEqual({
+      kind: "operator",
+      scopes: ["operator.write"],
+      clientId: trustedClientId,
+      deviceId: "device-1",
+      isOwner: false,
+    });
   });
 
   it("rejects reserved harness session contexts", async () => {

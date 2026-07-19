@@ -14,15 +14,22 @@ import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../plugin-sdk/provider-tools.js";
+import { createAuthorizationPrincipal } from "../plugins/authorization-policy-context.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import {
+  createOperatorTurnAuthoritySnapshot,
+  createTurnAuthoritySnapshot,
+} from "../plugins/turn-authority.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
@@ -198,6 +205,7 @@ describe("createOpenClawCodingTools", () => {
 
   afterEach(() => {
     resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("exposes only gateway config reads to owner sessions", () => {
@@ -281,6 +289,39 @@ describe("createOpenClawCodingTools", () => {
     );
     expect(execute).toHaveBeenCalledTimes(1);
     expect(tool.parameters).toEqual({ type: "object", properties: {} });
+  });
+
+  it("rejects forged authority before constructing tools or invoking hooks", () => {
+    const issuedAuthority = createTurnAuthoritySnapshot({
+      principal: { kind: "sender", senderId: "owner", senderIsOwner: true },
+      agentId: "molty",
+      sessionKey: "agent:molty:main",
+    });
+    const forgedAuthority = structuredClone(issuedAuthority);
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const coreToolFactory = vi.mocked(createOpenClawTools);
+    coreToolFactory.mockClear();
+    const pluginToolFactory = vi.spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions");
+
+    try {
+      expect(() =>
+        createOpenClawCodingTools({
+          agentId: "molty",
+          sessionKey: "agent:molty:main",
+          senderId: "legacy-owner",
+          senderIsOwner: true,
+          turnAuthority: forgedAuthority,
+        }),
+      ).toThrowError("turn-authority-invalid");
+      expect(coreToolFactory).not.toHaveBeenCalled();
+      expect(pluginToolFactory).not.toHaveBeenCalled();
+      expect(beforeToolCall).not.toHaveBeenCalled();
+    } finally {
+      pluginToolFactory.mockRestore();
+    }
   });
 
   it("adds Tool Search control tools when explicitly requested", () => {
@@ -889,6 +930,55 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("fails closed when plugin-only authority lacks a caller session binding", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([
+        {
+          name: "file_fetch",
+          label: "File fetch",
+          description: "Fetch a file",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ]);
+    const turnAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.admin"],
+      connectionId: "owner-webchat",
+      isOwner: true,
+      agentId: "molty",
+      sessionKey: "agent:molty:discord:channel:maintenance",
+      trigger: "gateway",
+    });
+
+    try {
+      const tools = createOpenClawCodingTools({
+        agentId: "molty",
+        turnAuthority,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["file_fetch"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      await expect(requireTool(tools, "file_fetch").execute("tool-call-1", {})).rejects.toThrow(
+        "turn-authority-invalid",
+      );
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
   it("forwards owner identity to plugin-only tool construction", () => {
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
@@ -915,6 +1005,113 @@ describe("createOpenClawCodingTools", () => {
       resolvePluginToolsSpy.mockRestore();
     }
   });
+
+  it("uses admitted requester identity for plugin-only tools without changing delivery routing", () => {
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: createAuthorizationPrincipal({
+        provider: "discord",
+        accountId: "source-account",
+        senderId: "maintainer",
+        senderIsOwner: false,
+        roleIds: ["clawtributors"],
+      }),
+      agentId: "molty",
+      sessionKey: "agent:molty:whatsapp:group:team",
+      trigger: "sessions_send",
+    });
+
+    try {
+      createOpenClawCodingTools({
+        config: testConfig,
+        agentId: "molty",
+        sessionKey: "agent:molty:whatsapp:group:team",
+        messageProvider: "whatsapp",
+        agentAccountId: "route-account",
+        senderId: "conflicting-legacy-sender",
+        senderIsOwner: true,
+        turnAuthority,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["codex_threads"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      const pluginOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
+      expect(pluginOptions).toMatchObject({
+        agentChannel: "whatsapp",
+        agentAccountId: "route-account",
+        requesterSenderId: "maintainer",
+        senderIsOwner: false,
+      });
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      policyKey: "name:Ada Lovelace",
+      aliasInput: { senderName: " Ada Lovelace " },
+      forgedInput: { senderName: "Forged User" },
+      forgedPolicyKey: "name:Forged User",
+    },
+    {
+      policyKey: "username:ada",
+      aliasInput: { senderUsername: " @Ada " },
+      forgedInput: { senderUsername: "forged-user" },
+      forgedPolicyKey: "username:forged-user",
+    },
+    {
+      policyKey: "e164:+15550001111",
+      aliasInput: { senderE164: " +15550001111 " },
+      forgedInput: { senderE164: "+15559999999" },
+      forgedPolicyKey: "e164:+15559999999",
+    },
+  ] as const)(
+    "uses issued $policyKey aliases for embedded sender policy",
+    ({ policyKey, aliasInput, forgedInput, forgedPolicyKey }) => {
+      const turnAuthority = createTurnAuthoritySnapshot({
+        principal: createAuthorizationPrincipal({
+          provider: "discord",
+          accountId: "molty",
+          senderId: "maintainer",
+          ...aliasInput,
+        }),
+        agentId: "molty",
+        sessionKey: "agent:molty:discord:channel:maintenance",
+        trigger: "channel",
+      });
+
+      const tools = createOpenClawCodingTools({
+        config: {
+          tools: {
+            toolsBySender: {
+              [policyKey]: { deny: ["read"] },
+              [forgedPolicyKey]: { deny: ["write"] },
+            },
+          },
+        },
+        agentId: "molty",
+        sessionKey: "agent:molty:discord:channel:maintenance",
+        messageProvider: "discord",
+        agentAccountId: "molty",
+        senderId: "forged-sender",
+        ...forgedInput,
+        turnAuthority,
+      });
+
+      expect(toolNameList(tools)).not.toContain("read");
+      expect(toolNameList(tools)).toContain("write");
+    },
+  );
 
   it("forwards the native channel id through standard tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
@@ -1208,6 +1405,318 @@ describe("createOpenClawCodingTools", () => {
       stages.indexOf("openclaw-tools"),
     );
     expect(stages.indexOf("schema-normalization")).toBeLessThan(stages.indexOf("tool-hooks"));
+  });
+
+  it("passes parent conversation identity to tools invoked from a thread", async () => {
+    let seenParentConversationId: string | undefined;
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Capture thread identity",
+        handlers: {
+          "tool.call": (_request, context) => {
+            seenParentConversationId = context.parentConversationId;
+            return { effect: "deny", code: "captured-thread-parent" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const tools = createOpenClawCodingTools({
+      agentId: "molty",
+      currentChannelId: "maintenance-thread",
+      parentConversationId: "maintenance",
+    });
+
+    const result = await requireTool(tools, "read").execute("call-thread", {
+      path: "missing.txt",
+    });
+
+    expect(result).toMatchObject({
+      details: {
+        status: "blocked",
+        deniedReason: "authorization-policy",
+      },
+    });
+    expect(seenParentConversationId).toBe("maintenance");
+  });
+
+  it("keeps legacy sender tool policy when only command policies are active", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "command-access",
+      source: "test",
+      policy: {
+        id: "command-access",
+        description: "Command-only authorization",
+        handlers: {
+          "command.invoke": () => ({ effect: "pass" }),
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "id:legacy-sender": { deny: ["write"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      senderId: "legacy-sender",
+    });
+
+    expect(toolNameList(tools)).not.toContain("write");
+  });
+
+  it("uses an unknown principal instead of legacy sender fields when tool policy is active", async () => {
+    const principals: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "sender-access",
+        description: "Capture authority",
+        handlers: {
+          "tool.call": (_request, context) => {
+            principals.push(context.principal);
+            return { effect: "deny", code: "captured" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const config = {
+      tools: {
+        toolsBySender: {
+          "id:legacy-owner": { allow: ["read"] },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const legacyCapabilityProfile = resolveConversationCapabilityProfile({
+      config,
+      agentId: "molty",
+      sessionKey: "agent:molty:discord:channel:maintenance",
+      messageProvider: "discord",
+      agentAccountId: "molty",
+      senderId: "legacy-owner",
+      senderName: "Legacy Owner",
+      senderUsername: "legacy-owner",
+      senderE164: "+15559999999",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      memberRoleIds: ["admins"],
+    });
+
+    const tools = createOpenClawCodingTools({
+      config,
+      agentId: "molty",
+      sessionKey: "agent:molty:discord:channel:maintenance",
+      messageProvider: "discord",
+      agentAccountId: "molty",
+      senderId: "legacy-owner",
+      senderName: "Legacy Owner",
+      senderUsername: "legacy-owner",
+      senderE164: "+15559999999",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      memberRoleIds: ["admins"],
+      currentChannelId: "maintenance",
+      conversationCapabilityProfile: legacyCapabilityProfile,
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      requesterSenderId: undefined,
+      senderIsOwner: false,
+      agentMemberRoleIds: undefined,
+      authorization: {
+        principal: { kind: "unknown", provider: "discord", accountId: "molty" },
+      },
+    });
+    expect(toolNameList(tools)).toContain("write");
+    const result = await requireTool(tools, "read").execute("call-unknown", {
+      path: "missing.txt",
+    });
+    expect(result).toMatchObject({ details: { deniedReason: "authorization-policy" } });
+    expect(principals).toEqual([{ kind: "unknown", provider: "discord", accountId: "molty" }]);
+  });
+
+  it("keeps authorization unknown when tool policy loads after tool construction", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "id:legacy-owner": { deny: ["write"] },
+          },
+        },
+      },
+      agentId: "molty",
+      sessionKey: "agent:molty:discord:channel:maintenance",
+      messageProvider: "discord",
+      agentAccountId: "molty",
+      senderId: "legacy-owner",
+      senderName: "Legacy Owner",
+      senderUsername: "legacy-owner",
+      senderE164: "+15559999999",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      memberRoleIds: ["admins"],
+      currentChannelId: "maintenance",
+    });
+    expect(toolNameList(tools)).not.toContain("write");
+
+    const principals: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "sender-access",
+        description: "Capture late authority",
+        handlers: {
+          "tool.call": (_request, context) => {
+            principals.push(context.principal);
+            return { effect: "deny", code: "captured" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const result = await requireTool(tools, "read").execute("call-late-policy", {
+      path: "missing.txt",
+    });
+
+    expect(result).toMatchObject({ details: { deniedReason: "authorization-policy" } });
+    expect(principals).toEqual([{ kind: "unknown" }]);
+  });
+
+  it("passes immutable admin and write operator authority to tool policies", async () => {
+    const principals: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "operator-access",
+      source: "test",
+      policy: {
+        id: "operator-access",
+        description: "Capture operator authority",
+        handlers: {
+          "tool.call": (_request, context) => {
+            principals.push(context.principal);
+            return { effect: "deny", code: "captured" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    for (const scope of ["operator.admin", "operator.write"] as const) {
+      const tools = createOpenClawCodingTools({
+        agentId: "molty",
+        sessionKey: "agent:molty:main",
+        senderId: "conflicting-legacy-sender",
+        senderIsOwner: scope !== "operator.admin",
+        isAuthorizedSender: false,
+        memberRoleIds: ["guest"],
+        turnAuthority: createOperatorTurnAuthoritySnapshot({
+          scopes: [scope],
+          connectionId: `${scope}-conn`,
+          isOwner: scope === "operator.admin",
+          agentId: "molty",
+          sessionKey: "agent:molty:main",
+          trigger: "gateway",
+        }),
+      });
+      await requireTool(tools, "read").execute(`call-${scope}`, { path: "missing.txt" });
+    }
+
+    expect(principals).toEqual([
+      { kind: "operator", scopes: ["operator.admin"], isOwner: true },
+      { kind: "operator", scopes: ["operator.write"], isOwner: false },
+    ]);
+  });
+
+  it("preserves a cross-route target without reusing an unqualified source sender grant", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: createAuthorizationPrincipal({
+        provider: "discord",
+        accountId: "source-account",
+        senderId: "maintainer",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["clawtributors"],
+      }),
+      agentId: "molty",
+      sessionKey: "agent:molty:whatsapp:group:team",
+      trigger: "sessions_send",
+    });
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              "route-account": {
+                groups: {
+                  team: {
+                    tools: { allow: ["read"] },
+                    toolsBySender: {
+                      "channel:discord:maintainer": { allow: ["read", "write"] },
+                    },
+                  },
+                },
+              },
+              "source-account": {
+                groups: {
+                  team: { tools: { allow: ["exec"] } },
+                },
+              },
+            },
+          },
+        },
+      },
+      agentId: "molty",
+      sessionKey: "agent:molty:whatsapp:group:team",
+      messageProvider: "whatsapp",
+      agentAccountId: "route-account",
+      chatType: "group",
+      groupId: "team",
+      senderId: "conflicting-legacy-sender",
+      senderIsOwner: true,
+      isAuthorizedSender: false,
+      memberRoleIds: ["guest"],
+      turnAuthority,
+    });
+
+    expect(toolNameList(tools)).toEqual([]);
+    expect(toolNameList(tools)).not.toContain("exec");
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      agentChannel: "whatsapp",
+      agentAccountId: "route-account",
+      requesterSenderId: "maintainer",
+      senderIsOwner: false,
+      agentMemberRoleIds: ["clawtributors"],
+      authorization: {
+        principal: {
+          kind: "sender",
+          provider: "discord",
+          accountId: "source-account",
+          senderId: "maintainer",
+          senderIsOwner: false,
+          isAuthorizedSender: true,
+          roleIds: ["clawtributors"],
+        },
+      },
+      turnAuthority,
+    });
   });
 
   it("preserves action enums in normalized schemas", () => {

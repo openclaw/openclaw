@@ -17,6 +17,7 @@ import {
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -136,6 +137,8 @@ type ReplyTurnAdmissionParams = {
   onLifecycleInterrupt?: () => void;
   /** Reports one interval while blocked behind an older lane owner or its delivery barrier. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Immutable authority of the turn acquiring this lifecycle admission. */
+  turnAuthority?: TurnAuthoritySnapshot;
 };
 
 type WaitForReplyAdmission = <T>(wait: () => Promise<T>) => Promise<T>;
@@ -185,6 +188,7 @@ async function admitReplyTurnWithWaitSignal(
             scope: storePath,
             identities: [params.sessionKey],
             signal: params.upstreamAbortSignal,
+            turnAuthority: params.turnAuthority,
             onInterrupt: () => {
               interruptedBeforeOperation = true;
               operation?.abortForRestart();

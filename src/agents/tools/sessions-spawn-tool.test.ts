@@ -1,9 +1,13 @@
 // sessions_spawn tool tests cover model-visible schema gating, ACP/subagent
 // dispatch, and result details for spawned child sessions.
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSteeringAuthorizationAffinity } from "../../auto-reply/reply/steering-authorization-affinity.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { setActiveEmbeddedRun } from "../embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../embedded-agent-runner/runs.test-support.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -52,6 +56,7 @@ describe("sessions_spawn tool", () => {
   });
 
   beforeEach(() => {
+    embeddedRunTesting.resetActiveEmbeddedRuns();
     acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
@@ -65,6 +70,10 @@ describe("sessions_spawn tool", () => {
     });
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.runSubagentProgressMock.mockClear();
+  });
+
+  afterEach(() => {
+    embeddedRunTesting.resetActiveEmbeddedRuns();
   });
 
   function registerAcpBackendForTest() {
@@ -939,6 +948,60 @@ describe("sessions_spawn tool", () => {
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("captures the exact active requester attempt for completion steering", async () => {
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "molty",
+        senderId: "maintainer",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-parent",
+      runId: "run-parent",
+      conversationId: "maintenance",
+      trigger: "channel",
+    });
+    const steeringAuthorizationAffinity = createSteeringAuthorizationAffinity({ turnAuthority });
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-parent", {
+      runId: "run-parent",
+      queueMessage,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      steeringAuthorizationAffinity,
+      abort: () => {},
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterSessionId: "session-parent",
+      requesterRunId: "run-parent",
+      requesterTurnAuthority: turnAuthority,
+    });
+
+    await tool.execute("call-capture-parent-attempt", { task: "build feature" });
+
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    const steeringTarget = requireRecord(
+      spawnContext.requesterSteeringTarget,
+      "requester steering target",
+    );
+    const queueMessageWithOutcome = steeringTarget.queueMessageWithOutcome;
+    if (typeof queueMessageWithOutcome !== "function") {
+      throw new Error("expected requester steering queue");
+    }
+    const outcome = await queueMessageWithOutcome("child completed");
+
+    expect(outcome).toMatchObject({ queued: true, sessionId: "session-parent" });
+    expect(queueMessage).toHaveBeenCalledWith("child completed", {
+      steeringAuthorizationAffinity,
+    });
   });
 
   it("passes inherited tool denies to subagent spawns", async () => {

@@ -10,6 +10,7 @@ import {
   runAuthorizationPolicies,
   type AuthorizationPolicyDenial,
 } from "../plugins/authorization-policy.js";
+import type { PluginJsonValue } from "../plugins/host-hook-json.js";
 
 /** Host-side final policy gate for channel-native core command shortcuts. */
 export async function authorizeNativeCoreCommand(params: {
@@ -18,6 +19,9 @@ export async function authorizeNativeCoreCommand(params: {
   provider: string;
   accountId?: string;
   senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
   senderIsOwner?: boolean;
   isAuthorizedSender?: boolean;
   roleIds?: readonly string[];
@@ -28,9 +32,11 @@ export async function authorizeNativeCoreCommand(params: {
   parentConversationId?: string;
   threadId?: string | number;
   rawArguments?: string;
+  values?: Record<string, PluginJsonValue>;
   signal?: AbortSignal;
 }): Promise<AuthorizationPolicyDenial | undefined> {
   const rawArguments = params.rawArguments?.trim();
+  const values = params.values;
   return await runAuthorizationPolicies({
     request: {
       operation: "command.invoke",
@@ -38,13 +44,23 @@ export async function authorizeNativeCoreCommand(params: {
       commandName: params.commandName,
       owner: { kind: "core" },
       source: "native",
-      ...(rawArguments ? { arguments: { raw: rawArguments } } : {}),
+      ...(rawArguments || values
+        ? {
+            arguments: {
+              ...(rawArguments ? { raw: rawArguments } : {}),
+              ...(values ? { values } : {}),
+            },
+          }
+        : {}),
     },
     context: createAuthorizationInvocationContext({
       principal: createAuthorizationPrincipal({
         provider: params.provider,
         accountId: params.accountId,
         senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
         senderIsOwner: params.senderIsOwner,
         isAuthorizedSender: params.isAuthorizedSender,
         roleIds: params.roleIds,

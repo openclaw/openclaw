@@ -1488,9 +1488,10 @@ describe("slack slash commands access groups", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(responseTexts(respond)).not.toContain("You are not authorized to use this command.");
     const dispatchArg = firstDispatchArg() as {
-      ctx?: { CommandAuthorized?: boolean };
+      ctx?: { CommandAuthorized?: boolean; InboundAccessAuthorized?: boolean };
     };
     expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
+    expect(dispatchArg?.ctx?.InboundAccessAuthorized).toBe(true);
   });
 
   it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {

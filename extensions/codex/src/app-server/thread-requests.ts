@@ -1,4 +1,5 @@
 import {
+  hasAuthorizationPolicies,
   isHostScopedAgentToolActive,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -393,7 +394,7 @@ export function buildCodexRuntimeThreadConfigForRun(
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
-      params.delegationCapability === "report_only"
+      options.nativeCodeModeEnabled === false || params.delegationCapability === "report_only"
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
       buildCodexRingZeroThreadConfigPatch(
@@ -401,6 +402,12 @@ export function buildCodexRuntimeThreadConfigForRun(
         options.hostSystemAgentActive,
         ringZeroMcpServerNames,
       ),
+      buildCodexAuthorizationRestrictedThreadConfigPatch({
+        params,
+        config,
+        nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+        inheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
+      }),
     ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
@@ -411,6 +418,38 @@ export function buildCodexRuntimeThreadConfigForRun(
       ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
     }
   );
+}
+
+function buildCodexAuthorizationRestrictedThreadConfigPatch(params: {
+  params: EmbeddedRunAttemptParams;
+  config?: JsonObject;
+  nativeCodeModeEnabled?: boolean;
+  inheritedMcpServerNames?: readonly string[];
+}): JsonObject | undefined {
+  if (
+    params.nativeCodeModeEnabled !== false ||
+    !hasAuthorizationPolicies(undefined, params.params.config)
+  ) {
+    return undefined;
+  }
+  const configuredMcpServers = params.config?.mcp_servers;
+  if (configuredMcpServers !== undefined && !isJsonObject(configuredMcpServers)) {
+    throw new Error("Codex authorization restriction received invalid thread mcp_servers config");
+  }
+  const mcpServers = Object.fromEntries(
+    [
+      ...new Set([
+        ...(params.inheritedMcpServerNames ?? []),
+        ...Object.keys(configuredMcpServers ?? {}),
+      ]),
+    ]
+      .toSorted()
+      .map((name) => [name, { enabled: false }]),
+  );
+  return {
+    ...CODEX_RING_ZERO_THREAD_CONFIG,
+    ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
+  };
 }
 
 export function buildCodexRingZeroThreadConfigPatch(

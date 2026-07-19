@@ -1406,12 +1406,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
           {
             ctx?: {
               CommandAuthorized?: boolean;
+              InboundAccessAuthorized?: boolean;
             };
           },
         ]
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandAuthorized).toBe(true);
+    expect(dispatchCall?.ctx?.InboundAccessAuthorized).toBe(true);
     expect(dispatchCall?.ctx).not.toHaveProperty("OwnerAllowFrom");
   });
 
@@ -1471,11 +1473,20 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     const dispatchCall = (
       replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandTargetSessionKey?: string; OriginatingTo?: string } }]
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              OriginatingTo?: string;
+              ThreadParentId?: string;
+            };
+          },
+        ]
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-group");
     expect(dispatchCall?.ctx?.OriginatingTo).toBe("telegram:-1001234567890");
+    expect(dispatchCall?.ctx?.ThreadParentId).toBeUndefined();
     const sessionMetaCall = (
       sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
         [{ sessionKey?: string }]
@@ -1505,6 +1516,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
                 CommandTargetSessionKey?: string;
                 MessageThreadId?: number;
                 OriginatingTo?: string;
+                ThreadParentId?: string;
               };
             },
           ]
@@ -1516,6 +1528,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
           CommandTargetSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
           MessageThreadId: 42,
           OriginatingTo: "telegram:-1001234567890:topic:42",
+          ThreadParentId: "telegram:-1001234567890",
         },
         "topic dispatch context",
       );

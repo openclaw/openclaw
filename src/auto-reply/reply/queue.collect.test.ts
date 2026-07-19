@@ -8,6 +8,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { createOperatorTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -24,12 +25,146 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
+import {
+  createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryContextKey,
+} from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
 describe("followup queue collect routing", () => {
+  it("collects only matching operator scope and controller authority", () => {
+    const createOperatorRun = (scope: string, connectionId: string, runId: string) => {
+      const run = createRun({
+        prompt: runId,
+        originatingChannel: "webchat",
+        originatingTo: "agent:molty:main",
+      });
+      run.run.agentId = "molty";
+      run.run.sessionKey = "agent:molty:main";
+      run.run.turnAuthority = createOperatorTurnAuthoritySnapshot({
+        scopes: [scope],
+        connectionId,
+        isOwner: scope === "operator.admin",
+        agentId: "molty",
+        sessionKey: "agent:molty:main",
+        runId,
+        conversationId: "agent:molty:main",
+        trigger: "gateway",
+        capability: "same-client-capability",
+      });
+      return run;
+    };
+    const admin = createOperatorRun("operator.admin", "conn-admin", "run-1");
+    const sameAdmin = createOperatorRun("operator.admin", "conn-admin", "run-2");
+    const writer = createOperatorRun("operator.write", "conn-admin", "run-3");
+    const otherConnection = createOperatorRun("operator.admin", "conn-other", "run-4");
+
+    expect(resolveFollowupDeliveryContextKey(sameAdmin)).toBe(
+      resolveFollowupDeliveryContextKey(admin),
+    );
+    expect(resolveFollowupDeliveryContextKey(writer)).not.toBe(
+      resolveFollowupDeliveryContextKey(admin),
+    );
+    expect(resolveFollowupDeliveryContextKey(otherConnection)).not.toBe(
+      resolveFollowupDeliveryContextKey(admin),
+    );
+  });
+
+  it("preserves the exact issued authority snapshot through a collect drain", async () => {
+    const key = `test-collect-authority-identity-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const authority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.admin"],
+      connectionId: "conn-owner",
+      isOwner: true,
+      agentId: "molty",
+      sessionKey: "agent:molty:main",
+      runId: "admitted-run",
+      conversationId: "agent:molty:main",
+      trigger: "gateway",
+    });
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    for (const prompt of ["one", "two"]) {
+      const run = createRun({
+        prompt,
+        originatingChannel: "webchat",
+        originatingTo: "agent:molty:main",
+      });
+      run.run.agentId = "molty";
+      run.run.sessionKey = "agent:molty:main";
+      run.run.turnAuthority = authority;
+      run.run.senderId = "conflicting-legacy-sender";
+      enqueueFollowupRun(key, run, settings);
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(Object.isFrozen(authority)).toBe(true);
+    expect(calls[0]?.run.turnAuthority).toBe(authority);
+  });
+
+  it("splits collect batches when sender roles or authorization change", () => {
+    const baseline = createRun({
+      prompt: "before role change",
+      originatingChannel: "discord",
+      originatingTo: "channel:maintenance",
+      originatingAccountId: "molty",
+    });
+    baseline.originatingChatId = "maintenance";
+    baseline.run.sessionKey = "agent:molty:discord:channel:maintenance";
+    baseline.run.senderId = "maintainer";
+    baseline.run.senderIsOwner = false;
+    baseline.run.isAuthorizedSender = true;
+    baseline.run.memberRoleIds = ["maintainers"];
+
+    const roleChanged = structuredClone(baseline);
+    roleChanged.run.memberRoleIds = ["maintainers", "release"];
+    const authorizationChanged = structuredClone(baseline);
+    authorizationChanged.run.isAuthorizedSender = false;
+
+    expect(resolveFollowupDeliveryContextKey(roleChanged)).not.toBe(
+      resolveFollowupDeliveryContextKey(baseline),
+    );
+    expect(resolveFollowupDeliveryContextKey(authorizationChanged)).not.toBe(
+      resolveFollowupDeliveryContextKey(baseline),
+    );
+  });
+
+  it("splits thread turns by parent scope and preserves it in overflow retries", () => {
+    const maintenance = createRun({
+      prompt: "maintenance thread",
+      originatingChannel: "discord",
+      originatingTo: "channel:thread-1",
+      originatingThreadId: "thread-1",
+      originatingChatId: "thread-1",
+      originatingParentConversationId: "maintenance",
+    });
+    const otherParent = {
+      ...maintenance,
+      originatingParentConversationId: "other-channel",
+    };
+
+    expect(resolveFollowupDeliveryContextKey(maintenance)).not.toBe(
+      resolveFollowupDeliveryContextKey(otherParent),
+    );
+    expect(createOverflowSummaryRetrySource(maintenance).originatingParentConversationId).toBe(
+      "maintenance",
+    );
+  });
+
   it("marks exclusive admission without onAbandoned and isolates collect identity", () => {
     // Failure window: cancel-only used to be inferred from missing onAbandoned,
     // so exclusive admission without onAbandoned shared collect identity.

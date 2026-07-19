@@ -205,7 +205,9 @@ async function runEmbeddedAgentViaCliBackend(
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
       clientCaps: params.clientCaps,
+      turnAuthority: params.turnAuthority,
       currentChannelId: params.currentChannelId,
+      parentConversationId: params.parentConversationId,
       chatId: params.chatId,
       currentThreadTs:
         params.currentThreadTs ??

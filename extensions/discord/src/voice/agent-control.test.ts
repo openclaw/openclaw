@@ -13,9 +13,11 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
 }));
 
 function createEntry() {
-  return { route: { sessionKey: "discord:g1:c1" } } as Parameters<
-    typeof maybeControlDiscordVoiceAgentRun
-  >[0]["entry"];
+  return {
+    accountId: "default",
+    channelId: "c1",
+    route: { agentId: "main", sessionKey: "discord:g1:c1" },
+  } as Parameters<typeof maybeControlDiscordVoiceAgentRun>[0]["entry"];
 }
 
 describe("maybeControlDiscordVoiceAgentRun", () => {
@@ -65,6 +67,41 @@ describe("maybeControlDiscordVoiceAgentRun", () => {
       handled: true,
       result,
       speakText: "Cancelled the active OpenClaw run.",
+    });
+  });
+
+  it("binds spoken run control to the authenticated speaker", async () => {
+    mocks.controlRealtimeVoiceAgentRun.mockResolvedValue({
+      ok: true,
+      active: true,
+      mode: "cancel",
+      sessionKey: "discord:g1:c1",
+      message: "Cancelled the active OpenClaw run.",
+      speak: true,
+      suppress: false,
+    });
+
+    await maybeControlDiscordVoiceAgentRun({
+      entry: createEntry(),
+      context: { senderIsOwner: false, speakerLabel: "Ada" },
+      userId: "user-1",
+      text: "cancel that",
+    });
+
+    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:c1",
+      text: "cancel that",
+      agentId: "main",
+      senderIsOwner: false,
+      ingressAuthority: {
+        provider: "discord",
+        accountId: "default",
+        senderId: "user-1",
+        senderName: "Ada",
+        roleIds: [],
+        isAuthorizedSender: true,
+        conversationId: "c1",
+      },
     });
   });
 

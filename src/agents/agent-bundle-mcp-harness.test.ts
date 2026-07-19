@@ -150,10 +150,18 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     mocks.setResolveImpl(async () => undefined);
     const result = await materializeRequesterScopedMcpToolsForHarnessRun({
       sessionId: "session-empty",
+      sessionKey: "custom-ops-session",
       workspaceDir: "/workspace",
       requesterSenderId: "guest",
+      policyContext: { agentId: "ops" },
     });
     expect(result).toBeUndefined();
+    expect(mocks.getOrCreateRequesterScopedMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "custom-ops-session",
+        agentId: "ops",
+      }),
+    );
     expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
   });
 

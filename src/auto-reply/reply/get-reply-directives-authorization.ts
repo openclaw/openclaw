@@ -10,6 +10,7 @@ import {
   shouldAuthorizeCoreCommandTurn,
 } from "./commands-authorization.js";
 import type { CommandContext } from "./commands-types.js";
+import type { PreparedModelDirectiveEffect } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 
 export type DirectiveAuthorizationRequest = {
@@ -39,6 +40,7 @@ function compactDirectiveValues(
 
 export function resolveDirectiveAuthorizationRequests(
   directives: InlineDirectives,
+  options?: { modelEffect?: PreparedModelDirectiveEffect },
 ): DirectiveAuthorizationRequest[] {
   const requests: DirectiveAuthorizationRequest[] = [];
   const add = (params: {
@@ -116,11 +118,20 @@ export function resolveDirectiveAuthorizationRequests(
   const profile = normalizeOptionalString(directives.rawModelProfile);
   const runtime = normalizeOptionalString(directives.rawModelRuntime);
   const modelRef = model ? `${model}${profile ? `@${profile}` : ""}` : undefined;
+  const modelEffect = options?.modelEffect;
   add({
     present: directives.hasModelDirective,
     commandName: "model",
     rawArguments: joinDirectiveArguments([modelRef, runtime ? `--runtime ${runtime}` : undefined]),
-    values: { model: modelRef, profile, runtime },
+    values:
+      modelEffect?.kind === "selection"
+        ? {
+            provider: modelEffect.modelSelection.provider,
+            model: modelEffect.modelSelection.model,
+            profile: modelEffect.profileOverride,
+            runtime: modelEffect.runtime,
+          }
+        : undefined,
   });
   const queueMode = directives.queueReset ? "reset" : directives.queueMode;
   const queueValues = {
@@ -143,7 +154,7 @@ export function resolveDirectiveAuthorizationRequests(
   return requests;
 }
 
-export async function authorizeReplyDirectiveCommands(params: {
+type ReplyDirectiveAuthorizationParams = {
   command: CommandContext;
   ctx: MsgContext;
   directives: InlineDirectives;
@@ -153,7 +164,31 @@ export async function authorizeReplyDirectiveCommands(params: {
   sessionKey: string;
   sessionId?: string;
   signal?: AbortSignal;
-}): Promise<AuthorizationPolicyDenial | undefined> {
+};
+
+async function authorizeDirectiveRequest(
+  params: ReplyDirectiveAuthorizationParams,
+  request: DirectiveAuthorizationRequest,
+): Promise<AuthorizationPolicyDenial | undefined> {
+  const authorization = await authorizeCoreCommandName({
+    command: params.command,
+    ctx: params.ctx,
+    commandName: request.commandName,
+    config: params.config,
+    rawArguments: request.rawArguments,
+    values: request.values,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    signal: params.signal,
+  });
+  return authorization.allowed ? undefined : authorization.denial;
+}
+
+/** Authorizes every parsed directive except `/model`, whose concrete effect resolves later. */
+export async function authorizeReplyDirectiveCommandsBeforeModelResolution(
+  params: ReplyDirectiveAuthorizationParams,
+): Promise<AuthorizationPolicyDenial | undefined> {
   const requests = resolveDirectiveAuthorizationRequests(params.directives);
   const leadingCommandName = resolveTextCommand(params.command.commandBodyNormalized)?.command.key;
   const leadingCommandIsParsedDirective =
@@ -184,21 +219,26 @@ export async function authorizeReplyDirectiveCommands(params: {
     return undefined;
   }
   for (const request of requests) {
-    const authorization = await authorizeCoreCommandName({
-      command: params.command,
-      ctx: params.ctx,
-      commandName: request.commandName,
-      config: params.config,
-      rawArguments: request.rawArguments,
-      values: request.values,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      signal: params.signal,
-    });
-    if (!authorization.allowed) {
-      return authorization.denial;
+    if (request.commandName === "model") {
+      continue;
+    }
+    const denial = await authorizeDirectiveRequest(params, request);
+    if (denial) {
+      return denial;
     }
   }
   return undefined;
+}
+
+/** Authorizes `/model` using the concrete effect prepared for the mutation path. */
+export async function authorizeResolvedReplyModelDirective(
+  params: ReplyDirectiveAuthorizationParams & { modelEffect: PreparedModelDirectiveEffect },
+): Promise<AuthorizationPolicyDenial | undefined> {
+  if (!params.command.isAuthorizedSender || !params.directives.hasModelDirective) {
+    return undefined;
+  }
+  const request = resolveDirectiveAuthorizationRequests(params.directives, {
+    modelEffect: params.modelEffect,
+  }).find((candidate) => candidate.commandName === "model");
+  return request ? await authorizeDirectiveRequest(params, request) : undefined;
 }

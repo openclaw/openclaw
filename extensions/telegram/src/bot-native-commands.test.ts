@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -49,9 +50,10 @@ function primePlugCommand(params: PlugCommandHarnessParams = {}) {
     },
     args: params.args,
   } as never);
-  pluginCommandMocks.executePluginCommand.mockResolvedValue(
-    (params.result ?? { text: "ok" }) as never,
-  );
+  pluginCommandMocks.executePluginCommand.mockImplementation(async (executeParams) => {
+    await executeParams.onAuthorized?.();
+    return (params.result ?? { text: "ok" }) as never;
+  });
 }
 
 function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
@@ -831,6 +833,8 @@ describe("registerTelegramNativeCommands", () => {
     expect(commandParams.from).toBe("telegram:group:-1001234567890:topic:77");
     expect(commandParams.to).toBe("telegram:-1001234567890");
     expect(commandParams.messageThreadId).toBe(77);
+    expect(commandParams.conversationId).toBe("telegram:-1001234567890:topic:77");
+    expect(commandParams.parentConversationId).toBe("telegram:-1001234567890");
   });
 
   it("treats Telegram forum #General commands as topic 1 when Telegram omits topic metadata", async () => {
@@ -872,6 +876,19 @@ describe("registerTelegramNativeCommands", () => {
     expect(commandParams.from).toBe("telegram:100");
     expect(commandParams.to).toBe("telegram:100");
     expect(commandParams.messageThreadId).toBeUndefined();
+    expect(commandParams.conversationId).toBe("telegram:100");
+    expect(commandParams.parentConversationId).toBeUndefined();
+  });
+
+  it("omits parent context for top-level group plugin commands", async () => {
+    const { handler } = registerPlugCommand();
+
+    await handler(createTelegramGroupCommandContext());
+
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.messageThreadId).toBeUndefined();
+    expect(commandParams.conversationId).toBe("telegram:-1001234567890");
+    expect(commandParams.parentConversationId).toBeUndefined();
   });
 
   it("suppresses the fallback reply when a plugin command returns suppressReply: true", async () => {

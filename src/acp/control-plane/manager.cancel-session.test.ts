@@ -22,6 +22,11 @@ describe("AcpSessionManager cancelSession", () => {
   it("preempts an active turn on cancel and returns to idle state", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();
+      runtimeState.ensureSession.mockImplementation(async (input) => ({
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: "runtime-1",
+      }));
       hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
         id: "acpx",
         runtime: runtimeState.runtime,
@@ -60,11 +65,41 @@ describe("AcpSessionManager cancelSession", () => {
         { interval: 1 },
       );
 
-      await manager.cancelSession({
+      const resolution = manager.resolveSession({
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
-        reason: "manual-cancel",
       });
+      if (resolution.kind !== "ready" || !resolution.entry?.sessionId) {
+        throw new Error("expected active ACP session metadata");
+      }
+      const expectedTarget = {
+        sessionId: resolution.entry.sessionId,
+        backend: resolution.meta.backend,
+        agent: resolution.meta.agent,
+        runtimeSessionName: resolution.meta.runtimeSessionName,
+        ...(resolution.meta.identity ? { identity: resolution.meta.identity } : {}),
+      };
+      await expect(
+        manager.cancelSession({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          reason: "stale-cancel",
+          expectedTarget: {
+            ...expectedTarget,
+            runtimeSessionName: "replacement-runtime",
+          },
+        }),
+      ).resolves.toBe(false);
+      expect(runtimeState.cancel).not.toHaveBeenCalled();
+
+      await expect(
+        manager.cancelSession({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          reason: "manual-cancel",
+          expectedTarget,
+        }),
+      ).resolves.toBe(true);
       await runPromise;
 
       expect(runtimeState.cancel).toHaveBeenCalledTimes(1);

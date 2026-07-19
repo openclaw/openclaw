@@ -21,9 +21,12 @@ import {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
 } from "../plugins/authorization-policy-context.js";
+import { hasAuthorizationPolicies } from "../plugins/authorization-policy.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { resolveTurnAuthorityAuthorization } from "../plugins/turn-authority.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
@@ -115,7 +118,7 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
-import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -320,6 +323,8 @@ type OpenClawCodingToolsOptions = {
   runId?: string;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
+  /** Immutable host-issued authority for this admitted turn. */
+  turnAuthority?: TurnAuthoritySnapshot;
   /** Diagnostic trace context for hook/log correlation during this run. */
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
@@ -369,6 +374,8 @@ type OpenClawCodingToolsOptions = {
   modelAuthMode?: ModelAuthMode;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Transport-native parent conversation ID when the current conversation is a thread. */
+  parentConversationId?: string;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
@@ -476,8 +483,56 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
   const sandboxToolPolicy = sandbox?.tools;
+  const admittedAuthorization = resolveTurnAuthorityAuthorization(options?.turnAuthority);
+  const authorizationPolicyActive = hasAuthorizationPolicies(
+    undefined,
+    options?.config,
+    "tool.call",
+  );
+  const policyPrincipal =
+    admittedAuthorization?.principal ??
+    (authorizationPolicyActive
+      ? createAuthorizationPrincipal({
+          provider:
+            options?.toolPolicyMessageProvider ??
+            options?.messageProvider ??
+            options?.messageChannel,
+          accountId: options?.agentAccountId,
+        })
+      : undefined);
+  const admittedPrincipal = policyPrincipal;
+  const admittedSender = admittedPrincipal?.kind === "sender" ? admittedPrincipal : undefined;
+  const admittedOperator = admittedPrincipal?.kind === "operator" ? admittedPrincipal : undefined;
+  // Legacy sender fields remain a compatibility fallback only when the host did
+  // not issue authority and no authorization policy is active for this turn.
+  // Policy-active turns without a snapshot stay explicitly unknown.
+  const senderPolicyIdentity = admittedPrincipal
+    ? {
+        messageProvider: admittedSender ? (admittedSender.provider ?? null) : undefined,
+        accountId: admittedSender?.accountId,
+        memberRoleIds: admittedSender?.roleIds ? [...admittedSender.roleIds] : undefined,
+        senderId: admittedSender?.senderId,
+        senderName: admittedSender?.aliases?.name,
+        senderUsername: admittedSender?.aliases?.username,
+        senderE164: admittedSender?.aliases?.e164,
+        senderIsOwner: admittedSender?.senderIsOwner === true || admittedOperator?.isOwner === true,
+        isAuthorizedSender: admittedSender?.isAuthorizedSender,
+      }
+    : {
+        messageProvider: options?.messageProvider,
+        accountId: options?.agentAccountId,
+        memberRoleIds: options?.memberRoleIds,
+        senderId: options?.senderId,
+        senderName: options?.senderName,
+        senderUsername: options?.senderUsername,
+        senderE164: options?.senderE164,
+        senderIsOwner: options?.senderIsOwner,
+        isAuthorizedSender: options?.isAuthorizedSender,
+      };
   const capabilityProfile =
-    options?.conversationCapabilityProfile ??
+    (!authorizationPolicyActive || admittedAuthorization
+      ? options?.conversationCapabilityProfile
+      : undefined) ??
     resolveConversationCapabilityProfile({
       config: options?.config,
       sessionKey: options?.sessionKey,
@@ -488,6 +543,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       agentDir: options?.agentDir,
       agentAccountId: options?.agentAccountId,
       messageProvider: options?.messageProvider,
+      senderMessageProvider: senderPolicyIdentity.messageProvider,
+      senderAccountId: senderPolicyIdentity.accountId,
+      requireSenderRouteBinding: admittedSender !== undefined,
       messageChannel: options?.messageChannel,
       chatType: options?.chatType,
       messageTo: options?.messageTo,
@@ -499,14 +557,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       groupId: options?.groupId,
       groupChannel: options?.groupChannel,
       groupSpace: options?.groupSpace,
-      memberRoleIds: options?.memberRoleIds,
+      memberRoleIds: senderPolicyIdentity.memberRoleIds,
       spawnedBy: options?.spawnedBy,
-      senderId: options?.senderId,
-      senderName: options?.senderName,
-      senderUsername: options?.senderUsername,
-      senderE164: options?.senderE164,
-      senderIsOwner: options?.senderIsOwner,
-      isAuthorizedSender: options?.isAuthorizedSender,
+      senderId: senderPolicyIdentity.senderId,
+      senderName: senderPolicyIdentity.senderName,
+      senderUsername: senderPolicyIdentity.senderUsername,
+      senderE164: senderPolicyIdentity.senderE164,
+      senderIsOwner: senderPolicyIdentity.senderIsOwner,
+      isAuthorizedSender: senderPolicyIdentity.isAuthorizedSender,
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
       modelApi: options?.modelApi,
@@ -518,7 +576,31 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       skillsSnapshot: options?.skillsSnapshot,
       sandboxToolPolicy,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
+      runtimePluginToolGrant: options?.conversationCapabilityProfile?.policy.runtimePluginToolGrant,
+      isCanonicalWorkspace: options?.conversationCapabilityProfile?.workspace.isCanonicalWorkspace,
+      promptMode: options?.conversationCapabilityProfile?.instructions.promptMode,
     });
+  const policyAuthorization =
+    admittedAuthorization ??
+    (authorizationPolicyActive && policyPrincipal
+      ? createAuthorizationInvocationContext({
+          principal: policyPrincipal,
+          agentId: capabilityProfile.agentId,
+          sessionKey: options?.sessionKey,
+          sessionId: options?.sessionId,
+          runId: options?.runId,
+          conversationId:
+            options?.hookChannelId ??
+            capabilityProfile.conversation.currentChannelId ??
+            capabilityProfile.conversation.currentMessagingTarget ??
+            capabilityProfile.conversation.messageTo,
+          parentConversationId: options?.parentConversationId,
+          threadId:
+            capabilityProfile.conversation.currentThreadTs ??
+            capabilityProfile.conversation.messageThreadId,
+          trigger: options?.trigger,
+        })
+      : undefined);
   const {
     agentId,
     globalPolicy,
@@ -812,7 +894,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         });
   options?.recordToolPrepStage?.("shell-tools");
   const ownerOnlyCoreToolDenylist =
-    options?.senderIsOwner === false ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS] : [];
+    senderPolicyIdentity.senderIsOwner === false ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS] : [];
   const ownerOnlyCoreToolPolicy =
     ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
@@ -836,20 +918,20 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   );
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
-  const pluginToolCallerIdentity =
-    agentId && options?.sessionKey?.trim()
-      ? {
-          agentId,
-          sessionKey: options.sessionKey.trim(),
-          turnSourceChannel: resolveGatewayMessageChannel(
-            options.messageChannel ?? options.messageProvider,
-          ),
-          turnSourceTo:
-            options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
-          turnSourceAccountId: options.agentAccountId,
-          turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
-        }
-      : undefined;
+  // Use the shared factory so supplied authority survives incomplete bindings
+  // and fails closed before plugin, hook, or direct tool execution.
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(agentId, {
+    agentSessionKey: options?.sessionKey,
+    runSessionKey: options?.runSessionKey,
+    turnAuthority: options?.turnAuthority,
+    agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
+    currentMessagingTarget: options?.currentMessagingTarget,
+    currentChannelId: options?.currentChannelId,
+    agentTo: options?.messageTo,
+    agentAccountId: options?.agentAccountId,
+    currentThreadTs: options?.currentThreadTs,
+    agentThreadId: options?.messageThreadId,
+  });
   const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
@@ -867,8 +949,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             workspaceDir: workspaceRoot,
             config: options?.config,
             fsPolicy,
-            requesterSenderId: options?.senderId,
-            senderIsOwner: options?.senderIsOwner,
+            requesterSenderId: senderPolicyIdentity.senderId,
+            senderIsOwner: senderPolicyIdentity.senderIsOwner,
             sessionId: options?.sessionId,
             conversationRecall: options?.conversationRecall,
             oneShotCliRun: options?.oneShotCliRun,
@@ -895,7 +977,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           resolvedConfig: options?.config,
         }),
     options?.clientCaps,
-  ).map((tool) => wrapToolWithGatewayCallerIdentity(tool, pluginToolCallerIdentity));
+  ).map(wrapGatewayCallerIdentity);
   const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
   const toolSearchTools =
     toolSearchControlsEnabled && ringZeroTools.length === 0
@@ -960,10 +1042,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,
             messageActionTurnCapability: options?.messageActionTurnCapability,
+            authorization: policyAuthorization,
+            turnAuthority: options?.turnAuthority,
             agentGroupId: options?.groupId ?? null,
             agentGroupChannel: options?.groupChannel ?? null,
             agentGroupSpace: options?.groupSpace ?? null,
-            agentMemberRoleIds: options?.memberRoleIds,
+            agentMemberRoleIds: senderPolicyIdentity.memberRoleIds,
             agentDir: options?.agentDir,
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
@@ -1009,8 +1093,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             wrapBeforeToolCallHook: false,
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
             requesterAgentIdOverride: agentId,
-            requesterSenderId: options?.senderId,
-            senderIsOwner: options?.senderIsOwner,
+            requesterSenderId: senderPolicyIdentity.senderId,
+            senderIsOwner: senderPolicyIdentity.senderIsOwner,
             authProfileStore: options?.authProfileStore,
             sessionId: options?.sessionId,
             conversationRecall: options?.conversationRecall,
@@ -1162,31 +1246,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
-    authorization: createAuthorizationInvocationContext({
-      principal: createAuthorizationPrincipal({
-        provider:
-          capabilityProfile.conversation.messageProvider ??
-          capabilityProfile.conversation.messageChannel,
-        accountId: capabilityProfile.serviceIdentity.accountId,
-        senderId: capabilityProfile.sender.id,
-        senderIsOwner: capabilityProfile.sender.isOwner,
-        isAuthorizedSender: capabilityProfile.sender.isAuthorized,
-        roleIds: capabilityProfile.conversation.memberRoleIds,
-      }),
-      agentId,
-      sessionKey: options?.sessionKey,
-      sessionId: options?.sessionId,
-      runId: options?.runId,
-      conversationId:
-        options?.hookChannelId ??
-        capabilityProfile.conversation.currentChannelId ??
-        capabilityProfile.conversation.currentMessagingTarget ??
-        capabilityProfile.conversation.messageTo,
-      threadId:
-        capabilityProfile.conversation.currentThreadTs ??
-        capabilityProfile.conversation.messageThreadId,
-      trigger: options?.trigger,
-    }),
+    // Keep this absent when no host authority exists. The execution-time
+    // policy seam supplies an unknown principal, including after policy reload.
+    authorization: policyAuthorization,
     approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
@@ -1217,7 +1279,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // NOTE: Keep canonical (lowercase) tool names here.
   // shared model runtime's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withDeferredFollowupDescriptions;
+  // Identity is the outermost execution scope. Rejected nested bindings must
+  // clear inherited authority before hooks, abort wrappers, or tools can run.
+  return withDeferredFollowupDescriptions.map(wrapGatewayCallerIdentity);
 }
 
 /** Build the runtime tool list exposed through the public agent harness SDK. */

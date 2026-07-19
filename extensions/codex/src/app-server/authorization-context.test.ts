@@ -1,7 +1,46 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { hasAuthorizationPoliciesMock, resolveTurnAuthorityAuthorizationMock } = vi.hoisted(() => ({
+  hasAuthorizationPoliciesMock: vi.fn(),
+  resolveTurnAuthorityAuthorizationMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  hasAuthorizationPolicies: hasAuthorizationPoliciesMock,
+  resolveTurnAuthorityAuthorization: resolveTurnAuthorityAuthorizationMock,
+}));
 import { buildCodexAuthorizationContext } from "./authorization-context.js";
 
 describe("buildCodexAuthorizationContext", () => {
+  beforeEach(() => {
+    hasAuthorizationPoliciesMock.mockReset().mockReturnValue(false);
+    resolveTurnAuthorityAuthorizationMock.mockReset();
+  });
+
+  it("uses host-issued authority instead of conflicting legacy sender fields", () => {
+    const authorization = {
+      principal: { kind: "operator", scopes: ["operator.admin"], isOwner: true },
+      agentId: "molty",
+      sessionKey: "agent:molty:maintenance",
+      runId: "run-operator",
+      trigger: "gateway",
+    } as const;
+    const turnAuthority = { authorization } as never;
+    resolveTurnAuthorityAuthorizationMock.mockReturnValue(authorization);
+
+    expect(
+      buildCodexAuthorizationContext({
+        turnAuthority,
+        messageProvider: "discord",
+        senderId: "spoofed-sender",
+        senderIsOwner: false,
+        isAuthorizedSender: false,
+        memberRoleIds: ["guest"],
+      }),
+    ).toBe(authorization);
+  });
+
   it("preserves authenticated sender, role, channel, and thread facts", () => {
     expect(
       buildCodexAuthorizationContext({
@@ -51,6 +90,31 @@ describe("buildCodexAuthorizationContext", () => {
     ).toEqual({
       principal: { kind: "unknown", provider: "telegram", accountId: "default" },
       sessionId: "session-2",
+    });
+  });
+
+  it("uses an unknown principal when policy is active without turn authority", () => {
+    hasAuthorizationPoliciesMock.mockReturnValue(true);
+
+    expect(
+      buildCodexAuthorizationContext({
+        config: {},
+        messageProvider: "discord",
+        agentAccountId: "molty",
+        senderId: "legacy-owner",
+        senderName: "Legacy Owner",
+        senderUsername: "legacy-owner",
+        senderE164: "+15559999999",
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        memberRoleIds: ["admins"],
+        agentId: "molty",
+        sessionKey: "agent:molty:discord:channel:maintenance",
+      }),
+    ).toEqual({
+      principal: { kind: "unknown", provider: "discord", accountId: "molty" },
+      agentId: "molty",
+      sessionKey: "agent:molty:discord:channel:maintenance",
     });
   });
 

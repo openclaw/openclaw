@@ -840,6 +840,7 @@ describe("mattermost inbound user posts", () => {
     const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello /status");
     expect(ctx?.CommandAuthorized).toBe(false);
+    expect(ctx?.InboundAccessAuthorized).toBe(true);
     // Inline non-control text must not be tagged as an explicit text-slash command turn —
     // only authorized control commands take the source-reply suppression bypass.
     expect(ctx?.CommandSource).toBeUndefined();

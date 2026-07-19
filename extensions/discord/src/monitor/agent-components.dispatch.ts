@@ -223,6 +223,7 @@ export async function dispatchDiscordComponentEvent(params: {
       authorized: commandAuthorized,
       body: eventText,
     },
+    InboundAccessAuthorized: true,
     CommandSource: "text" as const,
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,

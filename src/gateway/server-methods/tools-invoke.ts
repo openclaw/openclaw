@@ -62,6 +62,16 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (client?.internal?.agentRuntimeIdentity) {
+      // Runtime connections are delegated agent callers. Their transport scopes
+      // must never be promoted into an operator principal at this RPC boundary.
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "tools.invoke is not available to agent runtimes"),
+      );
+      return;
+    }
 
     const operatorScopes = client?.connect?.scopes ?? [];
     const operatorIsOwner = operatorScopes.includes("operator.admin");
@@ -77,7 +87,7 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       authorization: createAuthorizationInvocationContext({
         principal: createAuthorizationPrincipal({
           operatorScopes,
-          operatorClientId: client?.connect?.client?.id,
+          operatorClientId: client?.pairedClientId,
           operatorDeviceId: client?.connect?.device?.id,
           operatorIsOwner,
         }),

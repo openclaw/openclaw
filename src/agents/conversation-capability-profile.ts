@@ -20,7 +20,10 @@ import {
   sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
+import {
+  resolveRouteBoundSenderToolPolicyIdentity,
+  resolveSenderToolPolicy,
+} from "./sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -49,6 +52,12 @@ export type ConversationCapabilityProfileParams = {
   agentDir?: string;
   agentAccountId?: string | null;
   messageProvider?: string | null;
+  /** Authenticated source provider used for sender selectors, separate from the delivery route. */
+  senderMessageProvider?: string | null;
+  /** Authenticated source account used to keep sender selectors on their receiving route. */
+  senderAccountId?: string | null;
+  /** Require sender selectors to match the exact source and delivery route. */
+  requireSenderRouteBinding?: boolean;
   messageChannel?: string | null;
   chatType?: string;
   messageTo?: string | null;
@@ -122,6 +131,8 @@ export type ResolvedConversationCapabilityProfile = {
     spawnedBy?: string | null;
   };
   sender: {
+    provider?: string | null;
+    accountId?: string | null;
     id?: string | null;
     name?: string | null;
     username?: string | null;
@@ -184,6 +195,18 @@ export function resolveConversationCapabilityProfile(
   params: ConversationCapabilityProfileParams,
 ): ResolvedConversationCapabilityProfile {
   const messageProvider = params.messageProvider;
+  const senderMessageProvider = params.senderMessageProvider;
+  const routeBoundSenderPolicyIdentity = resolveRouteBoundSenderToolPolicyIdentity({
+    routeMessageProvider: messageProvider ?? params.messageChannel,
+    routeAccountId: params.agentAccountId,
+    senderMessageProvider,
+    senderAccountId: params.senderAccountId,
+    requireRouteBinding: params.requireSenderRouteBinding,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
     sessionKey: params.sessionKey,
@@ -205,31 +228,38 @@ export function resolveConversationCapabilityProfile(
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: messageProvider ?? undefined,
+    senderMessageProvider: routeBoundSenderPolicyIdentity.messageProvider,
     groupId: trustedGroup.groupId,
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,
     accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
+    senderId: routeBoundSenderPolicyIdentity.senderId,
+    senderName: routeBoundSenderPolicyIdentity.senderName,
+    senderUsername: routeBoundSenderPolicyIdentity.senderUsername,
+    senderE164: routeBoundSenderPolicyIdentity.senderE164,
   });
   // Owner WebChat intentionally has no external sender identity. Its trusted
   // owner state must not fall through to the wildcard policy for guests.
   const isOwnerInternalSession =
     params.senderIsOwner === true &&
-    normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
-  const senderPolicy = isOwnerInternalSession
-    ? undefined
-    : resolveSenderToolPolicy({
-        config: params.config,
-        agentId: effective.agentId,
-        messageProvider,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      });
+    normalizeMessageChannel(
+      params.senderMessageProvider === undefined
+        ? (messageProvider ?? params.messageChannel)
+        : senderMessageProvider,
+    ) === INTERNAL_MESSAGE_CHANNEL;
+  const senderPolicy = !routeBoundSenderPolicyIdentity.routeBound
+    ? { deny: ["*"] }
+    : isOwnerInternalSession
+      ? undefined
+      : resolveSenderToolPolicy({
+          config: params.config,
+          agentId: effective.agentId,
+          messageProvider: routeBoundSenderPolicyIdentity.messageProvider,
+          senderId: routeBoundSenderPolicyIdentity.senderId,
+          senderName: routeBoundSenderPolicyIdentity.senderName,
+          senderUsername: routeBoundSenderPolicyIdentity.senderUsername,
+          senderE164: routeBoundSenderPolicyIdentity.senderE164,
+        });
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -327,6 +357,8 @@ export function resolveConversationCapabilityProfile(
       spawnedBy: params.spawnedBy,
     },
     sender: {
+      provider: senderMessageProvider,
+      accountId: params.senderAccountId,
       id: params.senderId,
       name: params.senderName,
       username: params.senderUsername,

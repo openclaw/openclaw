@@ -1,5 +1,6 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
+import { resolveCliAuthorizationToolAvailability } from "../../agents/cli-runner/tool-policy.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -10,6 +11,8 @@ import {
 } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
+import { rebindTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -26,6 +29,7 @@ import {
 } from "./agent-runner-cli-dispatch.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { buildHostAdmittedRunParams } from "./agent-runner-run-params.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -37,6 +41,43 @@ type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
   "handlePartialForTyping" | "preparePartialForTyping" | "startPresentationWhileTyping"
 >;
+
+export function resolveCliAttemptTurnAuthority(params: {
+  turnAuthority?: TurnAuthoritySnapshot;
+  agentId: string;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+  sessionId: string;
+  runId: string;
+  trigger: "heartbeat" | "user";
+}): TurnAuthoritySnapshot | undefined {
+  const sessionKey = params.runtimePolicySessionKey ?? params.sessionKey;
+  return sessionKey
+    ? rebindTurnAuthoritySnapshot(params.turnAuthority, {
+        agentId: params.agentId,
+        sessionKey,
+        sessionId: params.sessionId,
+        runId: params.runId,
+        trigger: params.trigger,
+      })
+    : undefined;
+}
+
+export { resolveCliAuthorizationToolAvailability };
+
+export function resolveCliCandidateAdmissionParams(params: {
+  candidateRun: FollowupRun["run"];
+  attemptTurnAuthority?: TurnAuthoritySnapshot;
+  originatingParentConversationId?: string;
+  sessionParentConversationId?: string;
+}) {
+  return {
+    ...buildHostAdmittedRunParams(params.candidateRun),
+    turnAuthority: params.attemptTurnAuthority,
+    parentConversationId:
+      params.originatingParentConversationId ?? params.sessionParentConversationId,
+  };
+}
 
 export async function runCliFallbackCandidate(params: {
   turn: AgentTurnParams;
@@ -110,6 +151,24 @@ export async function runCliFallbackCandidate(params: {
   const cliCurrentMessageId = isRestartSentinelContinuation
     ? turn.sessionCtx.ReplyToId
     : (turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid);
+  const cliRuntimePolicySessionKey =
+    turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey;
+  const attemptTurnAuthority = resolveCliAttemptTurnAuthority({
+    turnAuthority: params.candidateRun.turnAuthority,
+    agentId: turn.followupRun.run.agentId,
+    sessionKey: turn.sessionKey ?? turn.followupRun.run.sessionKey,
+    runtimePolicySessionKey: cliRuntimePolicySessionKey,
+    sessionId: turn.followupRun.run.sessionId,
+    runId: params.runId,
+    trigger: turn.isHeartbeat ? "heartbeat" : "user",
+  });
+  const candidateAdmissionParams = resolveCliCandidateAdmissionParams({
+    candidateRun: params.candidateRun,
+    attemptTurnAuthority,
+    originatingParentConversationId: turn.followupRun.originatingParentConversationId,
+    sessionParentConversationId: turn.sessionCtx.ThreadParentId,
+  });
+  const cliToolAvailability = resolveCliAuthorizationToolAvailability(params.runtimeConfig);
   const cliToolSummaryTracker = createCliToolSummaryTracker({
     detailMode: turn.toolProgressDetail,
     shouldEmitToolResult: turn.shouldEmitToolResult,
@@ -231,8 +290,7 @@ export async function runCliFallbackCandidate(params: {
           runParams: {
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
-            runtimePolicySessionKey:
-              turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
+            runtimePolicySessionKey: cliRuntimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,
             trigger: turn.isHeartbeat ? "heartbeat" : "user",
             sessionFile: turn.followupRun.run.sessionFile,
@@ -289,15 +347,10 @@ export async function runCliFallbackCandidate(params: {
             skillsSnapshot: turn.followupRun.run.skillsSnapshot,
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
-            clientCaps: turn.followupRun.run.clientCaps,
+            ...candidateAdmissionParams,
+            cliToolAvailability,
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,
-            senderId: turn.followupRun.run.senderId,
-            isAuthorizedSender: turn.followupRun.run.isAuthorizedSender,
-            memberRoleIds: turn.followupRun.run.memberRoleIds,
-            senderName: turn.followupRun.run.senderName,
-            senderUsername: turn.followupRun.run.senderUsername,
-            senderE164: turn.followupRun.run.senderE164,
             groupId: turn.followupRun.run.groupId,
             groupChannel: turn.followupRun.run.groupChannel,
             groupSpace: turn.followupRun.run.groupSpace,
@@ -308,8 +361,6 @@ export async function runCliFallbackCandidate(params: {
             currentMessageId: cliCurrentMessageId,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
-            senderIsOwner: turn.followupRun.run.senderIsOwner,
-            approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             disableTools: turn.opts?.disableTools,
             abortSignal: params.runAbortSignal,

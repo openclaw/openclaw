@@ -420,7 +420,11 @@ export async function handleIrcInbound(params: {
     messageId: message.messageId,
     timestamp: message.timestamp,
     from: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
-    sender: { id: senderDisplay, name: message.senderNick || undefined },
+    // Host-less IRC prefixes expose only a mutable nick. Keep authorization identity unknown.
+    sender: {
+      id: message.senderHost ? senderDisplay : undefined,
+      name: message.senderNick || undefined,
+    },
     conversation: {
       kind: message.isGroup ? "group" : "direct",
       id: peerId,

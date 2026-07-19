@@ -9,9 +9,17 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import {
+  createSteeringAuthorizationAffinity,
+  resolveSteeringAuthorizationAffinityKey,
+  steeringAuthorizationAffinitiesMatch,
+  type SteeringAuthorizationAffinity,
+} from "../auto-reply/reply/steering-authorization-affinity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
+import { isIssuedTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
@@ -25,6 +33,8 @@ export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
   sessionKey: string;
+  /** Immutable authority lineage captured when this run entered the host. */
+  readonly steeringAuthorizationAffinity?: SteeringAuthorizationAffinity;
   lifecycleGeneration?: string;
   agentId?: string;
   startedAtMs: number;
@@ -71,6 +81,41 @@ export type ChatAbortControllerEntry = {
   /** Side questions stay independent from main-turn TUI session stops. */
   turnKind?: "main" | "btw";
 };
+
+/** Attach one process-issued turn lineage without allowing later controller swaps. */
+export function attachChatAbortControllerTurnAuthority(
+  entry: ChatAbortControllerEntry,
+  turnAuthority: TurnAuthoritySnapshot,
+): boolean {
+  if (!isIssuedTurnAuthoritySnapshot(turnAuthority)) {
+    return false;
+  }
+  const authorization = turnAuthority.authorization;
+  // A trusted rebind is host-issued too, but it must name the exact target
+  // whose controller will later authorize steering and abort effects.
+  if (
+    !entry.agentId ||
+    authorization.agentId !== entry.agentId ||
+    authorization.sessionKey !== entry.sessionKey ||
+    authorization.sessionId !== entry.sessionId
+  ) {
+    return false;
+  }
+  const affinity = createSteeringAuthorizationAffinity({ turnAuthority });
+  if (!resolveSteeringAuthorizationAffinityKey(affinity)) {
+    return false;
+  }
+  if (entry.steeringAuthorizationAffinity) {
+    return steeringAuthorizationAffinitiesMatch(entry.steeringAuthorizationAffinity, affinity);
+  }
+  Object.defineProperty(entry, "steeringAuthorizationAffinity", {
+    value: affinity,
+    enumerable: true,
+    configurable: false,
+    writable: false,
+  });
+  return true;
+}
 
 export type RestartRecoveryCandidate = {
   runId: string;

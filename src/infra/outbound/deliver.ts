@@ -102,6 +102,7 @@ import {
   createPendingOutboundEffectAuthorization,
   digestOutboundEffectPayload,
   isOutboundEffectAuthorizationError,
+  materializeOutboundEffectPayload,
   OutboundEffectAuthorizationError,
   parseQueuedOutboundEffectAuthorization,
   type OutboundEffectAuthorizationInput,
@@ -1488,13 +1489,14 @@ function effectAuthorizationFailure(message: string, cause?: unknown) {
 async function authorizeFinalOutboundEffect(params: {
   payload?: ReplyPayload;
   runtime: OutboundEffectAuthorizationRuntime;
-}): Promise<void> {
+}): Promise<ReplyPayload | undefined> {
   if (params.runtime.kind === "recovery") {
     if (!params.payload) {
-      return;
+      return undefined;
     }
+    const finalPayload = materializeOutboundEffectPayload(params.payload);
     const finalDigest = digestOutboundEffectPayload(
-      params.payload,
+      finalPayload,
       params.runtime.authorization.mediaAliases,
     );
     if (finalDigest !== params.runtime.authorization.digest) {
@@ -1502,16 +1504,19 @@ async function authorizeFinalOutboundEffect(params: {
         "Recovered outbound payload no longer matches its authorized effect",
       );
     }
-    return;
+    return finalPayload;
   }
 
   const enforceFinalPayloadAuthorization =
     params.runtime.input.enforceFinalPayloadAuthorization !== false;
   let finalDigest: string | undefined;
+  let authorizedPayload: ReplyPayload | undefined;
   let authorizationError: unknown;
   let sealHandle: OutboundEffectAuthorizationSealHandle | null = null;
   try {
-    const finalPayload = params.payload;
+    let finalPayload = params.payload
+      ? materializeOutboundEffectPayload(params.payload)
+      : undefined;
     finalDigest = finalPayload
       ? digestOutboundEffectPayload(finalPayload, params.runtime.mediaAliases)
       : params.runtime.initialDigest;
@@ -1521,8 +1526,12 @@ async function authorizeFinalOutboundEffect(params: {
           "Outbound payload changed after authorization without a changed-payload authorizer",
         );
       }
-      await params.runtime.input.authorizeChangedPayload(finalPayload);
+      finalPayload = materializeOutboundEffectPayload(
+        await params.runtime.input.authorizeChangedPayload(finalPayload),
+      );
+      finalDigest = digestOutboundEffectPayload(finalPayload, params.runtime.mediaAliases);
     }
+    authorizedPayload = finalPayload;
     // Seal before joining a multi-leaf barrier. A CAS failure then becomes a
     // denied outcome and prevents any sibling from crossing into transport I/O.
     if (params.runtime.queue) {
@@ -1568,6 +1577,7 @@ async function authorizeFinalOutboundEffect(params: {
       throw effectAuthorizationFailure("Failed to authorize sealed outbound effect", error);
     }
   }
+  return authorizedPayload;
 }
 
 /**
@@ -1584,8 +1594,27 @@ export async function deliverOutboundPayloads(
 }
 
 export async function deliverOutboundPayloadsInternal(
-  params: DeliverOutboundPayloadsParams,
+  input: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  // Detach both baseline and dispatch payloads before the first await. Direct
+  // callers cannot mutate the effect after its authorization run has started.
+  const params =
+    input.effectAuthorization || input.recoveredEffectAuthorization
+      ? {
+          ...input,
+          payloads: input.payloads.map((payload) => materializeOutboundEffectPayload(payload)),
+          ...(input.effectAuthorization
+            ? {
+                effectAuthorization: {
+                  ...input.effectAuthorization,
+                  authorizedPayload: materializeOutboundEffectPayload(
+                    input.effectAuthorization.authorizedPayload,
+                  ),
+                },
+              }
+            : {}),
+        }
+      : input;
   const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
   const emitPreQueueFailure = (): void => {
@@ -2538,18 +2567,21 @@ async function deliverOutboundPayloadsCore(
   // and channel normalizer are one-to-zero-or-one; text/media transport fan-out
   // is derived only after this one complete semantic payload is authorized.
   let effectAuthorizationCompleted = false;
-  const completeEffectAuthorization = async (payload?: ReplyPayload): Promise<void> => {
+  const completeEffectAuthorization = async (
+    payload?: ReplyPayload,
+  ): Promise<ReplyPayload | undefined> => {
     if (!params.effectAuthorizationRuntime) {
-      return;
+      return payload;
     }
     if (effectAuthorizationCompleted) {
       throw effectAuthorizationFailure("Outbound effect authorization completed more than once");
     }
-    await authorizeFinalOutboundEffect({
+    const authorizedPayload = await authorizeFinalOutboundEffect({
       runtime: params.effectAuthorizationRuntime,
       ...(payload ? { payload } : {}),
     });
     effectAuthorizationCompleted = true;
+    return authorizedPayload;
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
   if (params.effectAuthorizationRuntime && normalizedPayloads.length > 1) {
@@ -2766,20 +2798,24 @@ async function deliverOutboundPayloadsCore(
       }
       const effectivePayloadSummary = buildPayloadSummary(effectivePayload);
       assertStableMediaFanout(params, payloadIndex, originalMediaCount, effectivePayloadSummary);
-      await completeEffectAuthorization(effectivePayload);
-      payloadSummary = effectivePayloadSummary;
+      const authorizedEffectivePayload =
+        (await completeEffectAuthorization(effectivePayload)) ?? effectivePayload;
+      payloadSummary = buildPayloadSummary(authorizedEffectivePayload);
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
-      const effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
+      const effectiveDeliveryKind = deliveryKindForPayload(
+        authorizedEffectivePayload,
+        payloadSummary,
+      );
       effectiveDeliveryKinds.set(payloadIndex, effectiveDeliveryKind);
       startDeliveryDiagnostics(effectiveDeliveryKind);
 
       params.onPayload?.(payloadSummary);
-      const replyToResolution = resolveCurrentReplyTo(effectivePayload);
+      const replyToResolution = resolveCurrentReplyTo(authorizedEffectivePayload);
       const sendOverrides: OutboundMessageSendOverrides = {
         replyToId: replyToResolution.replyToId,
         replyToIdSource: replyToResolution.source,
         ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-        ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(authorizedEffectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
       };
       const applySendReplyToConsumption = <T extends OutboundMessageSendOverrides>(
@@ -2791,25 +2827,25 @@ async function deliverOutboundPayloadsCore(
       const deliveryTarget = deliveryHandler.buildTargetRef({ threadId: sendOverrides.threadId });
       if (
         deliveryHandler.sendPayload &&
-        ((effectivePayload.isError === true &&
+        ((authorizedEffectivePayload.isError === true &&
           deliveryHandler.sendTextOnlyErrorPayloads === true) ||
           hasReplyPayloadContent(
             {
-              presentation: effectivePayload.presentation,
-              interactive: effectivePayload.interactive,
-              channelData: effectivePayload.channelData,
-              location: effectivePayload.location,
+              presentation: authorizedEffectivePayload.presentation,
+              interactive: authorizedEffectivePayload.interactive,
+              channelData: authorizedEffectivePayload.channelData,
+              location: authorizedEffectivePayload.location,
             },
             {
-              extraContent: effectivePayload.location != null,
+              extraContent: authorizedEffectivePayload.location != null,
             },
           ) ||
-          effectivePayload.audioAsVoice === true ||
-          effectivePayload.videoAsNote === true)
+          authorizedEffectivePayload.audioAsVoice === true ||
+          authorizedEffectivePayload.videoAsNote === true)
       ) {
         const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(
-          effectivePayload,
+          authorizedEffectivePayload,
           applySendReplyToConsumption(sendOverrides),
         );
         await recordIdentifiedDeliveryResult(delivery);
@@ -2832,14 +2868,14 @@ async function deliverOutboundPayloadsCore(
         recordDeliveredPayload(payloadSummary, deliveredResults);
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
-          payload: effectivePayload,
+          payload: authorizedEffectivePayload,
           target: deliveryTarget,
           messageId: deliveredResults.find((entry) => entry.messageId)?.messageId,
           gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
           handler: deliveryHandler,
-          payload: effectivePayload,
+          payload: authorizedEffectivePayload,
           target: deliveryTarget,
           results: deliveredResults,
         });
@@ -2883,14 +2919,14 @@ async function deliverOutboundPayloadsCore(
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
-          payload: effectivePayload,
+          payload: authorizedEffectivePayload,
           target: deliveryTarget,
           messageId: pinMessageId,
           gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
           handler: deliveryHandler,
-          payload: effectivePayload,
+          payload: authorizedEffectivePayload,
           target: deliveryTarget,
           results: deliveredResults,
         });
@@ -2943,14 +2979,14 @@ async function deliverOutboundPayloadsCore(
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
-          payload: effectivePayload,
+          payload: authorizedEffectivePayload,
           target: deliveryTarget,
           messageId: pinMessageId,
           gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
           handler: deliveryHandler,
-          payload: effectivePayload,
+          payload: authorizedEffectivePayload,
           target: deliveryTarget,
           results: deliveredResults,
         });
@@ -3007,14 +3043,14 @@ async function deliverOutboundPayloadsCore(
       }
       await maybePinDeliveredMessage({
         handler: deliveryHandler,
-        payload: effectivePayload,
+        payload: authorizedEffectivePayload,
         target: deliveryTarget,
         messageId: firstMessageId,
         gatewayClientScopes: params.gatewayClientScopes,
       });
       await maybeNotifyAfterDeliveredPayload({
         handler: deliveryHandler,
-        payload: effectivePayload,
+        payload: authorizedEffectivePayload,
         target: deliveryTarget,
         results: deliveredResults,
       });

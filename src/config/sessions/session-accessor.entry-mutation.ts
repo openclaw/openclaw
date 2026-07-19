@@ -413,6 +413,8 @@ export function resolveSessionAbortTarget(
  * storage-sized operation. Runtime abort side effects remain with callers.
  */
 export async function markSessionAbortTarget(params: {
+  /** Skip the write when the authorized durable session has already changed. */
+  expectedSessionId?: string;
   resolveAbortCutoff?: (context: SessionAbortTargetContext) => SessionAbortTargetCutoff | undefined;
   scope: SessionAccessScope;
   now?: () => number;
@@ -423,6 +425,12 @@ export async function markSessionAbortTarget(params: {
     const updated = await patchSessionEntry(
       params.scope,
       (currentEntry) => {
+        if (
+          params.expectedSessionId !== undefined &&
+          currentEntry.sessionId !== params.expectedSessionId
+        ) {
+          return null;
+        }
         resolvedTarget = {
           entry: { ...currentEntry },
           persisted: false,

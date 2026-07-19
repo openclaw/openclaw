@@ -5,6 +5,7 @@
  */
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import { createSteeringAuthorizationAffinity } from "../../auto-reply/reply/steering-authorization-affinity.js";
 import {
   resolveThreadBindingSpawnPolicy,
   supportsAutomaticThreadBindingSpawn,
@@ -12,10 +13,12 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { captureActiveEmbeddedRunSteeringTarget } from "../embedded-agent-runner/runs.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -233,6 +236,10 @@ export function createSessionsSpawnTool(
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /** Internal identity of the exact active requester attempt. */
+    requesterRunId?: string;
+    requesterSessionId?: string;
+    requesterTurnAuthority?: TurnAuthoritySnapshot;
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
 ): AnyAgentTool {
@@ -252,6 +259,13 @@ export function createSessionsSpawnTool(
     parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const requesterSteeringTarget = captureActiveEmbeddedRunSteeringTarget({
+        sessionId: opts?.requesterSessionId,
+        runId: opts?.requesterRunId,
+        steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({
+          turnAuthority: opts?.requesterTurnAuthority,
+        }),
+      });
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
         Object.hasOwn(params, key),
       );
@@ -305,6 +319,7 @@ export function createSessionsSpawnTool(
         requestedAgentId,
         sandbox,
         options: opts,
+        requesterSteeringTarget,
       });
       if (visibleResult) {
         return jsonResult(
@@ -450,6 +465,7 @@ export function createSessionsSpawnTool(
               runTimeoutSeconds: result.runTimeoutSeconds,
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
+              ...(requesterSteeringTarget ? { requesterSteeringTarget } : {}),
             });
             try {
               const hookRunner = getGlobalHookRunner();
@@ -528,6 +544,7 @@ export function createSessionsSpawnTool(
           workspaceDir: opts?.workspaceDir,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          ...(requesterSteeringTarget ? { requesterSteeringTarget } : {}),
         },
       );
 

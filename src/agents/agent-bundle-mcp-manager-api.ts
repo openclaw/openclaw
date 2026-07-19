@@ -18,6 +18,7 @@ function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
 export async function getOrCreateSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
@@ -36,6 +37,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
 export async function getOrCreateRequesterScopedMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
@@ -130,6 +132,27 @@ export async function retireSessionMcpRuntimeForSessionKey(params: {
     return false;
   }
   const sessionId = getSessionMcpRuntimeManager().resolveSessionId(sessionKey);
+  return await retireSessionMcpRuntime({
+    sessionId,
+    reason: params.reason,
+    preserveActiveLeases: params.preserveActiveLeases,
+    onError: params.onError,
+  });
+}
+
+/** Retires an unscoped or scoped session runtime without crossing adjacent agent stores. */
+export async function retireSessionMcpRuntimeForAgentSessionKey(params: {
+  agentId: string;
+  sessionKey?: string | null;
+  reason: string;
+  preserveActiveLeases?: boolean;
+  onError?: (error: unknown, sessionId: string, reason: string) => void;
+}): Promise<boolean> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return false;
+  }
+  const sessionId = getSessionMcpRuntimeManager().resolveAgentSessionId(params.agentId, sessionKey);
   return await retireSessionMcpRuntime({
     sessionId,
     reason: params.reason,

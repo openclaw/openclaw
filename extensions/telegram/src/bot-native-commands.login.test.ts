@@ -5,7 +5,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
+import {
+  createTelegramGroupCommandContext,
+  createTelegramTopicCommandContext,
+} from "./bot-native-commands.fixture-test-support.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -57,7 +60,10 @@ function createDeferred<T>() {
 }
 
 function installCommandDenialPolicy() {
-  const handler = vi.fn(() => ({ effect: "deny" as const, code: "native-command-denied" }));
+  const handler = vi.fn((_request: unknown, _context: unknown) => ({
+    effect: "deny" as const,
+    code: "native-command-denied",
+  }));
   const registry = createEmptyPluginRegistry();
   registry.authorizationPolicies.push({
     pluginId: "sender-access",
@@ -111,6 +117,40 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).toEqual([
       "Command blocked by authorization policy.",
     ]);
+  });
+
+  it("only exposes a parent conversation for an actual Telegram topic", async () => {
+    const authorizationHandler = installCommandDenialPolicy();
+    const loginFlow = vi.fn(async () => {
+      throw new Error("login flow should not start");
+    });
+    const { handler } = registerLoginCommand({
+      cfg: {
+        commands: {
+          native: true,
+          ownerAllowFrom: ["200"],
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+
+    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    await handler(createTelegramTopicCommandContext({ match: "codex", userId: 200 }));
+
+    expect(authorizationHandler).toHaveBeenCalledTimes(2);
+    const topLevelContext = authorizationHandler.mock.calls[0]?.[1];
+    expect(topLevelContext).toMatchObject({
+      conversationId: "telegram:100",
+    });
+    expect(topLevelContext).not.toHaveProperty("parentConversationId");
+    expect(topLevelContext).not.toHaveProperty("threadId");
+    expect(authorizationHandler.mock.calls[1]?.[1]).toMatchObject({
+      conversationId: "telegram:-1001234567890:topic:42",
+      parentConversationId: "telegram:-1001234567890",
+      threadId: 42,
+    });
+    expect(loginFlow).not.toHaveBeenCalled();
   });
 
   it("leaves skill command authorization to the skill dispatch path", async () => {

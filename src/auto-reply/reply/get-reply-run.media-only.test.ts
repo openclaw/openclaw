@@ -11,14 +11,28 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { createAuthorizationPrincipal } from "../../plugins/authorization-policy-context.js";
+import {
+  createTurnAuthoritySnapshot,
+  rebindTurnAuthoritySnapshot,
+} from "../../plugins/turn-authority.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { createSteeringAuthorizationAffinity } from "./steering-authorization-affinity.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../agents/embedded-agent.runtime.js", () => ({
+  abortActiveRunWithSteeringAuthorization: vi.fn().mockReturnValue({
+    status: "aborted",
+    replacementObserved: false,
+  }),
+  authorizedActiveRunAbortObservedReplacement: vi.fn(
+    (outcome: { replacementObserved: boolean }) => outcome.replacementObserved,
+  ),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
@@ -65,6 +79,7 @@ vi.mock("../../globals.js", () => ({
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
+  clearCommandLaneByAuthorizationAffinity: vi.fn().mockReturnValue(0),
   clearCommandLane: vi.fn().mockReturnValue(0),
   getQueueSize: vi.fn().mockReturnValue(0),
 }));
@@ -262,6 +277,41 @@ function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   return params;
 }
 
+function createInterruptTurnAuthority() {
+  return createTurnAuthoritySnapshot({
+    principal: createAuthorizationPrincipal({
+      provider: "slack",
+      senderId: "U-maintainer",
+      isAuthorizedSender: true,
+    }),
+    agentId: "default",
+    sessionKey: "session-key",
+    conversationId: "C123",
+    controllerKey: "sender:slack:U-maintainer",
+  });
+}
+
+function createAuthorizedActiveReplyOperation(params: {
+  sessionId: string;
+  kind: "embedded" | "cli";
+}) {
+  const turnAuthority = createInterruptTurnAuthority();
+  const operation = createReplyOperation({
+    sessionId: params.sessionId,
+    sessionKey: "session-key",
+    resetTriggered: false,
+  });
+  const cancel = vi.fn(() => operation.complete());
+  operation.attachBackend({
+    kind: params.kind,
+    steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({ turnAuthority }),
+    cancel,
+    isStreaming: () => true,
+  });
+  operation.setPhase("running");
+  return { cancel, operation, turnAuthority };
+}
+
 type MockCallSource = {
   mock: {
     calls: ReadonlyArray<ReadonlyArray<unknown>>;
@@ -386,6 +436,66 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     expect(requireRunReplyAgentCall().followupRun.run.spawnedBy).toBe(spawnedBy);
+  });
+
+  it("rebinds queued turn authority to the peer-scoped runtime policy session", async () => {
+    const sessionKey = "agent:default:main";
+    const originalAuthority = createTurnAuthoritySnapshot({
+      principal: createAuthorizationPrincipal({
+        provider: "slack",
+        senderId: "U-peer-a",
+        senderName: "Peer A",
+        senderUsername: "peer-a",
+        senderE164: "+15550001111",
+        isAuthorizedSender: true,
+      }),
+      agentId: "default",
+      sessionKey,
+      conversationId: "D-peer-a",
+      controllerKey: "sender:slack:U-peer-a",
+      trigger: "channel",
+    });
+    const params = baseParams({ sessionKey });
+    params.ctx = {
+      ...params.ctx,
+      ChatType: "direct",
+      Provider: "slack",
+      OriginatingChannel: "slack",
+      NativeDirectUserId: "U-peer-a",
+      SenderId: "U-peer-a",
+      NativeChannelId: "D-peer-a",
+      TurnAuthority: originalAuthority,
+    };
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      ChatType: "direct",
+      Provider: "slack",
+      OriginatingChannel: "slack",
+      NativeDirectUserId: "U-peer-a",
+      SenderId: "U-peer-a",
+      NativeChannelId: "D-peer-a",
+    };
+    const expectedRuntimeKey = resolveRuntimePolicySessionKey({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      sessionKey,
+    });
+
+    await runPreparedReply(params);
+
+    const queuedAuthority = requireLastRunReplyAgentCall().followupRun.run.turnAuthority;
+    expect(expectedRuntimeKey).not.toBe(sessionKey);
+    expect(queuedAuthority?.authorization).toMatchObject({
+      agentId: "default",
+      sessionKey: expectedRuntimeKey,
+      principal: originalAuthority.authorization.principal,
+      conversationId: "D-peer-a",
+    });
+    expect(queuedAuthority?.authorization.principal).toMatchObject({
+      aliases: { name: "peer a", username: "peer-a", e164: "+15550001111" },
+    });
+    expect(queuedAuthority?.controllerKey).toBe(originalAuthority.controllerKey);
+    expect(originalAuthority.authorization.sessionKey).toBe(sessionKey);
   });
 
   it("propagates non-visible assistant silence for group runs", async () => {
@@ -1577,6 +1687,262 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+
+  it("interrupts reply-only active runs through the reply registry", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReset()
+      .mockReturnValue(undefined);
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockClear();
+    const active = createAuthorizedActiveReplyOperation({
+      sessionId: "session-reply-only",
+      kind: "embedded",
+    });
+    const params = baseParams({ isNewSession: false, sessionId: "session-reply-only-next" });
+    params.ctx.TurnAuthority = active.turnAuthority;
+
+    try {
+      await expect(runPreparedReply(params)).resolves.toEqual({ text: "ok" });
+
+      expect(active.cancel).toHaveBeenCalledWith("user_abort");
+      expect(active.operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).not.toHaveBeenCalled();
+      expect(requireLastRunReplyAgentCall()).toMatchObject({
+        shouldFollowup: false,
+        forceFollowup: false,
+      });
+    } finally {
+      active.operation.complete();
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
+    }
+  });
+
+  it("interrupts only the exact peer-scoped runtime authority", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    const sessionKey = "agent:default:main";
+    const buildPeerParams = (senderId: string, conversationId: string) => {
+      const authority = createTurnAuthoritySnapshot({
+        principal: createAuthorizationPrincipal({
+          provider: "slack",
+          senderId,
+          isAuthorizedSender: true,
+        }),
+        agentId: "default",
+        sessionKey,
+        conversationId,
+        controllerKey: `sender:slack:${senderId}`,
+        trigger: "channel",
+      });
+      const params = baseParams({
+        isNewSession: false,
+        sessionId: `next-${senderId}`,
+        sessionKey,
+      });
+      params.ctx = {
+        ...params.ctx,
+        ChatType: "direct",
+        Provider: "slack",
+        OriginatingChannel: "slack",
+        NativeDirectUserId: senderId,
+        SenderId: senderId,
+        NativeChannelId: conversationId,
+        TurnAuthority: authority,
+      };
+      params.sessionCtx = {
+        ...params.sessionCtx,
+        ChatType: "direct",
+        Provider: "slack",
+        OriginatingChannel: "slack",
+        NativeDirectUserId: senderId,
+        SenderId: senderId,
+        NativeChannelId: conversationId,
+      };
+      return { authority, params };
+    };
+    const peerA = buildPeerParams("U-peer-a", "D-peer-a");
+    const peerARuntimeKey = expectDefined(
+      resolveRuntimePolicySessionKey({
+        cfg: peerA.params.cfg,
+        ctx: peerA.params.ctx,
+        sessionKey,
+      }),
+      "peer A runtime key",
+    );
+    const peerATargetAuthority = expectDefined(
+      rebindTurnAuthoritySnapshot(peerA.authority, {
+        agentId: "default",
+        sessionKey: peerARuntimeKey,
+        sessionId: "active-peer-a",
+        trigger: "channel",
+      }),
+      "peer A target authority",
+    );
+    const createPeerAOperation = (sessionId: string) => {
+      const operation = createReplyOperation({
+        sessionId,
+        sessionKey,
+        resetTriggered: false,
+      });
+      const cancel = vi.fn(() => operation.complete());
+      operation.attachBackend({
+        kind: "cli",
+        steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({
+          turnAuthority: peerATargetAuthority,
+        }),
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+      return { operation, cancel };
+    };
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReset()
+      .mockReturnValue(undefined);
+
+    const matching = createPeerAOperation("active-peer-a");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    try {
+      await expect(runPreparedReply(peerA.params)).resolves.toEqual({ text: "ok" });
+      expect(matching.cancel).toHaveBeenCalledWith("user_abort");
+    } finally {
+      matching.operation.complete();
+    }
+
+    const foreign = createPeerAOperation("active-peer-a-foreign-check");
+    const peerB = buildPeerParams("U-peer-b", "D-peer-b");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    try {
+      await expect(runPreparedReply(peerB.params)).resolves.toEqual({ text: "ok" });
+      expect(foreign.cancel).not.toHaveBeenCalled();
+      expect(foreign.operation.result).toBeNull();
+    } finally {
+      foreign.operation.complete();
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
+    }
+  });
+
+  it("falls back to the reply registry when embedded interruption misses a CLI run", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReset()
+      .mockReturnValue("session-cli-reply");
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization)
+      .mockReset()
+      .mockReturnValue({ status: "not_active", replacementObserved: false });
+    const active = createAuthorizedActiveReplyOperation({
+      sessionId: "session-cli-reply",
+      kind: "cli",
+    });
+    const params = baseParams({ isNewSession: false, sessionId: "session-cli-reply-next" });
+    params.ctx.TurnAuthority = active.turnAuthority;
+
+    try {
+      await expect(runPreparedReply(params)).resolves.toEqual({ text: "ok" });
+
+      expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-cli-reply", policy: "exact" }),
+      );
+      expect(active.cancel).toHaveBeenCalledWith("user_abort");
+      expect(active.operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(requireLastRunReplyAgentCall()).toMatchObject({
+        shouldFollowup: false,
+        forceFollowup: false,
+      });
+    } finally {
+      active.operation.complete();
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
+      vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization)
+        .mockReset()
+        .mockReturnValue({ status: "aborted", replacementObserved: false });
+    }
+  });
+
+  it("uses the reply registry when a CLI run appears before the later interrupt callback", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReset()
+      .mockReturnValue(undefined);
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockClear();
+    const turnAuthority = createInterruptTurnAuthority();
+    let active: ReturnType<typeof createAuthorizedActiveReplyOperation> | undefined;
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async () => {
+      active = createAuthorizedActiveReplyOperation({
+        sessionId: "session-late-cli-reply",
+        kind: "cli",
+      });
+      return undefined;
+    });
+    const params = baseParams({ isNewSession: false, sessionId: "session-late-cli-next" });
+    params.ctx.TurnAuthority = turnAuthority;
+
+    try {
+      await expect(runPreparedReply(params)).resolves.toEqual({ text: "ok" });
+
+      expect(active?.cancel).toHaveBeenCalledWith("user_abort");
+      expect(active?.operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).not.toHaveBeenCalled();
+      expect(requireLastRunReplyAgentCall()).toMatchObject({
+        shouldFollowup: false,
+        forceFollowup: false,
+      });
+    } finally {
+      active?.operation.complete();
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
+    }
+  });
+
+  it("preserves pre-backend reply operations when interrupt authority cannot be proven", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReset()
+      .mockReturnValue(undefined);
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockClear();
+    const operation = createReplyOperation({
+      sessionId: "session-pre-backend",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    const params = baseParams({ isNewSession: false, sessionId: "session-pre-backend-next" });
+    params.ctx.TurnAuthority = createInterruptTurnAuthority();
+
+    try {
+      await expect(runPreparedReply(params)).resolves.toEqual({ text: "ok" });
+
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(operation.result).toBeNull();
+      expect(operation.phase).toBe("queued");
+      expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).not.toHaveBeenCalled();
+      expect(requireLastRunReplyAgentCall()).toMatchObject({
+        shouldFollowup: true,
+        forceFollowup: true,
+      });
+    } finally {
+      operation.complete();
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
+    }
+  });
+
   it("refreshes goal context after interrupt admission waits", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const inboundMeta = await import("./inbound-meta.js");
@@ -1631,6 +1997,16 @@ describe("runPreparedReply media-only handling", () => {
       resetTriggered: false,
     });
     activeRun.setPhase("running");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValueOnce(
+      "session-goal-interrupt",
+    );
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockImplementationOnce(
+      () => {
+        activeRun.abortByUser();
+        return { status: "aborted", replacementObserved: false };
+      },
+    );
 
     const runPromise = runPreparedReply(
       baseParams({
@@ -1721,12 +2097,21 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
       "session-active",
     );
-    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(true);
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockReturnValue({
+      status: "aborted",
+      replacementObserved: false,
+    });
     const activeOperation = createReplyOperation({
       sessionId: "session-active",
       sessionKey: "session-key",
       resetTriggered: false,
     });
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockImplementationOnce(
+      () => {
+        activeOperation.abortByUser();
+        return { status: "aborted", replacementObserved: false };
+      },
+    );
 
     try {
       const result = await runPreparedReply(
@@ -1738,8 +2123,13 @@ describe("runPreparedReply media-only handling", () => {
       );
 
       expect(result).toEqual({ text: "ok" });
-      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
-      expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-active");
+      expect(commandQueue.clearCommandLaneByAuthorizationAffinity).toHaveBeenCalledWith(
+        "session:session-key",
+        undefined,
+      );
+      expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-active", policy: "exact" }),
+      );
       expect(activeOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
       expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
       const call = requireRunReplyAgentCall();
@@ -2042,13 +2432,51 @@ describe("runPreparedReply media-only handling", () => {
 
       const call = requireLastRunReplyAgentCall();
       expect(call.replyOperation).toBe(operation);
-      expect(commandQueue.clearCommandLane).not.toHaveBeenCalled();
-      expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(commandQueue.clearCommandLaneByAuthorizationAffinity).not.toHaveBeenCalled();
+      expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).not.toHaveBeenCalled();
     } finally {
       operation.complete();
       vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
         .mockReset()
         .mockReturnValue(undefined);
+    }
+  });
+
+  it("preserves a foreign controller's active run and queued lane work in interrupt mode", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+      "session-foreign-owner",
+    );
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValue(true);
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockReturnValueOnce({
+      status: "unauthorized",
+      replacementObserved: false,
+    });
+
+    try {
+      await expect(
+        runPreparedReply(baseParams({ isNewSession: false, sessionId: "session-new-owner" })),
+      ).resolves.toEqual({ text: "ok" });
+
+      expect(commandQueue.clearCommandLaneByAuthorizationAffinity).not.toHaveBeenCalled();
+      expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-foreign-owner", policy: "exact" }),
+      );
+      const call = requireLastRunReplyAgentCall();
+      expect(call.shouldFollowup).toBe(true);
+      expect(call.forceFollowup).toBe(true);
+    } finally {
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReset().mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming)
+        .mockReset()
+        .mockReturnValue(false);
     }
   });
 
@@ -2172,22 +2600,31 @@ describe("runPreparedReply media-only handling", () => {
     vi.useFakeTimers();
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const turnAuthority = createInterruptTurnAuthority();
     const previousRun = createReplyOperation({
       sessionId: "session-before-wait",
       sessionKey: "session-key",
       resetTriggered: false,
     });
+    previousRun.attachBackend({
+      kind: "cli",
+      steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({ turnAuthority }),
+      cancel: vi.fn(),
+      isStreaming: () => true,
+    });
     previousRun.setPhase("running");
 
-    const runPromise = runPreparedReply(
-      baseParams({
-        isNewSession: false,
-        sessionId: "session-before-wait",
-      }),
-    );
+    const params = baseParams({
+      isNewSession: false,
+      sessionId: "session-before-wait",
+    });
+    params.ctx.TurnAuthority = turnAuthority;
+    const runPromise = runPreparedReply(params);
 
     await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(previousRun.abortSignal.aborted).toBe(true);
 
     previousRun.complete();
     const nextRun = createReplyOperation({
@@ -2456,7 +2893,7 @@ describe("runPreparedReply media-only handling", () => {
       .mockReturnValueOnce("active-session");
     vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
     vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
-    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockClear();
+    vi.mocked(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).mockClear();
     vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockClear();
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
 
@@ -2641,7 +3078,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
     expect(call.resolvedQueue.mode).toBe("interrupt");
-    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization).not.toHaveBeenCalled();
     expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
   });
 
@@ -3553,7 +3990,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.chatType).toBe("direct");
   });
 
-  it("uses transport thread metadata for followup originatingThreadId", async () => {
+  it("uses raw conversation and transport thread metadata for followups", async () => {
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -3564,6 +4001,8 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "slack",
           OriginatingTo: "user:U1",
           ChatType: "direct",
+          NativeChannelId: "thread-650",
+          ThreadParentId: "parent-650",
           MessageThreadId: undefined,
           TransportThreadId: "650.000",
         },
@@ -3574,6 +4013,8 @@ describe("runPreparedReply media-only handling", () => {
           MediaPath: "/tmp/input.png",
           Provider: "slack",
           ChatType: "direct",
+          NativeChannelId: "thread-650",
+          ThreadParentId: "parent-650",
           OriginatingChannel: "slack",
           OriginatingTo: "user:U1",
           TransportThreadId: "650.000",
@@ -3582,6 +4023,8 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingChatId).toBe("thread-650");
+    expect(call?.followupRun.originatingParentConversationId).toBe("parent-650");
     expect(call?.followupRun.originatingThreadId).toBe("650.000");
   });
 

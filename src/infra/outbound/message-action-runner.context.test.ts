@@ -7,7 +7,8 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -190,6 +191,160 @@ describe("runMessageAction context isolation", () => {
         to: "C12345678",
       },
     });
+  });
+
+  it("uses capability tool context for channel and target inference", async () => {
+    const result = await runMessageAction({
+      cfg: {
+        channels: {
+          workspace: workspaceConfig.channels?.workspace,
+          forum: { token: "forum-test" },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: { message: "hi" },
+      toolContext: {
+        currentChannelId: "@ambient",
+        currentChannelProvider: "forum",
+      },
+      messageActionAuthorization: {
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "workspace",
+        },
+      },
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "C12345678",
+    });
+  });
+
+  it("uses capability tool context for cross-context policy and markers", async () => {
+    const ambientContext = {
+      currentChannelId: "C99999999",
+      currentChannelProvider: "workspace",
+    };
+    const trustedContext = {
+      currentChannelId: "C12345678",
+      currentChannelProvider: "workspace",
+    };
+    await expect(
+      runMessageAction({
+        cfg: {
+          ...workspaceConfig,
+          tools: {
+            message: {
+              crossContext: { allowWithinProvider: false },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "channel:C99999999",
+          message: "hi",
+        },
+        toolContext: ambientContext,
+        messageActionAuthorization: { toolContext: trustedContext },
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Cross-context messaging denied/);
+
+    let authorizedInput: Record<string, unknown> | undefined;
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected active plugin registry");
+    }
+    registry.authorizationPolicies.push({
+      pluginId: "context-marker-test",
+      pluginName: "Context marker test",
+      origin: "workspace",
+      source: "test",
+      policy: {
+        id: "context-marker-test",
+        description: "Captures the decorated message action",
+        handlers: {
+          "message.action": (request) => {
+            authorizedInput = request.input;
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    const marked = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "channel:C99999999",
+        message: "hi",
+      },
+      toolContext: ambientContext,
+      messageActionAuthorization: { toolContext: trustedContext },
+      dryRun: false,
+    });
+    expect(marked).toMatchObject({ kind: "send", channel: "workspace" });
+    const visibleDecoration = authorizedInput?.presentation ?? authorizedInput?.message;
+    expect(JSON.stringify(visibleDecoration)).toContain("C12345678");
+    expect(JSON.stringify(visibleDecoration)).not.toContain("C99999999");
+  });
+
+  it.each([
+    {
+      name: "top-level authorization",
+      buildAuthority: (authorization: AuthorizationInvocationContext) => ({ authorization }),
+    },
+    {
+      name: "an authorization-only capability envelope",
+      buildAuthority: (authorization: AuthorizationInvocationContext) => ({
+        messageActionAuthorization: { authorization },
+      }),
+    },
+  ])("derives cross-context policy from $name", async ({ buildAuthority }) => {
+    const authorization: AuthorizationInvocationContext = {
+      principal: {
+        kind: "sender",
+        provider: "workspace",
+        senderId: "maintainer-1",
+      },
+      agentId: "main",
+      sessionKey: "agent:main:workspace:channel:C12345678",
+      conversationId: "C12345678",
+      threadId: "thread-1",
+    };
+
+    await expect(
+      runMessageAction({
+        cfg: {
+          ...workspaceConfig,
+          tools: {
+            message: {
+              crossContext: { allowWithinProvider: false },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "channel:C99999999",
+          message: "hi",
+        },
+        // Ambient routing points at the destination and must not erase the
+        // authenticated source-conversation restriction.
+        toolContext: {
+          currentChannelId: "C99999999",
+          currentChannelProvider: "workspace",
+        },
+        ...buildAuthority(authorization),
+        agentId: "main",
+        sessionKey: authorization.sessionKey,
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Cross-context messaging denied/);
   });
 
   afterEach(() => {
@@ -424,6 +579,60 @@ describe("runMessageAction context isolation", () => {
 
     expect(result.kind).toBe(expectedKind);
     expect(result.channel).toBe(expectedChannel);
+  });
+
+  it("uses the session agent override when checking whether broadcast is enabled", async () => {
+    await expect(
+      runMessageAction({
+        cfg: {
+          ...workspaceConfig,
+          tools: { message: { broadcast: { enabled: true } } },
+          agents: {
+            list: [
+              {
+                id: "sandbox",
+                tools: { message: { broadcast: { enabled: false } } },
+              },
+            ],
+          },
+        } as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          channel: "workspace",
+          targets: ["channel:C12345678"],
+          message: "hi",
+        },
+        sessionKey: "agent:sandbox:main",
+        dryRun: true,
+      }),
+    ).rejects.toThrow("Broadcast is disabled");
+  });
+
+  it("rejects single-send durable ownership reused by a multi-target broadcast", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "broadcast",
+        params: {
+          channel: "workspace",
+          targets: ["channel:C12345678", "channel:C99999999"],
+          message: "hi",
+        },
+        deliveryIntentId: "shared-delivery-intent",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "shared-operation",
+        },
+        preparedMessageId: "shared-message-id",
+        transcriptMirror: {
+          sessionKey: "agent:main:workspace:channel:C12345678",
+        },
+        dryRun: true,
+      }),
+    ).rejects.toThrow(
+      "Multi-target broadcast cannot reuse single-send ownership fields: deliveryIntentId, deliveryCompletion, preparedMessageId, transcriptMirror.",
+    );
   });
 
   it.each([

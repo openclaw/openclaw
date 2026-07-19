@@ -183,6 +183,7 @@ export async function activateCodexAttemptTurn(
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    steeringAuthorizationAffinity: params.steeringAuthorizationAffinity,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };

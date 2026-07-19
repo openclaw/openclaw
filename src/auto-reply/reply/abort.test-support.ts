@@ -3,6 +3,7 @@ import "./abort.js";
 type AbortTestDeps = {
   getAcpSessionManager: typeof import("../../acp/control-plane/manager.js").getAcpSessionManager;
   abortEmbeddedAgentRun: typeof import("../../agents/embedded-agent-runner/runs.js").abortEmbeddedAgentRun;
+  captureActiveEmbeddedRunIdentity: typeof import("../../agents/embedded-agent-runner/runs.js").captureActiveEmbeddedRunIdentity;
   resolveActiveEmbeddedRunSessionId: typeof import("../../agents/embedded-agent-runner/runs.js").resolveActiveEmbeddedRunSessionId;
   markSessionAbortTarget: typeof import("../../config/sessions/session-accessor.js").markSessionAbortTarget;
   resolveSessionAbortTarget: typeof import("../../config/sessions/session-accessor.js").resolveSessionAbortTarget;

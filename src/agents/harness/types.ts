@@ -87,6 +87,8 @@ export type AgentHarnessSideQuestionParams = {
   isNewSession: boolean;
   sessionId: string;
   sessionFile: string;
+  /** Host-issued requester authority, rebound to this side-question run. */
+  turnAuthority?: import("../../plugins/authorization-policy.types.js").TurnAuthoritySnapshot;
   sandboxSessionKey?: string;
   agentId?: string;
   workspaceDir?: string;

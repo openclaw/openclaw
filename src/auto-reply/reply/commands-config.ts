@@ -23,6 +23,7 @@ import {
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
+  resolveGatewayOperatorScopes,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
@@ -108,7 +109,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         ctx: params.ctx,
         command: params.command,
       }),
-      gatewayClientScopes: params.ctx.GatewayClientScopes,
+      gatewayClientScopes: resolveGatewayOperatorScopes(params.ctx),
       target: resolveConfigWriteTargetFromPath(parsedWritePath),
     });
     if (deniedText) {

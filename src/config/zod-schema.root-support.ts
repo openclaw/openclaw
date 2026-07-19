@@ -203,6 +203,17 @@ export const SkillEntrySchema = z.strictObject({
   config: z.record(z.string(), z.unknown()).optional(),
 });
 
+const RequiredAuthorizationPolicyScopeSchema = z
+  .strictObject({
+    agentIds: z.array(z.string().trim().min(1)).min(1).optional(),
+    providers: z.array(z.string().trim().min(1)).min(1).optional(),
+    accountIds: z.array(z.string().trim().min(1)).min(1).optional(),
+    conversationIds: z.array(z.string().trim().min(1)).min(1).optional(),
+  })
+  .refine((scope) => Object.keys(scope).length > 0, {
+    message: "authorization policy scope must select at least one identity field",
+  });
+
 export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
   authorization: z
@@ -212,6 +223,7 @@ export const PluginEntrySchema = z.strictObject({
           z.strictObject({
             id: z.string().trim().min(1),
             operations: z.array(z.enum(["tool.call", "message.action", "command.invoke"])).min(1),
+            scope: RequiredAuthorizationPolicyScopeSchema.optional(),
           }),
         )
         .optional(),

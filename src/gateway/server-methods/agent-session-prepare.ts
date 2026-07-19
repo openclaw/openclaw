@@ -7,7 +7,6 @@ import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-co
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveChannelResetConfig,
   resolveSessionFilePath,
@@ -26,6 +25,7 @@ import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marke
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
@@ -197,9 +197,7 @@ export function prepareAgentSession(params: {
   }
 
   const canonicalSessionAgentId =
-    canonicalKey === "global"
-      ? (params.agentId ?? resolveDefaultAgentId(cfg))
-      : resolveAgentIdFromSessionKey(canonicalKey);
+    parseAgentSessionKey(canonicalKey)?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg);
   const now = Date.now();
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg: cfg.session,

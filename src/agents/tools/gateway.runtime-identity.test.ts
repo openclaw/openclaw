@@ -69,7 +69,7 @@ describe("gateway tool runtime identity", () => {
     const capabilityInput = {
       agentId: "ops",
       runId: "run-1",
-      sessionKey: "agent:ops:telegram:group:room-1",
+      sessionKey: "agent:ops:main",
       sessionId: "session-1",
     };
     const turnCapability = mintMessageActionTurnCapability({
@@ -100,61 +100,58 @@ describe("gateway tool runtime identity", () => {
       sourceReplyToolCallId: "message-call-1",
     };
 
-    await withGatewayToolCallerIdentity(
-      { agentId: "ops", sessionKey: capabilityInput.sessionKey },
-      async () => {
-        const token = await resolveMessageActionAgentRuntimeIdentityToken({
+    await withGatewayToolCallerIdentity({ agentId: "OPS", sessionKey: "main" }, async () => {
+      const token = await resolveMessageActionAgentRuntimeIdentityToken({
+        ...terminalParams,
+        turnCapability,
+      });
+      await expect(verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+        messageActionContext: {
+          sessionId: "session-1",
+          sourceReplyFinal: true,
+          sourceReplyToolCallId: "message-call-1",
+          requesterAccountId: "default",
+          toolContext: { currentSourceTurnId: "source-turn-1" },
+        },
+      });
+      await expect(
+        resolveMessageActionAgentRuntimeIdentityToken({
           ...terminalParams,
+          sourceReplyToolCallId: undefined,
           turnCapability,
-        });
-        await expect(verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
-          messageActionContext: {
-            sessionId: "session-1",
-            sourceReplyFinal: true,
-            sourceReplyToolCallId: "message-call-1",
-            requesterAccountId: "default",
-            toolContext: { currentSourceTurnId: "source-turn-1" },
-          },
-        });
-        await expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
-            ...terminalParams,
-            sourceReplyToolCallId: undefined,
-            turnCapability,
-          }),
-        ).rejects.toThrow("terminal source reply requires tool-call correlation");
-        await expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
-            ...terminalParams,
-            turnCapability: "missing-capability",
-          }),
-        ).rejects.toThrow("terminal source reply requires an active turn capability");
-        await expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
-            ...terminalParams,
-            turnCapability: sourceLessTurnCapability,
-          }),
-        ).rejects.toThrow("terminal source reply requires source-turn correlation");
-        await expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
-            ...terminalParams,
-            target: "remote",
-            turnCapability,
-          }),
-        ).rejects.toThrow("terminal source reply requires the trusted local gateway context");
-        await expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
-            ...terminalParams,
-            target: "remote",
-            turnCapability,
-            callerOwnsTerminalReceipt: true,
-          }),
-        ).resolves.toBeUndefined();
-        await expect(
-          resolveMessageActionAgentRuntimeIdentityToken({ opts: {}, target: "local" }),
-        ).resolves.toBeUndefined();
-      },
-    );
+        }),
+      ).rejects.toThrow("terminal source reply requires tool-call correlation");
+      await expect(
+        resolveMessageActionAgentRuntimeIdentityToken({
+          ...terminalParams,
+          turnCapability: "missing-capability",
+        }),
+      ).rejects.toThrow("terminal source reply requires an active turn capability");
+      await expect(
+        resolveMessageActionAgentRuntimeIdentityToken({
+          ...terminalParams,
+          turnCapability: sourceLessTurnCapability,
+        }),
+      ).rejects.toThrow("terminal source reply requires source-turn correlation");
+      await expect(
+        resolveMessageActionAgentRuntimeIdentityToken({
+          ...terminalParams,
+          target: "remote",
+          turnCapability,
+        }),
+      ).rejects.toThrow("terminal source reply requires the trusted local gateway context");
+      await expect(
+        resolveMessageActionAgentRuntimeIdentityToken({
+          ...terminalParams,
+          target: "remote",
+          turnCapability,
+          callerOwnsTerminalReceipt: true,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        resolveMessageActionAgentRuntimeIdentityToken({ opts: {}, target: "local" }),
+      ).resolves.toBeUndefined();
+    });
     await expect(
       resolveMessageActionAgentRuntimeIdentityToken({ ...terminalParams, turnCapability }),
     ).rejects.toThrow("terminal source reply requires trusted agent runtime identity");

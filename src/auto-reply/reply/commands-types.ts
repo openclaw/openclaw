@@ -21,6 +21,10 @@ export type CommandContext = {
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   senderId?: string;
+  /** Host-admitted sender aliases used by authorization policy selectors. */
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
   /** Trusted provider role ids for this sender. */
   memberRoleIds?: string[];
   abortKey?: string;

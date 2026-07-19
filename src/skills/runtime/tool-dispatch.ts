@@ -1,4 +1,5 @@
 // Skill tool dispatch routes runtime skill tool calls through the active session context.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -33,11 +34,12 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import {
-  createAuthorizationInvocationContext,
-  createAuthorizationPrincipal,
-} from "../../plugins/authorization-policy-context.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
+import { classifyTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
+import { normalizeAccountId, normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { SkillCommandSpec } from "../types.js";
 
@@ -74,14 +76,17 @@ export function resolveSkillDispatchTools(params: {
   workspaceDir: string;
   provider: string;
   model: string;
+  runId?: string;
   senderId?: string;
   currentChannelId?: string;
   skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
     toolName?: string;
   };
   groupId?: string;
+  /** Immutable host authority admitted for this command turn. */
+  turnAuthority?: TurnAuthoritySnapshot;
 }): AnyAgentTool[] {
-  const channel =
+  const routeChannel =
     resolveGatewayMessageChannel(params.message.surface) ??
     resolveGatewayMessageChannel(params.message.provider) ??
     undefined;
@@ -102,6 +107,93 @@ export function resolveSkillDispatchTools(params: {
     modelProvider: params.provider,
     modelId: params.model,
   });
+  const classifiedAuthority = classifyTurnAuthoritySnapshot(params.turnAuthority);
+  if (classifiedAuthority.kind !== "issued") {
+    logVerbose(`Skill command tool dispatch blocked: ${classifiedAuthority.kind} turn authority`);
+    return [];
+  }
+  const turnAuthority = classifiedAuthority.snapshot;
+  const turnAuthorization = turnAuthority.authorization;
+  const authorityAgentId = normalizeOptionalString(turnAuthorization.agentId);
+  const executionSessionKey = normalizeOptionalString(params.sessionKey);
+  const authoritySessionKey = normalizeOptionalString(turnAuthorization.sessionKey);
+  const executionSessionId = normalizeOptionalString(params.sessionEntry?.sessionId);
+  const authoritySessionId = normalizeOptionalString(turnAuthorization.sessionId);
+  const executionRunId = normalizeOptionalString(params.runId);
+  const authorityRunId = normalizeOptionalString(turnAuthorization.runId);
+  if (
+    !resolvedAgentId ||
+    !authorityAgentId ||
+    normalizeAgentId(authorityAgentId) !== resolvedAgentId ||
+    !executionSessionKey ||
+    authoritySessionKey !== executionSessionKey ||
+    authoritySessionId !== executionSessionId ||
+    authorityRunId !== executionRunId
+  ) {
+    logVerbose("Skill command tool dispatch blocked: turn authority execution mismatch");
+    return [];
+  }
+
+  const principal = turnAuthorization.principal;
+  if (principal.kind === "unknown") {
+    logVerbose("Skill command tool dispatch blocked: unknown turn authority principal");
+    return [];
+  }
+
+  let deliveryChannel = routeChannel;
+  let deliveryAccountId = params.message.accountId;
+  let deliveryConversationId =
+    normalizeOptionalString(params.message.nativeChannelId) ??
+    normalizeOptionalString(params.message.originatingTo) ??
+    normalizeOptionalString(params.message.to) ??
+    executionSessionKey;
+  let deliveryThreadId = params.message.messageThreadId;
+  let groupId = params.sessionEntry?.groupId ?? params.groupId;
+  if (principal.kind === "sender") {
+    const authorityChannel = resolveGatewayMessageChannel(principal.provider);
+    const authorityAccountId = normalizeOptionalAccountId(principal.accountId);
+    const authorityConversationId = normalizeOptionalString(turnAuthorization.conversationId);
+    const routeParentConversationId = normalizeOptionalString(params.message.threadParentId);
+    const authorityParentConversationId = normalizeOptionalString(
+      turnAuthorization.parentConversationId,
+    );
+    const routeThreadId = stringifyRouteThreadId(params.message.messageThreadId);
+    const authorityThreadId = stringifyRouteThreadId(turnAuthorization.threadId);
+    if (
+      !routeChannel ||
+      !authorityChannel ||
+      routeChannel !== authorityChannel ||
+      !authorityAccountId ||
+      authorityAccountId !== normalizeAccountId(params.message.accountId) ||
+      !deliveryConversationId ||
+      !authorityConversationId ||
+      deliveryConversationId !== authorityConversationId ||
+      routeParentConversationId !== authorityParentConversationId ||
+      routeThreadId !== authorityThreadId
+    ) {
+      logVerbose("Skill command tool dispatch blocked: sender authority route mismatch");
+      return [];
+    }
+    // After exact admission checks, carry only host-issued route facts forward.
+    // Mutable message siblings must not select another account, group, or thread.
+    deliveryChannel = authorityChannel;
+    deliveryAccountId = authorityAccountId;
+    deliveryConversationId = authorityConversationId;
+    deliveryThreadId = turnAuthorization.threadId;
+    groupId = authorityConversationId;
+  }
+
+  const senderId = principal.kind === "sender" ? principal.senderId : undefined;
+  const senderName = principal.kind === "sender" ? principal.aliases?.name : undefined;
+  const senderUsername = principal.kind === "sender" ? principal.aliases?.username : undefined;
+  const senderE164 = principal.kind === "sender" ? principal.aliases?.e164 : undefined;
+  const senderIsOwner =
+    principal.kind === "sender"
+      ? principal.senderIsOwner
+      : principal.kind === "operator"
+        ? principal.isOwner
+        : undefined;
+  const memberRoleIds = principal.kind === "sender" ? [...(principal.roleIds ?? [])] : undefined;
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
@@ -109,29 +201,29 @@ export function resolveSkillDispatchTools(params: {
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
-  const groupId = params.sessionEntry?.groupId ?? params.groupId;
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
     spawnedBy: params.sessionEntry?.spawnedBy,
-    messageProvider: channel,
+    messageProvider: deliveryChannel,
+    senderMessageProvider: principal.kind === "sender" ? deliveryChannel : undefined,
     groupId,
     groupChannel: params.sessionEntry?.groupChannel,
     groupSpace: params.sessionEntry?.space,
-    accountId: params.message.accountId,
-    senderId: params.message.senderId ?? params.senderId,
-    senderName: params.message.senderName,
-    senderUsername: params.message.senderUsername,
-    senderE164: params.message.senderE164,
+    accountId: deliveryAccountId,
+    senderId,
+    senderName,
+    senderUsername,
+    senderE164,
   });
   const senderPolicy = resolveSenderToolPolicy({
     config: params.cfg,
     agentId: resolvedAgentId,
-    messageProvider: channel,
-    senderId: params.message.senderId ?? params.senderId,
-    senderName: params.message.senderName,
-    senderUsername: params.message.senderUsername,
-    senderE164: params.message.senderE164,
+    messageProvider: principal.kind === "sender" ? deliveryChannel : undefined,
+    senderId,
+    senderName,
+    senderUsername,
+    senderE164,
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
@@ -173,27 +265,7 @@ export function resolveSkillDispatchTools(params: {
   const beforeToolCallHookContext = {
     cwd: params.workspaceDir,
     workspaceDir: params.workspaceDir,
-    authorization: createAuthorizationInvocationContext({
-      principal: createAuthorizationPrincipal({
-        provider: channel,
-        accountId: params.message.accountId,
-        senderId: params.message.senderId ?? params.senderId,
-        senderIsOwner: params.message.senderIsOwner,
-        isAuthorizedSender: params.message.isAuthorizedSender,
-        roleIds: params.message.memberRoleIds,
-      }),
-      agentId: resolvedAgentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionEntry?.sessionId,
-      conversationId:
-        params.currentChannelId ??
-        params.message.nativeChannelId ??
-        params.message.originatingTo ??
-        params.message.to,
-      parentConversationId: params.message.threadParentId,
-      threadId: params.message.messageThreadId,
-      trigger: "user",
-    }),
+    authorization: turnAuthorization,
     ...(params.sessionEntry?.skillsSnapshot
       ? { skillsSnapshot: params.sessionEntry.skillsSnapshot }
       : {}),
@@ -211,25 +283,28 @@ export function resolveSkillDispatchTools(params: {
   };
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
-    agentChannel: channel,
-    agentAccountId: params.message.accountId,
-    agentTo: params.message.originatingTo ?? params.message.to,
-    agentThreadId: params.message.messageThreadId ?? undefined,
-    nativeChannelId: params.message.nativeChannelId,
+    runId: executionRunId,
+    agentChannel: deliveryChannel,
+    agentAccountId: deliveryAccountId,
+    agentTo: deliveryConversationId,
+    agentThreadId: deliveryThreadId,
+    nativeChannelId: deliveryConversationId,
     agentGroupId: groupId,
     agentGroupChannel: params.sessionEntry?.groupChannel,
     agentGroupSpace: params.sessionEntry?.space,
-    agentMemberRoleIds: params.message.memberRoleIds,
-    senderIsOwner: params.message.senderIsOwner,
+    agentMemberRoleIds: memberRoleIds,
+    senderIsOwner,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     allowGatewaySubagentBinding: true,
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
-    requesterSenderId: params.message.senderId ?? params.senderId,
+    requesterSenderId: senderId,
     sessionId: params.sessionEntry?.sessionId,
-    currentChannelId: params.currentChannelId,
+    currentChannelId: deliveryConversationId,
+    authorization: turnAuthorization,
+    turnAuthority,
     beforeToolCallHookContext,
     modelProvider: params.provider,
     modelId: params.model,

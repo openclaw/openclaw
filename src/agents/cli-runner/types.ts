@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -152,7 +153,11 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Immutable host-issued authority for this admitted turn. */
+  turnAuthority?: TurnAuthoritySnapshot;
   currentChannelId?: string;
+  /** Transport-native parent conversation ID when the current conversation is a thread. */
+  parentConversationId?: string;
   chatId?: string;
   channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;

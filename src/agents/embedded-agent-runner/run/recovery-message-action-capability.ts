@@ -25,6 +25,7 @@ type RecoveryMessageActionCapabilityParams = Pick<
   | "messageProvider"
   | "messageTo"
   | "memberRoleIds"
+  | "parentConversationId"
   | "replyToMode"
   | "runId"
   | "sessionId"
@@ -32,6 +33,7 @@ type RecoveryMessageActionCapabilityParams = Pick<
   | "senderId"
   | "senderIsOwner"
   | "timeoutMs"
+  | "turnAuthority"
 >;
 
 /** Reconstructs a one-run action capability from host-only restart correlation. */
@@ -61,6 +63,8 @@ export function createRecoveryMessageActionTurnCapability(
     requesterSenderIsOwner: params.senderIsOwner,
     requesterIsAuthorizedSender: params.isAuthorizedSender,
     requesterRoleIds: params.memberRoleIds,
+    parentConversationId: params.parentConversationId,
+    turnAuthority: params.turnAuthority,
     toolContext: {
       currentChannelId: params.currentChannelId,
       currentChatType: params.chatType,

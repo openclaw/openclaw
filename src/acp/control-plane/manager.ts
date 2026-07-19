@@ -8,6 +8,7 @@ export type {
   AcpInitializeSessionInput,
   AcpManagerObservabilitySnapshot,
   AcpRunTurnInput,
+  AcpSessionCancelTarget,
   AcpSessionResolution,
   AcpSessionRuntimeOptions,
   AcpSessionStatus,

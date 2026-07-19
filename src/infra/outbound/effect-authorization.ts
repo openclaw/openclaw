@@ -1,7 +1,8 @@
+import { isProxy } from "node:util/types";
 import { stableStringify } from "../../agents/stable-stringify.js";
 // Final outbound-effect authorization binds policy decisions to the exact
 // post-hook payload that reaches a channel adapter.
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { sha256Hex } from "../crypto-digest.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
@@ -45,8 +46,8 @@ export type OutboundEffectAuthorizationInput = {
   authorizedPayload: ReplyPayload;
   /** False keeps only an all-leaf ordering barrier; its durable row still fails closed. */
   enforceFinalPayloadAuthorization?: boolean;
-  /** Re-authorize only when hooks or channel rendering changed the semantic payload. */
-  authorizeChangedPayload?: (payload: ReplyPayload) => Promise<void>;
+  /** Re-authorize and return the exact snapshot that may reach transport. */
+  authorizeChangedPayload?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   /** Optional all-leaf barrier; denied leaves arrive too, preventing broadcast deadlock. */
   waitForAuthorizationBarrier?: (
     outcome: OutboundEffectAuthorizationBarrierOutcome,
@@ -77,12 +78,130 @@ function encodeMediaReference(source: unknown, aliases: ReadonlyMap<string, stri
     : { kind: "media-source", value: source };
 }
 
-function toJsonValue(value: unknown): unknown {
-  const serialized = JSON.stringify(value);
-  if (serialized === undefined) {
-    return null;
+const OUTBOUND_EFFECT_MAX_DEPTH = 32;
+const OUTBOUND_EFFECT_MAX_NODES = 4096;
+const OMIT_OUTBOUND_EFFECT_VALUE = Symbol("omit-outbound-effect-value");
+
+type OutboundEffectMaterializationState = {
+  ancestors: WeakSet<object>;
+  depth: number;
+  nodes: number;
+};
+
+function materializeOutboundEffectValue(
+  value: unknown,
+  state: OutboundEffectMaterializationState,
+): unknown {
+  state.nodes += 1;
+  if (state.nodes > OUTBOUND_EFFECT_MAX_NODES || state.depth > OUTBOUND_EFFECT_MAX_DEPTH) {
+    throw new TypeError("Outbound effect payload exceeds materialization limits");
   }
-  return JSON.parse(serialized) as unknown;
+  if (value === undefined) {
+    return OMIT_OUTBOUND_EFFECT_VALUE;
+  }
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError("Outbound effect payload must contain only plain data");
+  }
+  if (isProxy(value)) {
+    throw new TypeError("Outbound effect payload must not contain proxies");
+  }
+  if (state.ancestors.has(value)) {
+    throw new TypeError("Outbound effect payload must not contain cycles");
+  }
+
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new TypeError("Outbound effect payload arrays must use the standard prototype");
+    }
+    const ownKeys = Reflect.ownKeys(value);
+    if (
+      ownKeys.some(
+        (key) =>
+          typeof key !== "string" ||
+          (key !== "length" && !(/^(?:0|[1-9]\d*)$/u.test(key) && Number(key) < value.length)),
+      )
+    ) {
+      throw new TypeError("Outbound effect payload arrays must not have custom properties");
+    }
+    state.ancestors.add(value);
+    state.depth += 1;
+    try {
+      const snapshot: unknown[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new TypeError("Outbound effect payload arrays must contain plain data entries");
+        }
+        const entry = materializeOutboundEffectValue(descriptor.value, state);
+        if (entry === OMIT_OUTBOUND_EFFECT_VALUE) {
+          throw new TypeError("Outbound effect payload arrays must not contain undefined entries");
+        }
+        snapshot.push(entry);
+      }
+      return snapshot;
+    } finally {
+      state.depth -= 1;
+      state.ancestors.delete(value);
+    }
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Outbound effect payload objects must use a plain prototype");
+  }
+  state.ancestors.add(value);
+  state.depth += 1;
+  try {
+    const snapshot: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") {
+        throw new TypeError("Outbound effect payload objects must not have symbol properties");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError("Outbound effect payload objects must contain enumerable data fields");
+      }
+      const entry = materializeOutboundEffectValue(descriptor.value, state);
+      if (entry === OMIT_OUTBOUND_EFFECT_VALUE) {
+        continue;
+      }
+      Object.defineProperty(snapshot, key, {
+        value: entry,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return snapshot;
+  } finally {
+    state.depth -= 1;
+    state.ancestors.delete(value);
+  }
+}
+
+/** Detached plain-data snapshot used by both authorization and transport dispatch. */
+export function materializeOutboundEffectData<T>(value: T): T {
+  const snapshot = materializeOutboundEffectValue(value, {
+    ancestors: new WeakSet(),
+    depth: 0,
+    nodes: 0,
+  });
+  if (snapshot === OMIT_OUTBOUND_EFFECT_VALUE) {
+    throw new TypeError("Outbound effect payload must be defined");
+  }
+  return snapshot as T;
+}
+
+export function materializeOutboundEffectPayload(payload: ReplyPayload): ReplyPayload {
+  return copyReplyPayloadMetadata(payload, materializeOutboundEffectData(payload));
 }
 
 /** SHA-256 of the JSON-stable, policy-relevant payload with staged paths aliased. */
@@ -90,8 +209,9 @@ export function digestOutboundEffectPayload(
   payload: ReplyPayload,
   mediaAliases: readonly OutboundEffectAuthorizationMediaAlias[] = [],
 ): string {
+  const snapshot = materializeOutboundEffectPayload(payload);
   const aliases = new Map(mediaAliases.map((entry) => [entry.source, entry.alias] as const));
-  const projection: Record<string, unknown> = { ...payload };
+  const projection: Record<string, unknown> = { ...snapshot };
   // Canonical outbound planning materializes these two false defaults. Keep
   // every other false value: fields such as replyToCurrent are tri-state.
   if (projection.replyToTag === false) {
@@ -100,15 +220,17 @@ export function digestOutboundEffectPayload(
   if (projection.audioAsVoice === false) {
     delete projection.audioAsVoice;
   }
-  if (payload.mediaUrl !== undefined) {
-    projection.mediaUrl = encodeMediaReference(payload.mediaUrl, aliases);
+  if (snapshot.mediaUrl !== undefined) {
+    projection.mediaUrl = encodeMediaReference(snapshot.mediaUrl, aliases);
   }
-  if (payload.mediaUrls !== undefined) {
-    projection.mediaUrls = payload.mediaUrls.map((source) => encodeMediaReference(source, aliases));
+  if (snapshot.mediaUrls !== undefined) {
+    projection.mediaUrls = snapshot.mediaUrls.map((source) =>
+      encodeMediaReference(source, aliases),
+    );
   }
   const canonical = stableStringify({
     version: EFFECT_AUTHORIZATION_VERSION,
-    payload: toJsonValue(projection),
+    payload: projection,
   });
   return `sha256:${sha256Hex(canonical)}`;
 }

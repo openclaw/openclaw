@@ -460,6 +460,8 @@ export function resolveGroupToolPolicy(params: {
   sessionKey?: string;
   spawnedBy?: string | null;
   messageProvider?: string;
+  /** Authenticated source provider used only for sender-key matching. */
+  senderMessageProvider?: string | null;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
@@ -507,6 +509,7 @@ export function resolveGroupToolPolicy(params: {
       groupChannel: trustedGroup.dropped ? null : params.groupChannel,
       groupSpace: trustedGroup.dropped ? null : params.groupSpace,
       accountId: params.accountId,
+      senderMessageProvider: params.senderMessageProvider,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,
@@ -520,7 +523,7 @@ export function resolveGroupToolPolicy(params: {
   const configTools = resolveChannelGroupToolsPolicy({
     cfg: params.config,
     channel,
-    messageProvider: channel,
+    messageProvider: params.senderMessageProvider,
     groupId: groupIds[0],
     groupIdCandidates: groupIds.slice(1),
     accountId: params.accountId,

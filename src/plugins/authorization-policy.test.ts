@@ -38,6 +38,100 @@ const senderContext: AuthorizationInvocationContext = {
   threadId: "thread-1",
 };
 
+function requiredPolicyConfigWithScope(scope: {
+  agentIds?: string[];
+  providers?: string[];
+  accountIds?: string[];
+  conversationIds?: string[];
+}): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        "molty-access": {
+          authorization: {
+            requiredPolicies: [
+              {
+                id: "sender-access",
+                operations: ["tool.call"],
+                scope,
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
+const scopedRequiredPolicyConfig = requiredPolicyConfigWithScope({
+  agentIds: ["molty"],
+  providers: ["discord"],
+  accountIds: ["molty"],
+  conversationIds: ["maintenance"],
+});
+
+const scopedSenderPrincipal = {
+  kind: "sender" as const,
+  provider: "discord",
+  accountId: "molty",
+  senderId: "maintainer-1",
+  roleIds: ["maintainers"],
+};
+
+const scopedSenderContext: AuthorizationInvocationContext = {
+  principal: scopedSenderPrincipal,
+  agentId: "molty",
+  conversationId: "maintenance",
+  parentConversationId: "maintenance",
+  threadId: "thread-1",
+};
+
+const { agentId: _agentId, ...scopedContextWithoutAgent } = scopedSenderContext;
+const { provider: _provider, ...scopedPrincipalWithoutProvider } = scopedSenderPrincipal;
+const { accountId: _accountId, ...scopedPrincipalWithoutAccount } = scopedSenderPrincipal;
+const {
+  conversationId: _conversationId,
+  parentConversationId: _parentConversationId,
+  ...scopedContextWithoutConversation
+} = scopedSenderContext;
+
+const scopedProvenanceCases = [
+  {
+    dimension: "agent",
+    missing: scopedContextWithoutAgent,
+    nonmatching: { ...scopedSenderContext, agentId: "clawsweeper" },
+  },
+  {
+    dimension: "provider",
+    missing: { ...scopedSenderContext, principal: scopedPrincipalWithoutProvider },
+    nonmatching: {
+      ...scopedSenderContext,
+      principal: { ...scopedSenderPrincipal, provider: "telegram" },
+    },
+  },
+  {
+    dimension: "account",
+    missing: { ...scopedSenderContext, principal: scopedPrincipalWithoutAccount },
+    nonmatching: {
+      ...scopedSenderContext,
+      principal: { ...scopedSenderPrincipal, accountId: "reef" },
+    },
+  },
+  {
+    dimension: "conversation",
+    missing: scopedContextWithoutConversation,
+    nonmatching: {
+      ...scopedSenderContext,
+      conversationId: "general",
+      parentConversationId: "general",
+    },
+  },
+] satisfies Array<{
+  dimension: string;
+  missing: AuthorizationInvocationContext;
+  nonmatching: AuthorizationInvocationContext;
+}>;
+
 function registration(
   pluginId: string,
   policy: AuthorizationPolicyRegistration,
@@ -593,6 +687,209 @@ describe("authorization policy runner", () => {
       code: "required-policy-missing",
     });
   });
+
+  it("scopes fail-closed required policies to matching invocation context", async () => {
+    await expect(
+      runAuthorizationPolicies({
+        request: toolRequest(),
+        context: scopedSenderContext,
+        config: scopedRequiredPolicyConfig,
+        registry: registry(),
+      }),
+    ).resolves.toMatchObject({ code: "required-policy-missing" });
+    await expect(
+      runAuthorizationPolicies({
+        request: toolRequest(),
+        context: {
+          ...scopedSenderContext,
+          conversationId: "thread-1",
+          parentConversationId: "maintenance",
+        },
+        config: scopedRequiredPolicyConfig,
+        registry: registry(),
+      }),
+    ).resolves.toMatchObject({ code: "required-policy-missing" });
+  });
+
+  it.each(scopedProvenanceCases)(
+    "keeps the required pin active for missing $dimension provenance but skips a known nonmatch",
+    async ({ missing, nonmatching }) => {
+      await expect(
+        runAuthorizationPolicies({
+          request: toolRequest(),
+          context: missing,
+          config: scopedRequiredPolicyConfig,
+          registry: registry(),
+        }),
+      ).resolves.toMatchObject({ code: "required-policy-missing" });
+      await expect(
+        runAuthorizationPolicies({
+          request: toolRequest(),
+          context: nonmatching,
+          config: scopedRequiredPolicyConfig,
+          registry: registry(),
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      dimension: "agent",
+      context: { ...scopedSenderContext, agentId: "   " },
+      scope: { agentIds: ["molty"] },
+    },
+    {
+      dimension: "provider",
+      context: {
+        ...scopedSenderContext,
+        principal: { ...scopedSenderPrincipal, provider: "" },
+      },
+      scope: { providers: ["discord"] },
+    },
+    {
+      dimension: "account",
+      context: {
+        ...scopedSenderContext,
+        principal: { ...scopedSenderPrincipal, accountId: "   " },
+      },
+      scope: { accountIds: ["molty"] },
+    },
+    {
+      dimension: "conversation",
+      context: {
+        ...scopedSenderContext,
+        conversationId: "",
+        parentConversationId: "   ",
+      },
+      scope: { conversationIds: ["maintenance"] },
+    },
+  ] satisfies Array<{
+    dimension: string;
+    context: AuthorizationInvocationContext;
+    scope: Parameters<typeof requiredPolicyConfigWithScope>[0];
+  }>)("keeps a required pin active for blank $dimension provenance", async ({ context, scope }) => {
+    await expect(
+      runAuthorizationPolicies({
+        request: toolRequest(),
+        context,
+        config: requiredPolicyConfigWithScope(scope),
+        registry: registry(),
+      }),
+    ).resolves.toMatchObject({ code: "required-policy-missing" });
+  });
+
+  it("validates scoped provenance before using it to skip a required pin", async () => {
+    const providerGetter = vi.fn(() => "telegram");
+    const principal = { ...scopedSenderPrincipal };
+    Object.defineProperty(principal, "provider", {
+      enumerable: true,
+      get: providerGetter,
+    });
+
+    await expect(
+      runAuthorizationPolicies({
+        request: toolRequest(),
+        context: { ...scopedSenderContext, principal },
+        config: requiredPolicyConfigWithScope({ providers: ["discord"] }),
+        registry: registry(),
+      }),
+    ).resolves.toMatchObject({
+      pluginId: "molty-access",
+      policyId: "sender-access",
+      code: "policy-input-invalid",
+    });
+    expect(providerGetter).not.toHaveBeenCalled();
+  });
+
+  it("rejects proxied scoped provenance without invoking proxy traps", async () => {
+    const getOwnPropertyDescriptor = vi.fn(
+      (target: AuthorizationInvocationContext, property: PropertyKey) =>
+        Reflect.getOwnPropertyDescriptor(target, property),
+    );
+    const context: AuthorizationInvocationContext = new Proxy(scopedSenderContext, {
+      getOwnPropertyDescriptor,
+    });
+
+    await expect(
+      runAuthorizationPolicies({
+        request: toolRequest(),
+        context,
+        config: scopedRequiredPolicyConfig,
+        registry: registry(),
+      }),
+    ).resolves.toMatchObject({ code: "policy-input-invalid" });
+    expect(getOwnPropertyDescriptor).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      dimension: "provider",
+      principal: { kind: "unknown" as const, accountId: "molty" },
+      scope: { providers: ["discord"] },
+    },
+    {
+      dimension: "account",
+      principal: { kind: "unknown" as const, provider: "discord" },
+      scope: { accountIds: ["molty"] },
+    },
+  ])("keeps a required pin active for unknown principal missing $dimension", async (entry) => {
+    await expect(
+      runAuthorizationPolicies({
+        request: toolRequest(),
+        context: { principal: entry.principal },
+        config: requiredPolicyConfigWithScope(entry.scope),
+        registry: registry(),
+      }),
+    ).resolves.toMatchObject({ code: "required-policy-missing" });
+  });
+
+  it.each([
+    {
+      principalKind: "operator",
+      principal: { kind: "operator" as const, scopes: ["operator.read"] },
+    },
+    {
+      principalKind: "service",
+      principal: { kind: "service" as const, serviceId: "cron" },
+    },
+  ])(
+    "treats an authenticated $principalKind principal as outside provider/account scopes",
+    async ({ principal }) => {
+      for (const scope of [{ providers: ["discord"] }, { accountIds: ["molty"] }]) {
+        await expect(
+          runAuthorizationPolicies({
+            request: toolRequest(),
+            context: { principal },
+            config: requiredPolicyConfigWithScope(scope),
+            registry: registry(),
+          }),
+        ).resolves.toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    { principalKind: "operator without scopes", principal: { kind: "operator" } },
+    {
+      principalKind: "operator with malformed scopes",
+      principal: { kind: "operator", scopes: ["   "] },
+    },
+    { principalKind: "service without identity", principal: { kind: "service", serviceId: "" } },
+    { principalKind: "unrecognized", principal: { kind: "external" } },
+  ])(
+    "keeps a required pin active for malformed $principalKind provenance",
+    async ({ principal }) => {
+      await expect(
+        runAuthorizationPolicies({
+          request: toolRequest(),
+          context: { principal } as never,
+          config: requiredPolicyConfigWithScope({ providers: ["discord"] }),
+          registry: registry(),
+        }),
+      ).resolves.toMatchObject({ code: "required-policy-missing" });
+    },
+  );
 
   it("loads required policies from runtime config when no policy registered yet", async () => {
     const config = {

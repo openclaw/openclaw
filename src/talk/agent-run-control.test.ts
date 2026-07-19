@@ -1,5 +1,10 @@
 // Agent run control tests cover talk-driven agent pause and resume behavior.
 import { describe, expect, it, vi } from "vitest";
+import type {
+  EmbeddedAgentQueueMessageOptions,
+  EmbeddedAgentQueueMessageOutcome,
+} from "../agents/embedded-agent-runner/runs.js";
+import { createOperatorTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import type { RealtimeVoiceAgentRunActivity } from "./agent-run-control-shared.js";
 import {
   classifyRealtimeVoiceAgentControlText,
@@ -13,18 +18,22 @@ import type { TalkEvent } from "./talk-events.js";
 function createDeps(options: {
   activeSessionId?: string;
   queued?: boolean;
-  abortResult?: boolean;
+  abortStatus?: "aborted" | "not_active" | "not_abortable" | "unauthorized" | "failed";
+  replacementObserved?: boolean;
   activity?: RealtimeVoiceAgentRunActivity;
   reason?: "no_active_run" | "not_streaming" | "compacting" | "runtime_rejected";
 }) {
   return {
-    abortEmbeddedAgentRun: vi.fn(() => options.abortResult ?? true),
+    abortActiveRunWithSteeringAuthorization: vi.fn(() => ({
+      status: options.abortStatus ?? "aborted",
+      replacementObserved: options.replacementObserved ?? false,
+    })),
     queueEmbeddedAgentMessageWithOutcomeAsync: vi.fn(
       async (
         sessionId: string,
         _text: string,
-        _options?: { steeringMode?: "all"; taskSuggestionDeliveryMode?: undefined },
-      ) =>
+        _options?: EmbeddedAgentQueueMessageOptions,
+      ): Promise<EmbeddedAgentQueueMessageOutcome> =>
         options.queued === false
           ? {
               queued: false as const,
@@ -43,6 +52,18 @@ function createDeps(options: {
     getDiagnosticSessionActivitySnapshot: vi.fn(() => options.activity ?? {}),
     resolveActiveEmbeddedRunSessionId: vi.fn(() => options.activeSessionId),
   };
+}
+
+function createTalkAuthority(connectionId = "talk-conn", scopes = ["operator.write"]) {
+  return createOperatorTurnAuthoritySnapshot({
+    scopes,
+    connectionId,
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    conversationId: "agent:main:main",
+    trigger: "talk",
+    capability: "talk-client",
+  });
 }
 
 describe("classifyRealtimeVoiceAgentControlText", () => {
@@ -124,12 +145,14 @@ describe("classifyRealtimeVoiceAgentControlText", () => {
 describe("controlRealtimeVoiceAgentRun", () => {
   it("queues steering into the active embedded run", async () => {
     const deps = createDeps({ activeSessionId: "session-active" });
+    const turnAuthority = createTalkAuthority();
 
     const result = await controlRealtimeVoiceAgentRun(
       {
         sessionKey: "agent:main:main",
         text: "use the safer path",
         mode: "steer",
+        turnAuthority,
       },
       deps,
     );
@@ -147,7 +170,12 @@ describe("controlRealtimeVoiceAgentRun", () => {
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-active",
       "use the safer path",
-      { steeringMode: "all", debounceMs: 0, taskSuggestionDeliveryMode: undefined },
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
+        steeringAuthorizationAffinity: { kind: "authority", authority: turnAuthority },
+      },
     );
   });
 
@@ -170,13 +198,15 @@ describe("controlRealtimeVoiceAgentRun", () => {
   });
 
   it("cancels the active run without queueing a steering message", async () => {
-    const deps = createDeps({ activeSessionId: "session-active", abortResult: true });
+    const deps = createDeps({ activeSessionId: "session-active" });
+    const turnAuthority = createTalkAuthority();
 
     const result = await controlRealtimeVoiceAgentRun(
       {
         sessionKey: "agent:main:main",
         text: "stop",
         mode: "cancel",
+        turnAuthority,
       },
       deps,
     );
@@ -191,8 +221,34 @@ describe("controlRealtimeVoiceAgentRun", () => {
         message: "Cancelled the active OpenClaw run.",
       },
     });
-    expect(deps.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-active");
+    expect(deps.abortActiveRunWithSteeringAuthorization).toHaveBeenCalledWith({
+      sessionId: "session-active",
+      steeringAuthorizationAffinity: { kind: "authority", authority: turnAuthority },
+      policy: "operator-owner-or-admin",
+    });
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for an unattributed cancel", async () => {
+    const deps = createDeps({ activeSessionId: "session-active", abortStatus: "unauthorized" });
+
+    const result = await controlRealtimeVoiceAgentRun(
+      {
+        sessionKey: "agent:main:main",
+        text: "stop",
+        mode: "cancel",
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      aborted: false,
+      reason: "authorization_affinity_mismatch",
+    });
+    expect(deps.abortActiveRunWithSteeringAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ policy: "operator-owner-or-admin" }),
+    );
   });
 
   it("answers status from recent Talk tool events", async () => {

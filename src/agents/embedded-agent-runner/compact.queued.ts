@@ -26,6 +26,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { rebindTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
@@ -272,12 +273,27 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (params.trigger !== "manual") {
-    return await compactEmbeddedAgentSessionImpl(params);
+  const authoritySessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  const authorityAgentId = resolveSessionAgentIds({
+    sessionKey: authoritySessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  }).sessionAgentId;
+  const turnAuthority = rebindTurnAuthoritySnapshot(params.turnAuthority, {
+    agentId: authorityAgentId,
+    sessionKey: authoritySessionKey,
+    sessionId: params.sessionId,
+    runId: params.runId,
+    trigger: params.trigger ?? "manual",
+  });
+  const effectiveParams = turnAuthority ? { ...params, turnAuthority } : params;
+  if (effectiveParams.trigger !== "manual") {
+    return await compactEmbeddedAgentSessionImpl(effectiveParams);
   }
   // Reply operations and embedded handles are separate lifecycle owners. A
   // /compact reply may coexist with this handle, but another embedded writer may not.
-  if (resolveManualCompactionActiveRunSessionId(params)) {
+  if (resolveManualCompactionActiveRunSessionId(effectiveParams)) {
     return {
       ok: false,
       compacted: false,
@@ -287,8 +303,8 @@ export async function compactEmbeddedAgentSession(
   }
 
   const controller = new AbortController();
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, controller.signal])
+  const abortSignal = effectiveParams.abortSignal
+    ? AbortSignal.any([effectiveParams.abortSignal, controller.signal])
     : controller.signal;
   const handle: EmbeddedAgentQueueHandle = {
     kind: "embedded",
@@ -298,14 +314,24 @@ export async function compactEmbeddedAgentSession(
     abort: (reason) => controller.abort(reason ?? "user_abort"),
     cancel: (reason) => controller.abort(reason ?? "user_abort"),
   };
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  setActiveEmbeddedRun(
+    effectiveParams.sessionId,
+    handle,
+    effectiveParams.sessionKey,
+    effectiveParams.sessionFile,
+  );
   try {
     return await compactEmbeddedAgentSessionImpl({
-      ...params,
+      ...effectiveParams,
       abortSignal,
     });
   } finally {
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    clearActiveEmbeddedRun(
+      effectiveParams.sessionId,
+      handle,
+      effectiveParams.sessionKey,
+      effectiveParams.sessionFile,
+    );
   }
 }
 
@@ -1043,8 +1069,14 @@ function buildCompactionContextEngineRuntimeContext(params: {
       agentDir: params.agentDir,
       config: params.params.config,
       skillsSnapshot: params.params.skillsSnapshot,
+      turnAuthority: params.params.turnAuthority,
       senderIsOwner: params.params.senderIsOwner,
+      isAuthorizedSender: params.params.isAuthorizedSender,
+      memberRoleIds: params.params.memberRoleIds,
       senderId: params.params.senderId,
+      senderName: params.params.senderName,
+      senderUsername: params.params.senderUsername,
+      senderE164: params.params.senderE164,
       provider: params.params.provider,
       modelId: params.params.model,
       harnessRuntime: params.harnessRuntime,

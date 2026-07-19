@@ -71,6 +71,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
+import { subagentCompletionSteeringTargets } from "./subagent-registry-memory.js";
 import type {
   PendingFinalDeliveryPayload,
   RequesterSettleWakeState,
@@ -1636,6 +1637,7 @@ export function createSubagentRegistryLifecycleController(params: {
       );
     };
 
+    const requesterSteeringTarget = subagentCompletionSteeringTargets.get(entry);
     const announceParams: Parameters<RunSubagentAnnounceFlow>[0] = {
       childSessionKey: pendingPayload.childSessionKey,
       childRunId: pendingPayload.childRunId,
@@ -1655,6 +1657,7 @@ export function createSubagentRegistryLifecycleController(params: {
       spawnMode: pendingPayload.spawnMode,
       expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
       wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+      ...(requesterSteeringTarget ? { requesterSteeringTarget } : {}),
       onBeforeDeleteChildSession:
         cleanup === "delete"
           ? () => {

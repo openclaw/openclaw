@@ -370,6 +370,7 @@ export function prepareEmbeddedAttemptStream(input: {
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
+    steeringAuthorizationAffinity: attempt.steeringAuthorizationAffinity,
     cancel: abortActiveRunExternally,
     abort: (reason) => abortActiveRunExternally(reason),
   };

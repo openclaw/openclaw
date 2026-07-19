@@ -112,6 +112,21 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
+  it("routes unscoped key lookup through the requested agent store", async () => {
+    targetStore = {
+      [canonicalKey]: { sessionId: "sess-target", updatedAt: 1 },
+    };
+
+    await expectResolveToCanonicalKey({ key: "global", agentId: "target" });
+
+    expect(hoisted.resolveGatewaySessionStoreTargetWithStoreMock).toHaveBeenCalledWith({
+      cfg: {},
+      key: "global",
+      agentId: "target",
+      clone: false,
+    });
+  });
+
   it("does not page-limit exact key spawnedBy visibility checks", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

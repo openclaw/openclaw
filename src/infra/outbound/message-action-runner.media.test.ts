@@ -10,6 +10,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -331,6 +332,251 @@ describe("runMessageAction media behavior", () => {
     expect(result.kind).toBe("send");
     const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
     expect(sendArgs.asVoice).toBe(true);
+  });
+
+  it("uses capability requester identity for prepared send effects", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "12345678",
+        message: "hello",
+      },
+      requesterAccountId: "forged-account",
+      requesterSenderId: "forged-sender",
+      requesterSenderName: "Forged Name",
+      requesterSenderUsername: "forged_user",
+      requesterSenderE164: "+15550001111",
+      conversationReadOrigin: "direct-operator",
+      authorization: {
+        principal: {
+          kind: "operator",
+          scopes: ["operator.admin"],
+          isOwner: true,
+        },
+      },
+      messageActionAuthorization: {
+        requesterAccountId: "trusted-account",
+        requesterSenderId: "trusted-sender",
+        requesterSenderIsOwner: false,
+      },
+      dryRun: true,
+    });
+
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    const sendCtx = requireRecord(sendArgs.ctx);
+    expect(sendCtx.requesterAccountId).toBe("trusted-account");
+    expect(sendCtx.requesterSenderId).toBe("trusted-sender");
+    expect(sendCtx.requesterSenderName).toBeUndefined();
+    expect(sendCtx.requesterSenderUsername).toBeUndefined();
+    expect(sendCtx.requesterSenderE164).toBeUndefined();
+    expect(sendCtx.senderIsOwner).toBe(false);
+    expect(sendCtx.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("projects canonical sender identity into policy, media, and prepared effects", async () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "workspace",
+        source: "test",
+        plugin: workspacePlugin,
+      },
+    ]);
+    let seenContext: AuthorizationInvocationContext | undefined;
+    registry.authorizationPolicies.push({
+      pluginId: "canonical-sender-policy",
+      source: "test",
+      policy: {
+        id: "canonical-sender-policy",
+        description: "Capture canonical sender identity",
+        handlers: {
+          "message.action": (_request, context) => {
+            seenContext = context;
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const authorization: AuthorizationInvocationContext = {
+      principal: {
+        kind: "sender",
+        provider: "requestchat",
+        accountId: "canonical-account",
+        senderId: "canonical-sender",
+        aliases: {
+          name: "Canonical Name",
+          username: "canonical_user",
+          e164: "+15550002222",
+        },
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+      agentId: "alpha",
+      sessionKey: "agent:alpha:requestchat:group:ops",
+      conversationId: "ops",
+    };
+
+    await runMessageAction({
+      cfg: {
+        tools: {
+          allow: ["read"],
+          message: { crossContext: { allowAcrossProviders: true } },
+        },
+        channels: {
+          ...workspaceConfig.channels,
+          requestchat: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "username:canonical_user": { deny: ["read"] },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "12345678",
+        message: "hello",
+      },
+      requesterAccountId: "ambient-account",
+      requesterSenderId: "ambient-sender",
+      requesterSenderName: "Ambient Name",
+      requesterSenderUsername: "ambient_user",
+      requesterSenderE164: "+15550001111",
+      senderIsOwner: true,
+      authorization: {
+        principal: { kind: "service", serviceId: "ambient-service" },
+      },
+      messageActionAuthorization: {
+        authorization,
+        requesterAccountId: "conflicting-sibling-account",
+        requesterSenderId: "conflicting-sibling-sender",
+        requesterSenderIsOwner: true,
+        requesterIsAuthorizedSender: false,
+        requesterRoleIds: ["conflicting-role"],
+        toolContext: {
+          currentChannelProvider: "requestchat",
+          currentChannelId: "ops",
+        },
+      },
+      sessionKey: authorization.sessionKey,
+      agentId: "alpha",
+      dryRun: true,
+    });
+
+    expect(seenContext).toEqual(authorization);
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    const sendCtx = requireRecord(sendArgs.ctx);
+    expect(sendCtx.requesterAccountId).toBe("canonical-account");
+    expect(sendCtx.requesterSenderId).toBe("canonical-sender");
+    expect(sendCtx.requesterSenderName).toBe("Canonical Name");
+    expect(sendCtx.requesterSenderUsername).toBe("canonical_user");
+    expect(sendCtx.requesterSenderE164).toBe("+15550002222");
+    expect(sendCtx.senderIsOwner).toBe(false);
+    expect(requireRecord(sendCtx.mediaAccess).readFile).toBeUndefined();
+  });
+
+  it("projects top-level sender authorization into media and prepared effects", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+    const authorization: AuthorizationInvocationContext = {
+      principal: {
+        kind: "sender",
+        provider: "requestchat",
+        accountId: "canonical-account",
+        senderId: "canonical-sender",
+        aliases: {
+          name: "Canonical Name",
+          username: "canonical_user",
+          e164: "+15550002222",
+        },
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+      agentId: "alpha",
+      sessionKey: "agent:alpha:requestchat:group:ops",
+      conversationId: "ops",
+    };
+
+    await runMessageAction({
+      cfg: {
+        tools: {
+          allow: ["read"],
+          message: { crossContext: { allowAcrossProviders: true } },
+        },
+        channels: {
+          ...workspaceConfig.channels,
+          requestchat: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "username:canonical_user": { deny: ["read"] },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "12345678",
+        message: "hello",
+      },
+      defaultAccountId: "destination-account",
+      requesterAccountId: "ambient-account",
+      requesterSenderId: "ambient-sender",
+      requesterSenderName: "Ambient Name",
+      requesterSenderUsername: "ambient_user",
+      requesterSenderE164: "+15550001111",
+      senderIsOwner: true,
+      conversationReadOrigin: "direct-operator",
+      toolContext: {
+        currentChannelProvider: "requestchat",
+        currentChannelId: "ambient-conversation",
+      },
+      authorization,
+      sessionKey: authorization.sessionKey,
+      agentId: "alpha",
+      dryRun: true,
+    });
+
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    const sendCtx = requireRecord(sendArgs.ctx);
+    expect(sendCtx.accountId).toBe("destination-account");
+    expect(sendCtx.requesterAccountId).toBe("canonical-account");
+    expect(sendCtx.requesterSenderId).toBe("canonical-sender");
+    expect(sendCtx.requesterSenderName).toBe("Canonical Name");
+    expect(sendCtx.requesterSenderUsername).toBe("canonical_user");
+    expect(sendCtx.requesterSenderE164).toBe("+15550002222");
+    expect(sendCtx.senderIsOwner).toBe(false);
+    expect(sendCtx.conversationReadOrigin).toBe("delegated");
+    expect(sendCtx.toolContext).toBeUndefined();
+    expect(requireRecord(sendCtx.mediaAccess).readFile).toBeUndefined();
   });
 
   it("rejects plugin-declined attachment actions before loading media", async () => {

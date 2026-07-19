@@ -22,6 +22,7 @@ import {
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import {
+  hasGatewayOperatorScope,
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
@@ -126,7 +127,7 @@ function isPluginsWriteAction(action: string): boolean {
 }
 
 function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
-  return params.ctx.GatewayClientScopes?.includes("operator.admin") === true;
+  return hasGatewayOperatorScope(params.ctx, "operator.admin");
 }
 
 function rejectNixModePluginWrite(): {

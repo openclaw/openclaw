@@ -1,6 +1,7 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -340,6 +341,34 @@ export function isCompetingSessionWorkAdmissionActive(
   );
 }
 
+export type SessionWorkAdmissionControlSnapshot = Readonly<{
+  turnAuthority?: TurnAuthoritySnapshot;
+}>;
+
+/**
+ * Foreign admissions covered by a lifecycle mutation's exact identities.
+ * Call while holding that mutation fence so no new admission can enter after validation.
+ */
+export function collectSessionWorkAdmissionControlSnapshots(params: {
+  scope: string;
+  identities: Iterable<string | undefined>;
+}): readonly SessionWorkAdmissionControlSnapshot[] {
+  const admissions = new Set<SessionWorkAdmission>();
+  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+  for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
+    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
+      if (!currentAdmissions?.has(admission)) {
+        admissions.add(admission);
+      }
+    }
+  }
+  return Object.freeze(
+    Array.from(admissions, (admission) =>
+      Object.freeze(admission.turnAuthority ? { turnAuthority: admission.turnAuthority } : {}),
+    ),
+  );
+}
+
 /** Active session identities for one store/lifecycle scope. */
 export function collectActiveSessionWorkAdmissionIdentities(scope: string): Set<string> {
   const normalizedScope = scope.trim();
@@ -387,6 +416,7 @@ export async function beginSessionWorkAdmission(params: {
   revalidateAllowed?: () => Promise<void> | void;
   onInterrupt?: () => void;
   signal?: AbortSignal;
+  turnAuthority?: TurnAuthoritySnapshot;
 }): Promise<SessionWorkAdmissionLease> {
   if (isGatewaySubordinateWorkAdmissionClosed()) {
     throw new GatewayDrainingError();
@@ -409,6 +439,7 @@ export async function beginSessionWorkAdmission(params: {
         identities: new Set(identities),
         interrupt: params.onInterrupt,
         interrupted: false,
+        turnAuthority: params.turnAuthority,
         released: new Promise<void>((resolve) => {
           resolveReleased = resolve;
         }),
@@ -447,6 +478,16 @@ export async function beginSessionWorkAdmission(params: {
           const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
           current.add(admission);
           return await CURRENT_SESSION_WORK_ADMISSIONS.run(current, run);
+        },
+        setTurnAuthority: (turnAuthority) => {
+          if (released) {
+            throw new Error("cannot attach authority to a released session work admission");
+          }
+          if (admission.turnAuthority) {
+            return admission.turnAuthority === turnAuthority;
+          }
+          admission.turnAuthority = turnAuthority;
+          return true;
         },
       };
       const signal = params.signal;

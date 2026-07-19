@@ -26,10 +26,7 @@ export type {
   UserTurnInput,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
-
-export function buildRunUserTurnIdempotencyKey(runId: string): string {
-  return `${runId}:user`;
-}
+export { buildRunUserTurnIdempotencyKey } from "./user-turn-idempotency.js";
 
 type PersistedUserTurnMediaFields = {
   MediaPath?: string;

@@ -7,6 +7,7 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { TurnAuthoritySnapshot } from "../../plugins/authorization-policy.types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
@@ -37,6 +38,12 @@ export type CompactEmbeddedAgentSessionParams = {
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
+  /** Trusted provider role ids for the requester in this turn. */
+  memberRoleIds?: string[];
+  /** Host-resolved sender authorization result for this turn. */
+  isAuthorizedSender?: boolean;
+  /** Immutable host-issued authority for the admitted turn. */
+  turnAuthority?: TurnAuthoritySnapshot;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   /** Host-resolved provider credential for native harness compaction. */

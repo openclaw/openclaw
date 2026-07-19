@@ -941,6 +941,7 @@ type ConnectReqOptions = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  agentRuntimeIdentityToken?: string;
   skipDefaultAuth?: boolean;
   minProtocol?: number;
   maxProtocol?: number;
@@ -1061,6 +1062,7 @@ export async function connectReq(
   const bootstrapToken = normalizeOptionalString(opts?.bootstrapToken);
   const deviceToken = normalizeOptionalString(opts?.deviceToken);
   const password = opts?.password ?? defaultPassword;
+  const agentRuntimeIdentityToken = normalizeOptionalString(opts?.agentRuntimeIdentityToken);
   const authTokenForSignature = resolveAuthTokenForSignature({
     token,
     bootstrapToken,
@@ -1155,12 +1157,13 @@ export async function connectReq(
         role,
         scopes: requestedScopes,
         auth:
-          token || bootstrapToken || password || deviceToken
+          token || bootstrapToken || password || deviceToken || agentRuntimeIdentityToken
             ? {
                 token,
                 bootstrapToken,
                 deviceToken,
                 password,
+                agentRuntimeIdentityToken,
               }
             : undefined,
         device,

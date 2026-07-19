@@ -7,6 +7,7 @@ describe("buildDiscordNativeCommandContext", () => {
     const ctx = buildDiscordNativeCommandContext({
       prompt: "/status",
       commandArgs: {},
+      agentId: "codex",
       sessionKey: "agent:codex:discord:slash:user-1",
       commandTargetSessionKey: "agent:codex:discord:direct:user-1",
       accountId: "default",
@@ -33,19 +34,23 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.To).toBe("slash:user-1");
     expect(ctx.ChatType).toBe("direct");
     expect(ctx.ConversationLabel).toBe("Tester");
+    expect(ctx.AgentId).toBe("codex");
     expect(ctx.SessionKey).toBe("agent:codex:discord:slash:user-1");
     expect(ctx.CommandTargetSessionKey).toBe("agent:codex:discord:direct:user-1");
     expect(ctx.OriginatingTo).toBe("user:user-1");
+    expect(ctx.NativeChannelId).toBe("dm-1");
     expect(ctx.UntrustedContext).toBeUndefined();
     expect(ctx.UntrustedStructuredContext).toBeUndefined();
     expect(ctx.GroupSystemPrompt).toBeUndefined();
     expect(ctx.Timestamp).toBe(123);
+    expect(ctx.InboundAccessAuthorized).toBe(true);
   });
 
   it("builds guild slash command context with owner allowlist and channel metadata", () => {
     const ctx = buildDiscordNativeCommandContext({
       prompt: "/status",
       commandArgs: { values: { model: "gpt-5.2" } },
+      agentId: "codex",
       sessionKey: "agent:codex:discord:slash:user-1",
       commandTargetSessionKey: "agent:codex:discord:channel:chan-1",
       accountId: "default",
@@ -92,6 +97,7 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.MessageThreadId).toBe("chan-1");
     expect(ctx.ThreadParentId).toBe("parent-1");
     expect(ctx.OriginatingTo).toBe("channel:chan-1");
+    expect(ctx.NativeChannelId).toBe("chan-1");
     expect(ctx.UntrustedContext).toBeUndefined();
     expect(ctx.UntrustedStructuredContext).toEqual([
       {
@@ -102,5 +108,6 @@ describe("buildDiscordNativeCommandContext", () => {
       },
     ]);
     expect(ctx.Timestamp).toBe(456);
+    expect(ctx.InboundAccessAuthorized).toBe(true);
   });
 });

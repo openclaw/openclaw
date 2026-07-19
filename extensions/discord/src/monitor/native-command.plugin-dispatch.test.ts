@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createTestRegistry,
+  resetGlobalHookRunner,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -27,6 +28,7 @@ import {
   createMockCommandInteraction as createInteraction,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
+import type { ThreadBindingManager } from "./thread-bindings.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
@@ -271,7 +273,11 @@ function expectNoFollowUpContent(interaction: MockCommandInteraction, content: s
   expect(matched).toBe(false);
 }
 
-async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }) {
+async function createPluginCommand(params: {
+  cfg: OpenClawConfig;
+  name: string;
+  threadBindings?: ThreadBindingManager;
+}) {
   return createDiscordNativeCommand({
     command: {
       name: params.name,
@@ -283,7 +289,7 @@ async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }
     accountId: "default",
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
+    threadBindings: params.threadBindings ?? createNoopThreadBindingManager("default"),
   });
 }
 
@@ -317,6 +323,24 @@ function registerScopedPairPlugin(
       acceptsArgs: true,
       requireAuth: false,
       requiredScopes: ["operator.pairing"],
+      handler,
+    }),
+  ).toEqual({ ok: true });
+  return handler;
+}
+
+function registerFixPlugin(
+  handler = vi.fn(async ({ args }: { args?: string }) => ({
+    text: `fix queued:${args ?? ""}`,
+    continueAgent: true,
+  })),
+) {
+  expect(
+    registerPluginCommand("demo-plugin", {
+      name: "fix",
+      description: "Fix an issue",
+      acceptsArgs: true,
+      requireAuth: false,
       handler,
     }),
   ).toEqual({ ok: true });
@@ -416,6 +440,7 @@ describe("Discord native plugin command dispatch", () => {
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
+    resetGlobalHookRunner();
     vi.clearAllMocks();
     clearPluginCommands();
     setActivePluginRegistry(createTestRegistry());
@@ -497,6 +522,34 @@ describe("Discord native plugin command dispatch", () => {
       2,
       expect.objectContaining({ sessionKey: "agent:main:discord:direct:owner" }),
     );
+  });
+
+  it("refreshes merged account config before native command access checks", async () => {
+    const sourceCfg = createConfig();
+    const runtimeCfg = {
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          accounts: {
+            default: {
+              dm: { enabled: false },
+              slashCommand: { ephemeral: false },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    registerPairPlugin();
+    const command = await createPluginCommand({ cfg: sourceCfg, name: "pair" });
+    const interaction = createInteraction();
+    interaction.options.getString.mockReturnValue("now");
+    setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.defer).toHaveBeenCalledWith({ ephemeral: false });
+    expect(runtimeModuleMocks.executePluginCommand).not.toHaveBeenCalled();
+    expectFollowUpFields(interaction, { content: "Discord DMs are disabled." });
   });
 
   it("executes plugin commands from the real registry through the native Discord command path", async () => {
@@ -615,6 +668,174 @@ describe("Discord native plugin command dispatch", () => {
     expect(runtimeModuleMocks.getSessionEntry).toHaveBeenCalledWith({
       agentId: "codex",
       sessionKey: pluginSessionKey,
+    });
+  });
+
+  it("continues through the configured binding agent and its opaque session", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    const pluginSessionKey = "plugin-binding:openclaw-codex-app-server:dm";
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () => ({
+      ...createConfiguredRouteState({
+        sessionKey: "agent:main:discord:dm:owner",
+        agentId: "main",
+      }),
+      boundSessionKey: pluginSessionKey,
+      configuredBinding: {
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "codex",
+          sessionKey: pluginSessionKey,
+          agentId: "codex",
+        },
+      } as never,
+    });
+    interaction.options.getString.mockReturnValue("repair telegram migration");
+    registerFixPlugin();
+    const command = await createPluginCommand({ cfg, name: "fix" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expectPluginCommandExecution({
+      mock: runtimeModuleMocks.executePluginCommand,
+      commandName: "fix",
+      expected: {
+        agentId: "codex",
+        sessionKey: pluginSessionKey,
+      },
+    });
+    expect(runtimeModuleMocks.getSessionEntry).toHaveBeenCalledWith({
+      agentId: "codex",
+      sessionKey: pluginSessionKey,
+    });
+    const dispatchCall = firstMockArg(
+      runtimeModuleMocks.dispatchReplyWithDispatcher,
+      "dispatchReplyWithDispatcher",
+    ) as { ctx?: Record<string, unknown> };
+    expect(dispatchCall.ctx).toMatchObject({
+      AgentId: "codex",
+      SessionKey: pluginSessionKey,
+      CommandTargetSessionKey: pluginSessionKey,
+      BodyForCommands: "[native plugin command already handled]",
+    });
+  });
+
+  it("authorizes an opaque configured binding against its explicit agent and session", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    const pluginSessionKey = "plugin-binding:openclaw-codex-app-server:dm";
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async () => ({
+      ...createConfiguredRouteState({
+        sessionKey: "agent:main:discord:dm:owner",
+        agentId: "main",
+      }),
+      boundSessionKey: pluginSessionKey,
+      configuredBinding: {
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "codex",
+          sessionKey: pluginSessionKey,
+          agentId: "codex",
+        },
+      } as never,
+    });
+    const authorizationHandler = vi.fn(() => ({ effect: "pass" as const }));
+    const registry = createTestRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "maintainer-actions",
+        description: "Observe maintainer commands",
+        handlers: { "command.invoke": authorizationHandler },
+      },
+    });
+    setActivePluginRegistry(registry);
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    const command = await createStatusCommand(cfg);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(authorizationHandler).toHaveBeenCalledTimes(1);
+    expect(authorizationHandler.mock.calls[0]?.[1]).toMatchObject({
+      agentId: "codex",
+      sessionKey: pluginSessionKey,
+    });
+    expect(runtimeModuleMocks.getSessionEntry).toHaveBeenCalledWith({
+      agentId: "codex",
+      sessionKey: pluginSessionKey,
+    });
+    expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: pluginSessionKey }),
+    );
+  });
+
+  it("continues through the thread binding agent and its opaque session", async () => {
+    const guildId = "345678901234567890";
+    const threadId = "thread-123";
+    const parentId = "parent-456";
+    const pluginSessionKey = "plugin-binding:openclaw-codex-app-server:thread";
+    const cfg = {
+      commands: { useAccessGroups: false },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            [guildId]: {
+              channels: {
+                [threadId]: { enabled: true, requireMention: false, users: ["user:owner"] },
+                [parentId]: { enabled: true, requireMention: false, users: ["user:owner"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.PublicThread,
+      channelId: threadId,
+      threadParentId: parentId,
+      guildId,
+      guildName: "Test Guild",
+    });
+    interaction.options.getString.mockReturnValue("repair telegram migration");
+    const threadBindings = createNoopThreadBindingManager("default");
+    vi.spyOn(threadBindings, "getByThreadId").mockReturnValue({
+      accountId: "default",
+      channelId: parentId,
+      threadId,
+      targetKind: "acp",
+      targetSessionKey: pluginSessionKey,
+      agentId: "codex",
+      boundBy: "test",
+      boundAt: 1,
+      lastActivityAt: 1,
+    });
+    registerFixPlugin();
+    const command = await createPluginCommand({
+      cfg,
+      name: "fix",
+      threadBindings,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expectPluginCommandExecution({
+      mock: runtimeModuleMocks.executePluginCommand,
+      commandName: "fix",
+      expected: {
+        agentId: "codex",
+        sessionKey: pluginSessionKey,
+      },
+    });
+    const dispatchCall = firstMockArg(
+      runtimeModuleMocks.dispatchReplyWithDispatcher,
+      "dispatchReplyWithDispatcher",
+    ) as { ctx?: Record<string, unknown> };
+    expect(dispatchCall.ctx).toMatchObject({
+      AgentId: "codex",
+      SessionKey: pluginSessionKey,
+      CommandTargetSessionKey: pluginSessionKey,
     });
   });
 
@@ -933,6 +1154,111 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("continues an authorized native plugin command through the agent with its original context", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.options.getString.mockReturnValue("repair telegram migration");
+    const handler = registerFixPlugin();
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(
+      async (params: {
+        ctx: Record<string, unknown>;
+        dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+      }) => {
+        await params.dispatcherOptions.deliver({ text: "agent investigated" });
+        return {
+          counts: { final: 1, block: 0, tool: 0 },
+          queuedFinal: false,
+        } as never;
+      },
+    );
+    const command = await createPluginCommand({ cfg, name: "fix" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const dispatchCall = firstMockArg(dispatchSpy, "dispatchReplyWithDispatcher") as {
+      ctx?: Record<string, unknown>;
+    };
+    expect(dispatchCall.ctx).toMatchObject({
+      Body: "/fix repair telegram migration",
+      BodyForAgent: "/fix repair telegram migration",
+      RawBody: "/fix repair telegram migration",
+      CommandBody: "/fix repair telegram migration",
+      BodyForCommands: "[native plugin command already handled]",
+      CommandArgs: { raw: "repair telegram migration" },
+      CommandAuthorized: true,
+      CommandSource: "native",
+    });
+    expect(runtimeModuleMocks.executePluginCommand).toHaveBeenCalledTimes(1);
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "fix queued:repair telegram migration" }),
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "agent investigated" }),
+    );
+  });
+
+  it("does not count a suppressed plugin payload as a visible continuation reply", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.options.getString.mockReturnValue("repair telegram migration");
+    const handler = registerFixPlugin(
+      vi.fn(async () => ({
+        text: "hidden plugin acknowledgement",
+        continueAgent: true,
+        suppressReply: true,
+      })),
+    );
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+    } as never);
+    const command = await createPluginCommand({ cfg, name: "fix" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).toHaveBeenCalledTimes(1);
+    expectNoFollowUpContent(interaction, "hidden plugin acknowledgement");
+    expectFollowUpFields(interaction, {
+      content: "⚠️ Command produced no visible reply.",
+      ephemeral: true,
+    });
+  });
+
+  it("does not continue a native plugin command after command.invoke policy denial", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.options.getString.mockReturnValue("repair telegram migration");
+    const handler = registerFixPlugin();
+    const authorizationHandler = vi.fn(() => ({
+      effect: "deny" as const,
+      code: "fix-denied",
+    }));
+    const registry = createTestRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer commands",
+        handlers: { "command.invoke": authorizationHandler },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const command = await createPluginCommand({ cfg, name: "fix" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(authorizationHandler).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
+    expectFollowUpFields(interaction, {
+      content: "⚠️ Command blocked by authorization policy.",
+    });
+  });
+
   it("returns an explicit warning instead of success when dispatch produces zero visible replies", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
@@ -1107,6 +1433,8 @@ describe("Discord native plugin command dispatch", () => {
       sessionKey: "agent:main:discord:channel:thread-123",
       messageThreadId: "thread-123",
       threadParentId: "parent-456",
+      conversationId: "thread-123",
+      parentConversationId: "parent-456",
     });
   });
 

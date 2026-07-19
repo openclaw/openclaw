@@ -36,6 +36,7 @@ import {
   type AcpInitializeSessionInput,
   type AcpManagerObservabilitySnapshot,
   type AcpRunTurnInput,
+  type AcpSessionCancelTarget,
   type AcpSessionManagerDeps,
   type AcpSessionResolution,
   type AcpSessionRuntimeOptions,
@@ -322,16 +323,19 @@ export class AcpSessionManager {
     cfg: OpenClawConfig;
     sessionKey: string;
     reason?: string;
-  }): Promise<void> {
+    /** Exact ACP target authorized by callers that waited before cancellation. */
+    expectedTarget?: AcpSessionCancelTarget;
+  }): Promise<boolean> {
     const sessionKey = canonicalizeAcpSessionKey(params);
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles(params.cfg);
-    await runManagerCancelSession({
+    return await runManagerCancelSession({
       cfg: params.cfg,
       sessionKey,
       reason: params.reason,
+      ...(params.expectedTarget ? { expectedTarget: params.expectedTarget } : {}),
       activeTurnBySession: this.activeTurnBySession,
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),

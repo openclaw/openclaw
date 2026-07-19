@@ -27,6 +27,7 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import {
+  createDiscordModelPickerInteractionBinding,
   findProviderBucketLocation,
   loadDiscordModelPickerData,
   resolveDiscordModelPickerPageForModel,
@@ -35,6 +36,7 @@ import {
 import {
   renderDiscordModelPickerModelsView,
   toDiscordModelPickerMessagePayload,
+  truncateDiscordModelPickerTextDisplay,
 } from "./model-picker.view.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { SafeDiscordInteractionCall } from "./native-command-ui.types.js";
@@ -121,7 +123,7 @@ export function resolveDiscordModelPickerPreferenceScope(params: {
 
 export function buildDiscordModelPickerNoticePayload(message: string): { components: Container[] } {
   return {
-    components: [new Container([new TextDisplay(message)])],
+    components: [new Container([new TextDisplay(truncateDiscordModelPickerTextDisplay(message))])],
   };
 }
 
@@ -185,19 +187,23 @@ export async function resolveDiscordNativeChoiceContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
+  route?: ResolvedAgentRoute;
 }): Promise<{ provider?: string; model?: string; agentRuntime?: string } | null> {
   try {
-    const resolved = await resolveDiscordModelPickerRouteState({
-      interaction: params.interaction,
-      cfg: params.cfg,
-      accountId: params.accountId,
-      threadBindings: params.threadBindings,
-      enforceConfiguredBindingReadiness: true,
-    });
-    if (resolved.bindingReadiness && !resolved.bindingReadiness.ok) {
-      return null;
+    let route = params.route;
+    if (!route) {
+      const resolved = await resolveDiscordModelPickerRouteState({
+        interaction: params.interaction,
+        cfg: params.cfg,
+        accountId: params.accountId,
+        threadBindings: params.threadBindings,
+        enforceConfiguredBindingReadiness: true,
+      });
+      if (resolved.bindingReadiness && !resolved.bindingReadiness.ok) {
+        return null;
+      }
+      route = resolved.effectiveRoute;
     }
-    const route = resolved.effectiveRoute;
     const fallback = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: route.agentId,
@@ -299,14 +305,22 @@ export async function replyWithDiscordModelPickerProviders(params: {
   userId: string;
   accountId: string;
   threadBindings: ThreadBindingManager;
+  route?: ResolvedAgentRoute;
   preferFollowUp: boolean;
   safeInteractionCall: SafeDiscordInteractionCall;
 }) {
-  const route = await resolveDiscordModelPickerRoute({
-    interaction: params.interaction,
-    cfg: params.cfg,
+  const route =
+    params.route ??
+    (await resolveDiscordModelPickerRoute({
+      interaction: params.interaction,
+      cfg: params.cfg,
+      accountId: params.accountId,
+      threadBindings: params.threadBindings,
+    }));
+  const interactionBinding = createDiscordModelPickerInteractionBinding({
     accountId: params.accountId,
-    threadBindings: params.threadBindings,
+    userId: params.userId,
+    route,
   });
   const data = await loadDiscordModelPickerData(params.cfg, route.agentId);
   const currentModel = resolveDiscordModelPickerCurrentModel({
@@ -346,7 +360,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
 
   const rendered = renderDiscordModelPickerModelsView({
     command: params.command,
-    userId: params.userId,
+    interactionBinding,
     data,
     provider: initialProvider,
     page: initialPage,
@@ -372,14 +386,13 @@ export async function replyWithDiscordModelPickerProviders(params: {
 }
 
 export function splitDiscordModelRef(modelRef: string): { provider: string; model: string } | null {
-  const trimmed = modelRef.trim();
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) {
+  const slashIndex = modelRef.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= modelRef.length - 1) {
     return null;
   }
-  const provider = trimmed.slice(0, slashIndex).trim();
-  const model = trimmed.slice(slashIndex + 1).trim();
-  if (!provider || !model) {
+  const provider = modelRef.slice(0, slashIndex).trim();
+  const model = modelRef.slice(slashIndex + 1);
+  if (!provider || !model.trim()) {
     return null;
   }
   return { provider, model };

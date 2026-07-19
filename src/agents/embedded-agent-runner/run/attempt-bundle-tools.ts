@@ -83,6 +83,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     ? await getOrCreateSessionMcpRuntime({
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
+        agentId: params.sessionAgentId,
         workspaceDir: params.effectiveWorkspace,
         agentDir: params.agentDir,
         cfg: params.attempt.config,

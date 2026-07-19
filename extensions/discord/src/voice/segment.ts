@@ -105,6 +105,8 @@ export async function processDiscordVoiceSegment(params: {
   let replyText: string;
   const control = await maybeControlDiscordVoiceAgentRun({
     entry,
+    context: ingress,
+    userId,
     text: transcript,
   }).catch((error: unknown) => {
     logger.warn(

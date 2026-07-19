@@ -10,8 +10,10 @@ import {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
 } from "../plugins/authorization-policy-context.js";
+import { materializeAuthorizationToolInput } from "../plugins/authorization-policy-input.js";
 import {
   AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  hasAuthorizationPoliciesForOperation,
   runAuthorizationPolicies,
 } from "../plugins/authorization-policy.js";
 import type { PluginJsonValue } from "../plugins/host-hook-json.js";
@@ -43,7 +45,15 @@ type BeforeToolCallPreparingTool = AnyAgentTool & {
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
   ) => unknown;
-  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
+  finalizeBeforeToolCallParams?: (
+    params: unknown,
+    preparedParams: unknown,
+  ) => unknown | Promise<unknown>;
+  adoptBeforeToolCallParamsSnapshot?: (
+    snapshot: unknown,
+    finalizedParams: unknown,
+    preparedParams: unknown,
+  ) => void;
 };
 
 type ToolExecuteArgsCurrent = [
@@ -308,13 +318,22 @@ async function prepareToolParamsBeforeHook(params: {
     : params.rawParams;
 }
 
-function finalizeToolParamsBeforeExecute(params: {
+async function finalizeToolParamsBeforeExecute(params: {
   tool: AnyAgentTool;
   executeParams: unknown;
   preparedParams: unknown;
-}): unknown {
+}): Promise<unknown> {
   const finalize = (params.tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams;
-  return finalize ? finalize(params.executeParams, params.preparedParams) : params.executeParams;
+  return finalize
+    ? await finalize(params.executeParams, params.preparedParams)
+    : params.executeParams;
+}
+
+function toolCallAuthorizationPolicyActive(hookContext: HookContext | undefined): boolean {
+  return hasAuthorizationPoliciesForOperation({
+    operation: "tool.call",
+    config: hookContext?.config,
+  });
 }
 
 async function authorizeFinalToolCall(params: {
@@ -462,11 +481,42 @@ export function toToolDefinitions(
               hookParams,
               adjustedParams: hookOutcome.params,
             });
-            executeParams = finalizeToolParamsBeforeExecute({
+            const authorizationPolicyActive = toolCallAuthorizationPolicyActive(hookContext);
+            if (authorizationPolicyActive) {
+              const detachedParams = materializeAuthorizationToolInput(executeParams);
+              if (!detachedParams) {
+                return buildBlockedToolResult({
+                  reason: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+                  deniedReason: "authorization-policy",
+                  toolCallId,
+                  runId: hookContext?.runId,
+                });
+              }
+              executeParams = detachedParams;
+            }
+            executeParams = await finalizeToolParamsBeforeExecute({
               tool,
               executeParams,
               preparedParams,
             });
+            if (authorizationPolicyActive) {
+              const finalizedParams = executeParams;
+              const detachedParams = materializeAuthorizationToolInput(finalizedParams);
+              if (!detachedParams) {
+                return buildBlockedToolResult({
+                  reason: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+                  deniedReason: "authorization-policy",
+                  toolCallId,
+                  runId: hookContext?.runId,
+                });
+              }
+              (tool as BeforeToolCallPreparingTool).adoptBeforeToolCallParamsSnapshot?.(
+                detachedParams,
+                finalizedParams,
+                preparedParams,
+              );
+              executeParams = detachedParams;
+            }
             const authorizationDenial = await authorizeFinalToolCall({
               toolName: name,
               input: executeParams,
@@ -597,7 +647,22 @@ export function toClientToolDefinitions(
             throw new Error(outcome.reason);
           }
           const adjustedParams = outcome.params;
-          const paramsRecord = coerceParamsRecord(adjustedParams);
+          let paramsRecord = coerceParamsRecord(adjustedParams);
+          if (toolCallAuthorizationPolicyActive(hookContext)) {
+            const detachedParams = materializeAuthorizationToolInput(paramsRecord);
+            if (!detachedParams) {
+              if (onClientToolCall && typeof onClientToolCall !== "function") {
+                onClientToolCall.discard?.(toolCallId, func.name);
+              }
+              return buildBlockedToolResult({
+                reason: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+                deniedReason: "authorization-policy",
+                toolCallId,
+                runId: hookContext?.runId,
+              });
+            }
+            paramsRecord = detachedParams;
+          }
           const authorizationDenial = await authorizeFinalToolCall({
             toolName: func.name,
             input: paramsRecord,

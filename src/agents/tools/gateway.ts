@@ -366,7 +366,10 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
   try {
-    return await mintAgentRuntimeIdentityToken(identity);
+    return await mintAgentRuntimeIdentityToken({
+      ...identity,
+      gatewayMethods: [params.method],
+    });
   } catch (error) {
     if (optionalLocalIdentity && !params.required) {
       return undefined;
@@ -444,6 +447,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
       };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
+    gatewayMethods: ["message.action"],
     messageActionContext: resolvedMessageActionContext,
   });
 }

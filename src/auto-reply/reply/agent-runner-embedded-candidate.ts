@@ -20,6 +20,10 @@ import {
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
 import {
+  isIssuedTurnAuthoritySnapshot,
+  rebindTurnAuthoritySnapshot,
+} from "../../plugins/turn-authority.js";
+import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
@@ -133,8 +137,19 @@ export async function runEmbeddedFallbackCandidate(params: {
       : undefined);
   const messageActionCapabilitySessionKey =
     turn.runtimePolicySessionKey ?? embeddedContext.sessionKey;
+  const attemptTurnAuthority =
+    embeddedContext.agentId && messageActionCapabilitySessionKey
+      ? rebindTurnAuthoritySnapshot(params.candidateRun.turnAuthority, {
+          agentId: embeddedContext.agentId,
+          sessionKey: messageActionCapabilitySessionKey,
+          sessionId: embeddedContext.sessionId,
+          runId: params.runId,
+          trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        })
+      : undefined;
   const messageActionTurnCapability =
-    isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider) &&
+    (isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider) ||
+      isIssuedTurnAuthoritySnapshot(attemptTurnAuthority)) &&
     !turn.isHeartbeat &&
     embeddedContext.agentId &&
     messageActionCapabilitySessionKey &&
@@ -150,6 +165,8 @@ export async function runEmbeddedFallbackCandidate(params: {
           requesterSenderIsOwner: params.candidateRun.senderIsOwner,
           requesterIsAuthorizedSender: params.candidateRun.isAuthorizedSender,
           requesterRoleIds: embeddedContext.memberRoleIds,
+          parentConversationId: embeddedContext.parentConversationId,
+          turnAuthority: attemptTurnAuthority,
           toolContext: {
             currentChannelId: embeddedContext.currentChannelId,
             currentChatType: embeddedContext.chatType,
@@ -204,6 +221,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
         ...senderContext,
         ...runBaseParams,
+        turnAuthority: attemptTurnAuthority,
         provider: embeddedRunProvider,
         agentHarnessId: embeddedRunHarnessOverride,
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,

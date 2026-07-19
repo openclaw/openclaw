@@ -13,6 +13,10 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import type {
+  AuthorizationInvocationContext,
+  TurnAuthoritySnapshot,
+} from "../plugins/authorization-policy.types.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
@@ -179,6 +183,10 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Server-owned operation-local origin for conversation-read visibility policy. */
     conversationReadOrigin?: ConversationReadInvocationOrigin;
+    /** Host-issued turn authorization for nested message effects. */
+    authorization?: AuthorizationInvocationContext;
+    /** Immutable host authority for trusted nested Gateway calls. */
+    turnAuthority?: TurnAuthoritySnapshot;
     /** Restrict cron operations to the active cron job's self-scoped surface. */
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
@@ -413,7 +421,7 @@ export function createOpenClawTools(
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
         conversationReadOrigin: options?.conversationReadOrigin,
-        authorization: options?.beforeToolCallHookContext?.authorization,
+        authorization: options?.authorization ?? options?.beforeToolCallHookContext?.authorization,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
@@ -642,7 +650,7 @@ export function createOpenClawTools(
             senderIsOwner: options?.senderIsOwner,
           }),
           createSessionsSendTool({
-            agentSessionKey: options?.agentSessionKey,
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
@@ -673,6 +681,9 @@ export function createOpenClawTools(
             workspaceDir: spawnWorkspaceDir,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
+            requesterRunId: options?.runId,
+            requesterSessionId: options?.sessionId,
+            requesterTurnAuthority: options?.turnAuthority,
           }),
         ]
       : []),

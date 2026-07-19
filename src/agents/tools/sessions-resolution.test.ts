@@ -248,9 +248,153 @@ describe("resolved session visibility checks", () => {
       displayKey: "agent:main:subagent:worker-999",
     });
   });
+
+  it("keeps same-key custom sessions scoped to their adjacent agent", async () => {
+    const customSession = {
+      ok: true as const,
+      key: "custom-ops-session",
+      displayKey: "custom-ops-session",
+      resolvedViaSessionId: false,
+    };
+
+    await expect(
+      resolveVisibleSessionReference({
+        resolvedSession: customSession,
+        requesterAgentId: "ops",
+        requesterSessionKey: customSession.key,
+        restrictToSpawned: true,
+        visibilitySessionKey: customSession.key,
+        targetAgentId: "ops",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: customSession.key,
+      displayKey: customSession.displayKey,
+    });
+    await expect(
+      resolveVisibleSessionReference({
+        resolvedSession: customSession,
+        requesterAgentId: "main",
+        requesterSessionKey: customSession.key,
+        restrictToSpawned: true,
+        visibilitySessionKey: customSession.key,
+        targetAgentId: "ops",
+      }),
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes cross-key custom spawned resolution to the adjacent agent", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:custom-child-session" });
+
+    await expect(
+      resolveVisibleSessionReference({
+        resolvedSession: {
+          ok: true,
+          key: "custom-child-session",
+          displayKey: "custom-child-session",
+          resolvedViaSessionId: false,
+        },
+        requesterAgentId: "ops",
+        requesterSessionKey: "custom-parent-session",
+        restrictToSpawned: true,
+        visibilitySessionKey: "custom-child-session",
+        targetAgentId: "ops",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: "custom-child-session",
+      displayKey: "custom-child-session",
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.resolve",
+      params: {
+        key: "custom-child-session",
+        agentId: "ops",
+        spawnedBy: "custom-parent-session",
+      },
+    });
+  });
+
+  it("rejects a key-only wrong-agent fallback collision for custom sessions", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("resolve unavailable")).mockResolvedValueOnce({
+      sessions: [{ key: "custom-child-session", agentId: "main" }],
+    });
+
+    await expect(
+      resolveVisibleSessionReference({
+        resolvedSession: {
+          ok: true,
+          key: "custom-child-session",
+          displayKey: "custom-child-session",
+          resolvedViaSessionId: false,
+        },
+        requesterAgentId: "ops",
+        requesterSessionKey: "custom-parent-session",
+        restrictToSpawned: true,
+        visibilitySessionKey: "custom-child-session",
+        targetAgentId: "ops",
+      }),
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+
+    callGatewayMock.mockReset();
+    await expect(
+      resolveVisibleSessionReference({
+        resolvedSession: {
+          ok: true,
+          key: "custom-child-session",
+          displayKey: "custom-child-session",
+          resolvedViaSessionId: false,
+        },
+        requesterAgentId: "ops",
+        requesterSessionKey: "custom-parent-session",
+        restrictToSpawned: true,
+        visibilitySessionKey: "custom-child-session",
+      }),
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveSessionReference", () => {
+  it("scopes key and session-id probes to the target agent", async () => {
+    callGatewayMock.mockResolvedValueOnce({}).mockResolvedValueOnce({ key: "global" });
+
+    const result = await resolveSessionReference({
+      sessionKey: "target-session-id",
+      targetAgentId: "target",
+      alias: "global",
+      mainKey: "main",
+      requesterInternalKey: "global",
+      restrictToSpawned: false,
+    });
+
+    expectResolvedSessionReference(result, {
+      key: "global",
+      displayKey: "main",
+      resolvedViaSessionId: true,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.resolve",
+      params: {
+        key: "target-session-id",
+        agentId: "target",
+        spawnedBy: undefined,
+      },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "target-session-id",
+        agentId: "target",
+        spawnedBy: undefined,
+        includeGlobal: true,
+        includeUnknown: true,
+      },
+    });
+  });
+
   it("prefers a literal current session key before alias fallback", async () => {
     callGatewayMock.mockResolvedValueOnce({ key: "current" });
 

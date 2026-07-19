@@ -183,16 +183,17 @@ export async function prepareAgentRequestRouting(params: {
     return undefined;
   }
   if (agentId && requestedSessionKeyRaw) {
-    const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
     const canonicalKey = resolveSessionStoreKey({
       cfg: params.cfg,
       sessionKey: requestedSessionKeyRaw,
+      storeAgentId: agentId,
     });
-    const sessionAgentId = parsed?.agentId
-      ? normalizeAgentId(parsed.agentId)
-      : canonicalKey === "global"
+    // Opaque request keys take their store identity from the adjacent explicit
+    // agent. Canonical agent keys still prove their own owner and must match it.
+    const sessionAgentId =
+      canonicalKey === "global" || canonicalKey === "unknown"
         ? agentId
-        : resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+        : resolveAgentIdFromSessionKey(canonicalKey);
     if (sessionAgentId !== agentId) {
       params.respond(
         false,

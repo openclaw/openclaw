@@ -277,7 +277,7 @@ export function createSessionVisibilityChecker(params: {
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
   spawnedKeys: Set<string> | null;
-}): { check: (targetSessionKey: string) => SessionAccessResult } {
+}): { check: (targetSessionKey: string, targetAgentId?: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
@@ -287,10 +287,11 @@ export function createSessionVisibilityChecker(params: {
     a2aPolicy: params.a2aPolicy,
   });
 
-  const check = (targetSessionKey: string): SessionAccessResult => {
+  const check = (targetSessionKey: string, targetAgentId?: string): SessionAccessResult => {
     const isSpawnedSession = spawnedKeys?.has(targetSessionKey) === true;
     return rowChecker.check({
       key: targetSessionKey,
+      agentId: targetAgentId,
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
   };
@@ -400,7 +401,7 @@ export async function createSessionVisibilityGuard(params: {
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
 }): Promise<{
-  check: (targetSessionKey: string) => SessionAccessResult;
+  check: (targetSessionKey: string, targetAgentId?: string) => SessionAccessResult;
 }> {
   // Listing already has row ownership metadata; direct key actions still need
   // this lookup until every caller can pass a normalized session row.

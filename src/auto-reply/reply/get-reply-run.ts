@@ -42,7 +42,11 @@ import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
+import { rebindTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
+import {
+  clearCommandLaneByAuthorizationAffinity,
+  getQueueSize,
+} from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -110,7 +114,7 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  abortReplyRunBySessionId,
+  abortReplyRunBySessionIdWithAuthorization,
   isReplyRunActiveForSessionId,
   isReplyRunStreamingForSessionId,
   resolveActiveReplyRunThreadId,
@@ -137,6 +141,10 @@ import {
   shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
+import {
+  createSteeringAuthorizationAffinity,
+  resolveSteeringAuthorizationAffinityKey,
+} from "./steering-authorization-affinity.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -1139,6 +1147,15 @@ export async function runPreparedReply(
     };
   };
   let preparedSessionState = resolvePreparedSessionState();
+  const resolveRuntimeTurnAuthority = () =>
+    runtimePolicySessionKey
+      ? rebindTurnAuthoritySnapshot(ctx.TurnAuthority, {
+          agentId,
+          sessionKey: runtimePolicySessionKey,
+          sessionId: preparedSessionState.sessionId,
+          trigger: ctx.TurnAuthority?.authorization.trigger ?? "user",
+        })
+      : ctx.TurnAuthority;
   const resolvedQueue = useFastReplyRuntime
     ? {
         mode: "collect" as const,
@@ -1164,23 +1181,62 @@ export async function runPreparedReply(
     : undefined;
   const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
-  const rawActiveSessionIdForInterrupt = resolveActiveEmbeddedSessionId();
-  const activeSessionIdForInterrupt = isOwnPreDispatchOperationSession(
-    rawActiveSessionIdForInterrupt,
+  const interruptSteeringAuthorizationAffinity = createSteeringAuthorizationAffinity({
+    turnAuthority: resolveRuntimeTurnAuthority(),
+  });
+  type InterruptRunSource = "embedded" | "reply";
+  const abortActiveRunWithInterruptAuthorization = (target: {
+    sessionId: string;
+    source: InterruptRunSource;
+  }) => {
+    const abortParams = {
+      sessionId: target.sessionId,
+      steeringAuthorizationAffinity: interruptSteeringAuthorizationAffinity,
+      policy: "exact" as const,
+    };
+    if (target.source === "reply" || !embeddedAgentRuntime) {
+      return abortReplyRunBySessionIdWithAuthorization(abortParams);
+    }
+    const embeddedOutcome =
+      embeddedAgentRuntime.abortActiveRunWithSteeringAuthorization(abortParams);
+    return embeddedOutcome.status === "not_active"
+      ? abortReplyRunBySessionIdWithAuthorization(abortParams)
+      : embeddedOutcome;
+  };
+  const embeddedActiveSessionIdForInterrupt = resolveActiveEmbeddedSessionId();
+  const replyActiveSessionIdForInterrupt = embeddedActiveSessionIdForInterrupt
+    ? undefined
+    : sessionKey
+      ? resolveActiveReplyRunSessionId(sessionKey)
+      : undefined;
+  const rawActiveRunForInterrupt = embeddedActiveSessionIdForInterrupt
+    ? ({ sessionId: embeddedActiveSessionIdForInterrupt, source: "embedded" } as const)
+    : replyActiveSessionIdForInterrupt
+      ? ({ sessionId: replyActiveSessionIdForInterrupt, source: "reply" } as const)
+      : undefined;
+  const activeRunForInterrupt = isOwnPreDispatchOperationSession(
+    rawActiveRunForInterrupt?.sessionId,
   )
     ? undefined
-    : rawActiveSessionIdForInterrupt;
-  if (
-    activeRunQueueMode === "interrupt" &&
-    !isRoomEvent &&
-    sessionLaneKey &&
-    (laneSize > 0 || activeSessionIdForInterrupt)
-  ) {
-    const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = embeddedAgentRuntime?.abortEmbeddedAgentRun(
-      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
+    : rawActiveRunForInterrupt;
+  let implicitInterruptMustFollowup = false;
+  if (activeRunQueueMode === "interrupt" && !isRoomEvent && activeRunForInterrupt) {
+    const outcome = abortActiveRunWithInterruptAuthorization(activeRunForInterrupt);
+    const cleared =
+      outcome.status === "aborted" && !outcome.replacementObserved && sessionLaneKey
+        ? clearCommandLaneByAuthorizationAffinity(
+            sessionLaneKey,
+            resolveSteeringAuthorizationAffinityKey(interruptSteeringAuthorizationAffinity),
+          )
+        : 0;
+    implicitInterruptMustFollowup = outcome.status !== "aborted" || outcome.replacementObserved;
+    logVerbose(
+      `Interrupting ${sessionLaneKey ?? activeRunForInterrupt.sessionId} (cleared ${cleared}, status=${outcome.status}, replacement=${outcome.replacementObserved})`,
     );
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+  } else if (activeRunQueueMode === "interrupt" && laneSize > 0) {
+    logVerbose(
+      `Preserving queued work for ${sessionLaneKey ?? preparedSessionState.sessionId} without an authority-bound active run`,
+    );
   }
   const agentHarnessPolicy = useFastReplyRuntime
     ? undefined
@@ -1334,18 +1390,22 @@ export async function runPreparedReply(
     !effectiveResetTriggered &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
-    !effectiveResetTriggered &&
-    ((isRoomEvent && isActive) ||
-      resolvedQueue.mode === "steer" ||
-      resolvedQueue.mode === "followup" ||
-      resolvedQueue.mode === "collect");
-  const activeRunQueueAction = resolveActiveRunQueueAction({
-    isActive,
-    isHeartbeat: isHeartbeatRun,
-    shouldFollowup,
-    queueMode: activeRunQueueMode,
-    resetTriggered: effectiveResetTriggered,
-  });
+    implicitInterruptMustFollowup ||
+    (!effectiveResetTriggered &&
+      ((isRoomEvent && isActive) ||
+        resolvedQueue.mode === "steer" ||
+        resolvedQueue.mode === "followup" ||
+        resolvedQueue.mode === "collect"));
+  const activeRunQueueAction =
+    implicitInterruptMustFollowup && isActive
+      ? "enqueue-followup"
+      : resolveActiveRunQueueAction({
+          isActive,
+          isHeartbeat: isHeartbeatRun,
+          shouldFollowup,
+          queueMode: activeRunQueueMode,
+          resetTriggered: effectiveResetTriggered,
+        });
   if (isActive && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
       activeRunQueueAction,
@@ -1354,10 +1414,11 @@ export async function runPreparedReply(
       sessionKey,
       sessionId: sessionIdFinal,
       abortActiveRun: (activeRunSessionId) => {
-        const embeddedAborted =
-          embeddedAgentRuntime?.abortEmbeddedAgentRun(activeRunSessionId) ?? false;
-        const replyOperationAborted = abortReplyRunBySessionId(activeRunSessionId);
-        return embeddedAborted || replyOperationAborted;
+        const outcome = abortActiveRunWithInterruptAuthorization({
+          sessionId: activeRunSessionId,
+          source: isReplyRunActiveForSessionId(activeRunSessionId) ? "reply" : "embedded",
+        });
+        return outcome.status === "aborted" && !outcome.replacementObserved;
       },
       waitForActiveRunEnd: (activeRunSessionId) =>
         isReplyRunActiveForSessionId(activeRunSessionId)
@@ -1589,6 +1650,7 @@ export async function runPreparedReply(
     originatingChatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
+    originatingParentConversationId: normalizeOptionalString(sessionCtx.ThreadParentId),
     originatingChatType: replyRoute.chatType,
     run: {
       agentId,
@@ -1598,6 +1660,7 @@ export async function runPreparedReply(
       runtimePolicySessionKey,
       messageProvider,
       clientCaps: ctx.GatewayClientCaps,
+      turnAuthority: resolveRuntimeTurnAuthority(),
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
@@ -1721,6 +1784,7 @@ export async function runPreparedReply(
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
+    forceFollowup: implicitInterruptMustFollowup,
     isActive,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();

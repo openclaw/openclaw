@@ -10,6 +10,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
+import { createGatewayOperatorTurnAuthority } from "./operator-turn-authority.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import type {
   GatewayClient,
@@ -165,6 +166,13 @@ export async function startTalkRealtimeAgentConsult(params: {
       sessionKey: params.sessionKey,
       runId: expectDefined(runId, "talk agent run id"),
       callId: params.callId,
+      turnAuthority: createGatewayOperatorTurnAuthority({
+        client: params.client,
+        config: params.context.getRuntimeConfig(),
+        sessionKey: params.sessionKey,
+        conversationId: params.sessionKey,
+        trigger: "talk.agent-consult",
+      }),
     });
   }
   return { ok: true, runId: expectDefined(runId, "talk agent run id"), idempotencyKey };

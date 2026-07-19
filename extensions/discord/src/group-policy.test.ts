@@ -43,6 +43,60 @@ describe("discord group policy", () => {
     ).toEqual({ deny: ["guild"] });
   });
 
+  it("uses the admitted source provider without changing the Discord policy scope", () => {
+    const cfg = createCfg({
+      guilds: {
+        guild: {
+          channels: {
+            channel: {
+              tools: { deny: ["exec"] },
+              toolsBySender: {
+                "channel:discord:alice": { allow: ["discord-sender"] },
+                "channel:slack:alice": { allow: ["slack-sender"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg,
+        groupSpace: "guild",
+        groupId: "channel",
+        senderMessageProvider: "slack",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["slack-sender"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg,
+        groupSpace: "guild",
+        groupId: "channel",
+        senderMessageProvider: "discord",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["discord-sender"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg,
+        groupSpace: "guild",
+        groupId: "channel",
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg,
+        groupSpace: "guild",
+        groupId: "channel",
+        senderMessageProvider: null,
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
+  });
+
   it("does not use a channel wildcard as fallback", () => {
     expect(
       resolveDiscordGroupToolPolicy({

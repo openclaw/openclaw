@@ -30,11 +30,8 @@ import {
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  applyModelRuntimeDirective,
-  resolveModelRuntimeDirective,
-} from "./directive-handling.model-runtime.js";
-import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
+import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.js";
+import { prepareModelDirectiveEffect } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
@@ -142,23 +139,30 @@ export async function handleDirectiveOnly(
     return modelInfo;
   }
 
-  const modelResolution = resolveModelSelectionFromDirective({
-    directives,
-    cfg: params.cfg,
-    agentDir,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelKeys,
-    allowedModelCatalog,
-    provider,
-    agentId: activeAgentId,
-  });
-  if (modelResolution.errorText) {
-    return { text: modelResolution.errorText };
+  const modelDirectiveEffect =
+    params.modelDirectiveEffect ??
+    prepareModelDirectiveEffect({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg: params.cfg,
+      agentDir,
+      agentId: activeAgentId,
+      sessionKey: runtimePolicySessionKey,
+      sessionEntry,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys,
+      allowedModelCatalog,
+      provider,
+    });
+  if (modelDirectiveEffect.kind === "invalid") {
+    return { text: modelDirectiveEffect.errorText };
   }
-  const modelSelection = modelResolution.modelSelection;
-  const profileOverride = modelResolution.profileOverride;
+  const modelSelection =
+    modelDirectiveEffect.kind === "selection" ? modelDirectiveEffect.modelSelection : undefined;
+  const profileOverride =
+    modelDirectiveEffect.kind === "selection" ? modelDirectiveEffect.profileOverride : undefined;
   if (modelSelection && isModelSelectionLocked(sessionEntry)) {
     return { text: MODEL_SELECTION_LOCKED_MESSAGE };
   }
@@ -166,26 +170,23 @@ export async function handleDirectiveOnly(
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
   const modelRuntimeResolution = modelSelection
-    ? resolveModelRuntimeDirective({
-        rawRuntime: directives.rawModelRuntime,
-        provider: resolvedProvider,
-        cfg: params.cfg,
-        sessionEntry,
-      })
+    ? modelDirectiveEffect.kind === "selection"
+      ? modelDirectiveEffect.runtimeResolution
+      : ({ kind: "unchanged" } as const)
     : ({ kind: "unchanged" } as const);
-  if (modelRuntimeResolution.kind === "invalid") {
-    return { text: modelRuntimeResolution.errorText };
-  }
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
-  const thinkingRuntime = resolveEffectiveAgentRuntime({
-    cfg: params.cfg,
-    provider: resolvedProvider,
-    modelId: resolvedModel,
-    agentId: activeAgentId,
-    sessionKey: runtimePolicySessionKey,
-    sessionEntry: prospectiveSessionEntry,
-  });
+  const thinkingRuntime =
+    modelDirectiveEffect.kind === "selection"
+      ? modelDirectiveEffect.runtime
+      : resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          provider: resolvedProvider,
+          modelId: resolvedModel,
+          agentId: activeAgentId,
+          sessionKey: runtimePolicySessionKey,
+          sessionEntry: prospectiveSessionEntry,
+        });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
       ? params.thinkingCatalog

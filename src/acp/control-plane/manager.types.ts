@@ -41,6 +41,17 @@ export type AcpSessionResolution =
       entry?: SessionEntry;
     };
 
+/** Exact persisted/runtime identity that a delayed cancellation was authorized to affect. */
+export type AcpSessionCancelTarget = Readonly<{
+  sessionId: string;
+  backend: string;
+  agent: string;
+  runtimeSessionName: string;
+  identity?: Readonly<
+    Pick<SessionAcpIdentity, "state" | "acpxRecordId" | "acpxSessionId" | "agentSessionId">
+  >;
+}>;
+
 /** Input required to create or resume an ACP runtime session. */
 export type AcpInitializeSessionInput = {
   cfg: OpenClawConfig;

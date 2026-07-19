@@ -1,16 +1,23 @@
+import { createAgentCommandIngressTurnAuthority } from "../agents/agent-command-ingress-authority.js";
+import type { AgentCommandIngressAuthorityFacts } from "../agents/command/types.js";
 /**
  * Runtime adapter for realtime voice control of active OpenClaw agent runs.
  *
  * The shared module owns classification and message contracts; this adapter
  * binds those contracts to embedded-run abort, status, and steering primitives.
  */
-import type { EmbeddedAgentQueueMessageOutcome } from "../agents/embedded-agent-runner/runs.js";
+import type {
+  EmbeddedAgentQueueMessageOptions,
+  EmbeddedAgentQueueMessageOutcome,
+} from "../agents/embedded-agent-runner/runs.js";
 import {
-  abortEmbeddedAgentRun,
+  abortActiveRunWithSteeringAuthorization,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/runs.js";
+import { createSteeringAuthorizationAffinity } from "../auto-reply/reply/steering-authorization-affinity.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentFollowupSteeringText,
@@ -40,15 +47,11 @@ export {
 } from "./agent-run-control-shared.js";
 
 type RealtimeVoiceAgentControlDeps = {
-  abortEmbeddedAgentRun: (sessionId: string) => boolean;
+  abortActiveRunWithSteeringAuthorization: typeof abortActiveRunWithSteeringAuthorization;
   queueEmbeddedAgentMessageWithOutcomeAsync: (
     sessionId: string,
     text: string,
-    options?: {
-      steeringMode?: "all";
-      debounceMs?: number;
-      taskSuggestionDeliveryMode?: undefined;
-    },
+    options?: EmbeddedAgentQueueMessageOptions,
   ) => Promise<EmbeddedAgentQueueMessageOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
     sessionId?: string;
@@ -58,7 +61,7 @@ type RealtimeVoiceAgentControlDeps = {
 };
 
 const defaultDeps: RealtimeVoiceAgentControlDeps = {
-  abortEmbeddedAgentRun,
+  abortActiveRunWithSteeringAuthorization,
   getDiagnosticSessionActivitySnapshot,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
@@ -71,11 +74,26 @@ export async function controlRealtimeVoiceAgentRun(
     text: string;
     mode?: unknown;
     recentEvents?: readonly TalkEvent[];
+    turnAuthority?: TurnAuthoritySnapshot;
+    ingressAuthority?: AgentCommandIngressAuthorityFacts;
+    agentId?: string;
+    senderIsOwner?: boolean;
   },
   deps: RealtimeVoiceAgentControlDeps = defaultDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
   const sessionKey = params.sessionKey.trim();
   const text = params.text.trim();
+  if (params.turnAuthority && params.ingressAuthority) {
+    throw new Error("Realtime voice control cannot supply two authority sources.");
+  }
+  const turnAuthority = params.ingressAuthority
+    ? createAgentCommandIngressTurnAuthority({
+        facts: params.ingressAuthority,
+        agentId: params.agentId,
+        sessionKey,
+        senderIsOwner: params.senderIsOwner,
+      })
+    : params.turnAuthority;
   const intent = resolveRealtimeVoiceAgentControlIntent({ text, mode: params.mode });
   const mode = intent.mode;
   const sessionId = deps.resolveActiveEmbeddedRunSessionId(sessionKey);
@@ -119,10 +137,21 @@ export async function controlRealtimeVoiceAgentRun(
         suppress: false,
       };
     }
-    const aborted = deps.abortEmbeddedAgentRun(sessionId);
+    const abortOutcome = deps.abortActiveRunWithSteeringAuthorization({
+      sessionId,
+      steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({
+        turnAuthority,
+      }),
+      policy: "operator-owner-or-admin",
+    });
+    const aborted = abortOutcome.status === "aborted" && !abortOutcome.replacementObserved;
     const message = aborted
       ? "Cancelled the active OpenClaw run."
-      : "OpenClaw could not cancel the active run.";
+      : abortOutcome.status === "unauthorized"
+        ? "OpenClaw cannot cancel a run owned by another controller."
+        : abortOutcome.replacementObserved
+          ? "The active OpenClaw run changed before it could be cancelled."
+          : "OpenClaw could not cancel the active run.";
     return {
       ok: aborted,
       mode,
@@ -130,7 +159,16 @@ export async function controlRealtimeVoiceAgentRun(
       sessionId,
       active: true,
       aborted,
-      ...(aborted ? {} : { reason: "abort_rejected" }),
+      ...(aborted
+        ? {}
+        : {
+            reason:
+              abortOutcome.status === "unauthorized"
+                ? "authorization_affinity_mismatch"
+                : abortOutcome.replacementObserved
+                  ? "active_run_replaced"
+                  : "abort_rejected",
+          }),
       message,
       speak: true,
       show: true,
@@ -163,6 +201,9 @@ export async function controlRealtimeVoiceAgentRun(
     // Talk cannot present task suggestions, so spoken user input must not inherit
     // a capable TUI run's model-facing task tools.
     taskSuggestionDeliveryMode: undefined,
+    steeringAuthorizationAffinity: createSteeringAuthorizationAffinity({
+      turnAuthority,
+    }),
   });
   if (!outcome.queued) {
     return {

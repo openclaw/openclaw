@@ -126,6 +126,151 @@ describe("native hook relay CLI", () => {
     expect(stderr.text()).toBe("err");
   });
 
+  it("converts local PreToolUse relay failures into an exit-2 block", async () => {
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        failClosedPreToolUse: true,
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        invokeBridge: vi.fn(async () => {
+          throw new Error("bridge down");
+        }) as never,
+        callGateway: vi.fn(async () => {
+          throw new Error("gateway down");
+        }) as never,
+      },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("Native hook relay unavailable");
+  });
+
+  it.each(["codex", "copilot"] as const)(
+    "keeps valid %s PreToolUse allows successful in fail-closed mode",
+    async (provider) => {
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider,
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          failClosedPreToolUse: true,
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+          invokeBridge: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })) as never,
+        },
+      );
+
+      expect(exitCode).toBe(0);
+    },
+  );
+
+  const failClosedCases = (["codex", "copilot"] as const).flatMap((provider) =>
+    (["timeout", "malformed input", "unavailable relay", "nonzero response"] as const).map(
+      (failureMode) => ({
+        provider,
+        failureMode,
+        expectedExitCode: provider === "copilot" ? 1 : 2,
+      }),
+    ),
+  );
+
+  it.each(failClosedCases)(
+    "fails closed for $provider PreToolUse $failureMode despite the no-policy marker",
+    async ({ provider, failureMode, expectedExitCode }) => {
+      const stdout = createWritableTextBuffer();
+      const stderr = createWritableTextBuffer();
+      const invokeBridge = vi.fn(async () => {
+        if (failureMode === "unavailable relay") {
+          throw new Error("bridge down");
+        }
+        if (failureMode === "nonzero response") {
+          return { stdout: "", stderr: "relay failed\n", exitCode: 1 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      });
+      const callGateway = vi.fn(async () => {
+        throw new Error("gateway down");
+      });
+      const stdin =
+        failureMode === "timeout"
+          ? createHeldOpenTextStream("{}")
+          : createReadableTextStream(failureMode === "malformed input" ? "{nope" : "{}");
+
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider,
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          failClosedPreToolUse: true,
+          preToolUseUnavailable: "noop",
+          ...(failureMode === "timeout" ? { timeout: "25" } : {}),
+        },
+        {
+          stdin,
+          stdout,
+          stderr,
+          invokeBridge: invokeBridge as never,
+          callGateway: callGateway as never,
+        },
+      );
+
+      expect(exitCode).toBe(expectedExitCode);
+      expect(stdout.text()).toBe("");
+      expect(stderr.text()).not.toBe("");
+    },
+    1_000,
+  );
+
+  it("keeps exit-2 fail-closed semantics for unknown configured providers", async () => {
+    const stderr = createWritableTextBuffer();
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "future-provider",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        failClosedPreToolUse: true,
+      },
+      {
+        stdin: createReadableTextStream("{nope"),
+        stderr,
+      },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(stderr.text()).toContain("refusing native tool call");
+  });
+
+  it("still requires an explicit provider", async () => {
+    await expect(
+      runNativeHookRelayCli(
+        {
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          failClosedPreToolUse: true,
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+        },
+      ),
+    ).rejects.toThrow("Missing required option --provider");
+  });
+
   it("rejects malformed timeouts before reading relay input", async () => {
     const invokeBridge = vi.fn();
     const callGateway = vi.fn();

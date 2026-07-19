@@ -7,7 +7,12 @@ import {
 } from "../../agents/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCronTurnAuthoritySnapshot } from "../../cron/isolated-agent/turn-authority.js";
+import { rebindTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { createGatewayOperatorTurnAuthority } from "../operator-turn-authority.js";
+import { resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
@@ -23,7 +28,26 @@ import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import { buildAgentSessionPatch } from "./agent-session-patch.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 import { prepareAgentSession } from "./agent-session-prepare.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+
+function respondMissingAgentRuntimeDelegation(respond: RespondFn): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "agent runtime identity requires validated turn delegation",
+    ),
+  );
+}
+
+// Restored continuations recover scheduler authority only from their canonical run key;
+// the internal client flag cannot choose the job/controller identity.
+function resolveCronRunJobId(sessionKey: string | undefined): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const jobId = parsed ? /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1] : undefined;
+  return normalizeOptionalString(jobId);
+}
 
 export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   params,
@@ -38,6 +62,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   }
   const {
     request,
+    sessionsSendDelegation,
     cfg,
     runId,
     lifecycleGeneration,
@@ -60,7 +85,21 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     isRawModelRun,
     agentDedupeKeys,
   } = preflight;
+  const agentRuntimeIdentity = client?.internal?.agentRuntimeIdentity;
+  if (agentRuntimeIdentity && !sessionsSendDelegation && !canUseCronRunContinuation) {
+    // Runtime identity proves an agent process, not an operator. Reject before
+    // reset/session effects unless a server-owned delegation path can validate it.
+    respondMissingAgentRuntimeDelegation(respond);
+    return;
+  }
   const idem = runId;
+  const canonicalSessionsSendTargetKey = sessionsSendDelegation
+    ? resolveSessionStoreKey({
+        cfg,
+        sessionKey: sessionsSendDelegation.targetSessionKey,
+        storeAgentId: sessionsSendDelegation.targetAgentId,
+      })
+    : undefined;
   let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
   let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
   let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
@@ -265,6 +304,18 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         touchInteraction,
         failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
       } = preparedSession;
+      if (
+        sessionsSendDelegation &&
+        (canonicalKey !== canonicalSessionsSendTargetKey ||
+          canonicalSessionAgentId !== sessionsSendDelegation.targetAgentId)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid sessions_send authority delegation"),
+        );
+        return;
+      }
       cfgForAgent = cfgLocal;
       effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
       restoredCronContinuationIdentity = preparedSession.restoredCronContinuationIdentity;
@@ -412,6 +463,47 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       return;
     }
     const { activeSessionAgentId } = delivery;
+    if (
+      sessionsSendDelegation &&
+      (resolvedSessionKey !== canonicalSessionsSendTargetKey ||
+        activeSessionAgentId !== sessionsSendDelegation.targetAgentId)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid sessions_send authority delegation"),
+      );
+      return;
+    }
+    if (agentRuntimeIdentity && !sessionsSendDelegation && !restoredCronContinuation) {
+      // A cron claim becomes authority only after the persisted continuation
+      // was restored; connect scopes must never fill a failed delegation gap.
+      respondMissingAgentRuntimeDelegation(respond);
+      return;
+    }
+    const turnAuthorityRequired = Boolean(
+      restoredCronContinuation || sessionsSendDelegation || client,
+    );
+    const authoritySessionKey = resolvedSessionKey;
+    if (turnAuthorityRequired && !authoritySessionKey) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid Gateway turn authority"),
+      );
+      return;
+    }
+    const restoredCronJobId = restoredCronContinuation
+      ? resolveCronRunJobId(authoritySessionKey)
+      : undefined;
+    if (restoredCronContinuation && !restoredCronJobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron continuation turn authority"),
+      );
+      return;
+    }
 
     const preparedDispatch = await prepareAgentRunDispatch({
       request,
@@ -451,12 +543,54 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       getGatewayWorkAdmission: admissionController.getAdmission,
       setAdmittedRunAbort: admissionController.setAdmittedRunAbort,
       getAdmittedRunAbort: admissionController.getAdmittedRunAbort,
+      attachTurnAuthority: ({ sessionId, threadId }) => {
+        const turnAuthority = restoredCronJobId
+          ? createCronTurnAuthoritySnapshot({
+              jobId: restoredCronJobId,
+              agentId: activeSessionAgentId,
+              sessionKey: authoritySessionKey!,
+              sessionId,
+              runId,
+            })
+          : sessionsSendDelegation
+            ? rebindTurnAuthoritySnapshot(sessionsSendDelegation.turnAuthority, {
+                agentId: activeSessionAgentId,
+                sessionKey: authoritySessionKey!,
+                sessionId,
+                runId,
+                trigger: "sessions_send",
+              })
+            : client && !agentRuntimeIdentity
+              ? createGatewayOperatorTurnAuthority({
+                  client,
+                  config: cfgForAgent ?? cfg,
+                  agentId: activeSessionAgentId,
+                  sessionKey: authoritySessionKey,
+                  sessionId,
+                  runId,
+                  conversationId: authoritySessionKey,
+                  threadId,
+                  trigger: "gateway",
+                })
+              : undefined;
+        if (turnAuthorityRequired && !turnAuthority) {
+          throw new Error("missing Gateway turn authority");
+        }
+        if (
+          turnAuthority &&
+          admissionController.getAdmission()?.setTurnAuthority(turnAuthority) !== true
+        ) {
+          throw new Error("conflicting Gateway turn authority");
+        }
+        return turnAuthority;
+      },
       markAgentRunAccepted: dedupeLifecycle.markAccepted,
     });
     if (!preparedDispatch) {
       return;
     }
     resolvedSessionId = admittedSessionId;
+    const { turnAuthority } = preparedDispatch;
     gatewayAdmissionTransferred = true;
     startAgentRunExecution({
       prepared: preparedDispatch,
@@ -469,6 +603,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       requestedSessionKey,
       requestedSessionKeyRaw,
       resolvedSessionId,
+      turnAuthority,
       agentId,
       activeSessionAgentId,
       delivery,
@@ -481,6 +616,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       images,
       imageOrder,
       effectiveTranscriptInputText,
+      delegatedTranscriptMessage: sessionsSendDelegation?.transcriptMessage,
       inputProvenance,
       runId,
       idempotencyKey: idem,

@@ -425,6 +425,7 @@ describe("applyPluginNodeInvokePolicy", () => {
             kind: "agentRuntime",
             agentId: "main",
             sessionKey: "agent:main:telegram:direct:alice",
+            gatewayMethods: ["node.invoke"],
           },
         },
       },

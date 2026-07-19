@@ -1,13 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { REQUIRED_PARAM_GROUPS, wrapToolParamValidation } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 afterEach(() => {
   resetGlobalHookRunner();
-  setActivePluginRegistry(createEmptyPluginRegistry());
+  resetPluginRuntimeStateForTest();
 });
 
 describe("final tool authorization", () => {
@@ -119,6 +125,115 @@ describe("final tool authorization", () => {
     const executedInput = execute.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(Object.isFrozen(executedInput)).toBe(false);
     expect(Object.isFrozen(executedInput.nested)).toBe(false);
+  });
+
+  it("executes the detached input approved before a retained alias mutates", async () => {
+    let releasePolicy: (() => void) | undefined;
+    let notifyPolicyStarted: (() => void) | undefined;
+    const policyStarted = new Promise<void>((resolve) => {
+      notifyPolicyStarted = resolve;
+    });
+    const registry = createEmptyPluginRegistry();
+    const policyInputs: unknown[] = [];
+    registry.authorizationPolicies.push({
+      pluginId: "async-policy",
+      source: "/plugins/async-policy/index.ts",
+      policy: {
+        id: "async-policy",
+        description: "Wait before allowing",
+        handlers: {
+          "tool.call": async (request) => {
+            policyInputs.push(request.input);
+            notifyPolicyStarted?.();
+            await new Promise<void>((resolve) => {
+              releasePolicy = resolve;
+            });
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const execute = vi.fn((_id, params) => ({
+      content: [{ type: "text", text: JSON.stringify(params) }],
+    }));
+    const wrapped = wrapToolWithBeforeToolCallHook(
+      { name: "message", execute } as unknown as AnyAgentTool,
+      { loopDetection: { enabled: false } },
+    );
+    const retainedInput = { action: "reply", nested: { target: "approved" } };
+
+    const pending = wrapped.execute?.("call-async", retainedInput, undefined, undefined);
+    await policyStarted;
+    retainedInput.action = "delete";
+    retainedInput.nested.target = "mutated";
+    releasePolicy?.();
+    await pending;
+
+    expect(policyInputs).toEqual([{ action: "reply", nested: { target: "approved" } }]);
+    expect(execute).toHaveBeenCalledWith(
+      "call-async",
+      { action: "reply", nested: { target: "approved" } },
+      undefined,
+      undefined,
+    );
+    expect(execute.mock.calls[0]?.[1]).not.toBe(retainedInput);
+  });
+
+  it("preserves non-JSON tool input identity when no authorization policy is active", async () => {
+    const execute = vi.fn((_id, params) => ({
+      content: [{ type: "text", text: String(params) }],
+    }));
+    const wrapped = wrapToolWithBeforeToolCallHook(
+      { name: "custom", execute } as unknown as AnyAgentTool,
+      { config: {}, loopDetection: { enabled: false } },
+    );
+    const input = { createdAt: new Date("2026-07-19T00:00:00.000Z") };
+
+    await wrapped.execute?.("call-non-json", input, undefined, undefined);
+
+    expect(execute.mock.calls[0]?.[1]).toBe(input);
+  });
+
+  it("authorizes and executes the same normalized file-tool path", async () => {
+    const policyInputs: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "file-policy",
+      source: "/plugins/file-policy/index.ts",
+      policy: {
+        id: "file-policy",
+        description: "Observe canonical file effects",
+        handlers: {
+          "tool.call": (request) => {
+            policyInputs.push(request.input);
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const execute = vi.fn((_id, params) => ({
+      content: [{ type: "text", text: JSON.stringify(params) }],
+    }));
+    const fileTool = wrapToolParamValidation(
+      { name: "write", execute } as unknown as AnyAgentTool,
+      REQUIRED_PARAM_GROUPS.write,
+    );
+    const wrapped = wrapToolWithBeforeToolCallHook(fileTool, {
+      loopDetection: { enabled: false },
+    });
+
+    await wrapped.execute?.(
+      "call-file",
+      { path: "reports/final.docodex</arg_value>>", content: "done" },
+      undefined,
+      undefined,
+    );
+
+    const expected = { path: "reports/final.docx", content: "done" };
+    expect(policyInputs).toEqual([expected]);
+    expect(execute.mock.calls[0]?.[1]).toEqual(expected);
   });
 
   it("blocks execution when an operator-required policy is absent", async () => {

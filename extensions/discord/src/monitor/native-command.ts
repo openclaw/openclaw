@@ -19,15 +19,16 @@ import {
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
+  mergeDiscordAccountConfig,
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
   resolveDiscordMaxLinesPerMessage,
 } from "../accounts.js";
-import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import {
   Button,
   Command,
@@ -43,6 +44,7 @@ import {
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";
 import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
@@ -64,6 +66,10 @@ import {
   hasRenderableReplyPayload,
   safeDiscordInteractionCall,
 } from "./native-command-reply.js";
+import {
+  resolveDiscordNativeBindingTarget,
+  resolveDiscordNativeBoundRoute,
+} from "./native-command-route.js";
 import { maybeDeliverDiscordDirectStatus } from "./native-command-status.js";
 import {
   buildDiscordCommandArgMenu,
@@ -89,6 +95,7 @@ import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 const log = createSubsystemLogger("discord/native-command");
+const NATIVE_PLUGIN_CONTINUATION_COMMAND_BODY = "[native plugin command already handled]";
 
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
@@ -99,15 +106,7 @@ export function createDiscordNativeCommand(params: {
   ephemeralDefault: boolean;
   threadBindings: ThreadBindingManager;
 }): Command {
-  const {
-    command,
-    cfg,
-    discordConfig,
-    accountId,
-    sessionPrefix,
-    ephemeralDefault,
-    threadBindings,
-  } = params;
+  const { command, cfg, accountId, sessionPrefix, ephemeralDefault, threadBindings } = params;
   const fallbackCommandDefinition = createNativeCommandDefinition(command);
   const pluginCommandMatch = nativeCommandRuntime.matchPluginCommand(`/${command.name}`);
   const commandDefinition =
@@ -122,14 +121,16 @@ export function createDiscordNativeCommand(params: {
     command: commandDefinition,
     cfg,
     resolveConfig: resolveCurrentConfig,
-    authorizeChoiceContext: async (interaction) =>
-      await resolveDiscordNativeAutocompleteAuthorized({
+    authorizeChoiceContext: async (interaction) => {
+      const currentConfig = resolveCurrentConfig();
+      return await resolveDiscordNativeAutocompleteAuthorized({
         interaction,
-        cfg: resolveCurrentConfig(),
-        discordConfig,
+        cfg: currentConfig,
+        discordConfig: mergeDiscordAccountConfig(currentConfig, accountId),
         accountId,
         skipCommandOwnerAllowFrom: pluginCommandMatch !== null,
-      }),
+      });
+    },
     resolveChoiceContext: async (interaction) =>
       resolveDiscordNativeChoiceContext({
         interaction,
@@ -166,8 +167,13 @@ export function createDiscordNativeCommand(params: {
     override options = options;
 
     async run(interaction: CommandInteraction) {
+      const currentConfig = resolveCurrentConfig();
+      const currentDiscordConfig = mergeDiscordAccountConfig(currentConfig, accountId);
+      const responseEphemeral = resolveDiscordSlashCommandConfig(
+        currentDiscordConfig.slashCommand,
+      ).ephemeral;
       const deferred = await safeDiscordInteractionCall("interaction defer", () =>
-        interaction.defer({ ephemeral: this.ephemeral }),
+        interaction.defer({ ephemeral: responseEphemeral }),
       );
       if (deferred === null) {
         return;
@@ -189,15 +195,15 @@ export function createDiscordNativeCommand(params: {
         prompt,
         command: commandDefinition,
         commandArgs: commandArgsWithRaw,
-        cfg,
-        discordConfig,
+        cfg: currentConfig,
+        discordConfig: currentDiscordConfig,
         accountId,
         sessionPrefix,
         // Slash commands are deferred up front, so all later responses must use
         // follow-up/edit semantics instead of the initial reply endpoint.
         preferFollowUp: true,
         threadBindings,
-        responseEphemeral: ephemeralDefault,
+        responseEphemeral,
       });
     }
   })();
@@ -216,6 +222,9 @@ async function dispatchDiscordCommandInteraction(params: {
   threadBindings: ThreadBindingManager;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
+  expectedRoute?: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
+  requireCoreCommandAuthorization?: boolean;
+  commandAuthorizationValues?: Record<string, string>;
 }): Promise<DispatchDiscordCommandInteractionResult> {
   const {
     interaction,
@@ -223,16 +232,37 @@ async function dispatchDiscordCommandInteraction(params: {
     command,
     commandArgs,
     cfg: inputConfig,
-    discordConfig,
     accountId,
     sessionPrefix,
     preferFollowUp,
     threadBindings,
     responseEphemeral,
     suppressReplies,
+    expectedRoute,
+    requireCoreCommandAuthorization,
+    commandAuthorizationValues,
   } = params;
   const cfg = getRuntimeConfigSnapshot() ?? inputConfig;
+  const discordConfig = mergeDiscordAccountConfig(cfg, accountId);
   const commandName = command.nativeName ?? command.key;
+  let coreCommandAuthorizationRoute:
+    | {
+        agentId: string;
+        sessionKey: string;
+        commandName: string;
+        rawArguments?: string;
+        values?: Readonly<Record<string, string>>;
+      }
+    | undefined;
+  const accepted = (
+    effectiveRoute?: ResolvedAgentRoute,
+  ): DispatchDiscordCommandInteractionResult => ({
+    accepted: true,
+    ...(effectiveRoute ? { effectiveRoute } : {}),
+    ...(coreCommandAuthorizationRoute
+      ? { coreCommandAuthorization: coreCommandAuthorizationRoute }
+      : {}),
+  });
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
     const ephemeral = options?.ephemeral ?? responseEphemeral;
     const payload = {
@@ -255,6 +285,7 @@ async function dispatchDiscordCommandInteraction(params: {
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
   const channel = interaction.channel;
+  const authenticatedChannelId = interaction.rawData.channel_id?.trim() ?? "";
   const {
     isDirectMessage,
     isGroupDm,
@@ -269,7 +300,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channel,
     client: interaction.client,
     hasGuild: Boolean(interaction.guild),
-    channelIdFallback: "",
+    channelIdFallback: authenticatedChannelId,
   });
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
@@ -320,6 +351,7 @@ async function dispatchDiscordCommandInteraction(params: {
       threadParentName,
       threadParentSlug,
     });
+  const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
   let nativeRouteStatePromise:
     | ReturnType<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>
     | undefined;
@@ -334,7 +366,7 @@ async function dispatchDiscordCommandInteraction(params: {
       directUserId: user.id,
       conversationId: rawChannelId || "unknown",
       parentConversationId: threadParentId,
-      threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
+      threadBinding,
       enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(commandName),
     }));
   const canBypassConfiguredAcpGuildGuards = async () => {
@@ -474,39 +506,100 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: false };
   }
 
-  if (commandName === "status") {
-    const policyRouteState = await getNativeRouteState();
-    const policyRoute = policyRouteState.effectiveRoute;
+  const routeState = await getNativeRouteState();
+  const bindingTarget = resolveDiscordNativeBindingTarget({
+    threadBinding,
+    configuredBinding: routeState.configuredBinding,
+  });
+  const commandRoute = resolveDiscordNativeBoundRoute({
+    cfg,
+    effectiveRoute: routeState.effectiveRoute,
+    bindingTarget,
+  });
+  // Interactive controls bind authorization to the route that rendered them.
+  // Fail before command policy or execution if a concurrent rebind retargeted the channel.
+  if (
+    expectedRoute &&
+    (commandRoute.agentId !== expectedRoute.agentId ||
+      commandRoute.sessionKey !== expectedRoute.sessionKey)
+  ) {
+    return { accepted: false, rejection: "route-mismatch" };
+  }
+  if (routeState.bindingReadiness && !routeState.bindingReadiness.ok) {
+    const configuredBinding = routeState.configuredBinding;
+    if (configuredBinding) {
+      logVerbose(
+        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${routeState.bindingReadiness.error}`,
+      );
+      await respond("Configured ACP binding is unavailable right now. Please try again.");
+      return { accepted: false };
+    }
+  }
+
+  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
+    command,
+    commandArgs,
+  });
+  const menuArgName =
+    command.argsMenu === "auto"
+      ? command.args?.find((arg) => commandArgs?.values?.[arg.name] == null)?.name
+      : command.argsMenu?.arg;
+  const mayOpenCommandArgMenu = Boolean(
+    command.args?.length &&
+    command.argsMenu &&
+    command.argsParsing !== "none" &&
+    !(commandArgs?.raw && !commandArgs.values) &&
+    menuArgName &&
+    commandArgs?.values?.[menuArgName] == null,
+  );
+  const requiresCoreShortcutAuthorization =
+    commandName === "status" ||
+    requireCoreCommandAuthorization === true ||
+    (!pluginMatch && (mayOpenCommandArgMenu || pickerCommandContext !== null));
+  if (requiresCoreShortcutAuthorization) {
     const policySessionEntry = nativeCommandRuntime.getSessionEntry({
-      agentId: policyRoute.agentId,
-      sessionKey: policyRoute.sessionKey,
+      agentId: commandRoute.agentId,
+      sessionKey: commandRoute.sessionKey,
     });
+    const authorizationCommandName = command.key;
+    const authorizationRawArguments = commandArgs?.raw;
     const authorizationDenial = await authorizeNativeCoreCommand({
-      commandName: command.key,
+      commandName: authorizationCommandName,
       config: cfg,
       provider: "discord",
       accountId,
       senderId: sender.id,
+      senderName: user.globalName ?? user.username,
+      senderUsername: user.username,
       senderIsOwner: senderIsCommandOwner,
       isAuthorizedSender: commandAuthorized,
       roleIds: memberRoleIds,
-      agentId: policyRoute.agentId,
-      sessionKey: policyRoute.sessionKey,
+      agentId: commandRoute.agentId,
+      sessionKey: commandRoute.sessionKey,
       sessionId: policySessionEntry?.sessionId,
-      conversationId:
-        resolveDiscordConversationIdentity({
-          isDirectMessage,
-          userId: user.id,
-          channelId: rawChannelId || "unknown",
-        }) ?? undefined,
+      conversationId: rawChannelId || undefined,
       parentConversationId: isThreadChannel ? threadParentId : undefined,
       threadId: isThreadChannel ? rawChannelId : undefined,
-      rawArguments: commandArgs?.raw,
+      rawArguments: authorizationRawArguments,
+      values: commandAuthorizationValues,
     });
     if (authorizationDenial) {
-      await respond("Command blocked by authorization policy.", { ephemeral: true });
-      return { accepted: false };
+      if (!suppressReplies) {
+        await respond("Command blocked by authorization policy.", { ephemeral: true });
+      }
+      return { accepted: false, rejection: "authorization-denied" };
     }
+    coreCommandAuthorizationRoute = {
+      agentId: commandRoute.agentId,
+      sessionKey: commandRoute.sessionKey,
+      commandName: authorizationCommandName,
+      ...(authorizationRawArguments !== undefined
+        ? { rawArguments: authorizationRawArguments }
+        : {}),
+      ...(commandAuthorizationValues
+        ? { values: Object.freeze({ ...commandAuthorizationValues }) }
+        : {}),
+    };
   }
 
   const isGuild = Boolean(interaction.guild);
@@ -522,6 +615,7 @@ async function dispatchDiscordCommandInteraction(params: {
         cfg,
         accountId,
         threadBindings,
+        route: commandRoute,
       })
     : null;
   // Native /think must not wait on provider discovery; persisted rows retain its metadata.
@@ -561,7 +655,7 @@ async function dispatchDiscordCommandInteraction(params: {
           ephemeral: true,
         }),
       );
-      return { accepted: true };
+      return accepted(commandRoute);
     }
     await safeDiscordInteractionCall("interaction reply", () =>
       interaction.reply({
@@ -570,36 +664,34 @@ async function dispatchDiscordCommandInteraction(params: {
         ephemeral: true,
       }),
     );
-    return { accepted: true };
+    return accepted(commandRoute);
   }
 
+  let pluginContinuesAgent = false;
+  let pluginContinuationAlreadyReplied = false;
   if (pluginMatch && commandName !== "status") {
     if (suppressReplies) {
-      return { accepted: true };
+      return accepted(commandRoute);
     }
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
     const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
-    const routeState = await getNativeRouteState();
-    const { effectiveRoute } = routeState;
-    const pluginCommandAgentId =
-      (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
-      routeState.configuredBinding?.statefulTarget.agentId ||
-      effectiveRoute.agentId;
     const targetSessionEntry = nativeCommandRuntime.getSessionEntry({
-      agentId: pluginCommandAgentId,
-      sessionKey: effectiveRoute.sessionKey,
+      agentId: commandRoute.agentId,
+      sessionKey: commandRoute.sessionKey,
     });
     const pluginReply = await nativeCommandRuntime.executePluginCommand({
       command: pluginMatch.command,
       args: pluginMatch.args,
       senderId: sender.id,
+      senderName: user.globalName ?? user.username,
+      senderUsername: user.username,
       memberRoleIds,
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
       senderIsOwner: senderIsCommandOwner,
-      agentId: pluginCommandAgentId,
-      sessionKey: effectiveRoute.sessionKey,
+      agentId: commandRoute.agentId,
+      sessionKey: commandRoute.sessionKey,
       sessionId: targetSessionEntry?.sessionId,
       sessionFile: targetSessionEntry?.sessionFile,
       authProfileId: targetSessionEntry?.authProfileOverride,
@@ -615,38 +707,57 @@ async function dispatchDiscordCommandInteraction(params: {
       accountId,
       messageThreadId,
       threadParentId: pluginThreadParentId,
-      conversationId: isDirectMessage
-        ? `discord:${user.id}`
-        : isGroupDm
-          ? `discord:group:${channelId}`
-          : `discord:channel:${channelId}`,
+      conversationId: channelId,
       parentConversationId: pluginThreadParentId,
     });
-    if (pluginReply.suppressReply === true) {
-      return { accepted: true, effectiveRoute };
+    const {
+      continueAgent: shouldContinueAgent,
+      suppressReply: shouldSuppressPluginReply,
+      ...pluginReplyPayload
+    } = pluginReply;
+    const hasVisiblePluginReply = hasRenderableReplyPayload(pluginReplyPayload);
+    if (shouldContinueAgent !== true) {
+      if (shouldSuppressPluginReply === true) {
+        return accepted(commandRoute);
+      }
+      if (!hasVisiblePluginReply) {
+        await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
+        return accepted(commandRoute);
+      }
+      await deliverDiscordInteractionReply({
+        interaction,
+        payload: pluginReplyPayload,
+        textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+          fallbackLimit: 2000,
+        }),
+        maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+        preferFollowUp,
+        responseEphemeral,
+        chunkMode: resolveChunkMode(cfg, "discord", accountId),
+      });
+      return accepted(commandRoute);
     }
-    if (!hasRenderableReplyPayload(pluginReply)) {
-      await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
-      return { accepted: true, effectiveRoute };
+
+    // The final command.invoke policy and plugin handler already ran above. Keep the
+    // original slash body for the model while preventing the generic dispatcher from
+    // executing the same plugin command a second time.
+    pluginContinuesAgent = true;
+    if (shouldSuppressPluginReply !== true && hasVisiblePluginReply) {
+      await deliverDiscordInteractionReply({
+        interaction,
+        payload: pluginReplyPayload,
+        textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+          fallbackLimit: 2000,
+        }),
+        maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+        preferFollowUp,
+        responseEphemeral,
+        chunkMode: resolveChunkMode(cfg, "discord", accountId),
+      });
+      pluginContinuationAlreadyReplied = true;
     }
-    await deliverDiscordInteractionReply({
-      interaction,
-      payload: pluginReply,
-      textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
-        fallbackLimit: 2000,
-      }),
-      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
-      preferFollowUp,
-      responseEphemeral,
-      chunkMode: resolveChunkMode(cfg, "discord", accountId),
-    });
-    return { accepted: true, effectiveRoute };
   }
 
-  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
-    command,
-    commandArgs,
-  });
   if (pickerCommandContext) {
     await replyWithDiscordModelPickerProviders({
       interaction,
@@ -655,26 +766,16 @@ async function dispatchDiscordCommandInteraction(params: {
       userId: user.id,
       accountId,
       threadBindings,
+      route: commandRoute,
       preferFollowUp,
       safeInteractionCall: safeDiscordInteractionCall,
     });
-    return { accepted: true };
+    return accepted(commandRoute);
   }
 
   const interactionId = interaction.rawData.id;
-  const routeState = await getNativeRouteState();
-  if (routeState.bindingReadiness && !routeState.bindingReadiness.ok) {
-    const configuredBinding = routeState.configuredBinding;
-    if (configuredBinding) {
-      logVerbose(
-        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${routeState.bindingReadiness.error}`,
-      );
-      await respond("Configured ACP binding is unavailable right now. Please try again.");
-      return { accepted: false };
-    }
-  }
-  const boundSessionKey = routeState.boundSessionKey;
-  const effectiveRoute = routeState.effectiveRoute;
+  const boundSessionKey = bindingTarget?.sessionKey ?? routeState.boundSessionKey;
+  const effectiveRoute = commandRoute;
   const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
     agentId: effectiveRoute.agentId,
     sessionPrefix,
@@ -685,7 +786,9 @@ async function dispatchDiscordCommandInteraction(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
   const ctxPayload = buildDiscordNativeCommandContext({
     prompt,
+    bodyForCommands: pluginContinuesAgent ? NATIVE_PLUGIN_CONTINUATION_COMMAND_BODY : undefined,
     commandArgs: commandArgs ?? {},
+    agentId: effectiveRoute.agentId,
     sessionKey,
     commandTargetSessionKey,
     accountId: effectiveRoute.accountId,
@@ -736,7 +839,9 @@ async function dispatchDiscordCommandInteraction(params: {
     respond,
   });
   if (directStatusResult) {
-    return directStatusResult;
+    return directStatusResult.accepted
+      ? accepted(directStatusResult.effectiveRoute)
+      : directStatusResult;
   }
 
   await dispatchDiscordNativeAgentReply({
@@ -751,10 +856,11 @@ async function dispatchDiscordCommandInteraction(params: {
     preferFollowUp,
     responseEphemeral,
     suppressReplies,
+    alreadyReplied: pluginContinuationAlreadyReplied,
     log,
   });
 
-  return { accepted: true, effectiveRoute };
+  return accepted(effectiveRoute);
 }
 
 export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {

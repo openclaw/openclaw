@@ -11,6 +11,7 @@ import {
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { ReplyPayload } from "../types.js";
+import { hasGatewayOperatorScope } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
@@ -36,10 +37,7 @@ function parseLoginCommand(commandBodyNormalized: string): { providerInput: stri
 }
 
 function hasInternalAdminScope(params: HandleCommandsParams): boolean {
-  return (
-    Array.isArray(params.ctx.GatewayClientScopes) &&
-    params.ctx.GatewayClientScopes.includes("operator.admin")
-  );
+  return hasGatewayOperatorScope(params.ctx, "operator.admin");
 }
 
 function canStartCodexLogin(params: HandleCommandsParams): boolean {

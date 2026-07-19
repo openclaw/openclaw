@@ -4,6 +4,10 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
   type RealtimeVoiceAgentControlResult,
 } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  resolveDiscordVoiceIngressAuthorityFacts,
+  type DiscordVoiceIngressContext,
+} from "./ingress.js";
 import type { VoiceSessionEntry } from "./session.js";
 
 type DiscordVoiceAgentControlOutcome =
@@ -18,15 +22,32 @@ type DiscordVoiceAgentControlOutcome =
     };
 
 export async function maybeControlDiscordVoiceAgentRun(params: {
-  entry: Pick<VoiceSessionEntry, "route">;
+  entry: Pick<VoiceSessionEntry, "accountId" | "channelId" | "route">;
+  context?: DiscordVoiceIngressContext;
+  userId?: string;
   text: string;
 }): Promise<DiscordVoiceAgentControlOutcome> {
   if (!shouldAutoControlRealtimeVoiceAgentText(params.text)) {
     return { handled: false };
   }
+  const ingressAuthority =
+    params.context && params.userId
+      ? resolveDiscordVoiceIngressAuthorityFacts({
+          context: params.context,
+          entry: params.entry,
+          userId: params.userId,
+        })
+      : undefined;
   const result = await controlRealtimeVoiceAgentRun({
     sessionKey: params.entry.route.sessionKey,
     text: params.text,
+    ...(ingressAuthority
+      ? {
+          ingressAuthority,
+          agentId: params.entry.route.agentId,
+          senderIsOwner: params.context?.senderIsOwner,
+        }
+      : {}),
   });
 
   if (!result.active) {

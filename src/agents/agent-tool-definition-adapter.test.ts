@@ -8,7 +8,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -23,6 +25,14 @@ import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 async function executeThrowingTool(name: string, callId: string) {
   const tool = {
@@ -53,6 +63,65 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("executes the detached unwrapped-tool input approved by an async policy", async () => {
+    let releasePolicy: (() => void) | undefined;
+    let notifyPolicyStarted: (() => void) | undefined;
+    const policyStarted = new Promise<void>((resolve) => {
+      notifyPolicyStarted = resolve;
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "adapter-policy",
+      source: "/plugins/adapter-policy/index.ts",
+      policy: {
+        id: "adapter-policy",
+        description: "Wait before allowing",
+        handlers: {
+          "tool.call": async () => {
+            notifyPolicyStarted?.();
+            await new Promise<void>((resolve) => {
+              releasePolicy = resolve;
+            });
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const execute = vi.fn(async (_id, params) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(params) }],
+      details: {},
+    }));
+    const tool = {
+      name: "adapter_tool",
+      label: "Adapter Tool",
+      description: "adapter test",
+      parameters: Type.Object({}),
+      execute,
+    } satisfies AgentTool;
+    const [definition] = toToolDefinitions([tool]);
+    const retainedInput = { action: "reply", nested: { target: "approved" } };
+
+    const pending = expectDefined(definition, "definition test invariant").execute(
+      "adapter-call",
+      retainedInput,
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    await policyStarted;
+    retainedInput.action = "delete";
+    retainedInput.nested.target = "mutated";
+    releasePolicy?.();
+    await pending;
+
+    expect(execute.mock.calls[0]?.[1]).toEqual({
+      action: "reply",
+      nested: { target: "approved" },
+    });
+    expect(execute.mock.calls[0]?.[1]).not.toBe(retainedInput);
+  });
+
   it("preserves argument preparation and execution mode contracts", () => {
     const prepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
     const tool = {
@@ -380,6 +449,55 @@ async function executeClientTool(params: unknown): Promise<{
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("records the detached client-tool input approved by an async policy", async () => {
+    let releasePolicy: (() => void) | undefined;
+    let notifyPolicyStarted: (() => void) | undefined;
+    const policyStarted = new Promise<void>((resolve) => {
+      notifyPolicyStarted = resolve;
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "client-policy",
+      source: "/plugins/client-policy/index.ts",
+      policy: {
+        id: "client-policy",
+        description: "Wait before allowing",
+        handlers: {
+          "tool.call": async () => {
+            notifyPolicyStarted?.();
+            await new Promise<void>((resolve) => {
+              releasePolicy = resolve;
+            });
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const completed = vi.fn();
+    const [definition] = toClientToolDefinitions([makeClientTool("search")], completed);
+    const retainedInput = { query: "approved", nested: { target: "channel" } };
+
+    const pending = expectDefined(definition, "definition test invariant").execute(
+      "client-call",
+      retainedInput,
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    await policyStarted;
+    retainedInput.query = "mutated";
+    retainedInput.nested.target = "mutated";
+    releasePolicy?.();
+    await pending;
+
+    expect(completed).toHaveBeenCalledWith("search", {
+      query: "approved",
+      nested: { target: "channel" },
+    });
+    expect(completed.mock.calls[0]?.[1]).not.toBe(retainedInput);
+  });
+
   it("returns terminal pending results for each client tool in a batch", async () => {
     const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
     const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {

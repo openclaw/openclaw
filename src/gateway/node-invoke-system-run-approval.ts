@@ -2,13 +2,11 @@
 // Verifies forwarded node exec approvals against stored operator decisions.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
+import { GATEWAY_CLIENT_NAMES } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
   type ExecApprovalRecord,
@@ -51,15 +49,17 @@ type ApprovalLookup = {
 
 type ApprovalClient = {
   connId?: string | null;
-  isDeviceTokenAuth?: boolean;
   connect?: {
     scopes?: unknown;
-    client?: { id?: string | null; mode?: string | null } | null;
     device?: { id?: string | null } | null;
+    client?: { id?: unknown; mode?: unknown } | null;
+  } | null;
+  internal?: {
+    agentRuntimeIdentity?: AgentRuntimeIdentity | null;
   } | null;
 };
 
-const BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
+const AGENT_RUNTIME_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
   GATEWAY_CLIENT_NAMES.CONTROL_UI,
   GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
   GATEWAY_CLIENT_NAMES.WEBCHAT,
@@ -76,16 +76,24 @@ function clientHasApprovals(client: ApprovalClient | null): boolean {
   return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
 }
 
-function isTrustedBackendApprovalClient(client: ApprovalClient | null): boolean {
-  return (
-    clientHasApprovals(client) &&
-    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
-    client.isDeviceTokenAuth !== true
-  );
+function resolveTrustedApprovalAgentRuntimeIdentity(
+  client: ApprovalClient | null,
+): { agentId: string; sessionKey: string } | null {
+  // The server populates this only after verifying the local agent-runtime token.
+  // Wire client id/mode fields are descriptive and must never grant replay authority.
+  if (!clientHasApprovals(client)) {
+    return null;
+  }
+  const identity = client?.internal?.agentRuntimeIdentity;
+  if (identity?.kind !== "agentRuntime") {
+    return null;
+  }
+  const agentId = normalizeNullableString(identity?.agentId);
+  const sessionKey = normalizeNullableString(identity?.sessionKey);
+  return agentId && sessionKey ? { agentId, sessionKey } : null;
 }
 
-function canBridgeNoDeviceApprovalFromBackend(params: {
+function canBridgeNoDeviceApprovalFromAgentRuntime(params: {
   snapshot: ExecApprovalRecord;
   client: ApprovalClient | null;
 }): boolean {
@@ -96,8 +104,8 @@ function canBridgeNoDeviceApprovalFromBackend(params: {
     params.snapshot.requestedByDeviceTokenAuth !== true &&
     !hasChatApprovalReplayBinding(request) &&
     requestedByClientId !== null &&
-    BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId) &&
-    isTrustedBackendApprovalClient(params.client)
+    AGENT_RUNTIME_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId) &&
+    approvalRequestMatchesAgentRuntimeIdentity({ request, client: params.client })
   );
 }
 
@@ -148,7 +156,28 @@ function matchesOptionalString(params: {
   return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
 }
 
-function canBridgeNoDeviceChatApprovalFromBackend(params: {
+function approvalRequestMatchesAgentRuntimeIdentity(params: {
+  request: ExecApprovalRecord["request"];
+  client: ApprovalClient | null;
+}): boolean {
+  const identity = resolveTrustedApprovalAgentRuntimeIdentity(params.client);
+  if (!identity) {
+    return false;
+  }
+  const plan = params.request.systemRunPlan ?? null;
+  return (
+    matchesRequiredString({
+      expected: plan?.agentId ?? params.request.agentId,
+      actual: identity.agentId,
+    }) &&
+    matchesRequiredString({
+      expected: plan?.sessionKey ?? params.request.sessionKey,
+      actual: identity.sessionKey,
+    })
+  );
+}
+
+function canBridgeNoDeviceChatApprovalFromAgentRuntime(params: {
   snapshot: ExecApprovalRecord;
   rawParams: SystemRunParamsLike;
   client: ApprovalClient | null;
@@ -156,7 +185,10 @@ function canBridgeNoDeviceChatApprovalFromBackend(params: {
   if (
     params.snapshot.requestedByDeviceId != null ||
     params.snapshot.requestedByDeviceTokenAuth === true ||
-    !isTrustedBackendApprovalClient(params.client)
+    !approvalRequestMatchesAgentRuntimeIdentity({
+      request: params.snapshot.request,
+      client: params.client,
+    })
   ) {
     return false;
   }
@@ -396,8 +428,12 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   } else if (
     snapshot.requestedByConnId &&
     snapshot.requestedByConnId !== (opts.client?.connId ?? null) &&
-    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client }) &&
-    !canBridgeNoDeviceChatApprovalFromBackend({ snapshot, rawParams: p, client: opts.client })
+    !canBridgeNoDeviceApprovalFromAgentRuntime({ snapshot, client: opts.client }) &&
+    !canBridgeNoDeviceChatApprovalFromAgentRuntime({
+      snapshot,
+      rawParams: p,
+      client: opts.client,
+    })
   ) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_CLIENT_MISMATCH",

@@ -9,12 +9,15 @@ import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+import { adoptToolCallParamsSnapshot, type AnyAgentTool } from "../agents/tools/common.js";
 import {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
 } from "../plugins/authorization-policy-context.js";
+import { materializeAuthorizationToolInput } from "../plugins/authorization-policy-input.js";
 import {
   AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  hasAuthorizationPoliciesForOperation,
   runAuthorizationPolicies,
 } from "../plugins/authorization-policy.js";
 import type { PluginJsonValue } from "../plugins/host-hook-json.js";
@@ -180,20 +183,62 @@ export async function handleMcpJsonRpc(params: {
             isError: true,
           });
         }
+        const authorizationPolicyActive = hasAuthorizationPoliciesForOperation({
+          operation: "tool.call",
+          config: params.hookContext?.config,
+        });
+        let finalizationInput = hookResult.params;
+        if (authorizationPolicyActive) {
+          const detachedArgs = materializeAuthorizationToolInput(finalizationInput);
+          if (!detachedArgs) {
+            executedToolArgs = {};
+            reportToolCallResult({
+              outcome: "blocked",
+              deniedReason: "authorization-policy",
+            });
+            return jsonRpcResult(id, {
+              content: [{ type: "text", text: AUTHORIZATION_POLICY_DENIED_MESSAGE }],
+              isError: true,
+            });
+          }
+          finalizationInput = detachedArgs;
+        }
         const finalizedToolArgs =
-          tool.finalizeBeforeToolCallParams?.(hookResult.params, preparedToolArgs) ??
-          hookResult.params;
+          (await tool.finalizeBeforeToolCallParams?.(finalizationInput, preparedToolArgs)) ??
+          finalizationInput;
+        let executableToolArgs = finalizedToolArgs;
+        if (authorizationPolicyActive) {
+          const detachedArgs = materializeAuthorizationToolInput(finalizedToolArgs);
+          if (!detachedArgs) {
+            executedToolArgs = {};
+            reportToolCallResult({
+              outcome: "blocked",
+              deniedReason: "authorization-policy",
+            });
+            return jsonRpcResult(id, {
+              content: [{ type: "text", text: AUTHORIZATION_POLICY_DENIED_MESSAGE }],
+              isError: true,
+            });
+          }
+          adoptToolCallParamsSnapshot(
+            tool as unknown as AnyAgentTool,
+            detachedArgs,
+            finalizedToolArgs,
+            preparedToolArgs,
+          );
+          executableToolArgs = detachedArgs;
+        }
         const authorizationDenial = await runAuthorizationPolicies({
           request: {
             operation: "tool.call",
             toolName,
             phase: "final",
-            ...(isRecord(finalizedToolArgs) &&
-            typeof finalizedToolArgs.action === "string" &&
-            finalizedToolArgs.action.trim()
-              ? { action: finalizedToolArgs.action.trim() }
+            ...(isRecord(executableToolArgs) &&
+            typeof executableToolArgs.action === "string" &&
+            executableToolArgs.action.trim()
+              ? { action: executableToolArgs.action.trim() }
               : {}),
-            input: finalizedToolArgs as Record<string, PluginJsonValue>,
+            input: executableToolArgs as Record<string, PluginJsonValue>,
           },
           context:
             params.hookContext?.authorization ??
@@ -225,7 +270,7 @@ export async function handleMcpJsonRpc(params: {
           });
         }
         params.signal?.throwIfAborted();
-        executedToolArgs = finalizedToolArgs as Record<string, unknown>;
+        executedToolArgs = executableToolArgs as Record<string, unknown>;
         try {
           params.onToolCallPrepared?.({ toolName, args: executedToolArgs });
         } catch {
@@ -238,7 +283,7 @@ export async function handleMcpJsonRpc(params: {
             isError: true,
           });
         }
-        const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        const result = await tool.execute(toolCallId, executableToolArgs, params.signal);
         const failureKind = resolveToolResultFailureKind(result);
         reportToolCallResult(
           failureKind === "blocked"

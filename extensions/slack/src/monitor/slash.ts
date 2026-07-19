@@ -731,6 +731,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         AccountId: route.accountId,
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
+        InboundAccessAuthorized: true,
         OriginatingChannel: "slack" as const,
         OriginatingTo: slashReplyTarget,
       });

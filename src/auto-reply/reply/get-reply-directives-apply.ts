@@ -12,7 +12,10 @@ import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
-import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
+import {
+  prepareModelDirectiveEffect,
+  type PreparedModelDirectiveEffect,
+} from "./directive-handling.model-selection.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -147,6 +150,7 @@ export async function applyInlineDirectiveOverrides(params: {
   defaultActivation: () => "always" | "mention";
   contextTokens: number;
   effectiveModelDirective?: string;
+  modelDirectiveEffect?: PreparedModelDirectiveEffect;
   typing: TypingController;
 }): Promise<ApplyDirectiveResult> {
   const {
@@ -189,6 +193,23 @@ export async function applyInlineDirectiveOverrides(params: {
     policyAliasIndex: modelState.policyAliasIndex,
     resetModelOverride: modelState.resetModelOverride,
   };
+  const modelDirectiveEffect =
+    params.modelDirectiveEffect ??
+    prepareModelDirectiveEffect({
+      directives,
+      effectiveModelDirective,
+      cfg,
+      agentDir,
+      agentId,
+      sessionKey,
+      sessionEntry,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      provider,
+    });
   const createDirectiveHandlingBase = () => ({
     cfg,
     directives,
@@ -208,6 +229,7 @@ export async function applyInlineDirectiveOverrides(params: {
     model,
     initialModelLabel,
     formatModelSwitchEvent,
+    modelDirectiveEffect,
   });
 
   let directiveAck: ReplyPayload | undefined;
@@ -239,22 +261,7 @@ export async function applyInlineDirectiveOverrides(params: {
     effectiveModelDirective &&
     isModelSelectionLocked(sessionEntry)
   ) {
-    const lockedModelResolution = resolveModelSelectionFromDirective({
-      directives: {
-        ...directives,
-        rawModelDirective: effectiveModelDirective,
-      },
-      cfg,
-      agentDir,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-      allowedModelKeys: modelState.allowedModelKeys,
-      allowedModelCatalog: modelState.allowedModelCatalog,
-      provider,
-      agentId,
-    });
-    if (lockedModelResolution.modelSelection) {
+    if (modelDirectiveEffect.kind === "selection") {
       typing.cleanup();
       return { kind: "reply", reply: { text: MODEL_SELECTION_LOCKED_MESSAGE } };
     }
@@ -299,6 +306,7 @@ export async function applyInlineDirectiveOverrides(params: {
     allowedModelKeys: modelState.allowedModelKeys,
     modelCatalog: modelState.allowedModelCatalog,
     thinkingCatalog: modelState.allowedModelCatalog,
+    modelDirectiveEffect,
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
@@ -324,26 +332,12 @@ export async function applyInlineDirectiveOverrides(params: {
       return { kind: "reply", reply: undefined };
     }
     if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
-      const modelResolution = resolveModelSelectionFromDirective({
-        directives: {
-          ...directives,
-          rawModelDirective: effectiveModelDirective,
-        },
-        cfg,
-        agentDir,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        allowedModelKeys: modelState.allowedModelKeys,
-        allowedModelCatalog: modelState.allowedModelCatalog,
-        provider,
-        agentId,
-      });
-      if (modelResolution.errorText) {
+      if (modelDirectiveEffect.kind === "invalid") {
         typing.cleanup();
-        return { kind: "reply", reply: { text: modelResolution.errorText } };
+        return { kind: "reply", reply: { text: modelDirectiveEffect.errorText } };
       }
-      const modelSelection = modelResolution.modelSelection;
+      const modelSelection =
+        modelDirectiveEffect.kind === "selection" ? modelDirectiveEffect.modelSelection : undefined;
       if (modelSelection) {
         const persisted = await (
           await loadDirectivePersist()
@@ -378,8 +372,8 @@ export async function applyInlineDirectiveOverrides(params: {
             : persisted.runtimeChange?.kind === "set"
               ? `Runtime set to ${persisted.runtimeChange.runtime} for this session.`
               : undefined,
-          modelResolution.profileOverride
-            ? `Auth profile set to ${modelResolution.profileOverride}.`
+          modelDirectiveEffect.kind === "selection" && modelDirectiveEffect.profileOverride
+            ? `Auth profile set to ${modelDirectiveEffect.profileOverride}.`
             : undefined,
         ].filter(Boolean);
         typing.cleanup();
@@ -490,6 +484,7 @@ export async function applyInlineDirectiveOverrides(params: {
         resolveThinkingCatalog: modelState.resolveThinkingCatalog,
         ...directiveModelState,
       },
+      modelDirectiveEffect,
     });
     directiveAck = fastLane.directiveAck;
     provider = fastLane.provider;

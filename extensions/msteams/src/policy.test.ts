@@ -278,6 +278,54 @@ describe("msteams policy", () => {
       ).toEqual({ deny: ["team"] });
     });
 
+    it("matches channel-prefixed senders against the admitted source provider", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            teams: {
+              team: {
+                channels: {
+                  channel: {
+                    tools: { deny: ["exec"] },
+                    toolsBySender: {
+                      "channel:discord:alice": { allow: ["source-sender"] },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupSpace: "team",
+          groupId: "channel",
+          senderMessageProvider: "discord",
+          senderId: "alice",
+        }),
+      ).toEqual({ allow: ["source-sender"] });
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupSpace: "team",
+          groupId: "channel",
+          senderId: "alice",
+        }),
+      ).toEqual({ deny: ["exec"] });
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupSpace: "team",
+          groupId: "channel",
+          senderMessageProvider: null,
+          senderId: "alice",
+        }),
+      ).toEqual({ deny: ["exec"] });
+    });
+
     it("keeps slash-bearing flat scope keys collision-free", () => {
       const cfg = {
         channels: {

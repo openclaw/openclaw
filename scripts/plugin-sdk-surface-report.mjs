@@ -277,7 +277,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
       // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
       // +7: authorization policy registration/context types and host-side policy gates.
-      8174,
+      // +2: host-issued turn authority snapshot and resolver.
+      8176,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -323,7 +324,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: bounded visible transcript cursor reader.
       // +1: AgentHarnessSessionSupersededError constructor.
       // +4: authorization context builders plus native/Codex policy gates.
-      4547,
+      // +1: turn-authority policy resolver.
+      4548,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

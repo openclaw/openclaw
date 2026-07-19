@@ -11,6 +11,7 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { mintAgentRuntimeIdentityToken } from "./agent-runtime-identity-token.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
@@ -367,7 +368,10 @@ describe("node.invoke approval bypass", () => {
     return await connectOperatorWithRetry(scopes);
   };
 
-  const connectTrustedBackend = async (scopes: string[]) => {
+  const connectBackend = async (params: {
+    scopes: string[];
+    runtimeIdentity?: { agentId: string; sessionKey: string };
+  }) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     trackConnectChallengeNonce(ws);
     await new Promise<void>((resolve) => {
@@ -375,8 +379,16 @@ describe("node.invoke approval bypass", () => {
     });
     const res = await connectReq(ws, {
       token: "secret",
-      scopes,
+      scopes: params.scopes,
       device: null,
+      ...(params.runtimeIdentity
+        ? {
+            agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
+              ...params.runtimeIdentity,
+              gatewayMethods: ["node.invoke"],
+            }),
+          }
+        : {}),
       client: {
         id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         displayName: "agent",
@@ -755,20 +767,21 @@ describe("node.invoke approval bypass", () => {
   test("bridges no-device chat approvals across backend reconnects only for the same turn source", async () => {
     const invokeCapture = createInvokeParamCapture();
     const node = await connectLinuxNode(invokeCapture.onInvoke);
-
-    const wsRequest = await connectTrustedBackend(["operator.write", "operator.approvals"]);
-    const wsReplay = await connectTrustedBackend(["operator.write", "operator.approvals"]);
+    const context: ChatApprovalContext = {
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:12345",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:12345",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: "42",
+    };
+    const scopes = ["operator.write", "operator.approvals"];
+    const wsRequest = await connectBackend({ scopes });
+    const wsSpoof = await connectBackend({ scopes });
+    const wsReplay = await connectBackend({ scopes, runtimeIdentity: context });
 
     try {
       const nodeId = await getConnectedNodeIdForTest(wsRequest);
-      const context: ChatApprovalContext = {
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "telegram:12345",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-      };
 
       const approvalId = await requestChatAllowOnceApproval({
         ws: wsRequest,
@@ -776,6 +789,17 @@ describe("node.invoke approval bypass", () => {
         nodeId,
         context,
       });
+      const invokeCountBeforeSpoof = invokeCapture.count();
+      const spoof = await rpcReq(wsSpoof, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: approvedChatSystemRunParams(context, approvalId),
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(spoof.ok).toBe(false);
+      expect(spoof.error?.message ?? "").toContain("not valid for this client");
+      await expectNoForwardedInvoke(() => invokeCapture.count() > invokeCountBeforeSpoof);
+
       const invoke = await rpcReq(wsReplay, "node.invoke", {
         nodeId,
         command: "system.run",
@@ -805,6 +829,7 @@ describe("node.invoke approval bypass", () => {
       await expectNoForwardedInvoke(() => invokeCapture.count() > invokeCountBeforeMismatch);
     } finally {
       wsRequest.close();
+      wsSpoof.close();
       wsReplay.close();
       node.stop();
     }

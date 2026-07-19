@@ -5,7 +5,10 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
@@ -18,6 +21,10 @@ import {
   normalizeAuthorizationCommandSource,
 } from "./authorization-policy-context.js";
 import { runAuthorizationPolicies } from "./authorization-policy.js";
+import type {
+  AuthorizationInvocationContext,
+  TurnAuthoritySnapshot,
+} from "./authorization-policy.types.js";
 import {
   clearPluginCommands,
   isReservedCommandName,
@@ -39,6 +46,7 @@ import {
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
+import { classifyTurnAuthoritySnapshot, rebindTurnAuthoritySnapshot } from "./turn-authority.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -217,10 +225,13 @@ function buildPluginCommandRuntimeContext(params: {
  * Note: Plugin authors should still validate and sanitize ctx.args for their
  * specific use case. This function provides basic defense-in-depth sanitization.
  */
-export async function executePluginCommand(params: {
+type ExecutePluginCommandParams = {
   command: RegisteredPluginCommand;
   args?: string;
   senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
   memberRoleIds?: string[];
   channel: string;
   channelId?: PluginCommandContext["channelId"];
@@ -251,8 +262,146 @@ export async function executePluginCommand(params: {
   diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
   diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
-}): Promise<PluginCommandResult> {
-  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
+};
+
+type HostExecutePluginCommandParams = ExecutePluginCommandParams & {
+  /** Internal host-issued authority. Never sourced from plugin or model input. */
+  turnAuthority?: TurnAuthoritySnapshot;
+};
+
+type CommandAuthorityTarget = { agentId: string; sessionKey: string; sessionId?: string };
+
+function resolveCommandAuthorityTarget(params: {
+  config: OpenClawConfig;
+  source: Readonly<AuthorizationInvocationContext>;
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+}): CommandAuthorityTarget | undefined {
+  const explicitAgentId =
+    params.agentId === undefined
+      ? undefined
+      : resolveBoundAgentIdForSession({ config: params.config, agentId: params.agentId });
+  const explicitSessionKey = normalizeOptionalString(params.sessionKey);
+  if (
+    (params.agentId !== undefined && !explicitAgentId) ||
+    (params.sessionKey !== undefined && !explicitSessionKey)
+  ) {
+    return undefined;
+  }
+
+  const sourceAgentId = params.source.agentId
+    ? resolveBoundAgentIdForSession({ config: params.config, agentId: params.source.agentId })
+    : undefined;
+  const sourceSessionKey = normalizeOptionalString(params.source.sessionKey);
+  const sessionKey = explicitSessionKey ?? sourceSessionKey;
+  if (!sessionKey) {
+    return undefined;
+  }
+
+  const sessionAgentId = resolveBoundAgentIdForSession({
+    config: params.config,
+    sessionKey,
+  });
+  const agentId =
+    explicitAgentId ??
+    sessionAgentId ??
+    (sessionKey === sourceSessionKey ? sourceAgentId : undefined);
+  if (
+    !agentId ||
+    (sessionAgentId !== undefined && sessionAgentId !== agentId) ||
+    (sessionKey === sourceSessionKey && sourceAgentId !== undefined && sourceAgentId !== agentId)
+  ) {
+    return undefined;
+  }
+
+  const sourceSessionId = normalizeOptionalString(params.source.sessionId);
+  const sessionId =
+    normalizeOptionalString(params.sessionId) ??
+    (sessionKey === sourceSessionKey ? sourceSessionId : undefined);
+  return { agentId, sessionKey, ...(sessionId ? { sessionId } : {}) };
+}
+
+export async function executePluginCommand(
+  params: ExecutePluginCommandParams,
+): Promise<PluginCommandResult> {
+  return await executePluginCommandInternal(params);
+}
+
+/** Host-only command entry point preserving the authority admitted for this turn. */
+export async function executePluginCommandWithTurnAuthority(
+  params: HostExecutePluginCommandParams,
+): Promise<PluginCommandResult> {
+  return await executePluginCommandInternal(params);
+}
+
+async function executePluginCommandInternal(
+  params: HostExecutePluginCommandParams,
+): Promise<PluginCommandResult> {
+  const { command, args, channel, commandBody, config } = params;
+  const classifiedAuthority = classifyTurnAuthoritySnapshot(params.turnAuthority);
+  if (classifiedAuthority.kind === "invalid") {
+    logVerbose(`Plugin command /${command.name} blocked: invalid turn authority`);
+    return { text: "⚠️ This command requires authorization." };
+  }
+  const sourceTurnAuthority =
+    classifiedAuthority.kind === "issued" ? classifiedAuthority.snapshot : undefined;
+  const sourceTurnAuthorization = sourceTurnAuthority?.authorization;
+  let commandAuthorityTarget: CommandAuthorityTarget | undefined;
+  let commandTurnAuthority: TurnAuthoritySnapshot | undefined;
+  if (sourceTurnAuthorization) {
+    commandAuthorityTarget = resolveCommandAuthorityTarget({
+      config,
+      source: sourceTurnAuthorization,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+    if (!commandAuthorityTarget) {
+      logVerbose(`Plugin command /${command.name} blocked: unresolved command authority target`);
+      return { text: "⚠️ This command requires authorization." };
+    }
+    commandTurnAuthority = rebindTurnAuthoritySnapshot(sourceTurnAuthority, {
+      agentId: commandAuthorityTarget.agentId,
+      sessionKey: commandAuthorityTarget.sessionKey,
+      sessionId: commandAuthorityTarget.sessionId,
+      runId: sourceTurnAuthorization.runId,
+      trigger: "command",
+    });
+    if (!commandTurnAuthority) {
+      logVerbose(`Plugin command /${command.name} blocked: command authority rebind failed`);
+      return { text: "⚠️ This command requires authorization." };
+    }
+  }
+  const turnAuthorization = commandTurnAuthority?.authorization;
+  const agentId = commandAuthorityTarget?.agentId ?? params.agentId;
+  const sessionKey = commandAuthorityTarget?.sessionKey ?? params.sessionKey;
+  const sessionId = commandAuthorityTarget?.sessionId ?? params.sessionId;
+  // Once admitted, identity and scopes come only from the immutable snapshot.
+  // Legacy channel fields remain a compatibility path for callers without one.
+  const principal = turnAuthorization?.principal;
+  const senderId = turnAuthorization
+    ? principal?.kind === "sender"
+      ? principal.senderId
+      : undefined
+    : params.senderId;
+  const isAuthorizedSender = turnAuthorization
+    ? principal?.kind === "sender"
+      ? principal.isAuthorizedSender === true
+      : principal?.kind === "operator" || principal?.kind === "service"
+    : params.isAuthorizedSender;
+  const senderIsOwner = turnAuthorization
+    ? principal?.kind === "sender"
+      ? principal.senderIsOwner === true
+      : principal?.kind === "operator"
+        ? principal.isOwner === true
+        : false
+    : params.senderIsOwner === true;
+  const gatewayClientScopes = turnAuthorization
+    ? principal?.kind === "operator"
+      ? [...principal.scopes]
+      : undefined
+    : params.gatewayClientScopes;
 
   // Check authorization
   if (!pluginCommandSupportsChannel(command, channel)) {
@@ -279,10 +428,7 @@ export async function executePluginCommand(params: {
     return { text: "⚠️ This command has invalid gateway scope configuration." };
   }
   if (requiredScopes.length > 0) {
-    const senderIsOwner = params.senderIsOwner === true;
-    const scopes = Array.isArray(params.gatewayClientScopes)
-      ? new Set(params.gatewayClientScopes)
-      : undefined;
+    const scopes = Array.isArray(gatewayClientScopes) ? new Set(gatewayClientScopes) : undefined;
     const hasGatewayScopeContext = scopes !== undefined;
     const hasAdmin = scopes?.has(ADMIN_SCOPE) === true;
     const missingScope = scopes
@@ -320,28 +466,33 @@ export async function executePluginCommand(params: {
       source: normalizeAuthorizationCommandSource(params.commandSource),
       ...(sanitizedArgs ? { arguments: { raw: sanitizedArgs } } : {}),
     },
-    context: createAuthorizationInvocationContext({
-      principal: createAuthorizationPrincipal({
-        provider: channel,
-        // The resolved account selects the handler binding; only ingress may authenticate a sender.
-        accountId: params.accountId,
-        senderId,
-        senderIsOwner: params.senderIsOwner,
-        isAuthorizedSender,
-        roleIds: params.memberRoleIds,
+    context:
+      turnAuthorization ??
+      createAuthorizationInvocationContext({
+        principal: createAuthorizationPrincipal({
+          provider: channel,
+          // Conversation resolution preserves the ingress account, defaulting it from host config;
+          // provider target resolution cannot replace it with a destination account.
+          accountId: effectiveAccountId,
+          senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          senderIsOwner,
+          isAuthorizedSender,
+          roleIds: params.memberRoleIds,
+        }),
+        agentId,
+        sessionKey,
+        sessionId,
+        conversationId: params.conversationId ?? bindingConversation?.conversationId,
+        parentConversationId:
+          params.parentConversationId ??
+          bindingConversation?.parentConversationId ??
+          params.threadParentId,
+        threadId: params.messageThreadId,
+        trigger: "command",
       }),
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      conversationId:
-        bindingConversation?.conversationId ?? params.conversationId ?? params.to ?? params.from,
-      parentConversationId:
-        bindingConversation?.parentConversationId ??
-        params.parentConversationId ??
-        params.threadParentId,
-      threadId: params.messageThreadId,
-      trigger: "command",
-    }),
     config,
     signal: params.abortSignal,
   });
@@ -360,7 +511,7 @@ export async function executePluginCommand(params: {
       command.ownership === "reserved" &&
       isReservedCommandName(command.name) &&
       command.pluginId === normalizeLowercaseStringOrEmpty(command.name))
-      ? params.senderIsOwner
+      ? senderIsOwner
       : undefined;
   const diagnosticsPrivateRoutedForCommand =
     isTrustedReservedCommandOwner(command) &&
@@ -390,10 +541,10 @@ export async function executePluginCommand(params: {
     channelId: params.channelId,
     isAuthorizedSender,
     ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
-    gatewayClientScopes: params.gatewayClientScopes,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
+    gatewayClientScopes,
+    agentId,
+    sessionKey,
+    sessionId,
     sessionFile: params.sessionFile,
     args: sanitizedArgs,
     commandBody,
@@ -407,8 +558,8 @@ export async function executePluginCommand(params: {
     runtimeContext: buildPluginCommandRuntimeContext({
       command,
       config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
+      agentId,
+      sessionKey,
       authProfileId: params.authProfileId,
     }),
     ...(diagnosticsUploadApprovedForCommand === undefined

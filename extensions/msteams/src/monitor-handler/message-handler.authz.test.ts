@@ -931,6 +931,7 @@ describe("msteams monitor handler authz", () => {
       "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
     );
     expect(ctxPayload.GroupSpace).toBe("team123");
+    expect(ctxPayload.MessageThreadId).toBe(currentParentMessageId);
     expect(ctxPayload.NativeChannelId).toBe("graph-team-123/19:graph-channel@thread.tacv2");
     expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
       "Mallory",

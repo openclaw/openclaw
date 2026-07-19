@@ -7,7 +7,10 @@ import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
 type BuildDiscordNativeCommandContextParams = {
   prompt: string;
+  /** Non-user command-routing text used after a native plugin handler already ran. */
+  bodyForCommands?: string;
   commandArgs: CommandArgs;
+  agentId: string;
   sessionKey: string;
   commandTargetSessionKey: string;
   accountId?: string | null;
@@ -57,6 +60,7 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     BodyForAgent: params.prompt,
     RawBody: params.prompt,
     CommandBody: params.prompt,
+    BodyForCommands: params.bodyForCommands,
     CommandArgs: params.commandArgs,
     From: params.isDirectMessage
       ? `discord:${params.user.id}`
@@ -64,6 +68,7 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
         ? `discord:group:${params.channelId}`
         : `discord:channel:${params.channelId}`,
     To: `slash:${params.user.id}`,
+    AgentId: params.agentId,
     SessionKey: params.sessionKey,
     CommandTargetSessionKey: params.commandTargetSessionKey,
     AccountId: params.accountId ?? undefined,
@@ -94,6 +99,7 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
       authorized: params.commandAuthorized,
       body: params.prompt,
     },
+    InboundAccessAuthorized: true,
     CommandSource: "native" as const,
     // Native slash contexts use To=slash:<user> for interaction routing.
     // For follow-up delivery (for example subagent completion announces),
@@ -105,6 +111,7 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
         userId: params.user.id,
         channelId: params.channelId,
       }) ?? (params.isDirectMessage ? `user:${params.user.id}` : `channel:${params.channelId}`),
+    NativeChannelId: params.channelId,
     ThreadParentId: params.isThreadChannel ? params.threadParentId : undefined,
   });
 }

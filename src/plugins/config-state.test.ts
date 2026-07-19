@@ -199,6 +199,119 @@ describe("normalizePluginsConfig", () => {
     ).toEqual({ requiredPolicies: [] });
   });
 
+  it("conservatively merges required policies across canonical plugin aliases", () => {
+    const guard = { id: "maintainer-control", operations: ["tool.call" as const] };
+    const entryPairs = [
+      [
+        ["google", { authorization: { requiredPolicies: [guard] } }],
+        ["google-gemini-cli", { authorization: { requiredPolicies: [] } }],
+      ],
+      [
+        ["google-gemini-cli", { authorization: { requiredPolicies: [] } }],
+        ["google", { authorization: { requiredPolicies: [guard] } }],
+      ],
+    ] as const;
+
+    for (const pairs of entryPairs) {
+      const normalized = normalizePluginsConfig({
+        entries: Object.fromEntries(pairs),
+      });
+      expect(normalized.entries.google?.authorization?.requiredPolicies).toEqual([guard]);
+    }
+
+    const malformedAlias = normalizePluginsConfig({
+      entries: {
+        google: { authorization: { requiredPolicies: [guard] } },
+        "google-gemini-cli": null as never,
+      },
+    });
+    expect(malformedAlias.entries.google?.authorization?.requiredPolicies).toEqual([guard]);
+  });
+
+  it("makes canonical-alias required-policy unions deterministic", () => {
+    const canonical = {
+      authorization: {
+        requiredPolicies: [
+          { id: "z-policy", operations: ["tool.call" as const] },
+          { id: "a-policy", operations: ["message.action" as const] },
+        ],
+      },
+    };
+    const legacy = {
+      authorization: {
+        requiredPolicies: [
+          { id: "z-policy", operations: ["command.invoke" as const] },
+          { id: "a-policy", operations: ["tool.call" as const] },
+        ],
+      },
+    };
+    const normalize = (entries: Record<string, PluginEntryConfig>) =>
+      normalizePluginsConfig({ entries }).entries.google?.authorization?.requiredPolicies;
+
+    const expected = [
+      { id: "a-policy", operations: ["tool.call", "message.action"] },
+      { id: "z-policy", operations: ["tool.call", "command.invoke"] },
+    ];
+    expect(normalize({ google: canonical, "google-gemini-cli": legacy })).toEqual(expected);
+    expect(normalize({ "google-gemini-cli": legacy, google: canonical })).toEqual(expected);
+  });
+
+  it("drops blocked plugin entry keys without mutating the result prototype", () => {
+    const plugins = JSON.parse(
+      '{"entries":{"__proto__":{"authorization":{"requiredPolicies":[{"id":"guard","operations":["tool.call"]}]}}}}',
+    );
+    const normalized = normalizePluginsConfig(plugins);
+
+    expect(Object.getPrototypeOf(normalized.entries)).toBeNull();
+    expect(Object.hasOwn(normalized.entries, "__proto__")).toBe(false);
+    expect(Object.keys(normalized.entries)).toEqual([]);
+  });
+
+  it("normalizes required-policy scopes without merging distinct scopes", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        authorization: {
+          requiredPolicies: [
+            {
+              id: "maintainer-control",
+              operations: ["tool.call"],
+              scope: {
+                agentIds: [" molty ", ""],
+                conversationIds: [" maintenance "],
+              },
+            },
+            {
+              id: "maintainer-control",
+              operations: ["message.action"],
+              scope: {
+                agentIds: ["molty"],
+                conversationIds: ["maintenance"],
+              },
+            },
+            {
+              id: "maintainer-control",
+              operations: ["command.invoke"],
+              scope: { agentIds: ["clawsweeper"] },
+            },
+          ],
+        },
+      })?.authorization,
+    ).toEqual({
+      requiredPolicies: [
+        {
+          id: "maintainer-control",
+          operations: ["tool.call", "message.action"],
+          scope: { agentIds: ["molty"], conversationIds: ["maintenance"] },
+        },
+        {
+          id: "maintainer-control",
+          operations: ["command.invoke"],
+          scope: { agentIds: ["clawsweeper"] },
+        },
+      ],
+    });
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
       allow: ["openai", "google-gemini-cli", "minimax-portal-auth"],

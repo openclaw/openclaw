@@ -40,6 +40,10 @@ import {
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import {
+  rebindTurnAuthoritySnapshot,
+  resolveTurnAuthorityAuthorization,
+} from "../../plugins/turn-authority.js";
+import {
   isCronSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
@@ -427,6 +431,8 @@ export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  // Validate issued authority before any early return or tool/plugin materialization.
+  resolveTurnAuthorityAuthorization(paramsBase.turnAuthority);
   const lockedHarnessRuntime = normalizeOptionalAgentRuntimeId(paramsBase.agentHarnessId);
   if (paramsBase.modelSelectionLocked === true && lockedHarnessRuntime !== "openclaw") {
     return {
@@ -439,12 +445,30 @@ export async function compactEmbeddedAgentSessionDirect(
     };
   }
   const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
+  const authoritySessionKey =
+    paramsBase.sandboxSessionKey?.trim() ||
+    paramsBase.sessionKey?.trim() ||
+    runSessionTarget.sessionKey?.trim() ||
+    runSessionTarget.sessionId;
+  const authorityAgentId = resolveSessionAgentIds({
+    sessionKey: authoritySessionKey,
+    config: paramsBase.config,
+    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+  }).sessionAgentId;
+  const turnAuthority = rebindTurnAuthoritySnapshot(paramsBase.turnAuthority, {
+    agentId: authorityAgentId,
+    sessionKey: authoritySessionKey,
+    sessionId: runSessionTarget.sessionId,
+    runId: paramsBase.runId,
+    trigger: paramsBase.trigger ?? "manual",
+  });
   const params: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
     agentId: paramsBase.agentId ?? runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
     sessionFile: runSessionTarget.sessionFile,
+    ...(turnAuthority ? { turnAuthority } : {}),
   };
   if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
@@ -1043,6 +1067,39 @@ async function compactEmbeddedAgentSessionDirectOnce(
             sandbox,
             resolvedWorkspace,
           });
+    const admittedAuthorization = resolveTurnAuthorityAuthorization(params.turnAuthority);
+    const admittedPrincipal = admittedAuthorization?.principal;
+    const admittedSender = admittedPrincipal?.kind === "sender" ? admittedPrincipal : undefined;
+    const admittedOperator = admittedPrincipal?.kind === "operator" ? admittedPrincipal : undefined;
+    // Issued authority owns requester identity. Legacy fields remain only for
+    // callers that have not entered through an authenticated turn boundary.
+    const senderPolicyIdentity = admittedAuthorization
+      ? {
+          messageProvider: admittedSender ? (admittedSender.provider ?? null) : undefined,
+          accountId: admittedSender?.accountId,
+          memberRoleIds: admittedSender?.roleIds,
+          senderId: admittedSender?.senderId,
+          senderName: admittedSender?.aliases?.name,
+          senderUsername: admittedSender?.aliases?.username,
+          senderE164: admittedSender?.aliases?.e164,
+          senderIsOwner:
+            admittedSender?.senderIsOwner === true || admittedOperator?.isOwner === true,
+          isAuthorizedSender: admittedSender?.isAuthorizedSender,
+        }
+      : {
+          messageProvider: resolvedMessageProvider,
+          accountId: params.agentAccountId,
+          memberRoleIds: params.memberRoleIds,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          senderIsOwner: params.senderIsOwner,
+          isAuthorizedSender: params.isAuthorizedSender,
+        };
+    // Compaction tools share the same authority rule as normal turns. Legacy
+    // sender fields still feed toolsBySender, never plugin authorization.
+    const toolHookAuthorization = admittedAuthorization;
     const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
       config: params.config,
       sessionKey: sandboxSessionKey,
@@ -1052,19 +1109,26 @@ async function compactEmbeddedAgentSessionDirectOnce(
           : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
+      agentId: effectiveSkillAgentId,
       agentDir,
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
+      senderMessageProvider: senderPolicyIdentity.messageProvider,
+      senderAccountId: senderPolicyIdentity.accountId,
+      requireSenderRouteBinding: admittedSender !== undefined,
+      messageChannel: params.messageChannel,
       chatType: params.chatType,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
+      memberRoleIds: senderPolicyIdentity.memberRoleIds,
       spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
+      senderId: senderPolicyIdentity.senderId,
+      senderName: senderPolicyIdentity.senderName,
+      senderUsername: senderPolicyIdentity.senderUsername,
+      senderE164: senderPolicyIdentity.senderE164,
+      senderIsOwner: senderPolicyIdentity.senderIsOwner,
+      isAuthorizedSender: senderPolicyIdentity.isAuthorizedSender,
       modelProvider: effectiveModel.provider,
       modelId,
       modelApi: effectiveModel.api,
@@ -1078,12 +1142,14 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const toolsEnabled = supportsModelTools(effectiveModel);
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingTools({
+          agentId: effectiveSkillAgentId,
           exec: {
             ...params.execOverrides,
             config: params.config,
             elevated: params.bashElevated,
           },
           sandbox,
+          messageChannel: params.messageChannel,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,
@@ -1099,11 +1165,15 @@ async function compactEmbeddedAgentSessionDirectOnce(
           groupId: params.groupId,
           groupChannel: params.groupChannel,
           groupSpace: params.groupSpace,
+          memberRoleIds: params.memberRoleIds,
           spawnedBy: params.spawnedBy,
           senderId: params.senderId,
           senderName: params.senderName,
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
+          senderIsOwner: params.senderIsOwner,
+          isAuthorizedSender: params.isAuthorizedSender,
+          turnAuthority: params.turnAuthority,
           allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
           agentDir,
           cwd: effectiveCwd,
@@ -1489,6 +1559,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
+          authorization: toolHookAuthorization,
           channelId: params.currentChannelId,
         },
       });

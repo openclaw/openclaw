@@ -41,6 +41,8 @@ export async function dispatchDiscordNativeAgentReply(params: {
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
+  /** A plugin handler already produced or directly delivered a visible response. */
+  alreadyReplied?: boolean;
   log: ReturnType<typeof createSubsystemLogger>;
 }): Promise<void> {
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -51,7 +53,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   });
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
-  let didReply = false;
+  let didReply = params.alreadyReplied === true;
   const dispatchResult = await nativeCommandRuntime.dispatchReplyWithDispatcher({
     ctx: params.ctxPayload,
     cfg: params.cfg,

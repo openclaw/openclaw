@@ -172,6 +172,8 @@ Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `
 
 Per-agent `agents.list[].tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 
+Sender matches remain bound to the admitted channel route. A delegated turn that targets a different channel provider or account does not reuse unqualified sender selectors such as `id:`, `username:`, or `name:` from the source route; its sender tool policy denies all tools unless that target route admits a new turn. This prevents the same provider-local user ID or handle on another account from inheriting the source sender's tools.
+
 ### `tools.elevated`
 
 Controls elevated exec access outside the sandbox:

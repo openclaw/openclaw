@@ -3,8 +3,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAuthorizationPrincipal } from "../plugins/authorization-policy-context.js";
+import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
 
 type CreateOpenClawToolsArg = {
+  agentChannel?: string;
+  agentAccountId?: string;
+  senderIsOwner?: boolean;
+  requesterSenderId?: string | null;
+  agentMemberRoleIds?: string[];
+  authorization?: AuthorizationInvocationContext;
   clientCaps?: string[];
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolAllowlist?: string[];
@@ -109,6 +117,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       cfg: {} as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
+      senderIsOwner: true,
       excludeToolNames: ["read", "apply_patch"],
     });
 
@@ -185,6 +194,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
+      senderIsOwner: true,
       excludeToolNames: ["read", "apply_patch"],
     });
 
@@ -404,6 +414,327 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
   });
+
+  it("uses sender authority for requester policy while preserving transport routing", () => {
+    const authorization: AuthorizationInvocationContext = {
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "canonical-account",
+        senderId: "canonical-sender",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "reviewers"],
+      },
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:dev",
+      runId: "run-canonical",
+      trigger: "user",
+    };
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:canonical-sender": { deny: ["exec"] },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:discord:channel:dev",
+      surface: "loopback",
+      authorization,
+      requesterIdentitySource: "authority",
+      senderIsOwner: true,
+      messageProvider: "telegram",
+      accountId: "route-account",
+      channelContext: {
+        sender: { id: "legacy-sender" },
+        chat: { id: "route-chat" },
+      },
+      senderName: "Legacy Name",
+      senderUsername: "legacy-user",
+      senderE164: "+15550001111",
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    const args = readCreateToolsArgs();
+    expect(args).toMatchObject({
+      agentChannel: "telegram",
+      agentAccountId: "route-account",
+      senderIsOwner: false,
+      requesterSenderId: "canonical-sender",
+      agentMemberRoleIds: ["maintainers", "reviewers"],
+      authorization: {
+        principal: authorization.principal,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:dev",
+      },
+    });
+  });
+
+  it("uses issued sender authority despite a stale legacy requester hint", () => {
+    const authorization: AuthorizationInvocationContext = {
+      principal: createAuthorizationPrincipal({
+        provider: "discord",
+        accountId: "canonical-account",
+        senderId: "canonical-sender",
+        roleIds: ["maintainers"],
+      }),
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:dev",
+      trigger: "user",
+    };
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:canonical-sender": { deny: ["exec"] },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:discord:channel:dev",
+      surface: "loopback",
+      authorization,
+      requesterIdentitySource: "legacy",
+      senderIsOwner: true,
+      messageProvider: "discord",
+      accountId: "canonical-account",
+      channelContext: { sender: { id: "legacy-owner" } },
+      senderName: "Legacy Owner",
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(result.tools.map((tool) => tool.name)).not.toContain("gateway");
+    expect(readCreateToolsArgs()).toMatchObject({
+      senderIsOwner: false,
+      requesterSenderId: "canonical-sender",
+      agentMemberRoleIds: ["maintainers"],
+      authorization: { principal: authorization.principal },
+    });
+  });
+
+  it("keeps explicitly legacy sender selectors separate from unknown authority", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:legacy-sender": { deny: ["exec"] },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:discord:channel:dev",
+      surface: "loopback",
+      authorization: {
+        principal: { kind: "unknown", provider: "discord", accountId: "canonical-account" },
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:dev",
+        trigger: "mcp",
+      },
+      requesterIdentitySource: "legacy",
+      senderIsOwner: true,
+      messageProvider: "discord",
+      accountId: "canonical-account",
+      channelContext: { sender: { id: "legacy-sender" } },
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(result.tools.map((tool) => tool.name)).not.toContain("gateway");
+    expect(readCreateToolsArgs()).toMatchObject({
+      senderIsOwner: false,
+      requesterSenderId: "legacy-sender",
+      authorization: { principal: { kind: "unknown" } },
+    });
+    expect(readCreateToolsArgs().agentMemberRoleIds).toBeUndefined();
+  });
+
+  it.each([
+    {
+      policyKey: "name:Ada Lovelace",
+      aliasInput: { senderName: " Ada Lovelace " },
+      forgedField: "senderName",
+      forgedValue: "Forged User",
+      forgedPolicyKey: "name:Forged User",
+    },
+    {
+      policyKey: "username:ada",
+      aliasInput: { senderUsername: " @Ada " },
+      forgedField: "senderUsername",
+      forgedValue: "forged-user",
+      forgedPolicyKey: "username:forged-user",
+    },
+    {
+      policyKey: "e164:+15550001111",
+      aliasInput: { senderE164: " +15550001111 " },
+      forgedField: "senderE164",
+      forgedValue: "+15559999999",
+      forgedPolicyKey: "e164:+15559999999",
+    },
+  ] as const)(
+    "uses issued $forgedField alias and ignores the legacy field",
+    ({ policyKey, aliasInput, forgedField, forgedValue, forgedPolicyKey }) => {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          tools: {
+            toolsBySender: {
+              [policyKey]: { deny: ["exec"] },
+              [forgedPolicyKey]: { deny: ["read"] },
+            },
+          },
+        } as OpenClawConfig,
+        sessionKey: "agent:main:discord:channel:dev",
+        surface: "loopback",
+        authorization: {
+          principal: createAuthorizationPrincipal({
+            provider: "discord",
+            accountId: "canonical-account",
+            senderId: "canonical-sender",
+            ...aliasInput,
+          }),
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:dev",
+          trigger: "user",
+        },
+        requesterIdentitySource: "authority",
+        messageProvider: "discord",
+        accountId: "canonical-account",
+        channelContext: { sender: { id: "forged-sender" } },
+        includeNodeExecTool: true,
+        [forgedField]: forgedValue,
+      });
+
+      expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+      expect(result.tools.map((tool) => tool.name)).toContain("read");
+      expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+      expect(readCreateToolsArgs().pluginToolDenylist).not.toContain("read");
+    },
+  );
+
+  it("fails closed for cross-route group sender matching without changing the route channel", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: {
+              dev: {
+                toolsBySender: {
+                  "channel:discord:canonical-sender": { deny: ["exec"] },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:dev",
+      surface: "loopback",
+      authorization: {
+        principal: {
+          kind: "sender",
+          provider: "discord",
+          senderId: "canonical-sender",
+          senderIsOwner: false,
+        },
+        sessionKey: "agent:main:telegram:group:dev",
+        trigger: "user",
+      },
+      requesterIdentitySource: "authority",
+      messageProvider: "telegram",
+      groupId: "dev",
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(readCreateToolsArgs().agentChannel).toBe("telegram");
+    expect(readCreateToolsArgs().pluginToolDenylist).toContain("*");
+  });
+
+  it("uses operator ownership without treating legacy sender hints as requester identity", () => {
+    const authorization: AuthorizationInvocationContext = {
+      principal: {
+        kind: "operator",
+        scopes: ["operator.admin"],
+        isOwner: true,
+      },
+      sessionKey: "agent:main:main",
+      trigger: "gateway",
+    };
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            "*": { deny: ["exec"] },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+      authorization,
+      requesterIdentitySource: "legacy",
+      senderIsOwner: false,
+      messageProvider: "webchat",
+      accountId: "route-account",
+      channelContext: { sender: { id: "legacy-sender" } },
+      senderName: "Legacy Name",
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toContain("exec");
+    expect(readCreateToolsArgs()).toMatchObject({
+      agentChannel: "webchat",
+      agentAccountId: "route-account",
+      senderIsOwner: true,
+      authorization: {
+        principal: authorization.principal,
+        sessionKey: "agent:main:main",
+      },
+    });
+    expect(readCreateToolsArgs().requesterSenderId).toBeUndefined();
+    expect(readCreateToolsArgs().agentMemberRoleIds).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "service",
+      principal: { kind: "service", serviceId: "scheduler" } as const,
+      requesterIdentitySource: "legacy" as const,
+    },
+    {
+      label: "unknown",
+      principal: {
+        kind: "unknown",
+        provider: "discord",
+        accountId: "unknown-account",
+      } as const,
+      requesterIdentitySource: "authority" as const,
+    },
+  ])(
+    "fails closed for $label authority despite legacy owner hints",
+    ({ principal, requesterIdentitySource }) => {
+      const result = resolveGatewayScopedTools({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        surface: "loopback",
+        authorization: { principal, sessionKey: "agent:main:main", trigger: "internal" },
+        requesterIdentitySource,
+        senderIsOwner: true,
+        messageProvider: "discord",
+        accountId: "route-account",
+        channelContext: { sender: { id: "legacy-owner" } },
+        senderName: "Legacy Owner",
+      });
+
+      expect(result.tools.map((tool) => tool.name)).not.toContain("gateway");
+      expect(readCreateToolsArgs()).toMatchObject({
+        agentChannel: "discord",
+        agentAccountId: "route-account",
+        senderIsOwner: false,
+        authorization: { principal },
+      });
+      expect(readCreateToolsArgs().requesterSenderId).toBeUndefined();
+      expect(readCreateToolsArgs().agentMemberRoleIds).toBeUndefined();
+    },
+  );
 
   it("filters node exec through plugin group policy bound to group labels", () => {
     const resolveToolPolicy = vi.fn(
@@ -630,6 +961,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
+      senderIsOwner: true,
     });
 
     expect(result.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
@@ -652,6 +984,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
+      senderIsOwner: true,
     });
 
     expect(result.tools.map((tool) => tool.name)).toEqual(["read", "cron"]);

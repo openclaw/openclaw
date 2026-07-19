@@ -4,6 +4,7 @@
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
+  abortReplyRunBySessionIdWithAuthorization,
   expireStaleReplyRunBySessionId,
   forceClearReplyRunBySessionId,
   isReplyRunEvidenceStaleBySessionId,
@@ -18,6 +19,14 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  createSteeringAuthorizationAffinity,
+  steeringAuthorizationAffinityAllowsControl,
+  steeringAuthorizationAffinitiesMatch,
+  type AuthorizedActiveRunAbortOutcome,
+  type SteeringAuthorizationControlPolicy,
+  type SteeringAuthorizationAffinity,
+} from "../../auto-reply/reply/steering-authorization-affinity.js";
+import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -29,6 +38,7 @@ import {
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
+import { createTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
@@ -67,6 +77,7 @@ type EmbeddedAgentQueueFailureReason =
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch"
+  | "authorization_affinity_mismatch"
   | "transcript_commit_wait_unsupported"
   | "runtime_rejected";
 
@@ -87,6 +98,36 @@ export type EmbeddedAgentQueueMessageOutcome =
       errorMessage?: string;
     };
 
+/**
+ * Process-issued capability for one exact active embedded attempt.
+ *
+ * The queue closure rechecks handle identity before every injection. A model
+ * fallback, restart, or replacement therefore invalidates the capability even
+ * when the session, run ID, and sender authority are unchanged.
+ */
+export type ActiveEmbeddedRunSteeringTarget = Readonly<{
+  sessionId: string;
+  runId: string;
+  queueMessageWithOutcome: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<EmbeddedAgentQueueMessageOutcome>;
+}>;
+
+/** Opaque identity for one exact active handle across an async authorization wait. */
+export type CapturedActiveEmbeddedRunIdentity = Readonly<{
+  sessionId: string;
+  isCurrent: () => boolean;
+  abortIfCurrent: () => AuthorizedActiveRunAbortOutcome;
+}>;
+
+const issuedActiveEmbeddedRunSteeringTargets = new WeakSet<object>();
+const issuedActiveEmbeddedRunIdentities = new WeakSet<object>();
+const abortedEmbeddedRunHandleByOutcome = new WeakMap<
+  object,
+  { sessionId: string; handle: EmbeddedAgentQueueHandle }
+>();
+
 type PreparedEmbeddedAgentQueueMessage =
   | {
       kind: "complete";
@@ -96,6 +137,19 @@ type PreparedEmbeddedAgentQueueMessage =
       kind: "embedded_run";
       handle: EmbeddedAgentQueueHandle;
     };
+
+// Validation-only affinity. It never reaches a backend handle. The trusted
+// harness path uses it to keep every non-authorization queue invariant owned by
+// resolveReplyBackendQueueMessageMismatch while bypassing only affinity.
+const TRUSTED_AGENT_HARNESS_QUEUE_AFFINITY = createSteeringAuthorizationAffinity({
+  turnAuthority: createTurnAuthoritySnapshot({
+    principal: { kind: "service", serviceId: "openclaw:trusted-agent-harness-queue" },
+    agentId: "openclaw",
+    sessionKey: "agent:openclaw:trusted-agent-harness-queue",
+    conversationId: "agent:openclaw:trusted-agent-harness-queue",
+    controllerKey: "service:openclaw:trusted-agent-harness-queue",
+  }),
+});
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -308,6 +362,32 @@ export function queueEmbeddedAgentMessageWithOutcome(
   options?: EmbeddedAgentQueueMessageOptions,
 ): EmbeddedAgentQueueMessageOutcome {
   const prepared = prepareEmbeddedAgentQueueMessage(sessionId, text, options);
+  return queuePreparedEmbeddedAgentMessageWithOutcome(sessionId, text, options, prepared);
+}
+
+/**
+ * Internal compatibility path for installed native agent harness plugins.
+ * The SDK wrapper is already privileged to register and abort active handles,
+ * so it may queue against the exact handle captured here without sender affinity.
+ * General runtime callers must use the strict queue functions above.
+ *
+ * @internal
+ */
+export function queueEmbeddedAgentHarnessMessageWithOutcome(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedAgentQueueMessageOptions,
+): EmbeddedAgentQueueMessageOutcome {
+  const prepared = prepareEmbeddedAgentHarnessQueueMessage(sessionId, text, options);
+  return queuePreparedEmbeddedAgentMessageWithOutcome(sessionId, text, options, prepared);
+}
+
+function queuePreparedEmbeddedAgentMessageWithOutcome(
+  sessionId: string,
+  text: string,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  prepared: PreparedEmbeddedAgentQueueMessage,
+): EmbeddedAgentQueueMessageOutcome {
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
@@ -407,6 +487,20 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   options?: EmbeddedAgentQueueMessageOptions,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
   const prepared = prepareEmbeddedAgentQueueMessage(sessionId, text, options);
+  return await queuePreparedEmbeddedAgentMessageWithOutcomeAsync(
+    sessionId,
+    text,
+    options,
+    prepared,
+  );
+}
+
+async function queuePreparedEmbeddedAgentMessageWithOutcomeAsync(
+  sessionId: string,
+  text: string,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  prepared: PreparedEmbeddedAgentQueueMessage,
+): Promise<EmbeddedAgentQueueMessageOutcome> {
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
@@ -430,12 +524,160 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   }
 }
 
+/** Capture one exact active attempt for a later trusted internal handoff. */
+export function captureActiveEmbeddedRunSteeringTarget(params: {
+  sessionId?: string;
+  runId?: string;
+  steeringAuthorizationAffinity?: SteeringAuthorizationAffinity;
+}): ActiveEmbeddedRunSteeringTarget | undefined {
+  const sessionId = params.sessionId?.trim();
+  const runId = params.runId?.trim();
+  if (!sessionId || !runId) {
+    return undefined;
+  }
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const steeringAuthorizationAffinity = handle?.steeringAuthorizationAffinity;
+  if (
+    !handle ||
+    handle.runId !== runId ||
+    !steeringAuthorizationAffinity ||
+    !steeringAuthorizationAffinitiesMatch(
+      steeringAuthorizationAffinity,
+      params.steeringAuthorizationAffinity,
+    )
+  ) {
+    return undefined;
+  }
+
+  const target: ActiveEmbeddedRunSteeringTarget = Object.freeze({
+    sessionId,
+    runId,
+    queueMessageWithOutcome: async (
+      text: string,
+      options?: EmbeddedAgentQueueMessageOptions,
+    ): Promise<EmbeddedAgentQueueMessageOutcome> => {
+      if (
+        !issuedActiveEmbeddedRunSteeringTargets.has(target) ||
+        ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
+        handle.runId !== runId
+      ) {
+        return createQueueFailureOutcome(sessionId, "no_active_run");
+      }
+      return await queueEmbeddedAgentMessageForCapturedHandle({
+        sessionId,
+        handle,
+        text,
+        options: {
+          ...options,
+          steeringAuthorizationAffinity,
+        },
+      });
+    },
+  });
+  issuedActiveEmbeddedRunSteeringTargets.add(target);
+  return target;
+}
+
+/** Capture handle identity without exposing the mutable runtime handle. */
+export function captureActiveEmbeddedRunIdentity(
+  sessionId: string,
+): CapturedActiveEmbeddedRunIdentity | undefined {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return undefined;
+  }
+  const handle = ACTIVE_EMBEDDED_RUNS.get(normalizedSessionId);
+  if (!handle) {
+    return undefined;
+  }
+  const identity: CapturedActiveEmbeddedRunIdentity = Object.freeze({
+    sessionId: normalizedSessionId,
+    isCurrent: () =>
+      issuedActiveEmbeddedRunIdentities.has(identity) &&
+      ACTIVE_EMBEDDED_RUNS.get(normalizedSessionId) === handle,
+    abortIfCurrent: (): AuthorizedActiveRunAbortOutcome => {
+      if (
+        !issuedActiveEmbeddedRunIdentities.has(identity) ||
+        ACTIVE_EMBEDDED_RUNS.get(normalizedSessionId) !== handle
+      ) {
+        return {
+          status: "not_active",
+          replacementObserved: ACTIVE_EMBEDDED_RUNS.has(normalizedSessionId),
+        };
+      }
+      if (!isEmbeddedRunHandleAbortable(normalizedSessionId, handle)) {
+        return { status: "not_abortable", replacementObserved: false };
+      }
+      try {
+        handle.abort();
+        const current = ACTIVE_EMBEDDED_RUNS.get(normalizedSessionId);
+        return Object.freeze({
+          status: "aborted" as const,
+          replacementObserved: current !== undefined && current !== handle,
+          ...(handle.steeringAuthorizationAffinity
+            ? { controlledAuthorizationAffinity: handle.steeringAuthorizationAffinity }
+            : {}),
+        });
+      } catch (error) {
+        diag.warn(`captured abort failed: sessionId=${normalizedSessionId} err=${String(error)}`);
+        return { status: "failed", replacementObserved: false };
+      }
+    },
+  });
+  issuedActiveEmbeddedRunIdentities.add(identity);
+  return identity;
+}
+
+async function queueEmbeddedAgentMessageForCapturedHandle(params: {
+  sessionId: string;
+  handle: EmbeddedAgentQueueHandle;
+  text: string;
+  options?: EmbeddedAgentQueueMessageOptions;
+}): Promise<EmbeddedAgentQueueMessageOutcome> {
+  const prepared = prepareEmbeddedAgentQueueMessageForHandle(
+    params.sessionId,
+    params.text,
+    params.options,
+    params.handle,
+    false,
+  );
+  return await queuePreparedEmbeddedAgentMessageWithOutcomeAsync(
+    params.sessionId,
+    params.text,
+    params.options,
+    prepared,
+  );
+}
+
 function prepareEmbeddedAgentQueueMessage(
   sessionId: string,
   text: string,
   options?: EmbeddedAgentQueueMessageOptions,
 ): PreparedEmbeddedAgentQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  return prepareEmbeddedAgentQueueMessageForHandle(sessionId, text, options, handle, false);
+}
+
+function prepareEmbeddedAgentHarnessQueueMessage(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedAgentQueueMessageOptions,
+): PreparedEmbeddedAgentQueueMessage {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
+  }
+  return prepareEmbeddedAgentQueueMessageForHandle(sessionId, text, options, handle, true);
+}
+
+function prepareEmbeddedAgentQueueMessageForHandle(
+  sessionId: string,
+  text: string,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  handle: EmbeddedAgentQueueHandle | undefined,
+  trustedAgentHarness: boolean,
+): PreparedEmbeddedAgentQueueMessage {
   if (!handle) {
     // A stale reply-backed run must produce the same closed reason as the
     // embedded gate so announce delivery falls through to direct instead of
@@ -495,7 +737,20 @@ function prepareEmbeddedAgentQueueMessage(
       outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
     };
   }
-  const deliveryModeMismatch = resolveReplyBackendQueueMessageMismatch(handle, options);
+  const deliveryModeMismatch = trustedAgentHarness
+    ? resolveReplyBackendQueueMessageMismatch(
+        {
+          sourceReplyDeliveryMode: handle.sourceReplyDeliveryMode,
+          steeringAuthorizationAffinity: TRUSTED_AGENT_HARNESS_QUEUE_AFFINITY,
+          supportsQueueMessageImages: handle.supportsQueueMessageImages,
+          taskSuggestionDeliveryMode: handle.taskSuggestionDeliveryMode,
+        },
+        {
+          ...options,
+          steeringAuthorizationAffinity: TRUSTED_AGENT_HARNESS_QUEUE_AFFINITY,
+        },
+      )
+    : resolveReplyBackendQueueMessageMismatch(handle, options);
   if (deliveryModeMismatch) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
     return {
@@ -603,6 +858,64 @@ export function abortEmbeddedAgentRun(
   }
 
   return false;
+}
+
+/**
+ * Abort one captured active run only when its immutable turn authority permits control.
+ * The post-abort identity check prevents a synchronous replacement from being mistaken
+ * for the run that was authorized.
+ */
+export function abortActiveRunWithSteeringAuthorization(params: {
+  sessionId: string;
+  steeringAuthorizationAffinity?: SteeringAuthorizationAffinity;
+  policy: SteeringAuthorizationControlPolicy;
+}): AuthorizedActiveRunAbortOutcome {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
+  if (!handle) {
+    return abortReplyRunBySessionIdWithAuthorization(params);
+  }
+  if (
+    !steeringAuthorizationAffinityAllowsControl({
+      expected: handle.steeringAuthorizationAffinity,
+      incoming: params.steeringAuthorizationAffinity,
+      policy: params.policy,
+    })
+  ) {
+    return { status: "unauthorized", replacementObserved: false };
+  }
+  if (!isEmbeddedRunHandleAbortable(params.sessionId, handle)) {
+    return { status: "not_abortable", replacementObserved: false };
+  }
+  diag.debug(`authorized abort: sessionId=${params.sessionId}`);
+  try {
+    handle.abort();
+    const current = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
+    const outcome: AuthorizedActiveRunAbortOutcome = Object.freeze({
+      status: "aborted",
+      replacementObserved: current !== undefined && current !== handle,
+      controlledAuthorizationAffinity: handle.steeringAuthorizationAffinity,
+    });
+    abortedEmbeddedRunHandleByOutcome.set(outcome, { sessionId: params.sessionId, handle });
+    return outcome;
+  } catch (error) {
+    diag.warn(`authorized abort failed: sessionId=${params.sessionId} err=${String(error)}`);
+    return { status: "failed", replacementObserved: false };
+  }
+}
+
+/** Recheck the captured run after an awaited controller cleanup, before clearing queues. */
+export function authorizedActiveRunAbortObservedReplacement(
+  outcome: AuthorizedActiveRunAbortOutcome,
+): boolean {
+  if (outcome.replacementObserved) {
+    return true;
+  }
+  const captured = abortedEmbeddedRunHandleByOutcome.get(outcome);
+  if (!captured) {
+    return false;
+  }
+  const current = ACTIVE_EMBEDDED_RUNS.get(captured.sessionId);
+  return current !== undefined && current !== captured.handle;
 }
 
 export function isEmbeddedAgentRunActive(sessionId: string): boolean {

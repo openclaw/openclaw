@@ -7,6 +7,12 @@ export type AuthorizationPrincipal =
       provider?: string;
       accountId?: string;
       senderId: string;
+      /** Host-attested mutable aliases, normalized to toolsBySender selector semantics. */
+      aliases?: Readonly<{
+        name?: string;
+        username?: string;
+        e164?: string;
+      }>;
       senderIsOwner?: boolean;
       isAuthorizedSender?: boolean;
       roleIds?: readonly string[];
@@ -40,6 +46,15 @@ export type AuthorizationInvocationContext = {
   threadId?: string | number;
   trigger?: string;
 };
+
+/** Immutable host-issued authority carried across one admitted turn. */
+export type TurnAuthoritySnapshot = Readonly<{
+  authorization: Readonly<AuthorizationInvocationContext>;
+  /** Stable authenticated controller boundary for queue/steering isolation. */
+  controllerKey?: string;
+  /** Optional digest of an opaque host capability; the capability itself never crosses this seam. */
+  capabilityDigest?: string;
+}>;
 
 export type AuthorizationCommandOwner =
   | { kind: "core" }

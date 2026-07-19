@@ -587,7 +587,23 @@ export async function executePreparedSendAction(
   if (pluginHandled) {
     return pluginHandled;
   }
-  throw new Error("Prepared plugin send action lost its execution route.");
+
+  // supportsAction can change between preparation and dispatch. A null means
+  // no plugin callback ran, so core delivery still owns the authorized effect.
+  const delivery = await sendCoreMessage({
+    ...params,
+    message: prepared.message,
+    queuePolicy: prepared.queuePolicy,
+    payloads: [prepared.payload],
+    effectAuthorization: options.effectAuthorization,
+    effectAuthorizationScope: options.effectAuthorizationScope,
+  });
+  return {
+    handledBy: "core",
+    payload: delivery.result,
+    ...(delivery.deliveredText ? { deliveredText: delivery.deliveredText } : {}),
+    sendResult: delivery.result,
+  };
 }
 
 /** Executes a message-tool send through plugin handlers or the core outbound path. */
@@ -614,11 +630,13 @@ export type PreparedPollAction =
 
 type PreparePollActionParams = {
   ctx: OutboundSendContext;
-  resolveCorePoll: () => CorePollAction;
+  resolveCorePoll: () => CorePollAction | Promise<CorePollAction>;
 };
 
 /** Selects the plugin or core poll route and captures core semantics before policy checks. */
-export function preparePollAction(params: PreparePollActionParams): PreparedPollAction {
+export async function preparePollAction(
+  params: PreparePollActionParams,
+): Promise<PreparedPollAction> {
   throwIfAborted(params.ctx.abortSignal);
   if (
     !params.ctx.dryRun &&
@@ -626,7 +644,7 @@ export function preparePollAction(params: PreparePollActionParams): PreparedPoll
   ) {
     return { kind: "plugin", ctx: params.ctx };
   }
-  const poll = params.resolveCorePoll();
+  const poll = await params.resolveCorePoll();
   const maxOptions = resolveOutboundChannelPlugin({
     channel: params.ctx.channel,
     cfg: params.ctx.cfg,
@@ -692,5 +710,5 @@ export async function executePreparedPollAction(
 export async function executePollAction(
   params: PreparePollActionParams,
 ): Promise<ExecutePollActionResult> {
-  return await executePreparedPollAction(preparePollAction(params));
+  return await executePreparedPollAction(await preparePollAction(params));
 }

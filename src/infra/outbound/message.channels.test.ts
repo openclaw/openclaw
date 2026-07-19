@@ -373,7 +373,7 @@ describe("gateway url override hardening", () => {
   it("re-authorizes and joins a local multi-target barrier before gateway delivery", async () => {
     setThreadChatGatewayRegistry();
     callGatewayMock.mockResolvedValueOnce({ messageId: "m1" });
-    const authorizeChangedPayload = vi.fn(async () => {});
+    const authorizeChangedPayload = vi.fn(async (payload) => payload);
     const barrier = vi.fn(async () => {});
 
     await sendMessage({

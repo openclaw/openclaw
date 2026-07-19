@@ -1,6 +1,7 @@
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -35,6 +36,52 @@ import {
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+
+const PluginEntryIdSchema = z
+  .string()
+  .refine(
+    (value) => !isBlockedObjectKey(value.trim().toLowerCase()),
+    "plugin entry id must not use a blocked object key",
+  );
+
+const ParsedPluginEntriesSchema = z
+  .record(PluginEntryIdSchema, PluginEntrySchema)
+  .superRefine((entries, ctx) => {
+    const canonicalIds = new Map<string, string>();
+    for (const rawId of Object.keys(entries)) {
+      const canonicalId = rawId.trim().toLowerCase();
+      const firstRawId = canonicalIds.get(canonicalId);
+      if (firstRawId !== undefined && firstRawId !== rawId) {
+        ctx.addIssue({
+          code: "custom",
+          message: `plugin entry id collides with ${JSON.stringify(firstRawId)} after canonicalization`,
+          path: [rawId],
+        });
+        continue;
+      }
+      canonicalIds.set(canonicalId, rawId);
+    }
+  });
+
+const PluginEntriesSchema = z.preprocess((value, ctx) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  try {
+    for (const rawId of Object.getOwnPropertyNames(value)) {
+      if (isBlockedObjectKey(rawId.trim().toLowerCase())) {
+        ctx.addIssue({
+          code: "custom",
+          message: "plugin entry id must not use a blocked object key",
+          path: [rawId],
+        });
+      }
+    }
+  } catch {
+    ctx.addIssue({ code: "custom", message: "plugin entries must be readable plain data" });
+  }
+  return value;
+}, ParsedPluginEntriesSchema);
 
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
@@ -625,7 +672,7 @@ export const OpenClawSchemaShape = {
           contextEngine: z.string().optional(),
         })
         .optional(),
-      entries: z.record(z.string(), PluginEntrySchema).optional(),
+      entries: PluginEntriesSchema.optional(),
       bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
     })
     .optional(),

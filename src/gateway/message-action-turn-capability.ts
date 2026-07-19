@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
+import { isIssuedTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
@@ -22,6 +24,8 @@ type AgentRuntimeMessageActionContextBase = {
   requesterSenderIsOwner?: boolean;
   requesterIsAuthorizedSender?: boolean;
   requesterRoleIds?: string[];
+  parentConversationId?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
   toolContext?: InternalChannelThreadingToolContext;
 };
 
@@ -43,6 +47,15 @@ type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   sessionKey: string;
 };
 
+type MessageActionRequesterIdentity = Pick<
+  AgentRuntimeMessageActionContextBase,
+  | "requesterAccountId"
+  | "requesterSenderId"
+  | "requesterSenderIsOwner"
+  | "requesterIsAuthorizedSender"
+  | "requesterRoleIds"
+>;
+
 const capabilitiesByToken = new Map<string, MessageActionTurnCapability>();
 
 export function isTrustedMessageActionTurnIngress(provider: string | null | undefined): boolean {
@@ -61,9 +74,13 @@ function resolveTtlMs(value: number | undefined): number {
 export function resolveMessageActionTurnCapabilityLifetime(
   timeoutMs: number,
 ): { expiresWithRun: true } | { ttlMs: number } {
-  return Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? { ttlMs: timeoutMs + CAPABILITY_COMPLETION_GRACE_MS }
-    : { expiresWithRun: true };
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { expiresWithRun: true };
+  }
+  const ttlMs = timeoutMs + CAPABILITY_COMPLETION_GRACE_MS;
+  // The bounded capability store still caps caller-provided TTLs. A legitimate
+  // long turn instead follows the run lifecycle and is revoked on completion.
+  return ttlMs > MAX_TTL_MS ? { expiresWithRun: true } : { ttlMs };
 }
 
 function copyToolContext(
@@ -88,6 +105,55 @@ function copyToolContext(
     sameChannelThreadRequired: context.sameChannelThreadRequired,
     skipCrossContextDecoration: context.skipCrossContextDecoration,
   };
+}
+
+function resolveMessageActionRequesterIdentity(params: {
+  turnAuthority?: TurnAuthoritySnapshot;
+  requesterAccountId?: string;
+  requesterSenderId?: string;
+  requesterSenderIsOwner?: boolean;
+  requesterIsAuthorizedSender?: boolean;
+  requesterRoleIds?: readonly string[];
+}): MessageActionRequesterIdentity {
+  const principal = params.turnAuthority?.authorization.principal;
+  if (!principal) {
+    const requesterRoleIds = normalizeSortedUniqueStringEntries(params.requesterRoleIds ?? []);
+    return {
+      requesterAccountId: normalizeOptionalString(params.requesterAccountId),
+      requesterSenderId: normalizeOptionalString(params.requesterSenderId),
+      ...(params.requesterSenderIsOwner !== undefined
+        ? { requesterSenderIsOwner: params.requesterSenderIsOwner }
+        : {}),
+      ...(params.requesterIsAuthorizedSender !== undefined
+        ? { requesterIsAuthorizedSender: params.requesterIsAuthorizedSender }
+        : {}),
+      ...(requesterRoleIds.length > 0 ? { requesterRoleIds } : {}),
+    };
+  }
+  if (principal.kind === "sender") {
+    const requesterRoleIds = normalizeSortedUniqueStringEntries(principal.roleIds ?? []);
+    return {
+      requesterAccountId: principal.accountId,
+      requesterSenderId: principal.senderId,
+      ...(principal.senderIsOwner !== undefined
+        ? { requesterSenderIsOwner: principal.senderIsOwner }
+        : {}),
+      ...(principal.isAuthorizedSender !== undefined
+        ? { requesterIsAuthorizedSender: principal.isAuthorizedSender }
+        : {}),
+      ...(requesterRoleIds.length > 0 ? { requesterRoleIds } : {}),
+    };
+  }
+  if (principal.kind === "operator") {
+    return principal.isOwner === undefined ? {} : { requesterSenderIsOwner: principal.isOwner };
+  }
+  if (principal.kind === "unknown") {
+    return {
+      requesterAccountId: principal.accountId,
+      requesterSenderIsOwner: false,
+    };
+  }
+  return { requesterSenderIsOwner: false };
 }
 
 function evictOldestCapability(): void {
@@ -122,6 +188,8 @@ export function mintMessageActionTurnCapability(params: {
   requesterSenderIsOwner?: boolean;
   requesterIsAuthorizedSender?: boolean;
   requesterRoleIds?: readonly string[];
+  parentConversationId?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
   toolContext?: InternalChannelThreadingToolContext;
   expiresWithRun?: boolean;
   ttlMs?: number;
@@ -134,33 +202,56 @@ export function mintMessageActionTurnCapability(params: {
     throw new Error("message action turn capability requires agent, run, and session identity");
   }
   const nowMs = params.nowMs ?? Date.now();
-  sweepExpiredMessageActionTurnCapabilities(nowMs);
-  while (capabilitiesByToken.size >= MAX_ACTIVE_CAPABILITIES) {
-    // A bounded fail-closed store prevents abandoned long-running turns from
-    // growing process memory without creating a second persistent state path.
-    evictOldestCapability();
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (params.turnAuthority !== undefined && !isIssuedTurnAuthoritySnapshot(params.turnAuthority)) {
+    throw new Error("message action turn capability requires host-issued turn authority");
   }
+  const turnAuthority = params.turnAuthority;
+  if (turnAuthority) {
+    const authorization = turnAuthority.authorization;
+    if (
+      normalizeAgentId(authorization.agentId) !== agentId ||
+      authorization.runId !== runId ||
+      authorization.sessionKey !== sessionKey ||
+      normalizeOptionalString(authorization.sessionId) !== sessionId
+    ) {
+      throw new Error("message action turn authority does not match execution identity");
+    }
+  }
+  // Signed authority is canonical. Legacy siblings apply only when no issued
+  // principal exists, so callers cannot combine identities across trust paths.
+  const requesterIdentity = resolveMessageActionRequesterIdentity({
+    turnAuthority,
+    requesterAccountId: params.requesterAccountId,
+    requesterSenderId: params.requesterSenderId,
+    requesterSenderIsOwner: params.requesterSenderIsOwner,
+    requesterIsAuthorizedSender: params.requesterIsAuthorizedSender,
+    requesterRoleIds: params.requesterRoleIds,
+  });
   const token = randomBytes(32).toString("base64url");
-  const requesterRoleIds = normalizeSortedUniqueStringEntries(params.requesterRoleIds ?? []);
-  capabilitiesByToken.set(token, {
+  const capability: MessageActionTurnCapability = {
     agentId,
     runId,
     sessionKey,
     expiresAtMs: params.expiresWithRun
       ? RUN_LIFETIME_EXPIRES_AT_MS
       : nowMs + resolveTtlMs(params.ttlMs),
-    sessionId: normalizeOptionalString(params.sessionId),
-    requesterAccountId: normalizeOptionalString(params.requesterAccountId),
-    requesterSenderId: normalizeOptionalString(params.requesterSenderId),
-    ...(params.requesterSenderIsOwner !== undefined
-      ? { requesterSenderIsOwner: params.requesterSenderIsOwner }
-      : {}),
-    ...(params.requesterIsAuthorizedSender !== undefined
-      ? { requesterIsAuthorizedSender: params.requesterIsAuthorizedSender }
-      : {}),
-    ...(requesterRoleIds.length > 0 ? { requesterRoleIds } : {}),
+    sessionId,
+    ...requesterIdentity,
+    parentConversationId: normalizeOptionalString(params.parentConversationId),
+    ...(turnAuthority ? { turnAuthority } : {}),
     toolContext: copyToolContext(params.toolContext),
-  });
+  };
+
+  // Finish every fallible validation and normalization before mutating the
+  // bounded shared store; a rejected mint must not evict another live turn.
+  sweepExpiredMessageActionTurnCapabilities(nowMs);
+  while (capabilitiesByToken.size >= MAX_ACTIVE_CAPABILITIES) {
+    // A bounded fail-closed store prevents abandoned long-running turns from
+    // growing process memory without creating a second persistent state path.
+    evictOldestCapability();
+  }
+  capabilitiesByToken.set(token, capability);
   return token;
 }
 
@@ -189,7 +280,7 @@ export function resolveMessageActionTurnCapability(params: {
     capability.agentId !== normalizeAgentId(params.agentId) ||
     capability.runId !== params.runId?.trim() ||
     capability.sessionKey !== params.sessionKey.trim() ||
-    (capability.sessionId && capability.sessionId !== normalizeOptionalString(params.sessionId))
+    capability.sessionId !== normalizeOptionalString(params.sessionId)
   ) {
     return undefined;
   }
@@ -201,6 +292,8 @@ export function resolveMessageActionTurnCapability(params: {
     requesterSenderIsOwner: capability.requesterSenderIsOwner,
     requesterIsAuthorizedSender: capability.requesterIsAuthorizedSender,
     requesterRoleIds: capability.requesterRoleIds ? [...capability.requesterRoleIds] : undefined,
+    parentConversationId: capability.parentConversationId,
+    turnAuthority: capability.turnAuthority,
     toolContext: copyToolContext(capability.toolContext),
   };
 }

@@ -126,6 +126,8 @@ export type SessionMcpRuntimeManager = {
   getOrCreate: (params: {
     sessionId: string;
     sessionKey?: string;
+    /** Adjacent agent identity for unscoped global/custom session keys. */
+    agentId?: string;
     workspaceDir: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
@@ -142,6 +144,8 @@ export type SessionMcpRuntimeManager = {
   getOrCreateRequesterScoped: (params: {
     sessionId: string;
     sessionKey?: string;
+    /** Adjacent agent identity for unscoped global/custom session keys. */
+    agentId?: string;
     workspaceDir: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
@@ -158,6 +162,7 @@ export type SessionMcpRuntimeManager = {
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
+  resolveAgentSessionId: (agentId: string, sessionKey: string) => string | undefined;
   /** Looks up an existing runtime only; must not create runtimes or connect transports. */
   peekSession: (params: {
     sessionId?: string;

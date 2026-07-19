@@ -114,6 +114,12 @@ export type PluginInspectReport = {
     requiredPolicies: Array<{
       id: string;
       operations: AuthorizationOperation[];
+      scope?: {
+        agentIds?: string[];
+        providers?: string[];
+        accountIds?: string[];
+        conversationIds?: string[];
+      };
       status: "not-runtime-inspected" | "ready" | "missing-registration" | "missing-handler";
       missingOperations: AuthorizationOperation[];
     }>;
@@ -164,6 +170,19 @@ function readAuthorizationPolicyOperations(value: unknown): AuthorizationOperati
   }
 }
 
+type RequiredAuthorizationPolicyInspect =
+  PluginInspectReport["authorizationPolicies"]["requiredPolicies"][number];
+
+function attachRequiredAuthorizationPolicyScope(
+  report: RequiredAuthorizationPolicyInspect,
+  scope: RequiredAuthorizationPolicyInspect["scope"],
+): RequiredAuthorizationPolicyInspect {
+  if (scope) {
+    report.scope = structuredClone(scope);
+  }
+  return report;
+}
+
 function buildAuthorizationPolicyInspect(params: {
   plugin: PluginRegistry["plugins"][number];
   policyEntry: ReturnType<typeof normalizePluginsConfig>["entries"][string] | undefined;
@@ -184,31 +203,40 @@ function buildAuthorizationPolicyInspect(params: {
         required.operations.includes(operation),
       );
       if (!runtimeInspected) {
-        return {
-          id: required.id,
-          operations,
-          status: "not-runtime-inspected" as const,
-          missingOperations: [],
-        };
+        return attachRequiredAuthorizationPolicyScope(
+          {
+            id: required.id,
+            operations,
+            status: "not-runtime-inspected",
+            missingOperations: [],
+          },
+          required.scope,
+        );
       }
       const registration = registrationsById.get(required.id);
       if (!registration) {
-        return {
-          id: required.id,
-          operations,
-          status: "missing-registration" as const,
-          missingOperations: [...operations],
-        };
+        return attachRequiredAuthorizationPolicyScope(
+          {
+            id: required.id,
+            operations,
+            status: "missing-registration",
+            missingOperations: [...operations],
+          },
+          required.scope,
+        );
       }
       const missingOperations = operations.filter(
         (operation) => !registration.operations.includes(operation),
       );
-      return {
-        id: required.id,
-        operations,
-        status: missingOperations.length > 0 ? ("missing-handler" as const) : ("ready" as const),
-        missingOperations,
-      };
+      return attachRequiredAuthorizationPolicyScope(
+        {
+          id: required.id,
+          operations,
+          status: missingOperations.length > 0 ? "missing-handler" : "ready",
+          missingOperations,
+        },
+        required.scope,
+      );
     },
   );
 

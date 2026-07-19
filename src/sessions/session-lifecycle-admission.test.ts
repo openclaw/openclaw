@@ -2,6 +2,8 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { createAuthorizationPrincipal } from "../plugins/authorization-policy-context.js";
+import { createTurnAuthoritySnapshot } from "../plugins/turn-authority.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -10,6 +12,7 @@ import {
 import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
+  collectSessionWorkAdmissionControlSnapshots,
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
@@ -27,6 +30,19 @@ function createDeferred() {
   return { promise, resolve };
 }
 
+function createAdmissionTurnAuthority(sessionKey: string) {
+  return createTurnAuthoritySnapshot({
+    principal: createAuthorizationPrincipal({
+      provider: "discord",
+      senderId: "maintainer",
+      isAuthorizedSender: true,
+    }),
+    agentId: "main",
+    sessionKey,
+    controllerKey: "sender:discord:maintainer",
+  });
+}
+
 it("counts one multi-identity admission once", async () => {
   const admission = await beginSessionWorkAdmission({
     scope: "store-count",
@@ -39,6 +55,51 @@ it("counts one multi-identity admission once", async () => {
     admission.release();
   }
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+});
+
+it("snapshots unique foreign admission authority and supports late attachment", async () => {
+  const scope = "store-control-snapshot";
+  const sessionKey = "agent:main:control-snapshot";
+  const sessionId = "session-control-snapshot";
+  const turnAuthority = createAdmissionTurnAuthority(sessionKey);
+  const attributed = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey, sessionId],
+    assertAllowed: () => {},
+    turnAuthority,
+  });
+  const late = await beginSessionWorkAdmission({
+    scope,
+    identities: [sessionKey, sessionId],
+    assertAllowed: () => {},
+  });
+
+  try {
+    const initial = collectSessionWorkAdmissionControlSnapshots({
+      scope,
+      identities: [sessionKey, sessionId],
+    });
+    expect(initial).toHaveLength(2);
+    expect(initial.filter((snapshot) => snapshot.turnAuthority === turnAuthority)).toHaveLength(1);
+    expect(initial.filter((snapshot) => snapshot.turnAuthority === undefined)).toHaveLength(1);
+    expect(Object.isFrozen(initial)).toBe(true);
+
+    await attributed.run(async () => {
+      expect(
+        collectSessionWorkAdmissionControlSnapshots({ scope, identities: [sessionId] }),
+      ).toEqual([{}]);
+    });
+
+    late.setTurnAuthority(turnAuthority);
+    expect(
+      collectSessionWorkAdmissionControlSnapshots({ scope, identities: [sessionKey] }).every(
+        (snapshot) => snapshot.turnAuthority === turnAuthority,
+      ),
+    ).toBe(true);
+  } finally {
+    attributed.release();
+    late.release();
+  }
 });
 
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {

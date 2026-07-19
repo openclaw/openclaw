@@ -91,8 +91,50 @@ describe("whatsapp group policy", () => {
       resolveWhatsAppGroupToolPolicy({
         cfg,
         groupId: "1203630@g.us",
+        senderMessageProvider: "whatsapp",
         senderId: "alice",
       }),
     ).toEqual({ allow: ["message.send"] });
+  });
+
+  it("matches a cross-route sender against its admitted source provider", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "1203630@g.us": {
+              tools: { deny: ["exec"] },
+              toolsBySender: {
+                "channel:discord:alice": { allow: ["message.send"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveWhatsAppGroupToolPolicy({
+        cfg,
+        groupId: "1203630@g.us",
+        senderMessageProvider: "discord",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["message.send"] });
+    expect(
+      resolveWhatsAppGroupToolPolicy({
+        cfg,
+        groupId: "1203630@g.us",
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveWhatsAppGroupToolPolicy({
+        cfg,
+        groupId: "1203630@g.us",
+        senderMessageProvider: null,
+        senderId: "alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
   });
 });

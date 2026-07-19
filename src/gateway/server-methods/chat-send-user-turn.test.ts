@@ -5,8 +5,24 @@ import {
   type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { isIssuedTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+import {
+  applyChatSendManagedMediaFields,
+  createChatSendTurnAuthority,
+  prepareChatSendUserTurn,
+} from "./chat-send-user-turn.js";
+
+function prepareUserTurn(
+  params: Omit<Parameters<typeof prepareChatSendUserTurn>[0], "admission" | "turnAuthority"> & {
+    admission: Parameters<typeof createChatSendTurnAuthority>[0]["admission"];
+  },
+) {
+  return prepareChatSendUserTurn({
+    ...params,
+    turnAuthority: createChatSendTurnAuthority(params),
+  });
+}
 
 function createUserTurnInputController() {
   const baseInput: UserTurnInput = {
@@ -62,7 +78,7 @@ function createAttachments(
 describe("prepareChatSendUserTurn", () => {
   it("assembles command, provenance, sender, and origin facts", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    const prepared = prepareChatSendUserTurn({
+    const prepared = prepareUserTurn({
       request: {
         clientInfo: createClientInfo({ displayName: "Gateway CLI" }),
         normalizedAttachments: [],
@@ -77,6 +93,7 @@ describe("prepareChatSendUserTurn", () => {
         sessionKey: "agent:main:main",
       },
       admission: {
+        admittedSessionId: "session-1",
         originatingRoute: {
           originatingChannel: "discord",
           originatingTo: "channel:1",
@@ -125,7 +142,7 @@ describe("prepareChatSendUserTurn", () => {
 
   it("carries pre-staged media and device ownership without UI sender decoration", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    const prepared = prepareChatSendUserTurn({
+    const prepared = prepareUserTurn({
       request: {
         clientInfo: createClientInfo({
           id: GATEWAY_CLIENT_IDS.CONTROL_UI,
@@ -142,6 +159,7 @@ describe("prepareChatSendUserTurn", () => {
         sessionKey: "agent:main:main",
       },
       admission: {
+        admittedSessionId: "session-1",
         originatingRoute: {
           originatingChannel: "webchat",
           explicitDeliverRoute: false,
@@ -154,6 +172,7 @@ describe("prepareChatSendUserTurn", () => {
       }),
       client: {
         connId: "conn-1",
+        pairedClientId: "paired-control-ui",
         connect: {
           device: { id: "device-1" },
           scopes: ["operator.admin"],
@@ -183,8 +202,68 @@ describe("prepareChatSendUserTurn", () => {
       GatewayClientCaps: ["tool-events"],
     });
     expect(prepared.ctx).not.toHaveProperty("SenderId");
+    expect(isIssuedTurnAuthoritySnapshot(prepared.ctx.TurnAuthority)).toBe(true);
+    expect(prepared.ctx.TurnAuthority).toMatchObject({
+      authorization: {
+        sessionId: "session-1",
+        principal: {
+          kind: "operator",
+          scopes: ["operator.admin"],
+          clientId: "paired-control-ui",
+          deviceId: "device-1",
+          isOwner: true,
+        },
+      },
+      controllerKey: "device:device-1",
+      capabilityDigest: expect.any(String),
+    });
     expect(prepared.queuedFollowupOwnerKey).toBe("device:device-1");
     await expect(readInput()).resolves.toEqual(controller.baseInput);
+  });
+
+  it("isolates device-less operators by authenticated connection and scope", () => {
+    const prepare = (connId: string, scopes: string[]) => {
+      const { controller } = createUserTurnInputController();
+      return prepareUserTurn({
+        request: {
+          clientInfo: createClientInfo({
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+          }),
+          normalizedAttachments: [],
+          suppressCommandInterpretation: false,
+        },
+        session: { agentId: "main", clientRunId: `run-${connId}`, sessionKey: "agent:main:main" },
+        admission: {
+          admittedSessionId: "session-1",
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments(),
+        client: {
+          connId,
+          pairedClientId: "paired-control-ui",
+          connect: { scopes, caps: [] },
+        } as never,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+    };
+
+    const admin = prepare("conn-admin", ["operator.admin"]);
+    const writer = prepare("conn-writer", ["operator.write"]);
+
+    expect(admin.ctx.TurnAuthority?.controllerKey).toBe("connection:conn-admin");
+    expect(writer.ctx.TurnAuthority?.controllerKey).toBe("connection:conn-writer");
+    expect(admin.ctx.TurnAuthority?.authorization.principal).toMatchObject({
+      kind: "operator",
+      scopes: ["operator.admin"],
+      isOwner: true,
+    });
+    expect(writer.ctx.TurnAuthority?.authorization.principal).toMatchObject({
+      kind: "operator",
+      scopes: ["operator.write"],
+      isOwner: false,
+    });
   });
 });
 

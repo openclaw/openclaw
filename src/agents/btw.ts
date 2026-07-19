@@ -19,6 +19,7 @@ import type {
   Model,
   TextContent,
 } from "../llm/types.js";
+import type { TurnAuthoritySnapshot } from "../plugins/authorization-policy.types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
@@ -583,6 +584,7 @@ type RunBtwSideQuestionParams = {
   sessionEntry: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
+  turnAuthority?: TurnAuthoritySnapshot;
   sandboxSessionKey?: string;
   storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
@@ -947,6 +949,7 @@ export async function runBtwSideQuestion(
       },
       sessionId,
       sessionFile,
+      ...(params.turnAuthority ? { turnAuthority: params.turnAuthority } : {}),
       agentId: sessionAgentId,
       workspaceDir,
       ...(toolsAllow ? { toolsAllow } : {}),

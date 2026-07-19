@@ -10,6 +10,7 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { rebindTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -74,6 +75,16 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     const runId = params.opts?.runId ?? `btw-${randomUUID()}`;
     const currentChannelProvider = normalizeAnyChannelId(params.ctx.Provider);
     const capabilitySessionKey = params.ctx.RuntimePolicySessionKey ?? params.sessionKey;
+    const turnAuthority =
+      sessionAgentId && capabilitySessionKey
+        ? rebindTurnAuthoritySnapshot(params.ctx.TurnAuthority, {
+            agentId: sessionAgentId,
+            sessionKey: capabilitySessionKey,
+            sessionId: targetSessionEntry.sessionId,
+            runId,
+            trigger: "user",
+          })
+        : undefined;
     const messageActionTurnCapability =
       isTrustedMessageActionTurnIngress(params.ctx.Provider) &&
       sessionAgentId &&
@@ -90,6 +101,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
             requesterSenderIsOwner: params.command.senderIsOwner,
             requesterIsAuthorizedSender: params.command.isAuthorizedSender,
             requesterRoleIds: memberRoleIds,
+            turnAuthority,
             toolContext: {
               currentChannelId,
               currentChatType: chatType,
@@ -110,6 +122,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
         sessionEntry: targetSessionEntry,
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
+        ...(turnAuthority ? { turnAuthority } : {}),
         ...(params.ctx.RuntimePolicySessionKey
           ? { sandboxSessionKey: params.ctx.RuntimePolicySessionKey }
           : {}),

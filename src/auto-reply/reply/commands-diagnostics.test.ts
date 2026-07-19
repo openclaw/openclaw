@@ -5,6 +5,7 @@ import { clearPluginCommands, registerPluginCommand } from "../../plugins/comman
 import { createPluginRegistry } from "../../plugins/registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createBundledPluginRecord } from "../../plugins/status.test-fixtures.js";
+import { createOperatorTurnAuthoritySnapshot } from "../../plugins/turn-authority.js";
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "../../plugins/types.js";
 
 type PluginCommandHandler = OpenClawPluginCommandDefinition["handler"];
@@ -652,6 +653,47 @@ describe("diagnostics command", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(commandHandler).toHaveBeenCalledTimes(1);
     expect(result?.reply?.text).toBe("confirmed diagnostics confirm abc123def456");
+  });
+
+  it("preserves operator authority when diagnostics delegates to the Codex command", async () => {
+    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    const commandHandler = vi.fn(async (ctx: PluginCommandContext) => ({
+      text: JSON.stringify({
+        senderId: ctx.senderId,
+        senderIsOwner: ctx.senderIsOwner,
+        isAuthorizedSender: ctx.isAuthorizedSender,
+        gatewayClientScopes: ctx.gatewayClientScopes,
+      }),
+    }));
+    registerHostTrustedReservedCommandForTest({
+      name: "codex",
+      description: "Codex command",
+      acceptsArgs: true,
+      handler: commandHandler,
+      ownership: "reserved",
+    });
+    const params = buildDiagnosticsParams("/diagnostics confirm abc123def456");
+    params.ctx.GatewayClientScopes = ["operator.admin"];
+    params.ctx.TurnAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      pairedClientId: "control-ui",
+      connectionId: "connection-1",
+      isOwner: false,
+      agentId: "main",
+      sessionKey: params.sessionKey,
+      trigger: "gateway",
+    });
+
+    const result = await handleDiagnosticsCommand(params, true);
+
+    expect(commandHandler).toHaveBeenCalledTimes(1);
+    expect(result?.reply?.text).toBe(
+      JSON.stringify({
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
   });
 
   it("does not delegate diagnostics to a non-Codex plugin command", async () => {

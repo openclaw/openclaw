@@ -28,7 +28,9 @@ type AdvertisedScopedCatalogEntry = {
 
 type SessionMcpRuntimeManagerStore = {
   runtimesBySessionId: Map<string, SessionMcpRuntime>;
-  sessionIdBySessionKey: Map<string, string>;
+  // Raw custom keys can be shared by adjacent agents. Keep their owner-bound
+  // candidates so unscoped lookups can fail closed while the key is ambiguous.
+  sessionIdsBySessionKeyOwner: Map<string, Map<string, string>>;
   idleTtlMsBySessionId: Map<string, number>;
   deferredRetirementSessionIds: Set<string>;
   // Reset/delete retirement survives late creation or reuse by the stopping run.
@@ -73,7 +75,7 @@ export function createSessionMcpRuntimeManagerStore(
   return {
     // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
     runtimesBySessionId: new Map<string, SessionMcpRuntime>(),
-    sessionIdBySessionKey: new Map<string, string>(),
+    sessionIdsBySessionKeyOwner: new Map<string, Map<string, string>>(),
     idleTtlMsBySessionId: new Map<string, number>(),
     deferredRetirementSessionIds: new Set<string>(),
     requiredRetirementSessionIds: new Set<string>(),
@@ -143,9 +145,14 @@ export function createSessionMcpRuntimeManagerLifecycle(
   store: SessionMcpRuntimeManagerStore,
 ): SessionMcpRuntimeManagerLifecycle {
   const forgetSessionKeysForSessionId = (sessionId: string) => {
-    for (const [sessionKey, mappedSessionId] of store.sessionIdBySessionKey.entries()) {
-      if (mappedSessionId === sessionId) {
-        store.sessionIdBySessionKey.delete(sessionKey);
+    for (const [sessionKey, bindings] of store.sessionIdsBySessionKeyOwner.entries()) {
+      for (const [ownerKey, mappedSessionId] of bindings.entries()) {
+        if (mappedSessionId === sessionId) {
+          bindings.delete(ownerKey);
+        }
+      }
+      if (bindings.size === 0) {
+        store.sessionIdsBySessionKeyOwner.delete(sessionKey);
       }
     }
   };

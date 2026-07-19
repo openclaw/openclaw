@@ -16,6 +16,6 @@ export function resolveQQBotGroupToolPolicy(
     ...params,
     tree,
     path: scopeKey ? [scopeKey] : [],
-    messageProvider: "qqbot",
+    messageProvider: params.senderMessageProvider,
   });
 }

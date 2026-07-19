@@ -23,6 +23,8 @@ export function createQueueTestRun(params: {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  originatingChatId?: string;
+  originatingParentConversationId?: string;
   originatingReplyToId?: string;
   originatingReplyToMode?: FollowupRun["originatingReplyToMode"];
   originatingChatType?: string;
@@ -36,6 +38,8 @@ export function createQueueTestRun(params: {
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
     originatingThreadId: params.originatingThreadId,
+    originatingChatId: params.originatingChatId,
+    originatingParentConversationId: params.originatingParentConversationId,
     originatingReplyToId: params.originatingReplyToId,
     originatingReplyToMode: params.originatingReplyToMode,
     originatingChatType: params.originatingChatType,

@@ -40,6 +40,7 @@ import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
+import { resolveInlineToolTurnAuthority } from "./inline-tool-turn-authority.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
@@ -359,9 +360,42 @@ export async function handleInlineActions(params: {
       return { kind: "reply", reply: undefined };
     }
 
+    const dispatch = skillInvocation.command.dispatch;
+    const inlineToolTurnAuthority =
+      dispatch?.kind === "tool"
+        ? resolveInlineToolTurnAuthority({
+            ctx,
+            agentId,
+            sessionKey,
+            sessionId: targetSessionEntry?.sessionId,
+            runId: opts?.runId,
+          })
+        : undefined;
+    const inlineToolDispatch =
+      dispatch?.kind === "tool"
+        ? inlineToolTurnAuthority
+          ? { dispatch, turnAuthority: inlineToolTurnAuthority }
+          : null
+        : undefined;
+    if (inlineToolDispatch === null) {
+      typing.cleanup();
+      return {
+        kind: "reply",
+        reply: markCommandReplyForDelivery({
+          text: resolveCommandAuthorizationDenialText({
+            denied: true,
+            kind: "error",
+            pluginId: "authorization-engine",
+            policyId: "turn-authority",
+            code: "turn-authority-invalid",
+          }),
+        }),
+      };
+    }
+
     const authorization = await authorizeCommandInvocation({
       command,
-      ctx,
+      ctx: inlineToolTurnAuthority ? { ...ctx, TurnAuthority: inlineToolTurnAuthority } : ctx,
       commandName: skillInvocation.command.name,
       config: cfg,
       owner: {
@@ -375,6 +409,7 @@ export async function handleInlineActions(params: {
       agentId,
       sessionKey,
       sessionId: targetSessionEntry?.sessionId,
+      runId: opts?.runId,
       signal: opts?.abortSignal,
     });
     if (!authorization.allowed) {
@@ -387,27 +422,32 @@ export async function handleInlineActions(params: {
       };
     }
 
-    const dispatch = skillInvocation.command.dispatch;
-    if (dispatch?.kind === "tool") {
+    if (inlineToolDispatch) {
+      const { dispatch: toolDispatch, turnAuthority } = inlineToolDispatch;
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await loadSkillToolDispatchRuntime();
+      const admittedPrincipal = turnAuthority.authorization.principal;
+      const admittedSender = admittedPrincipal?.kind === "sender" ? admittedPrincipal : undefined;
+      const admittedOperator =
+        admittedPrincipal?.kind === "operator" ? admittedPrincipal : undefined;
+      const conversationId = turnAuthority.authorization.conversationId;
       const authorizedTools = resolveSkillDispatchTools({
         message: {
           surface: ctx.Surface,
           provider: ctx.Provider,
           accountId: ctx.AccountId,
-          senderId: ctx.SenderId,
-          senderName: ctx.SenderName,
-          senderUsername: ctx.SenderUsername,
-          senderE164: ctx.SenderE164,
-          senderIsOwner: command.senderIsOwner,
-          isAuthorizedSender: command.isAuthorizedSender,
+          senderId: admittedSender?.senderId,
+          senderName: admittedSender?.aliases?.name,
+          senderUsername: admittedSender?.aliases?.username,
+          senderE164: admittedSender?.aliases?.e164,
+          senderIsOwner: admittedSender?.senderIsOwner ?? admittedOperator?.isOwner,
+          isAuthorizedSender: admittedSender?.isAuthorizedSender,
           originatingTo: ctx.OriginatingTo,
           to: ctx.To,
-          nativeChannelId: ctx.NativeChannelId,
-          messageThreadId: ctx.MessageThreadId,
+          nativeChannelId: conversationId,
+          messageThreadId: ctx.MessageThreadId ?? ctx.TransportThreadId,
           threadParentId: ctx.ThreadParentId,
-          memberRoleIds: ctx.MemberRoleIds,
+          memberRoleIds: admittedSender?.roleIds ? [...admittedSender.roleIds] : undefined,
         },
         cfg,
         agentId,
@@ -417,9 +457,11 @@ export async function handleInlineActions(params: {
         workspaceDir,
         provider,
         model,
-        senderId: command.senderId,
-        currentChannelId: command.channelId,
+        runId: opts?.runId,
+        senderId: admittedSender?.senderId,
+        currentChannelId: conversationId,
         groupId: extractExplicitGroupId(ctx.From),
+        turnAuthority,
         skillCommand: {
           name: skillInvocation.command.name,
           ...(skillInvocation.command.skillFile
@@ -429,17 +471,17 @@ export async function handleInlineActions(params: {
           ...(skillInvocation.command.skillSource
             ? { skillSource: skillInvocation.command.skillSource }
             : {}),
-          toolName: dispatch.toolName,
+          toolName: toolDispatch.toolName,
         },
       });
 
-      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
+      const tool = authorizedTools.find((candidate) => candidate.name === toolDispatch.toolName);
       if (!tool) {
         typing.cleanup();
         return {
           kind: "reply",
           reply: markCommandReplyForDelivery({
-            text: `❌ Tool not available: ${dispatch.toolName}`,
+            text: `❌ Tool not available: ${toolDispatch.toolName}`,
           }),
         };
       }

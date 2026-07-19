@@ -7,6 +7,8 @@ import {
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
 import type {
+  AcpSessionCancelTarget,
+  AcpSessionResolution,
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
   ResolveManagerSession,
@@ -20,33 +22,50 @@ export async function runManagerCancelSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason?: string;
+  /** Refuse to cancel any ACP session other than this exact authorized target. */
+  expectedTarget?: AcpSessionCancelTarget;
   activeTurnBySession: Map<string, ActiveTurnState>;
   withSessionActor: WithManagerSessionActor;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
-}): Promise<void> {
+}): Promise<boolean> {
   const actorKey = normalizeActorKey(params.sessionKey);
   const activeTurn = params.activeTurnBySession.get(actorKey);
   if (activeTurn) {
+    if (
+      !resolvedSessionMatchesExpected(params) ||
+      !runtimeHandleMatchesExpected(activeTurn.handle, params.expectedTarget)
+    ) {
+      return false;
+    }
     await cancelActiveTurn({
       activeTurn,
       reason: params.reason,
     });
-    return;
+    return true;
   }
 
-  await params.withSessionActor(params.sessionKey, async () => {
+  return await params.withSessionActor(params.sessionKey, async () => {
     const resolution = params.resolveSession({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
     });
+    if (!resolutionMatchesExpectedTarget(resolution, params.expectedTarget)) {
+      return false;
+    }
     const resolvedMeta = requireReadySessionMeta(resolution);
     const { runtime, handle } = await params.ensureRuntimeHandle({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       meta: resolvedMeta,
     });
+    if (
+      !runtimeHandleMatchesExpected(handle, params.expectedTarget) ||
+      !resolvedSessionMatchesExpected(params)
+    ) {
+      return false;
+    }
     try {
       await cancelRuntimeHandle({
         runtime,
@@ -69,7 +88,60 @@ export async function runManagerCancelSession(params: {
       });
       throw acpError;
     }
+    return true;
   });
+}
+
+function resolvedSessionMatchesExpected(
+  params: Pick<
+    Parameters<typeof runManagerCancelSession>[0],
+    "cfg" | "expectedTarget" | "resolveSession" | "sessionKey"
+  >,
+): boolean {
+  const resolution = params.resolveSession({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  return resolutionMatchesExpectedTarget(resolution, params.expectedTarget);
+}
+
+function resolutionMatchesExpectedTarget(
+  resolution: AcpSessionResolution,
+  expected: AcpSessionCancelTarget | undefined,
+): boolean {
+  if (!expected) {
+    return true;
+  }
+  if (
+    resolution.kind !== "ready" ||
+    resolution.entry?.sessionId !== expected.sessionId ||
+    resolution.meta.backend !== expected.backend ||
+    resolution.meta.agent !== expected.agent ||
+    resolution.meta.runtimeSessionName !== expected.runtimeSessionName
+  ) {
+    return false;
+  }
+  const currentIdentity = resolution.meta.identity;
+  if (!expected.identity || !currentIdentity) {
+    return expected.identity === currentIdentity;
+  }
+  return (
+    currentIdentity.state === expected.identity.state &&
+    currentIdentity.acpxRecordId === expected.identity.acpxRecordId &&
+    currentIdentity.acpxSessionId === expected.identity.acpxSessionId &&
+    currentIdentity.agentSessionId === expected.identity.agentSessionId
+  );
+}
+
+function runtimeHandleMatchesExpected(
+  handle: AcpRuntimeHandle,
+  expected: AcpSessionCancelTarget | undefined,
+): boolean {
+  return (
+    !expected ||
+    (handle.backend === expected.backend &&
+      handle.runtimeSessionName === expected.runtimeSessionName)
+  );
 }
 
 async function cancelActiveTurn(params: {

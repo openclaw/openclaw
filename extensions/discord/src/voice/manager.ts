@@ -721,6 +721,7 @@ export class DiscordVoiceManager {
     };
 
     const entry: VoiceSessionEntry = {
+      accountId: this.params.accountId,
       guildId,
       guildName:
         channelInfo &&

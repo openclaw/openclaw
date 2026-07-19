@@ -282,6 +282,41 @@ describe("irc inbound behavior", () => {
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
 
+  it("keeps a host-less mutable nick out of authenticated sender identity", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({
+        target: "#ops",
+        isGroup: true,
+        senderHost: undefined,
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          groups: { "#ops": { enabled: true, requireMention: false } },
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      sendReply: vi.fn(async () => {}),
+    });
+
+    const dispatch = coreRuntime.channel.inbound.dispatch as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const ctx = (
+      dispatch.mock.calls[0]?.[0] as { ctxPayload?: Record<string, unknown> } | undefined
+    )?.ctxPayload;
+    expect(ctx?.SenderId).toBeUndefined();
+    expect(ctx?.SenderName).toBe("alice");
+    expect(ctx?.InboundAccessAuthorized).toBe(true);
+  });
+
   it("drops a spoofed sender for a host-less nick!user DM allowlist entry", async () => {
     const coreRuntime = createPluginRuntimeMock();
     const runtime = createRuntimeEnv();

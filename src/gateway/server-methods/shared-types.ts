@@ -74,6 +74,8 @@ export type GatewayClient = {
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
   isDeviceTokenAuth?: boolean;
   internal?: {
+    /** Set only by trusted in-process dispatchers; never derived from wire client metadata. */
+    inProcessGatewayDispatch?: boolean;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;

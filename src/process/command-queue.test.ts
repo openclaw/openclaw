@@ -28,6 +28,7 @@ vi.mock("../logging/diagnostic-runtime.js", () => ({
 type CommandQueueModule = typeof import("./command-queue.js");
 
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
+let clearCommandLaneByAuthorizationAffinity: CommandQueueModule["clearCommandLaneByAuthorizationAffinity"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
@@ -98,6 +99,7 @@ describe("command queue", () => {
   beforeAll(async () => {
     ({
       clearCommandLane,
+      clearCommandLaneByAuthorizationAffinity,
       CommandLaneClearedError,
       enqueueCommandInLane,
       GatewayDrainingError,
@@ -830,6 +832,43 @@ describe("command queue", () => {
     // Let the active task finish normally.
     release();
     await expect(first).resolves.toBe("first");
+  });
+
+  it("clears only queued entries with the same authorization affinity", async () => {
+    const lane = `authority-clear-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const blocker = createDeferred();
+    const started = createDeferred();
+    const calls: string[] = [];
+    const first = enqueueCommandInLane(lane, async () => {
+      started.resolve();
+      await blocker.promise;
+      calls.push("active");
+    });
+    await started.promise;
+    const sameOwner = enqueueCommandInLane(
+      lane,
+      async () => {
+        calls.push("same");
+      },
+      { authorizationAffinityKey: "owner-a" },
+    );
+    const foreignOwner = enqueueCommandInLane(
+      lane,
+      async () => {
+        calls.push("foreign");
+      },
+      { authorizationAffinityKey: "owner-b" },
+    );
+    const unattributed = enqueueCommandInLane(lane, async () => {
+      calls.push("unattributed");
+    });
+
+    expect(clearCommandLaneByAuthorizationAffinity(lane, "owner-a")).toBe(1);
+    await expect(sameOwner).rejects.toBeInstanceOf(CommandLaneClearedError);
+
+    blocker.resolve();
+    await Promise.all([first, foreignOwner, unattributed]);
+    expect(calls).toEqual(["active", "foreign", "unattributed"]);
   });
 
   it("keeps draining functional after synchronous onWait failure", async () => {

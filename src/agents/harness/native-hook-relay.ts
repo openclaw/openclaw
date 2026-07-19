@@ -11,6 +11,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import path from "node:path";
+import { isProxy } from "node:util/types";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -26,14 +27,15 @@ import {
   createAuthorizationInvocationContext,
   createAuthorizationPrincipal,
 } from "../../plugins/authorization-policy-context.js";
+import { materializeAuthorizationToolInput } from "../../plugins/authorization-policy-input.js";
 import {
   AUTHORIZATION_POLICY_DENIED_MESSAGE,
   hasAuthorizationPolicies,
+  hasAuthorizationPoliciesForOperation,
   runAuthorizationPolicies,
 } from "../../plugins/authorization-policy.js";
 import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
-import type { PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -163,6 +165,8 @@ type RegisterNativeHookRelayParams = {
 
 type NativeHookRelayCommandOptions = {
   executable?: string;
+  /** Wrap PreToolUse so relay spawn, timeout, and nonzero failures become a Codex block. */
+  failClosedPreToolUse?: boolean;
   nice?: number | false;
   nodeExecutable?: string;
   timeoutMs?: number;
@@ -479,6 +483,7 @@ export function registerNativeHookRelay(
         stateDbPath,
         generation: registration.generation,
         event,
+        failClosedPreToolUse: params.command?.failClosedPreToolUse,
         preToolUseUnavailable:
           event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
             ? "noop"
@@ -598,6 +603,7 @@ export function buildNativeHookRelayCommand(params: {
   relayId: string;
   generation?: string;
   event: NativeHookRelayEvent;
+  failClosedPreToolUse?: boolean;
   preToolUseUnavailable?: "noop";
   timeoutMs?: number;
   executable?: string;
@@ -613,6 +619,7 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
   stateDbPath?: string;
   generation?: string;
   event: NativeHookRelayEvent;
+  failClosedPreToolUse?: boolean;
   preToolUseUnavailable?: "noop";
   timeoutMs?: number;
   executable?: string;
@@ -626,8 +633,7 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
       ? ["openclaw"]
       : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
-  return shellQuoteArgs([
-    ...nicePrefix,
+  const relayArgv = [
     ...argv,
     "hooks",
     "relay",
@@ -639,13 +645,45 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,
+    ...(params.event === "pre_tool_use" && params.failClosedPreToolUse === true
+      ? ["--fail-closed-pre-tool-use"]
+      : []),
     ...(params.event === "pre_tool_use" && params.preToolUseUnavailable
       ? ["--pre-tool-use-unavailable", params.preToolUseUnavailable]
       : []),
     "--timeout",
     String(timeoutMs),
+  ];
+  if (params.event !== "pre_tool_use" || params.failClosedPreToolUse !== true) {
+    return shellQuoteArgs([...nicePrefix, ...relayArgv]);
+  }
+  return shellQuoteArgs([
+    params.nodeExecutable ?? process.execPath,
+    "-e",
+    FAIL_CLOSED_PRE_TOOL_USE_RELAY_SCRIPT,
+    "--",
+    String(timeoutMs + 100),
+    ...nicePrefix,
+    ...relayArgv,
   ]);
 }
+
+const FAIL_CLOSED_PRE_TOOL_USE_RELAY_SCRIPT = String.raw`
+const { spawnSync } = require("node:child_process");
+const timeout = Number(process.argv[1]);
+const executable = process.argv[2];
+const result = spawnSync(executable, process.argv.slice(3), {
+  encoding: "utf8",
+  stdio: ["inherit", "inherit", "pipe"],
+  timeout,
+});
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error || result.signal || (result.status !== 0 && result.status !== 2)) {
+  process.stderr.write("OpenClaw authorization relay failed; refusing native tool call.\n");
+  process.exit(2);
+}
+process.exit(result.status ?? 2);
+`.trim();
 
 function nativePreToolUseMayRunLoopDetection(
   registration: ActiveNativeHookRelayRegistration,
@@ -1440,7 +1478,17 @@ async function runNativeHookRelayPreToolUse(params: {
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
-  const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
+  const authorizationPolicyActive = hasAuthorizationPoliciesForOperation({
+    operation: "tool.call",
+    config: params.registration.config,
+  });
+  const rawToolInput = params.adapter.readToolInput(params.invocation.rawPayload);
+  const toolInput = authorizationPolicyActive
+    ? materializeAuthorizationToolInput(rawToolInput)
+    : rawToolInput;
+  if (authorizationPolicyActive && !toolInput) {
+    return params.adapter.renderPreToolUseBlockResponse(AUTHORIZATION_POLICY_DENIED_MESSAGE);
+  }
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
   const outcome = await runBeforeToolCallHook({
@@ -1472,7 +1520,9 @@ async function runNativeHookRelayPreToolUse(params: {
         : undefined,
     );
   }
-  const authorizationInput = outcome.params;
+  const authorizationInput = authorizationPolicyActive
+    ? materializeAuthorizationToolInput(outcome.params)
+    : outcome.params;
   if (
     !isJsonValue(authorizationInput) ||
     authorizationInput === null ||
@@ -1492,7 +1542,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(typeof authorizationInput.action === "string" && authorizationInput.action.trim()
         ? { action: authorizationInput.action.trim() }
         : {}),
-      input: authorizationInput as Record<string, PluginJsonValue>,
+      input: authorizationInput,
     },
     context:
       params.registration.authorization ??
@@ -1535,7 +1585,7 @@ async function runNativeHookRelayPreToolUse(params: {
     }
     return params.adapter.renderNoopResponse(params.invocation.event);
   }
-  if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)) {
+  if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, authorizationInput)) {
     // Codex app-server may continue with the original params when updatedInput
     // is unsupported, so rewrites must fail closed here.
     return params.adapter.renderPreToolUseBlockResponse(
@@ -2417,12 +2467,33 @@ function isJsonValue(value: unknown): value is JsonValue {
     if (typeof current.value === "boolean") {
       continue;
     }
+    if (typeof current.value === "object" && isProxy(current.value)) {
+      return false;
+    }
     if (Array.isArray(current.value)) {
-      for (const valueLocal of current.value) {
+      if (Object.getPrototypeOf(current.value) !== Array.prototype) {
+        return false;
+      }
+      const ownKeys = Reflect.ownKeys(current.value);
+      if (
+        ownKeys.some(
+          (key) =>
+            typeof key !== "string" ||
+            (key !== "length" &&
+              (!/^(?:0|[1-9]\d*)$/u.test(key) || Number(key) >= current.value.length)),
+        )
+      ) {
+        return false;
+      }
+      for (let index = 0; index < current.value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(current.value, String(index));
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          return false;
+        }
         if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
           return false;
         }
-        stack.push({ value: valueLocal, depth: current.depth + 1 });
+        stack.push({ value: descriptor.value, depth: current.depth + 1 });
       }
       continue;
     }
@@ -2430,9 +2501,9 @@ function isJsonValue(value: unknown): value is JsonValue {
       return false;
     }
     try {
-      for (const key in current.value) {
-        if (!Object.hasOwn(current.value, key)) {
-          continue;
+      for (const key of Reflect.ownKeys(current.value)) {
+        if (typeof key !== "string") {
+          return false;
         }
         if (key.length > MAX_NATIVE_HOOK_RELAY_STRING_LENGTH) {
           return false;
@@ -2444,7 +2515,11 @@ function isJsonValue(value: unknown): value is JsonValue {
         if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
           return false;
         }
-        stack.push({ value: current.value[key], depth: current.depth + 1 });
+        const descriptor = Object.getOwnPropertyDescriptor(current.value, key);
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          return false;
+        }
+        stack.push({ value: descriptor.value, depth: current.depth + 1 });
       }
     } catch {
       return false;

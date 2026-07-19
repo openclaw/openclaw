@@ -281,6 +281,7 @@ export async function runCodexAppServerSideQuestion(
   });
   const authorization = buildCodexAuthorizationContext({
     ...effectiveParams,
+    config: params.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -831,6 +832,7 @@ function registerCodexSideNativeHookRelay(params: {
     signal: params.signal,
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
+      failClosedPreToolUse: authorizationActive,
       timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
@@ -906,6 +908,7 @@ function buildSideRunAttemptParams(
       ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
       : {}),
     runId: options.runId,
+    ...(params.turnAuthority ? { turnAuthority: params.turnAuthority } : {}),
     abortSignal: params.opts?.abortSignal,
     onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {
       if (event.stream === "approval") {
@@ -1012,6 +1015,7 @@ async function createCodexSideToolBridge(input: {
       ...(input.params.isAuthorizedSender !== undefined
         ? { isAuthorizedSender: input.params.isAuthorizedSender }
         : {}),
+      ...(input.params.turnAuthority ? { turnAuthority: input.params.turnAuthority } : {}),
       ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
       hookChannelId: buildAgentHookContextChannelFields({
         sessionKey: input.params.sessionKey,

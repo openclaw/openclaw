@@ -12,6 +12,7 @@ import {
   runEmbeddedAgentMock,
   resolveCronDeliveryPlanMock,
 } from "./run.test-harness.js";
+import { createCronTurnAuthoritySnapshot } from "./turn-authority.js";
 
 const actualDeliveryPlanModule =
   await vi.importActual<typeof import("../delivery-plan.js")>("../delivery-plan.js");
@@ -430,6 +431,13 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     agentDir: "/tmp/agent-dir",
     agentSessionKey: "cron:source-delivery-guard",
     runSessionKey: "cron:source-delivery-guard:run:test-session-id",
+    turnAuthority: createCronTurnAuthoritySnapshot({
+      jobId: "source-delivery-guard",
+      agentId: "default",
+      sessionKey: "cron:source-delivery-guard:run:test-session-id",
+      sessionId: "test-session-id",
+      runId: "test-session-id",
+    }),
     workspaceDir: "/tmp/workspace",
     skillsSnapshot: emptySkillsSnapshot,
     agentPayload: null,

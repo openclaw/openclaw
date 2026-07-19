@@ -80,6 +80,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
     await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
+    expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
     expect(disposeMcp).toHaveBeenCalledOnce();
     expect(disposeLsp).toHaveBeenCalledOnce();
   });

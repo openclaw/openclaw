@@ -8,6 +8,10 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createOperatorTurnAuthoritySnapshot,
+  createTurnAuthoritySnapshot,
+} from "../../plugins/turn-authority.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -218,6 +222,36 @@ function mockToolDispatchedSkillCommand() {
     },
   ] satisfies SkillCommandSpec[]);
   return toolExecute;
+}
+
+function admitTestSenderTurn(params: {
+  ctx: ReturnType<typeof buildTestCtx>;
+  agentId?: string;
+  sessionKey?: string;
+  senderId?: string;
+  senderIsOwner?: boolean;
+}) {
+  const sessionKey = params.sessionKey ?? "s:main";
+  const authority = createTurnAuthoritySnapshot({
+    principal: {
+      kind: "sender",
+      provider: params.ctx.Surface ?? params.ctx.Provider ?? "whatsapp",
+      accountId: params.ctx.AccountId ?? "default",
+      senderId: params.senderId ?? params.ctx.SenderId ?? "sender-1",
+      senderIsOwner: params.senderIsOwner,
+      isAuthorizedSender: true,
+      roleIds: params.ctx.MemberRoleIds,
+    },
+    agentId: params.agentId ?? "main",
+    sessionKey,
+    conversationId:
+      params.ctx.NativeChannelId ?? params.ctx.ChatId ?? params.ctx.OriginatingTo ?? sessionKey,
+    parentConversationId: params.ctx.ThreadParentId,
+    threadId: params.ctx.MessageThreadId ?? params.ctx.TransportThreadId,
+    trigger: "channel",
+  });
+  params.ctx.TurnAuthority = authority;
+  return authority;
 }
 
 function officeHoursSkillCommands(): SkillCommandSpec[] {
@@ -854,6 +888,7 @@ describe("handleInlineActions", () => {
       SenderId: "maintainer-1",
       MemberRoleIds: ["maintainers"],
     });
+    admitTestSenderTurn({ ctx, senderId: "maintainer-1" });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "fix",
@@ -929,6 +964,12 @@ describe("handleInlineActions", () => {
       Body: "/spawn_subagent investigate",
       CommandBody: "/spawn_subagent investigate",
     });
+    admitTestSenderTurn({
+      ctx,
+      agentId: "named-worker",
+      senderId: "sender-1",
+      senderIsOwner: true,
+    });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "spawn_subagent",
@@ -987,6 +1028,7 @@ describe("handleInlineActions", () => {
       CommandBody: "/set_profile display name",
       NativeChannelId: "oc_native_chat",
     });
+    admitTestSenderTurn({ ctx, senderId: "sender-1", senderIsOwner: true });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "set_profile",
@@ -1047,6 +1089,331 @@ describe("handleInlineActions", () => {
     expect(toolCall?.[2]).toBeUndefined();
   });
 
+  it("passes immutable operator authority into inline tool runtimes", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ text: "updated" }));
+    createOpenClawToolsMock.mockReturnValue([{ name: "message", execute: toolExecute }]);
+    const ctx = buildTestCtx({
+      Body: "/set_profile display name",
+      CommandBody: "/set_profile display name",
+      Provider: "discord",
+      Surface: "discord",
+      SenderId: "forged-sender",
+      NativeChannelId: "maintenance",
+    });
+    const turnAuthority = createOperatorTurnAuthoritySnapshot({
+      scopes: ["operator.write"],
+      pairedClientId: "control-ui",
+      connectionId: "connection-1",
+      isOwner: false,
+      agentId: "main",
+      sessionKey: "s:main",
+      conversationId: "maintenance",
+      trigger: "gateway",
+    });
+    ctx.TurnAuthority = turnAuthority;
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "set_profile",
+        skillName: "matrix-profile",
+        description: "Set Matrix profile",
+        dispatch: { kind: "tool", toolName: "message", argMode: "raw" },
+        sourceFilePath: "/tmp/plugin/commands/set-profile.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/set_profile display name",
+        command: {
+          surface: "discord",
+          channel: "discord",
+          channelId: "maintenance",
+          isAuthorizedSender: true,
+          senderId: "forged-sender",
+          senderIsOwner: true,
+          rawBodyNormalized: "/set_profile display name",
+          commandBodyNormalized: "/set_profile display name",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
+    const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
+    expect(toolsArgs.turnAuthority).not.toBe(turnAuthority);
+    const reboundAuthority = requireRecord(toolsArgs.turnAuthority, "rebound authority");
+    const reboundAuthorization = requireRecord(
+      reboundAuthority.authorization,
+      "rebound authorization",
+    );
+    expect(reboundAuthorization).toMatchObject({
+      agentId: "main",
+      sessionKey: "s:main",
+      conversationId: "maintenance",
+      trigger: "command",
+      principal: { kind: "operator", scopes: ["operator.write"], isOwner: false },
+    });
+    expect(toolsArgs.authorization).toBe(reboundAuthorization);
+    expect(toolsArgs.requesterSenderId).toBeUndefined();
+    expect(toolsArgs.senderIsOwner).toBe(false);
+    expect(toolExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebinds standard channel authority before executing an inline skill tool", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ text: "updated" }));
+    createOpenClawToolsMock.mockReturnValue([{ name: "message", execute: toolExecute }]);
+    const ctx = buildTestCtx({
+      Body: "/set_profile display name",
+      CommandBody: "/set_profile display name",
+      Provider: "discord",
+      Surface: "discord",
+      AccountId: "molty",
+      SenderId: "forged-sender",
+      SenderName: "Forged Name",
+      SenderUsername: "forged-user",
+      SenderE164: "+15559999999",
+      MemberRoleIds: ["guests"],
+      NativeChannelId: "maintenance",
+      TransportThreadId: "thread-1",
+      ThreadParentId: "maintenance-parent",
+    });
+    const turnAuthority = createTurnAuthoritySnapshot({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "molty",
+        senderId: "canonical-sender",
+        aliases: {
+          name: "canonical name",
+          username: "canonical-user",
+          e164: "+15550000001",
+        },
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+      agentId: "main",
+      sessionKey: "s:main",
+      conversationId: "maintenance",
+      parentConversationId: "maintenance-parent",
+      threadId: "thread-1",
+      trigger: "user",
+    });
+    ctx.TurnAuthority = turnAuthority;
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "set_profile",
+        skillName: "matrix-profile",
+        description: "Set Matrix profile",
+        dispatch: { kind: "tool", toolName: "message", argMode: "raw" },
+        sourceFilePath: "/tmp/plugin/commands/set-profile.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/set_profile display name",
+        command: {
+          surface: "discord",
+          channel: "discord",
+          accountId: "molty",
+          channelId: "maintenance",
+          isAuthorizedSender: true,
+          senderId: "forged-sender",
+          senderName: "Forged Name",
+          senderUsername: "forged-user",
+          senderE164: "+15559999999",
+          senderIsOwner: true,
+          memberRoleIds: ["guests"],
+          rawBodyNormalized: "/set_profile display name",
+          commandBodyNormalized: "/set_profile display name",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          opts: { runId: "run-inline-skill" },
+          sessionEntry: { sessionId: "session-inline-skill", updatedAt: 0 },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
+    const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
+    expect(toolsArgs.turnAuthority).not.toBe(turnAuthority);
+    const reboundAuthority = requireRecord(toolsArgs.turnAuthority, "rebound authority");
+    const reboundAuthorization = requireRecord(
+      reboundAuthority.authorization,
+      "rebound authorization",
+    );
+    expect(reboundAuthorization).toMatchObject({
+      agentId: "main",
+      sessionKey: "s:main",
+      sessionId: "session-inline-skill",
+      runId: "run-inline-skill",
+      conversationId: "maintenance",
+      parentConversationId: "maintenance-parent",
+      threadId: "thread-1",
+      trigger: "command",
+    });
+    expect(toolsArgs.authorization).toBe(reboundAuthorization);
+    expect(toolsArgs.sessionId).toBe("session-inline-skill");
+    expect(toolsArgs.runId).toBe("run-inline-skill");
+    expect(toolsArgs.currentChannelId).toBe("maintenance");
+    expect(toolsArgs.agentThreadId).toBe("thread-1");
+    expect(toolsArgs.requesterSenderId).toBe("canonical-sender");
+    expect(toolsArgs.senderIsOwner).toBe(false);
+    expect(toolsArgs.agentMemberRoleIds).toEqual(["maintainers"]);
+    expect(toolExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { authorityCase: "missing", authoritySessionKey: undefined },
+    { authorityCase: "foreign-session", authoritySessionKey: "s:other" },
+  ] as const)(
+    "rejects $authorityCase skill tool authority before tool assembly",
+    async (testCase) => {
+      const typing = createTypingController();
+      const toolExecute = mockToolDispatchedSkillCommand();
+      const ctx = buildTestCtx({
+        Body: "/send_status now",
+        CommandBody: "/send_status now",
+        Provider: "discord",
+        Surface: "discord",
+        AccountId: "molty",
+        NativeChannelId: "maintenance",
+        TransportThreadId: "thread-1",
+      });
+      if (testCase.authoritySessionKey) {
+        ctx.TurnAuthority = createTurnAuthoritySnapshot({
+          principal: {
+            kind: "sender",
+            provider: "discord",
+            accountId: "molty",
+            senderId: "maintainer-1",
+            isAuthorizedSender: true,
+          },
+          agentId: "main",
+          sessionKey: testCase.authoritySessionKey,
+          conversationId: "maintenance",
+          threadId: "thread-1",
+          trigger: "channel",
+        });
+      }
+
+      const result = await handleInlineActions(
+        createHandleInlineActionsInput({
+          ctx,
+          typing,
+          cleanedBody: "/send_status now",
+          command: {
+            surface: "discord",
+            channel: "discord",
+            accountId: "molty",
+            channelId: "discord",
+            isAuthorizedSender: true,
+            senderId: "maintainer-1",
+            rawBodyNormalized: "/send_status now",
+            commandBodyNormalized: "/send_status now",
+          },
+          overrides: {
+            cfg: { commands: { text: true } },
+            allowTextCommands: true,
+            opts: { runId: "run-inline-skill" },
+            sessionEntry: { sessionId: "session-inline-skill", updatedAt: 0 },
+          },
+        }),
+      );
+
+      expect(result).toMatchObject({
+        kind: "reply",
+        reply: { text: "Command blocked by authorization policy." },
+      });
+      expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+      expect(toolExecute).not.toHaveBeenCalled();
+      expect(typing.cleanup).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("shapes invalid turn authority into a denial before inline tool assembly", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ text: "updated" }));
+    createOpenClawToolsMock.mockReturnValue([{ name: "message", execute: toolExecute }]);
+    const ctx = buildTestCtx({
+      Body: "/set_profile display name",
+      CommandBody: "/set_profile display name",
+      Provider: "discord",
+      Surface: "discord",
+      SenderId: "forged-sender",
+      NativeChannelId: "maintenance",
+    });
+    ctx.TurnAuthority = structuredClone(
+      createTurnAuthoritySnapshot({
+        principal: {
+          kind: "sender",
+          provider: "discord",
+          senderId: "canonical-sender",
+          senderIsOwner: false,
+          isAuthorizedSender: true,
+        },
+        agentId: "main",
+        sessionKey: "s:main",
+        conversationId: "maintenance",
+        trigger: "user",
+      }),
+    );
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "set_profile",
+        skillName: "matrix-profile",
+        description: "Set Matrix profile",
+        dispatch: { kind: "tool", toolName: "message", argMode: "raw" },
+        sourceFilePath: "/tmp/plugin/commands/set-profile.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/set_profile display name",
+        command: {
+          surface: "discord",
+          channel: "discord",
+          channelId: "maintenance",
+          isAuthorizedSender: true,
+          senderId: "forged-sender",
+          senderIsOwner: true,
+          rawBodyNormalized: "/set_profile display name",
+          commandBodyNormalized: "/set_profile display name",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: "Command blocked by authorization policy." },
+    });
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+    expect(toolExecute).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("honors construction-time before-tool-call blocks for inline tool dispatch", async () => {
     const typing = createTypingController();
     const abortController = new AbortController();
@@ -1069,6 +1436,7 @@ describe("handleInlineActions", () => {
       Body: "/set_profile display name",
       CommandBody: "/set_profile display name",
     });
+    admitTestSenderTurn({ ctx, senderId: "sender-1", senderIsOwner: true });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "set_profile",
@@ -1129,7 +1497,7 @@ describe("handleInlineActions", () => {
     });
     const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
     expect(toolsArgs.sessionId).toBe("target-session");
-    expect(toolsArgs.currentChannelId).toBe("whatsapp");
+    expect(toolsArgs.currentChannelId).toBe("s:main");
     const blockedToolCall = mockCallArgs(toolExecute, "toolExecute");
     expect(blockedToolCall?.[0]).toMatch(/^cmd_/);
     expect(blockedToolCall?.[1]).toEqual({
@@ -1155,6 +1523,7 @@ describe("handleInlineActions", () => {
       Body: "/send_status hello",
       CommandBody: "/send_status hello",
     });
+    admitTestSenderTurn({ ctx, senderId: "sender-1", senderIsOwner: true });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "send_status",
@@ -1216,6 +1585,7 @@ describe("handleInlineActions", () => {
       Body: "/send_status hello",
       CommandBody: "/send_status hello",
     });
+    admitTestSenderTurn({ ctx, senderId: "sender-1", senderIsOwner: true });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "send_status",
@@ -1273,6 +1643,7 @@ describe("handleInlineActions", () => {
       Body: "/send_status hello",
       CommandBody: "/send_status hello",
     });
+    admitTestSenderTurn({ ctx, senderId: "sender-1", senderIsOwner: true });
     const skillCommands: SkillCommandSpec[] = [
       {
         name: "send_status",
@@ -1346,6 +1717,12 @@ describe("handleInlineActions", () => {
         Body: "/spawn_subagent investigate",
         CommandBody: "/spawn_subagent investigate",
       });
+      admitTestSenderTurn({
+        ctx,
+        sessionKey: "agent:main:acp:leaf",
+        senderId: "sender-1",
+        senderIsOwner: true,
+      });
       const skillCommands: SkillCommandSpec[] = [
         {
           name: "spawn_subagent",
@@ -1409,6 +1786,12 @@ describe("handleInlineActions", () => {
     const ctx = buildTestCtx({
       Body: "/list_sessions now",
       CommandBody: "/list_sessions now",
+    });
+    admitTestSenderTurn({
+      ctx,
+      sessionKey: "agent:main:thread",
+      senderId: "sender-1",
+      senderIsOwner: true,
     });
     const skillCommands: SkillCommandSpec[] = [
       {
