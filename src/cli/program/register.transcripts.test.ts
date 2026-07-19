@@ -179,6 +179,34 @@ describe("transcripts CLI", () => {
     expect(pathOutput.trim()).toBe(path.join(store.sessionDir(session), "summary.md"));
   });
 
+  it("list --json escapes C1 control characters while JSON.parse round-trips raw values", async () => {
+    const title = "CSI \u009b31m injected \u007f\u0085 title";
+    const sessionDir = path.join(stateDir, "transcripts", "2026-05-22", "c1-title");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionDir, "metadata.json"),
+      JSON.stringify({
+        sessionId: "c1-title",
+        title,
+        source: { providerId: "manual-transcript" },
+        startedAt: "2026-05-22T10:00:00.000Z",
+        stoppedAt: "2026-05-22T10:05:00.000Z",
+      }),
+    );
+
+    const output = await runTranscriptsCli(["list", "--json"]);
+
+    const bytes = Buffer.from(output, "utf8");
+    expect(bytes.includes(Buffer.from([0xc2, 0x9b]))).toBe(false);
+    expect(bytes.includes(0x7f)).toBe(false);
+    expect(/[\u007f-\u009f]/.test(output)).toBe(false);
+    expect(output).toContain("\\u009b");
+    const parsed = JSON.parse(output) as Array<{ sessionId: string; title: string }>;
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.sessionId).toBe("c1-title");
+    expect(parsed[0]?.title).toBe(title);
+  });
+
   it("ignores unrelated corrupt metadata while reading a valid session", async () => {
     await writeSession(stateDir, "design-review");
     const corruptDir = path.join(stateDir, "transcripts", "corrupt");

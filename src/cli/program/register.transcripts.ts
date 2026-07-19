@@ -73,7 +73,12 @@ function writeLine(value: string): void {
 }
 
 function writeJson(value: unknown): void {
-  writeLine(JSON.stringify(value, null, 2));
+  writeLine(
+    JSON.stringify(value, null, 2).replace(
+      /[\u007f-\u009f]/g,
+      (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    ),
+  );
 }
 
 function isNodeError(err: unknown, code: string): boolean {
