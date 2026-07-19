@@ -1,7 +1,8 @@
 // Openai tests cover realtime session secret creation behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOpenAIRealtimeClientSecret,
+  createOpenAIRealtimeTranslationClientSecret,
   createOpenAIRealtimeTranscriptionClientSecret,
 } from "./realtime-provider-shared.js";
 
@@ -45,6 +46,9 @@ function guardedFetch(response: Response): void {
 }
 
 describe("createOpenAIRealtimeClientSecret", () => {
+  beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+  });
   it("returns client secret from a well-formed response", async () => {
     guardedFetch(
       new Response(
@@ -64,6 +68,37 @@ describe("createOpenAIRealtimeClientSecret", () => {
 
     expect(result.value).toBe("eph-secret-abc");
     expect(typeof result.expiresAt).toBe("number");
+  });
+
+  it("uses the dedicated translation client-secret endpoint", async () => {
+    guardedFetch(
+      new Response(JSON.stringify({ value: "eph-translation" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const result = await createOpenAIRealtimeTranslationClientSecret({
+      authToken: "sk-test",
+      auditContext: "test-translation",
+      session: {
+        model: "gpt-realtime-translate",
+        audio: { output: { language: "en" } },
+      },
+    });
+
+    expect(result.value).toBe("eph-translation");
+    const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as {
+      url?: string;
+      init?: { body?: string };
+    };
+    expect(request.url).toBe("https://api.openai.com/v1/realtime/translations/client_secrets");
+    expect(JSON.parse(request.init?.body ?? "{}")).toEqual({
+      session: {
+        model: "gpt-realtime-translate",
+        audio: { output: { language: "en" } },
+      },
+    });
   });
 
   it("bounds oversized success response and cancels the stream", async () => {

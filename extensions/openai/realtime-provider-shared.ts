@@ -158,6 +158,22 @@ export async function createOpenAIRealtimeClientSecret(params: {
   });
 }
 
+export async function createOpenAIRealtimeTranslationClientSecret(params: {
+  authToken: string;
+  auditContext: string;
+  session: Record<string, unknown>;
+}): Promise<OpenAIRealtimeClientSecretResult> {
+  const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/translations/client_secrets`;
+  return createOpenAIRealtimeSecret({
+    ...params,
+    url,
+    body: { session: params.session },
+    errorMessage: "OpenAI Realtime translation client secret failed",
+    missingValueMessage:
+      "OpenAI Realtime translation client secret response did not include a value",
+  });
+}
+
 export async function createOpenAIRealtimeTranscriptionClientSecret(params: {
   authToken: string;
   auditContext: string;

@@ -568,6 +568,43 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).toBeUndefined();
   });
 
+  it("creates dedicated browser live-translation sessions", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({ value: "translation-secret", expires_at: 1_765_000_000 }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserTranslationSession) {
+      throw new Error("expected OpenAI realtime provider to support browser translation sessions");
+    }
+
+    const session = await provider.createBrowserTranslationSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      sourceLanguage: "zh",
+      targetLanguage: "en",
+    });
+
+    expect(requireFetchRequest().url).toBe(
+      "https://api.openai.com/v1/realtime/translations/client_secrets",
+    );
+    expect(requireFetchJsonBody()).toEqual({
+      session: {
+        model: "gpt-realtime-translate",
+        audio: {
+          output: { language: "en" },
+        },
+      },
+    });
+    expectRecordFields(session, "translation session", {
+      provider: "openai",
+      transport: "webrtc",
+      clientSecret: "translation-secret",
+      offerUrl: "https://api.openai.com/v1/realtime/translations/calls",
+      model: "gpt-realtime-translate",
+      expiresAt: 1_765_000_000_000,
+    });
+  });
+
   it("omits unsupported OpenAI tool names from browser sessions", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: createJsonResponse({ client_secret: { value: "client-secret-123" } }),

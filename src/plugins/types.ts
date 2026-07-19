@@ -54,6 +54,7 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeTranslationBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderConfiguredContext,
@@ -1932,6 +1933,9 @@ export type RealtimeVoiceProviderPlugin = {
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
   createBrowserSession?: (
     req: RealtimeVoiceBrowserSessionCreateRequest,
+  ) => Promise<RealtimeVoiceBrowserSession>;
+  createBrowserTranslationSession?: (
+    req: RealtimeTranslationBrowserSessionCreateRequest,
   ) => Promise<RealtimeVoiceBrowserSession>;
 };
 

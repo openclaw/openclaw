@@ -196,6 +196,17 @@ export const TalkEventSchema = Type.Object(
   },
 );
 
+/** Creates a browser-facing live translation session. */
+export const TalkTranslationCreateParamsSchema = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    sourceLanguage: Type.Optional(NonEmptyString),
+    targetLanguage: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 /** Creates a browser-facing Talk client session. */
 export const TalkClientCreateParamsSchema = Type.Object(
   {

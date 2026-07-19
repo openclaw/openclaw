@@ -17,6 +17,7 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeTranslationBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
@@ -37,6 +38,7 @@ import {
   asFiniteNumber,
   captureOpenAIRealtimeWsClose,
   createOpenAIRealtimeClientSecret,
+  createOpenAIRealtimeTranslationClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
@@ -87,6 +89,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
 };
 
 const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
+const OPENAI_REALTIME_TRANSLATION_DEFAULT_MODEL = "gpt-realtime-translate";
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";
@@ -1438,10 +1441,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 }
 
-function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | undefined {
+function resolveOpenAIRealtimeBrowserOfferHeaders(
+  baseUrl = "https://api.openai.com/v1/realtime/calls",
+): Record<string, string> | undefined {
   const headers = resolveProviderRequestHeaders({
     provider: "openai",
-    baseUrl: "https://api.openai.com/v1/realtime/calls",
+    baseUrl,
     capability: "audio",
     transport: "http",
     defaultHeaders: {},
@@ -1524,6 +1529,43 @@ async function createOpenAIRealtimeBrowserSession(
   };
 }
 
+async function createOpenAIRealtimeTranslationBrowserSession(
+  req: RealtimeTranslationBrowserSessionCreateRequest,
+): Promise<RealtimeVoiceBrowserSession> {
+  const config = normalizeProviderConfig(req.providerConfig);
+  if (config.azureEndpoint || config.azureDeployment) {
+    throw new Error("OpenAI Realtime translation browser sessions do not support Azure endpoints");
+  }
+
+  const model = req.model ?? OPENAI_REALTIME_TRANSLATION_DEFAULT_MODEL;
+  const authToken = await requireOpenAIRealtimePlatformAuthToken({
+    configuredApiKey: config.apiKey,
+    cfg: req.cfg,
+  });
+  const session: Record<string, unknown> = {
+    model,
+    audio: {
+      output: { language: req.targetLanguage },
+    },
+  };
+  const clientSecret = await createOpenAIRealtimeTranslationClientSecret({
+    authToken,
+    auditContext: "openai-realtime-translation-browser-session",
+    session,
+  });
+  const offerUrl = "https://api.openai.com/v1/realtime/translations/calls";
+  const offerHeaders = resolveOpenAIRealtimeBrowserOfferHeaders(offerUrl);
+  return {
+    provider: "openai",
+    transport: "webrtc",
+    clientSecret: clientSecret.value,
+    offerUrl,
+    ...(offerHeaders ? { offerHeaders } : {}),
+    model,
+    ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
+  };
+}
+
 export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
   return {
     id: "openai",
@@ -1577,5 +1619,6 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       });
     },
     createBrowserSession: createOpenAIRealtimeBrowserSession,
+    createBrowserTranslationSession: createOpenAIRealtimeTranslationBrowserSession,
   };
 }

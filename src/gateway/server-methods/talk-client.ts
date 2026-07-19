@@ -11,6 +11,7 @@ import {
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
+  validateTalkTranslationCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
@@ -36,6 +37,61 @@ import type { GatewayRequestHandlers } from "./types.js";
  * calls back into OpenClaw agent consult runs.
  */
 export const talkClientHandlers: GatewayRequestHandlers = {
+  "talk.translation.create": async ({ params, respond, context }) => {
+    if (!validateTalkTranslationCreateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.translation.create params: ${formatValidationErrors(validateTalkTranslationCreateParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const runtimeConfig = context.getRuntimeConfig();
+      const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
+      const resolution = resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: realtimeConfig.provider,
+        providerConfigs: realtimeConfig.providers,
+        cfg: runtimeConfig,
+        cfgForResolve: runtimeConfig,
+        defaultModel: realtimeConfig.model,
+        noRegisteredProviderMessage: "No realtime voice provider registered",
+      });
+      const createSession = resolution.provider.createBrowserTranslationSession;
+      if (!createSession) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Realtime provider "${resolution.provider.id}" does not support browser translation sessions`,
+          ),
+        );
+        return;
+      }
+      const session = await createSession({
+        cfg: runtimeConfig,
+        providerConfig: resolution.providerConfig,
+        model: params.model,
+        sourceLanguage: params.sourceLanguage,
+        targetLanguage: params.targetLanguage,
+      });
+      if (isUnsupportedBrowserWebRtcSession(session)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "Live translation requires a browser WebRTC session"),
+        );
+        return;
+      }
+      respond(true, session, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
   "talk.client.create": async ({ params, respond, context }) => {
     if (!validateTalkClientCreateParams(params)) {
       respond(

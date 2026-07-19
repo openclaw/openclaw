@@ -159,6 +159,7 @@ export type TalkCatalogParams = SchemaType<"TalkCatalogParams">;
 export type TalkCatalogResult = SchemaType<"TalkCatalogResult">;
 export type TalkConfigParams = SchemaType<"TalkConfigParams">;
 export type TalkConfigResult = SchemaType<"TalkConfigResult">;
+export type TalkTranslationCreateParams = SchemaType<"TalkTranslationCreateParams">;
 export type TalkClientCreateParams = SchemaType<"TalkClientCreateParams">;
 export type TalkClientCreateResult = SchemaType<"TalkClientCreateResult">;
 export type TalkClientSteerParams = SchemaType<"TalkClientSteerParams">;

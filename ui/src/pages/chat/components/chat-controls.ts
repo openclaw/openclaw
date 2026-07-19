@@ -19,6 +19,10 @@ import {
 import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
+import {
+  renderRealtimeTranslationControls,
+  type RealtimeTranslationControlsProps,
+} from "./chat-translation-controls.ts";
 
 type ChatControlsProps = {
   paneId: string;
@@ -47,6 +51,7 @@ type ChatControlsProps = {
   onRealtimeTalkInputRefresh?: () => void;
   onRealtimeTalkInputSelect?: (deviceId: string) => void;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
+  realtimeTranslation?: RealtimeTranslationControlsProps;
   onSettingsChange: (next: UiSettings) => void;
   onSettingsOpenChange: (
     open: boolean,
@@ -358,6 +363,9 @@ export function renderChatControls(props: ChatControlsProps) {
                 })}
               </div>
             `
+          : ""}
+        ${props.realtimeTranslation
+          ? renderRealtimeTranslationControls(props.realtimeTranslation)
           : ""}
       </div>
     </div>

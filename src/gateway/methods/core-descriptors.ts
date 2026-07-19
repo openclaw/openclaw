@@ -76,6 +76,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "talk.catalog", scope: "operator.read" },
   { name: "talk.config", scope: "operator.read" },
   { name: "talk.client.create", scope: "operator.write" },
+  { name: "talk.translation.create", scope: "operator.write" },
   { name: "talk.client.toolCall", scope: "operator.write" },
   { name: "talk.client.steer", scope: "operator.write" },
   { name: "talk.session.create", scope: "operator.write" },

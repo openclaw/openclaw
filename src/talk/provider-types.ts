@@ -129,6 +129,14 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   reasoningEffort?: string;
 };
 
+export type RealtimeTranslationBrowserSessionCreateRequest = {
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  model?: string;
+  sourceLanguage?: string;
+  targetLanguage: string;
+};
+
 export type RealtimeVoiceBrowserAudioContract = {
   inputEncoding: "pcm16" | "g711_ulaw";
   inputSampleRateHz: number;

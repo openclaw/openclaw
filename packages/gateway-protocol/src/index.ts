@@ -94,6 +94,8 @@ import {
   TalkCatalogParamsSchema,
   type TalkCatalogResult,
   TalkCatalogResultSchema,
+  type TalkTranslationCreateParams,
+  TalkTranslationCreateParamsSchema,
   type TalkClientCreateParams,
   TalkClientCreateParamsSchema,
   type TalkClientCreateResult,
@@ -865,6 +867,9 @@ export const validateTalkCatalogParams = lazyCompile<TalkCatalogParams>(TalkCata
 export const validateTalkCatalogResult = lazyCompile<TalkCatalogResult>(TalkCatalogResultSchema);
 export const validateTalkConfigParams = lazyCompile<TalkConfigParams>(TalkConfigParamsSchema);
 export const validateTalkConfigResult = lazyCompile<TalkConfigResult>(TalkConfigResultSchema);
+export const validateTalkTranslationCreateParams = lazyCompile<TalkTranslationCreateParams>(
+  TalkTranslationCreateParamsSchema,
+);
 export const validateTalkClientCreateParams = lazyCompile<TalkClientCreateParams>(
   TalkClientCreateParamsSchema,
 );

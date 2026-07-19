@@ -14,6 +14,13 @@ import {
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
 } from "./realtime-talk.ts";
+import {
+  RealtimeTranslationSession,
+  type RealtimeTranslationDirection,
+  type RealtimeTranslationInputSource,
+  type RealtimeTranslationStatus,
+  type RealtimeTranslationTranscript,
+} from "./realtime-translation.ts";
 
 const realtimeTalkInputDeviceIds = new Map<string, string>();
 
@@ -50,12 +57,22 @@ export type ChatRealtimeState = {
   realtimeTalkInputRefreshId: number;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
+  realtimeTranslationActive: boolean;
+  realtimeTranslationStatus: RealtimeTranslationStatus;
+  realtimeTranslationDetail: string | null;
+  realtimeTranslationDirection: RealtimeTranslationDirection;
+  realtimeTranslationInputSource: RealtimeTranslationInputSource;
+  realtimeTranslationTranscripts: RealtimeTranslationTranscript[];
+  realtimeTranslationSession: RealtimeTranslationSession | null;
   requestUpdate: () => void;
   updateRealtimeTalkOptions: (next: Partial<RealtimeTalkOptions>) => void;
   refreshRealtimeTalkInputs: (requestPermission?: boolean) => Promise<void>;
   selectRealtimeTalkInput: (deviceId: string) => void;
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
+  setRealtimeTranslationDirection: (direction: RealtimeTranslationDirection) => void;
+  setRealtimeTranslationInputSource: (source: RealtimeTranslationInputSource) => void;
+  toggleRealtimeTranslation: () => Promise<void>;
 };
 
 function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
@@ -80,6 +97,13 @@ export function createInitialChatRealtimeState(inputDeviceId = "") {
     realtimeTalkInputRefreshId: 0,
     realtimeTalkSession: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
+    realtimeTranslationActive: false,
+    realtimeTranslationStatus: "idle" as RealtimeTranslationStatus,
+    realtimeTranslationDetail: null,
+    realtimeTranslationDirection: "zh-en" as RealtimeTranslationDirection,
+    realtimeTranslationInputSource: "microphone" as RealtimeTranslationInputSource,
+    realtimeTranslationTranscripts: [] as RealtimeTranslationTranscript[],
+    realtimeTranslationSession: null,
   };
 }
 
@@ -160,6 +184,81 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.realtimeTalkInputError = null;
     state.requestUpdate();
   };
+  state.setRealtimeTranslationDirection = (direction) => {
+    if (!state.realtimeTranslationActive) {
+      state.realtimeTranslationDirection = direction;
+      state.requestUpdate();
+    }
+  };
+  state.setRealtimeTranslationInputSource = (source) => {
+    if (!state.realtimeTranslationActive) {
+      state.realtimeTranslationInputSource = source;
+      state.requestUpdate();
+    }
+  };
+  state.toggleRealtimeTranslation = async () => {
+    if (state.realtimeTranslationSession) {
+      state.realtimeTranslationSession.stop();
+      state.realtimeTranslationSession = null;
+      state.realtimeTranslationActive = false;
+      state.realtimeTranslationStatus = "idle";
+      state.realtimeTranslationDetail = null;
+      state.requestUpdate();
+      return;
+    }
+    if (!state.client || !state.connected) {
+      state.lastError = "Gateway not connected";
+      state.chatError = state.lastError;
+      state.requestUpdate();
+      return;
+    }
+    state.realtimeTalkSession?.stop();
+    state.realtimeTalkSession = null;
+    state.realtimeTalkActive = false;
+    state.realtimeTranslationActive = true;
+    state.realtimeTranslationStatus = "connecting";
+    state.realtimeTranslationDetail = null;
+    state.realtimeTranslationTranscripts = [];
+    const session = new RealtimeTranslationSession(
+      state.client,
+      state.realtimeTranslationDirection,
+      state.realtimeTranslationInputSource,
+      {
+        onStatus: (status, detail) => {
+          state.realtimeTranslationStatus = status;
+          state.realtimeTranslationDetail = detail ?? null;
+          state.realtimeTranslationActive = status !== "idle";
+          if (status === "idle") {
+            state.realtimeTranslationSession = null;
+          }
+          state.requestUpdate();
+        },
+        onTranscript: (entry) => {
+          const previous = state.realtimeTranslationTranscripts.at(-1);
+          if (!entry.final && previous?.role === entry.role && !previous.final) {
+            state.realtimeTranslationTranscripts = [
+              ...state.realtimeTranslationTranscripts.slice(0, -1),
+              { ...entry, text: `${previous.text}${entry.text}` },
+            ];
+          } else {
+            state.realtimeTranslationTranscripts = [...state.realtimeTranslationTranscripts, entry];
+          }
+          state.requestUpdate();
+        },
+      },
+    );
+    state.realtimeTranslationSession = session;
+    try {
+      await session.start();
+    } catch (error) {
+      session.stop();
+      state.realtimeTranslationSession = null;
+      state.realtimeTranslationActive = false;
+      state.realtimeTranslationStatus = "error";
+      state.realtimeTranslationDetail = error instanceof Error ? error.message : String(error);
+      state.requestUpdate();
+    }
+  };
   state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession) {
       state.realtimeTalkSession.stop();
@@ -177,6 +276,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.requestUpdate();
       return;
     }
+    state.realtimeTranslationSession?.stop();
+    state.realtimeTranslationSession = null;
+    state.realtimeTranslationActive = false;
     const inputDeviceId = currentRealtimeTalkInput(state) || undefined;
     const options = state.realtimeTalkOptions;
     const launchOptions: RealtimeTalkLaunchOptions = {
