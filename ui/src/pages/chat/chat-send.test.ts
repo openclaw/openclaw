@@ -7487,7 +7487,7 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toEqual([]);
     expect(host.chatQueue).toEqual([]);
     const idempotencyKeys = host.chatMessages.map((message) => {
-      const marker = (message as { __openclaw?: { idempotencyKey?: string } }).__openclaw;
+      const marker = (message as { __openclaw?: { idempotencyKey?: string } })["__openclaw"];
       return marker?.idempotencyKey;
     });
     expect(idempotencyKeys.slice(0, 2)).toEqual(["active-run:user", "steer-send-run:user"]);
