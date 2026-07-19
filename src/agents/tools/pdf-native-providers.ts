@@ -73,7 +73,10 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
       );
     }
 
-    const json = await readProviderJsonResponse<unknown>(response, params.responseLabel);
+    // fetchWithTimeout ends after headers; reuse the request budget for body idle.
+    const json = await readProviderJsonResponse<unknown>(response, params.responseLabel, {
+      chunkTimeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
+    });
     if (!isRecord(json)) {
       throw new Error(params.nonJsonMessage);
     }
