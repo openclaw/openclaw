@@ -33,8 +33,6 @@ export {
   resolveCliNoOutputTimeoutMs,
   resolveCliRunTimeoutOverrideMs,
 } from "./reliability.js";
-/** Re-export CLI prompt-file helpers used by older runner call sites. */
-export { writeCliSystemPromptFile } from "./cli-images.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 

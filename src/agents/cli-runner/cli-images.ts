@@ -116,7 +116,7 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
 }
 
 /** Loads and sanitizes image references found in prompt text. */
-export async function loadPromptRefImages(params: {
+async function loadPromptRefImages(params: {
   prompt: string;
   workspaceDir: string;
   maxBytes?: number;
@@ -154,7 +154,7 @@ export async function loadPromptRefImages(params: {
 }
 
 /** Writes CLI image payloads to private paths and returns their file paths. */
-export async function writeCliImages(params: {
+async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];
@@ -172,7 +172,9 @@ export async function writeCliImages(params: {
   for (const image of params.images) {
     const fileName = path.basename(resolveCliImagePath(image));
     const sizeError = validateBase64SizeLimit(image.data, maxBytes);
-    if (sizeError) throw sizeError;
+    if (sizeError) {
+      throw sizeError;
+    }
     const buffer = Buffer.from(image.data, "base64");
     await store.writeText(fileName, buffer);
     paths.push(store.path(fileName));
@@ -264,5 +266,12 @@ export async function prepareCliPromptImagePayload(params: {
     prompt,
     imagePaths,
     cleanupImages: imagePayload.cleanup,
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliImagesTestApi")] = {
+    loadPromptRefImages,
+    writeCliImages,
   };
 }

@@ -52,6 +52,7 @@ import {
   buildClaudeLiveArgs,
   resetClaudeLiveSessionsForTest,
 } from "./cli-runner/claude-live-session.test-support.js";
+import { writeCliSystemPromptFile } from "./cli-runner/cli-images.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -62,7 +63,7 @@ import {
   buildCliExecLogLine,
   setCliRunnerExecuteTestDeps,
 } from "./cli-runner/execute.test-support.js";
-import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
+import { buildCliAgentSystemPrompt } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
