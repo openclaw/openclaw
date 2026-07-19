@@ -90,6 +90,18 @@ describe("session reset policy", () => {
     ).toMatchObject({ mode: "daily", idleMinutes: 30 });
   });
 
+  it("inherits an active base mode for partial type overrides", () => {
+    expect(
+      resolveSessionResetPolicy({
+        sessionCfg: {
+          reset: { mode: "idle", idleMinutes: 60 },
+          resetByType: { group: { idleMinutes: 30 } },
+        },
+        resetType: "group",
+      }),
+    ).toMatchObject({ mode: "idle", idleMinutes: 30 });
+  });
+
   it("expires an explicit idle policy after inactivity", () => {
     const now = 10 * HOUR_MS;
     const lastInteractionAt = now - 31 * 60_000;

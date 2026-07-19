@@ -54,8 +54,10 @@ export function resolveSessionResetPolicy(params: {
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
   const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);
   // Legacy `idleMinutes` implied idle reset only when no modern reset block was configured.
+  const inheritedTypeMode = typeReset && baseReset?.mode !== "none" ? baseReset?.mode : undefined;
   const mode =
     typeReset?.mode ??
+    inheritedTypeMode ??
     (typeReset ? "daily" : undefined) ??
     baseReset?.mode ??
     (baseReset
