@@ -221,6 +221,25 @@ function expectBoundedLaunchctlCleanup() {
     logOutput: false,
     timeoutMs: 5_000,
   });
+  expect(mocks.runExec).toHaveBeenNthCalledWith(
+    3,
+    "launchctl",
+    ["print", `${domain}/${LEGACY_MAC_LABEL}`],
+    {
+      logOutput: false,
+      timeoutMs: expect.any(Number),
+    },
+  );
+  const probeTimeout = mocks.runExec.mock.calls[2]?.[2]?.timeoutMs;
+  expect(probeTimeout).toBeGreaterThan(0);
+  expect(probeTimeout).toBeLessThanOrEqual(5_000);
+}
+
+function mockConfirmedUnloaded() {
+  mocks.runExec
+    .mockResolvedValueOnce({ stdout: "", stderr: "" })
+    .mockResolvedValueOnce({ stdout: "", stderr: "" })
+    .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
 }
 
 async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
@@ -1824,8 +1843,9 @@ describe("maybeScanExtraGatewayServices", () => {
     );
   });
 
-  it("moves a legacy macOS plist after both bounded launchctl calls succeed", async () => {
+  it("moves a legacy macOS plist only after print confirms the label is gone", async () => {
     setupLegacyMacService();
+    mockConfirmedUnloaded();
     const runtime = makeDoctorIo();
     const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
     vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
@@ -1853,11 +1873,13 @@ describe("maybeScanExtraGatewayServices", () => {
       if (bootoutOk) {
         mocks.runExec
           .mockResolvedValueOnce({ stdout: "", stderr: "" })
-          .mockRejectedValueOnce(timeout);
+          .mockRejectedValueOnce(timeout)
+          .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
       } else {
         mocks.runExec
           .mockRejectedValueOnce(timeout)
-          .mockResolvedValueOnce({ stdout: "", stderr: "" });
+          .mockResolvedValueOnce({ stdout: "", stderr: "" })
+          .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
       }
       vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
       vi.spyOn(fs, "access").mockResolvedValue(undefined);
@@ -1877,7 +1899,8 @@ describe("maybeScanExtraGatewayServices", () => {
       setupLegacyMacService();
       mocks.runExec
         .mockRejectedValueOnce(launchctlFailure({ stderr }))
-        .mockRejectedValueOnce(launchctlFailure({ timedOut: true }));
+        .mockRejectedValueOnce(launchctlFailure({ timedOut: true }))
+        .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
       vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
       vi.spyOn(fs, "access").mockResolvedValue(undefined);
       const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
@@ -1917,8 +1940,76 @@ describe("maybeScanExtraGatewayServices", () => {
     );
   });
 
+  it("keeps the plist when a successful cleanup command is followed by a loaded probe", async () => {
+    setupLegacyMacService();
+    mocks.runExec
+      .mockRejectedValueOnce(launchctlFailure({ timedOut: true }))
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "state = waiting\npid = 0\n", stderr: "" })
+      .mockRejectedValueOnce(launchctlFailure({ stderr: "Permission denied" }));
+    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    const runtime = makeDoctorIo();
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+    expect(mocks.runExec).toHaveBeenCalledTimes(4);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoteContaining(
+      `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
+  it("keeps the plist when the postcondition probe times out", async () => {
+    setupLegacyMacService();
+    mocks.runExec
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockRejectedValueOnce(launchctlFailure({ timedOut: true }));
+    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    const runtime = makeDoctorIo();
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
+
+    expectBoundedLaunchctlCleanup();
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoteContaining(
+      `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
+  it("polls a still-registered stopped label until launchd reports it gone", async () => {
+    setupLegacyMacService();
+    mocks.runExec
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "state = waiting\npid = 0\n", stderr: "" })
+      .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.runExec).toHaveBeenCalledTimes(4);
+    expect(rename).toHaveBeenCalledTimes(1);
+    expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
   it("reports removal when launchctl confirms unload and the plist is already absent", async () => {
     setupLegacyMacService();
+    mockConfirmedUnloaded();
     vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
     vi.spyOn(fs, "access").mockRejectedValue(missing);
@@ -1934,6 +2025,7 @@ describe("maybeScanExtraGatewayServices", () => {
 
   it("does not report removal when the plist cannot be inspected", async () => {
     setupLegacyMacService();
+    mockConfirmedUnloaded();
     vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     vi.spyOn(fs, "access").mockRejectedValue(
       Object.assign(new Error("permission denied"), { code: "EACCES" }),
@@ -1953,6 +2045,7 @@ describe("maybeScanExtraGatewayServices", () => {
 
   it("does not report removal when the confirmed-unloaded plist cannot be moved", async () => {
     setupLegacyMacService();
+    mockConfirmedUnloaded();
     vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     vi.spyOn(fs, "rename").mockRejectedValue(new Error("permission denied"));

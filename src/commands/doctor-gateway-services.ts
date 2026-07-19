@@ -110,15 +110,19 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
+const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
 type LaunchctlCleanupAttempt =
   | { status: "succeeded"; stdout: string; stderr: string }
   | { status: "failed"; stdout: string; stderr: string };
 
-const runLaunchctlQuietly = async (args: string[]): Promise<LaunchctlCleanupAttempt> => {
+const runLaunchctlQuietly = async (
+  args: string[],
+  timeoutMs = DOCTOR_LAUNCHCTL_TIMEOUT_MS,
+): Promise<LaunchctlCleanupAttempt> => {
   try {
     const output = await runExec("launchctl", args, {
       logOutput: false,
-      timeoutMs: DOCTOR_LAUNCHCTL_TIMEOUT_MS,
+      timeoutMs,
     });
     return { status: "succeeded", ...output };
   } catch (error) {
@@ -130,6 +134,30 @@ const runLaunchctlQuietly = async (args: string[]): Promise<LaunchctlCleanupAtte
     };
   }
 };
+
+async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
+  const deadline = Date.now() + DOCTOR_LAUNCHCTL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const probe = await runLaunchctlQuietly(
+      ["print", serviceTarget],
+      Math.min(DOCTOR_LAUNCHCTL_TIMEOUT_MS, remainingMs),
+    );
+    if (probe.status === "failed") {
+      // A successful print (including a stopped job) means launchd still owns
+      // the label. Unknown errors and probe timeouts stay fail-closed.
+      return isLaunchctlNotLoaded(probe);
+    }
+    const delayMs = Math.min(DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS, deadline - Date.now());
+    if (delayMs <= 0) {
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+  }
+  return false;
+}
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
@@ -365,17 +393,12 @@ async function cleanupLegacyLaunchdService(params: {
   plistPath: string;
 }): Promise<{ status: "removed"; destination?: string } | { status: "failed"; reason: string }> {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  const bootout = await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
-  const unload = await runLaunchctlQuietly(["unload", params.plistPath]);
+  await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
+  await runLaunchctlQuietly(["unload", params.plistPath]);
 
-  // A timeout only proves launchctl was killed. Keep the plist unless one command
-  // succeeded or launchctl explicitly confirmed that the job was already absent.
-  const confirmedUnloaded =
-    bootout.status === "succeeded" ||
-    unload.status === "succeeded" ||
-    isLaunchctlNotLoaded(bootout) ||
-    isLaunchctlNotLoaded(unload);
-  if (!confirmedUnloaded) {
+  // bootout/unload can return before launchd finishes stopping the job. A plist
+  // must stay in place unless a bounded print probe observes the label gone.
+  if (!(await confirmLegacyLaunchdServiceUnloaded(`${domain}/${params.label}`))) {
     return { status: "failed", reason: "launchctl could not confirm unload" };
   }
 
