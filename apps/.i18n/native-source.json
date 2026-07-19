@@ -37075,11 +37075,83 @@
     },
     {
       "kind": "ui-call",
-      "line": 328,
+      "line": 349,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
       "source": "Widget unavailable",
       "surface": "apple",
       "id": "native.apple.2c865ac4a69645d3"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 368,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "Widget export failed",
+      "surface": "apple",
+      "id": "native.apple.d640691fd196f338"
+    },
+    {
+      "kind": "ui-call",
+      "line": 372,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "OK",
+      "surface": "apple",
+      "id": "native.apple.533c6e22a11e88de"
+    },
+    {
+      "kind": "ui-call",
+      "line": 413,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "Copy image",
+      "surface": "apple",
+      "id": "native.apple.e1fb28a2a9756402"
+    },
+    {
+      "kind": "ui-call",
+      "line": 421,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "Save image…",
+      "surface": "apple",
+      "id": "native.apple.ebd7bc92e1b12235"
+    },
+    {
+      "kind": "ui-call",
+      "line": 424,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "Save image",
+      "surface": "apple",
+      "id": "native.apple.742c46d4cf2db134"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 439,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "The widget image could not be captured.",
+      "surface": "apple",
+      "id": "native.apple.0589cce608418f90"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 469,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "The widget image could not be copied.",
+      "surface": "apple",
+      "id": "native.apple.dfe24e827fdbe9c5"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 476,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "The widget image could not be encoded as PNG.",
+      "surface": "apple",
+      "id": "native.apple.9e611e3a80e71408"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 488,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
+      "source": "The widget image could not be saved.",
+      "surface": "apple",
+      "id": "native.apple.9a6e8afbe24a262b"
     },
     {
       "kind": "conditional-branch",

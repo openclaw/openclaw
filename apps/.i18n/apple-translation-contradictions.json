@@ -5645,6 +5645,22 @@
       ]
     },
     {
+      "locale": "uk",
+      "source": "OK",
+      "translations": [
+        "OK",
+        "ОК"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "OK",
+      "translations": [
+        "好",
+        "确定"
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "OK",
       "translations": [

@@ -23179,6 +23179,51 @@
       "translated": "Widget indisponível"
     },
     {
+      "id": "native.apple.d640691fd196f338",
+      "source": "Widget export failed",
+      "translated": "Falha ao exportar o widget"
+    },
+    {
+      "id": "native.apple.533c6e22a11e88de",
+      "source": "OK",
+      "translated": "OK"
+    },
+    {
+      "id": "native.apple.e1fb28a2a9756402",
+      "source": "Copy image",
+      "translated": "Copiar imagem"
+    },
+    {
+      "id": "native.apple.ebd7bc92e1b12235",
+      "source": "Save image…",
+      "translated": "Salvar imagem…"
+    },
+    {
+      "id": "native.apple.742c46d4cf2db134",
+      "source": "Save image",
+      "translated": "Salvar imagem"
+    },
+    {
+      "id": "native.apple.0589cce608418f90",
+      "source": "The widget image could not be captured.",
+      "translated": "Não foi possível capturar a imagem do widget."
+    },
+    {
+      "id": "native.apple.dfe24e827fdbe9c5",
+      "source": "The widget image could not be copied.",
+      "translated": "Não foi possível copiar a imagem do widget."
+    },
+    {
+      "id": "native.apple.9e611e3a80e71408",
+      "source": "The widget image could not be encoded as PNG.",
+      "translated": "Não foi possível codificar a imagem do widget como PNG."
+    },
+    {
+      "id": "native.apple.9a6e8afbe24a262b",
+      "source": "The widget image could not be saved.",
+      "translated": "Não foi possível salvar a imagem do widget."
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"

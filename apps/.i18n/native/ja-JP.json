@@ -23179,6 +23179,51 @@
       "translated": "ウィジェットを利用できません"
     },
     {
+      "id": "native.apple.d640691fd196f338",
+      "source": "Widget export failed",
+      "translated": "ウィジェットの書き出しに失敗しました"
+    },
+    {
+      "id": "native.apple.533c6e22a11e88de",
+      "source": "OK",
+      "translated": "OK"
+    },
+    {
+      "id": "native.apple.e1fb28a2a9756402",
+      "source": "Copy image",
+      "translated": "画像をコピー"
+    },
+    {
+      "id": "native.apple.ebd7bc92e1b12235",
+      "source": "Save image…",
+      "translated": "画像を保存…"
+    },
+    {
+      "id": "native.apple.742c46d4cf2db134",
+      "source": "Save image",
+      "translated": "画像を保存"
+    },
+    {
+      "id": "native.apple.0589cce608418f90",
+      "source": "The widget image could not be captured.",
+      "translated": "ウィジェットの画像をキャプチャできませんでした。"
+    },
+    {
+      "id": "native.apple.dfe24e827fdbe9c5",
+      "source": "The widget image could not be copied.",
+      "translated": "ウィジェットの画像をコピーできませんでした。"
+    },
+    {
+      "id": "native.apple.9e611e3a80e71408",
+      "source": "The widget image could not be encoded as PNG.",
+      "translated": "ウィジェットの画像をPNG形式でエンコードできませんでした。"
+    },
+    {
+      "id": "native.apple.9a6e8afbe24a262b",
+      "source": "The widget image could not be saved.",
+      "translated": "ウィジェットの画像を保存できませんでした。"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
