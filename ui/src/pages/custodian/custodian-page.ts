@@ -134,9 +134,9 @@ export class CustodianPage extends OpenClawLightDomElement {
    */
   private currentSessionOwnershipKey(): string {
     const { gatewayUrl, token, password, bootstrapToken } = this.context.gateway.connection;
-    const hello = this.context.gateway.snapshot.hello;
-    if (hello) {
-      this.lastHelloDeviceToken = hello.auth?.deviceToken ?? "";
+    const auth = this.context.gateway.snapshot.hello?.auth;
+    if (auth) {
+      this.lastHelloDeviceToken = auth.deviceToken ?? "";
     }
     return JSON.stringify([gatewayUrl, token, password, bootstrapToken, this.lastHelloDeviceToken]);
   }
