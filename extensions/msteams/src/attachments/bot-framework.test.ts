@@ -6,6 +6,7 @@ import {
   downloadMSTeamsBotFrameworkAttachments,
   isBotFrameworkPersonalChatId,
 } from "./bot-framework.js";
+import { createResponseWithRejectingCancel, watchUnhandledRejections } from "./test-helpers.js";
 import type { MSTeamsAccessTokenProvider } from "./types.js";
 
 type SavedCall = {
@@ -588,6 +589,152 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       } finally {
         jsonSpy.mockRestore();
       }
+    });
+  });
+
+  describe("rejecting body.cancel() regression coverage", () => {
+    it("handles attachmentInfo non-ok response with rejecting cancel", async () => {
+      const watcher = watchUnhandledRejections();
+      try {
+        const fetchFn: typeof fetch = vi.fn(async () =>
+          createResponseWithRejectingCancel("server error", { status: 500 }),
+        );
+
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+        });
+
+        expect(media).toBeUndefined();
+      } finally {
+        watcher.detach();
+      }
+      expect(watcher.unhandled).toEqual([]);
+    });
+
+    it("handles attachmentView non-ok response with rejecting cancel", async () => {
+      const watcher = watchUnhandledRejections();
+      try {
+        const info = {
+          name: "report.pdf",
+          type: "application/pdf",
+          views: [{ viewId: "original", size: 10 }],
+        };
+        const fetchFn: typeof fetch = vi.fn(async (input: RequestInfo | URL) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (url.endsWith("/v3/attachments/att-1")) {
+            return new Response(JSON.stringify(info), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          return createResponseWithRejectingCancel("forbidden", { status: 403 });
+        });
+
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+        });
+
+        expect(media).toBeUndefined();
+      } finally {
+        watcher.detach();
+      }
+      expect(watcher.unhandled).toEqual([]);
+    });
+
+    it("handles attachmentView invalid content-length with rejecting cancel", async () => {
+      const watcher = watchUnhandledRejections();
+      try {
+        const info = {
+          name: "report.pdf",
+          type: "application/pdf",
+          views: [{ viewId: "original", size: 3 }],
+        };
+        const warn = vi.fn();
+        const fetchFn: typeof fetch = vi.fn(async (input: RequestInfo | URL) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (url.endsWith("/v3/attachments/att-1")) {
+            return new Response(JSON.stringify(info), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          return createResponseWithRejectingCancel("PDFBYTES", {
+            status: 200,
+            headers: { "content-length": "0x3" },
+          });
+        });
+
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+          logger: { warn },
+        });
+
+        expect(media).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          "msteams botFramework attachmentView invalid content-length",
+          { error: "invalid content-length header: 0x3" },
+        );
+      } finally {
+        watcher.detach();
+      }
+      expect(watcher.unhandled).toEqual([]);
+    });
+
+    it("handles attachmentView content-length exceeding maxBytes with rejecting cancel", async () => {
+      const watcher = watchUnhandledRejections();
+      try {
+        const info = {
+          name: "huge.bin",
+          type: "application/octet-stream",
+          views: [{ viewId: "original", size: 50_000_000 }],
+        };
+        const fetchFn: typeof fetch = vi.fn(async (input: RequestInfo | URL) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (url.endsWith("/v3/attachments/att-1")) {
+            return new Response(JSON.stringify(info), { status: 200 });
+          }
+          return createResponseWithRejectingCancel("BYTES", {
+            status: 200,
+            headers: { "content-length": "99999999" },
+          });
+        });
+
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+        });
+
+        expect(media).toBeUndefined();
+      } finally {
+        watcher.detach();
+      }
+      expect(watcher.unhandled).toEqual([]);
     });
   });
 });
