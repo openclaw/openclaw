@@ -448,9 +448,7 @@ function isRecoveredGatewayAgentTerminalFailure(err: unknown, runId: string): bo
     return false;
   }
   // A generic Gateway error cannot prove the original run failed; only replay's cache marker can.
-  return (
-    readCachedAgentResultErrorDetails((err as { details?: unknown }).details)?.runId === runId
-  );
+  return readCachedAgentResultErrorDetails((err as { details?: unknown }).details)?.runId === runId;
 }
 
 function readAcceptedRunContext(payload: unknown): {
