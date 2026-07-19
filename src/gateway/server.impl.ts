@@ -1264,13 +1264,16 @@ export async function startGatewayServer(
     const previous = presenceWatchedSessions(connId);
     const rollback = sessionMessageSubscribers.subscribe(connId, sessionKey, options);
     updateWatchedSessionsPresence(connId, previous);
-    return rollback
-      ? () => {
-          const rollbackPrevious = presenceWatchedSessions(connId);
-          rollback();
-          updateWatchedSessionsPresence(connId, rollbackPrevious);
-        }
-      : undefined;
+    if (!rollback) {
+      return undefined;
+    }
+    const rollbackPresence = (() => {
+      const rollbackPrevious = presenceWatchedSessions(connId);
+      rollback();
+      updateWatchedSessionsPresence(connId, rollbackPrevious);
+    }) as NonNullable<ReturnType<GatewayRequestContext["subscribeSessionMessageEvents"]>>;
+    rollbackPresence.commit = () => rollback.commit();
+    return rollbackPresence;
   };
   const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
     (connId, sessionKey) => {
