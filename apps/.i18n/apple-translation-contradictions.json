@@ -1058,7 +1058,6 @@
       "source": "Chat",
       "translations": [
         "Chat",
-        "چت",
         "گفت‌وگو"
       ]
     },
@@ -7065,6 +7064,22 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Recent",
+      "translations": [
+        "Reciente",
+        "Recientes"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Recent",
+      "translations": [
+        "Récent",
+        "Récents"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Recent",
       "translations": [
@@ -8332,6 +8347,14 @@
       "translations": [
         "Безпечне (TLS)",
         "Захищено (TLS)"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Selected",
+      "translations": [
+        "محدد",
+        "محدّد"
       ]
     },
     {

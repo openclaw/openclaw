@@ -12949,6 +12949,16 @@
       "translated": "Sistem, bu aygıtın görünüm ayarını izler."
     },
     {
+      "id": "native.apple.6d48137a8f6a5e96",
+      "source": "Sidebar Agents",
+      "translated": "Kenar Çubuğu Aracıları"
+    },
+    {
+      "id": "native.apple.69cccbdee0bb0b56",
+      "source": "How many agents the sidebar lists before the switcher menu.",
+      "translated": "Kenar çubuğunun, değiştirici menüsünden önce kaç aracı listeleyeceği."
+    },
+    {
       "id": "native.apple.70eca66c79335a6e",
       "source": "Connection",
       "translated": "Bağlantı"
@@ -15584,14 +15594,14 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.00f9704d3c430ff7",
-      "source": "Switch agent",
-      "translated": "Aracıyı değiştir"
+      "id": "native.apple.8855710a55de2ed5",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.14858678ae3f059f",
-      "source": "New Chat",
-      "translated": "Yeni Sohbet"
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "Ayarlar"
     },
     {
       "id": "native.apple.7042a7d70a7e5a20",
@@ -15599,9 +15609,14 @@
       "translated": "Kenar Çubuğunu Gizle"
     },
     {
-      "id": "native.apple.8855710a55de2ed5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "id": "native.apple.e779847164babc29",
+      "source": "Selected",
+      "translated": "Seçili"
+    },
+    {
+      "id": "native.apple.698c71602b569378",
+      "source": "More Agents",
+      "translated": "Daha Fazla Aracı"
     },
     {
       "id": "native.apple.94772cbd85c42e6e",
@@ -15614,11 +15629,6 @@
       "translated": "Oturum aramasını temizle"
     },
     {
-      "id": "native.apple.58ed7e02e09b847b",
-      "source": "Sessions",
-      "translated": "Oturumlar"
-    },
-    {
       "id": "native.apple.58248484e54174e3",
       "source": "Loading sessions",
       "translated": "Oturumlar yükleniyor"
@@ -15627,6 +15637,11 @@
       "id": "native.apple.dfb5cbd55893c4e5",
       "source": "No recent sessions",
       "translated": "Son oturum yok"
+    },
+    {
+      "id": "native.apple.01a4c3f6192bb1a3",
+      "source": "Recent",
+      "translated": "Son Kullanılanlar"
     },
     {
       "id": "native.apple.c0a4d120556df169",
@@ -15644,29 +15659,19 @@
       "translated": "Ana Sayfa"
     },
     {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "Okunmamış"
+    },
+    {
       "id": "native.apple.b4567540cbcaf944",
       "source": "Attention",
       "translated": "Dikkat"
     },
     {
-      "id": "native.apple.0db406639dd48044",
-      "source": "Pending approvals",
-      "translated": "Bekleyen onaylar"
-    },
-    {
-      "id": "native.apple.96b2be22c750a802",
-      "source": "Automation issues",
-      "translated": "Otomasyon sorunları"
-    },
-    {
-      "id": "native.apple.7029e1235380a92c",
-      "source": "Settings",
-      "translated": "Ayarlar"
-    },
-    {
-      "id": "native.apple.3995f7f73d1ded5f",
-      "source": "Unread",
-      "translated": "Okunmamış"
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Yeni Sohbet"
     },
     {
       "id": "native.apple.9d87aa7e7862a607",
@@ -15717,11 +15722,6 @@
       "id": "native.apple.098013d7dd8cdfc7",
       "source": "Not pinned",
       "translated": "Sabitlenmedi"
-    },
-    {
-      "id": "native.apple.a4256b2ab523ee60",
-      "source": "Chat",
-      "translated": "Sohbet"
     },
     {
       "id": "native.apple.64d7dc062ef4cc81",

@@ -12949,6 +12949,16 @@
       "translated": "Le système suit le réglage d’apparence de cet appareil."
     },
     {
+      "id": "native.apple.6d48137a8f6a5e96",
+      "source": "Sidebar Agents",
+      "translated": "Agents de la barre latérale"
+    },
+    {
+      "id": "native.apple.69cccbdee0bb0b56",
+      "source": "How many agents the sidebar lists before the switcher menu.",
+      "translated": "Nombre d’agents affichés dans la barre latérale avant le menu de sélection."
+    },
+    {
       "id": "native.apple.70eca66c79335a6e",
       "source": "Connection",
       "translated": "Connexion"
@@ -15584,14 +15594,14 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.00f9704d3c430ff7",
-      "source": "Switch agent",
-      "translated": "Changer d’agent"
+      "id": "native.apple.8855710a55de2ed5",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.14858678ae3f059f",
-      "source": "New Chat",
-      "translated": "Nouveau chat"
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "Réglages"
     },
     {
       "id": "native.apple.7042a7d70a7e5a20",
@@ -15599,9 +15609,14 @@
       "translated": "Masquer la barre latérale"
     },
     {
-      "id": "native.apple.8855710a55de2ed5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "id": "native.apple.e779847164babc29",
+      "source": "Selected",
+      "translated": "Sélectionné"
+    },
+    {
+      "id": "native.apple.698c71602b569378",
+      "source": "More Agents",
+      "translated": "Plus d’agents"
     },
     {
       "id": "native.apple.94772cbd85c42e6e",
@@ -15614,11 +15629,6 @@
       "translated": "Clear session search"
     },
     {
-      "id": "native.apple.58ed7e02e09b847b",
-      "source": "Sessions",
-      "translated": "Sessions"
-    },
-    {
       "id": "native.apple.58248484e54174e3",
       "source": "Loading sessions",
       "translated": "Loading sessions"
@@ -15627,6 +15637,11 @@
       "id": "native.apple.dfb5cbd55893c4e5",
       "source": "No recent sessions",
       "translated": "No recent sessions"
+    },
+    {
+      "id": "native.apple.01a4c3f6192bb1a3",
+      "source": "Recent",
+      "translated": "Récents"
     },
     {
       "id": "native.apple.c0a4d120556df169",
@@ -15644,29 +15659,19 @@
       "translated": "Accueil"
     },
     {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "Non lu"
+    },
+    {
       "id": "native.apple.b4567540cbcaf944",
       "source": "Attention",
       "translated": "Attention"
     },
     {
-      "id": "native.apple.0db406639dd48044",
-      "source": "Pending approvals",
-      "translated": "Approbations en attente"
-    },
-    {
-      "id": "native.apple.96b2be22c750a802",
-      "source": "Automation issues",
-      "translated": "Automation issues"
-    },
-    {
-      "id": "native.apple.7029e1235380a92c",
-      "source": "Settings",
-      "translated": "Réglages"
-    },
-    {
-      "id": "native.apple.3995f7f73d1ded5f",
-      "source": "Unread",
-      "translated": "Non lu"
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Nouveau chat"
     },
     {
       "id": "native.apple.9d87aa7e7862a607",
@@ -15717,11 +15722,6 @@
       "id": "native.apple.098013d7dd8cdfc7",
       "source": "Not pinned",
       "translated": "Non épinglé"
-    },
-    {
-      "id": "native.apple.a4256b2ab523ee60",
-      "source": "Chat",
-      "translated": "Discussion"
     },
     {
       "id": "native.apple.64d7dc062ef4cc81",
