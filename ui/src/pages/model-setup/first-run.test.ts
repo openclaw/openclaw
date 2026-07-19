@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
-import { isDefaultChatLanding, startModelSetupFirstRunRedirect } from "./first-run.ts";
+import {
+  isDefaultChatLanding,
+  locationsMatchDefaultLanding,
+  startModelSetupFirstRunRedirect,
+} from "./first-run.ts";
 
 describe("model setup first-run redirect", () => {
   it("recognizes only the implicit chat landing without a session deep link", () => {
@@ -33,6 +37,34 @@ describe("model setup first-run redirect", () => {
         { pathname: "/settings/general", search: "", hash: "" },
         "",
         routeIdFromPath,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the canonical main session on the default landing", () => {
+    const hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "dev",
+          mainKey: "main",
+          mainSessionKey: "agent:dev:main",
+        },
+      },
+    } as GatewayHelloOk;
+    const expected = { pathname: "/chat", search: "?session=main", hash: "" };
+
+    expect(
+      locationsMatchDefaultLanding(
+        { pathname: "/chat", search: "?session=agent%3Adev%3Amain", hash: "" },
+        expected,
+        hello,
+      ),
+    ).toBe(true);
+    expect(
+      locationsMatchDefaultLanding(
+        { pathname: "/chat", search: "?session=agent%3Adev%3Aother", hash: "" },
+        expected,
+        hello,
       ),
     ).toBe(false);
   });
@@ -121,6 +153,103 @@ describe("model setup first-run redirect", () => {
 
     expect(replace).not.toHaveBeenCalled();
     expect(consumeCachedModelSetupDetection(client)).toEqual(result);
+  });
+
+  it("retries detection with the replacement client after a transient failure", async () => {
+    const result = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/workspace",
+      setupComplete: false,
+    };
+    const firstRequest = vi.fn().mockRejectedValue(new Error("gateway disconnected"));
+    const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
+    const secondRequest = vi.fn().mockResolvedValue(result);
+    const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      connected: true,
+      client: firstClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    const replace = vi.fn();
+    let currentSnapshot = snapshot;
+    const context = {
+      gateway: {
+        get snapshot() {
+          return currentSnapshot;
+        },
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      replace,
+    } as unknown as ApplicationContext<RouteId>;
+
+    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
+
+    const reconnected = { ...snapshot, client: secondClient };
+    currentSnapshot = reconnected;
+    listener!(reconnected as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+
+    expect(secondRequest).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    expect(consumeCachedModelSetupDetection(secondClient)).toEqual(result);
+  });
+
+  it("does not repeat completed detection with a replacement client", async () => {
+    const result = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/workspace",
+      setupComplete: true,
+    };
+    const firstRequest = vi.fn().mockResolvedValue(result);
+    const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
+    const secondRequest = vi.fn();
+    const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      connected: true,
+      client: firstClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    let currentSnapshot = snapshot;
+    const context = {
+      gateway: {
+        get snapshot() {
+          return currentSnapshot;
+        },
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      replace: vi.fn(),
+    } as unknown as ApplicationContext<RouteId>;
+
+    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(consumeCachedModelSetupDetection(firstClient)).toEqual(result));
+
+    const reconnected = { ...snapshot, client: secondClient };
+    currentSnapshot = reconnected;
+    listener!(reconnected as Parameters<GatewayListener>[0]);
+
+    expect(firstRequest).toHaveBeenCalledOnce();
+    expect(secondRequest).not.toHaveBeenCalled();
   });
 
   it("does not detect without admin scope or an advertised setup method", () => {

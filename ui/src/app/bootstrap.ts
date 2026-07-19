@@ -17,7 +17,7 @@ import { createSessionCapability } from "../lib/sessions/index.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import {
   isDefaultChatLanding,
-  locationsMatch,
+  locationsMatchDefaultLanding,
   startModelSetupFirstRunRedirect,
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
@@ -412,10 +412,17 @@ export function bootstrapApplication(): ApplicationRuntime {
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
+  const isStillDefaultLanding = () => {
+    return locationsMatchDefaultLanding(
+      history.location(),
+      expectedDefaultLanding,
+      gateway.snapshot.hello,
+    );
+  };
   const stopModelSetupRedirect = firstRunDefaultLanding
     ? startModelSetupFirstRunRedirect({
         context,
-        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
+        isStillDefaultLanding,
       })
     : () => undefined;
   return {

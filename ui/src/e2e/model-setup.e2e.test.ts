@@ -31,6 +31,45 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     await server?.close();
   });
 
+  it("retries first-run detection after a Gateway reconnect and opens setup", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["openclaw.setup.detect"],
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.setup.detect"],
+      methodResponses: {
+        "openclaw.setup.detect": {
+          candidates: [],
+          manualProviders: [],
+          workspace: "/tmp/openclaw-e2e",
+          setupComplete: false,
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}chat`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("openclaw.setup.detect");
+      await gateway.closeLatest(1012, "first-run detection interrupted");
+
+      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect
+        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length, {
+          timeout: 15_000,
+        })
+        .toBe(2);
+      await page.getByRole("heading", { name: "Connect your AI" }).waitFor();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     const context = await browser.newContext({
       locale: "en-US",
