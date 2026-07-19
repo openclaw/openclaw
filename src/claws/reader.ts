@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { parseDocument } from "yaml";
+import { isScalar, parseDocument, visit } from "yaml";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
@@ -283,6 +283,35 @@ function parseClawMarkdown(
       ),
     };
   }
+  let unsupportedFeature: string | undefined;
+  visit(document, {
+    Alias() {
+      unsupportedFeature ??= "aliases";
+    },
+    Node(_key, node) {
+      if (node.anchor) {
+        unsupportedFeature ??= "anchors";
+      } else if (node.tag) {
+        unsupportedFeature ??= "explicit tags";
+      }
+    },
+    Pair(_key, pair) {
+      if (isScalar(pair.key) && pair.key.value === "<<") {
+        unsupportedFeature ??= "merge keys";
+      }
+    },
+  });
+  if (unsupportedFeature) {
+    return {
+      ok: false,
+      diagnostics: [
+        fileDiagnostic(
+          "unsupported_claw_yaml_feature",
+          `${path} uses ${unsupportedFeature}; CLAW.md frontmatter must map directly to JSON data.`,
+        ),
+      ],
+    };
+  }
   try {
     return { ok: true, value: document.toJSON() };
   } catch (error) {
@@ -322,18 +351,18 @@ async function readClawDocument(
   code: string,
   manifestFormatPath = path,
 ): Promise<
-  { ok: true; raw: string; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] }
+  { ok: true; raw: Buffer; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
-  let raw: string;
+  let raw: Buffer;
   try {
-    raw = await readFile(path, "utf8");
+    raw = await readFile(path);
   } catch (error) {
     return {
       ok: false,
       diagnostics: [fileDiagnostic(code, `Could not read ${path}: ${(error as Error).message}`)],
     };
   }
-  const parsed = parseClawManifestDocument(raw, manifestFormatPath);
+  const parsed = parseClawManifestDocument(raw.toString("utf8"), manifestFormatPath);
   return parsed.ok ? { ...parsed, raw } : parsed;
 }
 
