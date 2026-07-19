@@ -122,6 +122,34 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
 });
 
 describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
+  it("cancels a non-OK body before release while preserving the HTTP error", async () => {
+    const cleanupEvents: string[] = [];
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("unauthorized"));
+        },
+        cancel() {
+          cleanupEvents.push("cancel");
+          throw new Error("cancel failed");
+        },
+      }),
+      { status: 401 },
+    );
+    mocks.fetchWithSsrFGuard.mockResolvedValue({
+      response,
+      finalUrl: DEVICE_CODE_URL,
+      release: async () => {
+        cleanupEvents.push("release");
+      },
+    });
+
+    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
+      "GitHub device code failed: HTTP 401",
+    );
+    expect(cleanupEvents).toEqual(["cancel", "release"]);
+  });
+
   it("throws with failureLabel on non-OK device code response", async () => {
     mocks.fetchWithSsrFGuard.mockImplementation(async () => guardResponse({}, 401));
 
