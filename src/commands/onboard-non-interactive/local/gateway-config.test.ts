@@ -125,6 +125,25 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result?.nextConfig.gateway?.auth?.token).toBe("generated-random-token");
   });
 
+  it("establishes token auth when explicitly enabling Tailscale Serve from no-auth", () => {
+    const result = applyGatewayConfig({
+      nextConfig: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "none" },
+          tailscale: { mode: "off" },
+        },
+      },
+      opts: { tailscale: "serve" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({
+      mode: "token",
+      token: "generated-random-token",
+    });
+    expect(result?.nextConfig.gateway?.tailscale?.mode).toBe("serve");
+  });
+
   // --- SecretRef preservation ---
 
   it("preserves an existing SecretRef when no flag or env override is provided", () => {
