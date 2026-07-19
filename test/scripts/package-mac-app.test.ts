@@ -72,7 +72,7 @@ function getSparkleBuildHelperBlock(): string {
 
 function getSwiftPackageResolutionBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("resolve_swift_packages()");
+  const start = script.indexOf("run_with_locked_swift_packages()");
   const end = script.indexOf("PNPM_CMD=()");
 
   expect(start).toBeGreaterThanOrEqual(0);
@@ -190,7 +190,7 @@ function runSwiftPackageResolutionHarness(mutateLockfile: boolean) {
     ROOT_DIR=${JSON.stringify(root)}
     PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
     ${getSwiftPackageResolutionBlock()}
-    resolve_swift_packages "$ROOT_DIR/apps/macos/.build/arm64"
+    run_with_locked_swift_packages swift package --scratch-path "$ROOT_DIR/apps/macos/.build/arm64" resolve
   `);
 
   return { result, resolvedFile };
@@ -710,10 +710,11 @@ describe("package-mac-app plist stamping", () => {
   it("patches KeyboardShortcuts to resolve packaged resources before building", () => {
     const script = readFileSync(scriptPath, "utf8");
     const patch = readFileSync("apps/macos/Patches/KeyboardShortcuts-3.0.1.patch", "utf8");
-    const resolveCall = 'resolve_swift_packages "$BUILD_PATH"';
+    const resolveCall =
+      'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
     const patchCall = 'patch_keyboard_shortcuts_bundle_lookup "$BUILD_PATH"';
     const buildCall =
-      'swift build -c "$BUILD_CONFIG" --disable-automatic-resolution --product "$PRODUCT"';
+      'run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
 
     expect(script).toContain(
       'KEYBOARD_SHORTCUTS_PATCH="$ROOT_DIR/apps/macos/Patches/KeyboardShortcuts-3.0.1.patch"',
@@ -726,9 +727,7 @@ describe("package-mac-app plist stamping", () => {
     expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
-    expect(script).toContain(
-      'swift build -c "$BUILD_CONFIG" --disable-automatic-resolution --product "$PRODUCT"',
-    );
+    expect(script).toContain(buildCall);
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(patchCall));
     expect(script.indexOf(patchCall)).toBeLessThan(script.indexOf(buildCall));
     expect(patch).toContain("Bundle.main.url(");
