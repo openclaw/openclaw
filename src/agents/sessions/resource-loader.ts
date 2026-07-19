@@ -91,8 +91,8 @@ function readTextFileSafely(filePath: string, maxBytes: number): string | undefi
     }
     // Read through the same descriptor so the bound is on the opened inode, not a re-resolved path.
     const buffer = Buffer.alloc(stats.size);
-    readSync(fd, buffer, 0, stats.size, 0);
-    return buffer.toString("utf-8");
+    const bytesRead = readSync(fd, buffer, 0, stats.size, 0);
+    return buffer.subarray(0, bytesRead).toString("utf-8");
   } catch (error) {
     // Missing candidates are an ordinary absence, not a warning: the ancestor walk
     // probes all four filenames in every parent directory, so warning on ENOENT
