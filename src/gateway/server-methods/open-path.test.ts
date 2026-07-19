@@ -157,6 +157,8 @@ describe("execOpenPath", () => {
       },
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
-    expect(message.endsWith("x")).toBe(true);
+    const expectedMessage = `Command failed with exit code 3: xdg-open: ${"x".repeat(4_095)}`;
+    expect(message).toBe(expectedMessage);
+    expect(message).toHaveLength(expectedMessage.length);
   });
 });
