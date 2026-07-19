@@ -26,7 +26,6 @@ import {
   MAX_CARD_ARTIFACTS,
   MAX_CARD_COMMENTS,
   MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
   secondsToDurationMs,
 } from "./store-constants.js";
 import type {
@@ -44,6 +43,7 @@ import type {
   WorkboardSpecifyInput,
 } from "./store-inputs.js";
 import {
+  appendCompletionProof,
   clearDiagnostics,
   deriveChildIdempotencyKey,
   normalizeArtifact,
@@ -293,7 +293,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { id: randomUUID(), body: summary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
-          proof: proof ? [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF) : metadata.proof,
+          proof: proof ? appendCompletionProof(metadata.proof, proof) : metadata.proof,
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,

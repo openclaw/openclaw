@@ -983,6 +983,34 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
   };
 }
 
+function proofContentMatches(left: WorkboardProof, right: WorkboardProof): boolean {
+  return (
+    left.label === right.label &&
+    left.command === right.command &&
+    left.url === right.url &&
+    left.note === right.note
+  );
+}
+
+export function appendCompletionProof(
+  existing: readonly WorkboardProof[] | undefined,
+  proof: WorkboardProof,
+): WorkboardProof[] {
+  const entries = [...(existing ?? [])];
+  const latest = entries.at(-1);
+  // Completion may refine only the immediately preceding unresolved record; older proof has no
+  // correlation id, so scanning backward could rewrite evidence from a different run.
+  if (
+    proof.status !== "unknown" &&
+    latest?.status === "unknown" &&
+    proofContentMatches(latest, proof)
+  ) {
+    entries[entries.length - 1] = { ...latest, status: proof.status };
+    return entries.slice(-MAX_CARD_PROOF);
+  }
+  return [...entries, proof].slice(-MAX_CARD_PROOF);
+}
+
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},

@@ -1010,6 +1010,91 @@ describe("WorkboardStore", () => {
     expect(restored.events?.at(-1)).toMatchObject({ kind: "unarchived" });
   });
 
+  it("resolves matching unknown proof on completion without duplicating it", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({ title: "Resolve worker proof", status: "running" });
+      const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
+      const proofInput = {
+        label: "Haiku syllable check",
+        command: "review poem",
+        note: "Checked each line.",
+      };
+      const pending = await store.addProof(claimed.card.id, proofInput, {
+        ownerId: "main",
+        token: "token-1",
+      });
+
+      vi.setSystemTime(6_000);
+      const completed = await store.complete(claimed.card.id, {
+        ownerId: "main",
+        token: "token-1",
+        summary: "Poem complete.",
+        proof: { ...proofInput, status: "passed" },
+      });
+
+      expect(completed.metadata?.proof).toEqual([
+        {
+          ...pending.metadata?.proof?.[0],
+          status: "passed",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not rewrite legacy unknown proof behind a terminal completion match", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proofInput = { command: "pnpm test extensions/workboard", note: "94 tests" };
+    const card = await store.create({
+      title: "Preserve historical proof",
+      metadata: {
+        proof: [
+          { id: "proof-unknown", status: "unknown", createdAt: 1_000, ...proofInput },
+          { id: "proof-passed", status: "passed", createdAt: 2_000, ...proofInput },
+        ],
+      },
+    });
+
+    const failed = await store.complete(card.id, {
+      summary: "A later run failed.",
+      proof: { ...proofInput, status: "failed" },
+    });
+
+    expect(failed.metadata?.proof?.map((entry) => [entry.id, entry.status])).toEqual([
+      ["proof-unknown", "unknown"],
+      ["proof-passed", "passed"],
+      [expect.any(String), "failed"],
+    ]);
+  });
+
+  it("resolves only the latest identical unknown proof on completion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proofInput = { command: "review poem", note: "Checked each line." };
+    const card = await store.create({
+      title: "Keep unresolved proof history",
+      metadata: {
+        proof: [
+          { id: "proof-older", status: "unknown", createdAt: 1_000, ...proofInput },
+          { id: "proof-latest", status: "unknown", createdAt: 2_000, ...proofInput },
+        ],
+      },
+    });
+
+    const completed = await store.complete(card.id, {
+      summary: "Latest check passed.",
+      proof: { ...proofInput, status: "passed" },
+    });
+
+    expect(completed.metadata?.proof?.map((entry) => [entry.id, entry.status])).toEqual([
+      ["proof-older", "unknown"],
+      ["proof-latest", "passed"],
+    ]);
+  });
+
   it("stores attachments in the plugin kv namespace and adds worker context", async () => {
     const attachments = createMemoryStore<PersistedWorkboardAttachment>();
     const store = new WorkboardStore(createMemoryStore(), { attachments });
