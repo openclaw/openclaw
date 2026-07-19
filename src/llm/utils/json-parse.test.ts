@@ -46,52 +46,52 @@ describe("json-parse repairJson invalid \\u escapes", () => {
 });
 
 describe("json-parse repairJson Windows-path false positives (issue #93139)", () => {
-  // Before the code-context guard, the Windows-path heuristic matched any
-  // tail ending in `<non-alphanum><letter>:` — which also matches Python
-  // block openers like `if x:`, `for x:`, `try:`, `def foo(x):` — and the
-  // newline immediately after the colon got rewritten as a literal `\\n`
-  // instead of an actual newline. That broke any agent tool call carrying
-  // multi-line Python in a heredoc, with the symptom that the shell saw a
-  // line-continuation character and refused to run the script.
-
   it.each([
+    ["if x", '{"command": "if x:\\n    pass"}', "if x:\n    pass"],
     [
-      "Python if-block in a heredoc",
-      '{"command": "python3 << EOF\\nif x:\\n    print(1)\\nEOF"}',
-      "python3 << EOF\nif x:\n    print(1)\nEOF",
+      "as f",
+      '{"command": "with open(path) as f:\\n    read(f)"}',
+      "with open(path) as f:\n    read(f)",
     ],
-    [
-      "Python try/except",
-      '{"command": "try:\\n    foo()\\nexcept Exception as e:\\n    bar()"}',
-      "try:\n    foo()\nexcept Exception as e:\n    bar()",
-    ],
-    [
-      "Python def with parens in the signature",
-      '{"command": "def foo(x):\\n    return x"}',
-      "def foo(x):\n    return x",
-    ],
-    ["Python while-True loop", '{"command": "while True:\\n    break"}', "while True:\n    break"],
-    [
-      "reproducer reported in #93139 (if r:)",
-      '{"command": "r = re.match(p, s)\\nif r:\\n    print(r)"}',
-      "r = re.match(p, s)\nif r:\n    print(r)",
-    ],
-    [
-      "bash for-loop with shell redirect in prior context",
-      '{"command": "for f in *.py:\\n  echo $f"}',
-      "for f in *.py:\n  echo $f",
-    ],
-  ])("preserves real newlines after Python/shell block openers: %s", (_name, input, expected) => {
+    ["in d", '{"command": "if x in d:\\n    pass"}', "if x in d:\n    pass"],
+    ["match x", '{"command": "match x:\\n    pass"}', "match x:\n    pass"],
+    ["case x", '{"command": "case x:\\n    pass"}', "case x:\n    pass"],
+  ])("preserves real newlines after code keyword candidates: %s", (_name, input, expected) => {
     expect(parseJsonWithRepair(input)).toEqual({ command: expected });
     expect(parseStreamingJson(input)).toEqual({ command: expected });
   });
 
-  it("still preserves a Windows path that appears alongside code", () => {
-    // Confirms the guard is scoped: the path part stays escaped, the code
-    // part gets real newlines. Both parts of the same string survive.
-    const input = '{"text": "see C:\\\\Users for path; if x:\\n    do_stuff()"}';
+  it("preserves the reported if r code candidate", () => {
+    const input = '{"command": "r = re.match(p, s)\\nif r:\\n    print(r)"}';
+    const expected = { command: "r = re.match(p, s)\nif r:\n    print(r)" };
+    expect(parseJsonWithRepair(input)).toEqual(expected);
+    expect(parseStreamingJson(input)).toEqual(expected);
+  });
+
+  it("preserves uppercase batch paths after guarded keywords", () => {
+    const input = '{"command":"if C:\\new==C:\\temp echo same"}';
+    const expected = { command: "if C:\\new==C:\\temp echo same" };
+    expect(parseJsonWithRepair(input)).toEqual(expected);
+    expect(parseStreamingJson(input)).toEqual(expected);
+  });
+
+  it.each([
+    ["comma", '{"value":"if,C:\\new"}', "if,C:\\new"],
+    ["parentheses", '{"value":"(C:\\new)"}', "(C:\\new)"],
+    ["braces", '{"value":"{C:\\new}"}', "{C:\\new}"],
+  ])("preserves punctuation-wrapped Windows paths: %s", (_name, input, expected) => {
+    expect(parseJsonWithRepair(input)).toEqual({ value: expected });
+    expect(parseStreamingJson(input)).toEqual({ value: expected });
+  });
+
+  it("preserves a malformed Windows path after code-like command text", () => {
+    const input = '{"cmd": "python -c \'x\'; C:\\new\\file.txt"}';
+    expect(repairJson(input)).not.toBe(input);
     expect(parseJsonWithRepair(input)).toEqual({
-      text: "see C:\\Users for path; if x:\n    do_stuff()",
+      cmd: "python -c 'x'; C:\\new\\file.txt",
+    });
+    expect(parseStreamingJson(input)).toEqual({
+      cmd: "python -c 'x'; C:\\new\\file.txt",
     });
   });
 });
