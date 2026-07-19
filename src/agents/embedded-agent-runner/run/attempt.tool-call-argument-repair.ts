@@ -122,7 +122,9 @@ function repairDoubleEscapedCodeStrings(args: Record<string, unknown>): void {
             /\\([nrt])(?=\s*\\([nrt]))/gs,
             (_match, char) => TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? _match,
           );
-          if (repaired === prev) break;
+          if (repaired === prev) {
+            break;
+          }
         }
         // Final cleanup: remaining escapes preceded by a real newline
         // (result of a prior repair) that were not matched because their
