@@ -11,8 +11,10 @@ const linkEmail = vi.hoisted(() => vi.fn());
 const listProfiles = vi.hoisted(() => vi.fn());
 const setAvatar = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
+const ensureProfileForEmail = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profiles.js", () => ({
+  ensureProfileForEmail,
   linkEmail,
   listProfiles,
   setAvatar,
@@ -20,12 +22,16 @@ vi.mock("../../state/user-profiles.js", () => ({
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
 
-async function runUsersHandler(method: keyof typeof usersHandlers, params: object) {
+async function runUsersHandler(
+  method: keyof typeof usersHandlers,
+  params: object,
+  client?: object,
+) {
   const respond = vi.fn();
   await expectDefined(
     usersHandlers[method],
     `${method} test invariant`,
-  )({ params, respond } as never);
+  )({ client, params, respond } as never);
   return respond;
 }
 
@@ -40,8 +46,14 @@ describe("users gateway methods", () => {
     emails: ["ada@example.com"],
     hasAvatar: false,
   };
+  const adminClient = { connect: { scopes: ["operator.admin"] } };
+  const selfClient = {
+    authenticatedUserId: "ada@example.com",
+    connect: { scopes: ["operator.write"] },
+  };
 
   beforeEach(() => {
+    ensureProfileForEmail.mockReset();
     linkEmail.mockReset();
     listProfiles.mockReset();
     setAvatar.mockReset();
@@ -72,10 +84,14 @@ describe("users gateway methods", () => {
   it("returns protocol-complete display name mutations", async () => {
     setDisplayName.mockReturnValue(profile);
 
-    const respond = await runUsersHandler("users.setDisplayName", {
-      profileId: "profile-1",
-      displayName: "Ada",
-    });
+    const respond = await runUsersHandler(
+      "users.setDisplayName",
+      {
+        profileId: "profile-1",
+        displayName: "Ada",
+      },
+      adminClient,
+    );
 
     expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
   });
@@ -86,11 +102,15 @@ describe("users gateway methods", () => {
       value: { ...profile, avatarMime: "image/png", hasAvatar: true },
     });
 
-    const respond = await runUsersHandler("users.setAvatar", {
-      profileId: "profile-1",
-      mime: "image/png",
-      avatarBase64: "AQ==",
-    });
+    const respond = await runUsersHandler(
+      "users.setAvatar",
+      {
+        profileId: "profile-1",
+        mime: "image/png",
+        avatarBase64: "AQ==",
+      },
+      adminClient,
+    );
 
     expect(validateUsersSetAvatarResult(respond.mock.calls[0]?.[1])).toBe(true);
   });
@@ -124,11 +144,36 @@ describe("users gateway methods", () => {
     setAvatar.mockReturnValue({ ok: false, error: { code: "avatar_too_large" } });
 
     expect(
-      await runUsersHandler("users.setAvatar", {
-        profileId: "profile-1",
-        mime: "image/png",
-        avatarBase64: "AQ==",
-      }),
+      await runUsersHandler(
+        "users.setAvatar",
+        {
+          profileId: "profile-1",
+          mime: "image/png",
+          avatarBase64: "AQ==",
+        },
+        adminClient,
+      ),
     ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
+
+  it("allows an identified write caller to edit its own profile", async () => {
+    ensureProfileForEmail.mockReturnValue(profile);
+    setDisplayName.mockReturnValue(profile);
+    setAvatar.mockReturnValue({ ok: true, value: profile });
+
+    const displayName = await runUsersHandler(
+      "users.setDisplayName",
+      { profileId: "profile-1", displayName: "Ada Lovelace" },
+      selfClient,
+    );
+    const avatar = await runUsersHandler(
+      "users.setAvatar",
+      { profileId: "profile-1", mime: "image/png", avatarBase64: "AQ==" },
+      selfClient,
+    );
+
+    expect(displayName).toHaveBeenCalledWith(true, { profile });
+    expect(avatar).toHaveBeenCalledWith(true, { profile });
+    expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@example.com");
   });
 });

@@ -10,13 +10,15 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  ensureProfileForEmail,
   linkEmail,
   listProfiles,
   setAvatar,
   setDisplayName,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function decodeBase64(value: string): Uint8Array | undefined {
   const trimmed = value.trim();
@@ -44,7 +46,35 @@ function profileError(error: unknown) {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
-// Trusted-proxy identity is not yet exposed to RPC handlers on main; follow-up adds self-service.
+function canMutateProfile(
+  client: GatewayRequestHandlerOptions["client"],
+  profileId: string,
+): boolean {
+  if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+  const authenticatedUserId = client?.authenticatedUserId;
+  return authenticatedUserId ? ensureProfileForEmail(authenticatedUserId).id === profileId : false;
+}
+
+function requireProfileMutationAccess(
+  client: GatewayRequestHandlerOptions["client"],
+  profileId: string,
+  respond: GatewayRequestHandlerOptions["respond"],
+): boolean {
+  // These methods are write-scoped so an identified caller can edit only its own profile;
+  // edits targeting any other profile remain admin-only.
+  if (canMutateProfile(client, profileId)) {
+    return true;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.FORBIDDEN, "profile edits require the owning user or operator.admin"),
+  );
+  return false;
+}
+
 export const usersHandlers: GatewayRequestHandlers = {
   "users.list": ({ params, respond }) => {
     if (!validateUsersListParams(params)) {
@@ -73,7 +103,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setDisplayName": ({ params, respond }) => {
+  "users.setDisplayName": ({ client, params, respond }) => {
     if (!validateUsersSetDisplayNameParams(params)) {
       respond(
         false,
@@ -83,12 +113,15 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+        return;
+      }
       respond(true, { profile: setDisplayName(params.profileId, params.displayName) });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ params, respond }) => {
+  "users.setAvatar": ({ client, params, respond }) => {
     if (!validateUsersSetAvatarParams(params)) {
       respond(
         false,
@@ -107,6 +140,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+        return;
+      }
       const result = setAvatar(params.profileId, bytes, params.mime);
       if (!result.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
