@@ -385,6 +385,12 @@ async function isNodePairingWorkCurrent(params: {
   );
 }
 
+function resolveDispatchableNodeSession(
+  session: NodeSession | undefined,
+): NodeSession | undefined {
+  return session?.client?.invalidated === true ? undefined : session;
+}
+
 function prunePendingNodeActions(
   nodeId: string,
   nowMs: number,
@@ -392,17 +398,32 @@ function prunePendingNodeActions(
 ): PendingNodeAction[] {
   const queue = pendingNodeActionsById.get(nodeId) ?? [];
   const minTimestampMs = nowMs - nodeInvokePolicy.pendingActionTtlMs;
-  const live = queue.filter(
-    (entry) =>
-      entry.enqueuedAtMs >= minTimestampMs &&
-      (!pairingGeneration || entry.pairingGeneration === pairingGeneration),
-  );
+  const live = queue.filter((entry) => entry.enqueuedAtMs >= minTimestampMs);
   if (live.length === 0) {
     pendingNodeActionsById.delete(nodeId);
     return [];
   }
   pendingNodeActionsById.set(nodeId, live);
-  return live;
+  return pairingGeneration
+    ? live.filter((entry) => entry.pairingGeneration === pairingGeneration)
+    : live;
+}
+
+function replacePendingNodeActionsForGeneration(
+  nodeId: string,
+  pairingGeneration: string,
+  replacement: PendingNodeAction[],
+): void {
+  const live = prunePendingNodeActions(nodeId, Date.now());
+  const next = [
+    ...live.filter((entry) => entry.pairingGeneration !== pairingGeneration),
+    ...replacement,
+  ];
+  if (next.length === 0) {
+    pendingNodeActionsById.delete(nodeId);
+    return;
+  }
+  pendingNodeActionsById.set(nodeId, next);
 }
 
 function broadcastRemovedNodePairing(params: {
@@ -615,7 +636,7 @@ function enqueuePendingNodeAction(params: {
   if (queue.length > nodeInvokePolicy.pendingActionMaxPerNode) {
     queue.splice(0, queue.length - nodeInvokePolicy.pendingActionMaxPerNode);
   }
-  pendingNodeActionsById.set(params.nodeId, queue);
+  replacePendingNodeActionsForGeneration(params.nodeId, params.pairingGeneration, queue);
   return entry;
 }
 
@@ -681,11 +702,7 @@ function resolveAllowedPendingNodeActions(params: {
     return result.ok;
   });
   if (allowed.length !== pending.length) {
-    if (allowed.length === 0) {
-      pendingNodeActionsById.delete(params.nodeId);
-    } else {
-      pendingNodeActionsById.set(params.nodeId, allowed);
-    }
+    replacePendingNodeActionsForGeneration(params.nodeId, params.pairingGeneration, allowed);
   }
   return allowed;
 }
@@ -701,11 +718,7 @@ function ackPendingNodeActions(
   const pending = prunePendingNodeActions(nodeId, Date.now(), pairingGeneration);
   const idSet = new Set(ids);
   const remaining = pending.filter((entry) => !idSet.has(entry.id));
-  if (remaining.length === 0) {
-    pendingNodeActionsById.delete(nodeId);
-    return [];
-  }
-  pendingNodeActionsById.set(nodeId, remaining);
+  replacePendingNodeActionsForGeneration(nodeId, pairingGeneration, remaining);
   return remaining;
 }
 
@@ -1052,7 +1065,7 @@ export async function maybeSendNodeWakeNudge(
 
 export async function waitForNodeReconnect(params: {
   nodeId: string;
-  context: { nodeRegistry: { get: (nodeId: string) => unknown } };
+  context: { nodeRegistry: { get: (nodeId: string) => NodeSession | undefined } };
   timeoutMs?: number;
   pollMs?: number;
   lifecycle?: NodeWakeLifecycle;
@@ -1065,7 +1078,7 @@ export async function waitForNodeReconnect(params: {
     if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
       return false;
     }
-    if (params.context.nodeRegistry.get(params.nodeId)) {
+    if (resolveDispatchableNodeSession(params.context.nodeRegistry.get(params.nodeId))) {
       return true;
     }
     await delayMs(pollMs);
@@ -1073,7 +1086,7 @@ export async function waitForNodeReconnect(params: {
   if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
     return false;
   }
-  return Boolean(params.context.nodeRegistry.get(params.nodeId));
+  return Boolean(resolveDispatchableNodeSession(params.context.nodeRegistry.get(params.nodeId)));
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
@@ -1480,6 +1493,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
         client,
         cfg: context.getRuntimeConfig(),
       });
+      if (!(await isNodePairingGenerationCurrent(generation))) {
+        respondPairingChanged(respond);
+        return;
+      }
       respond(
         true,
         {
@@ -1518,6 +1535,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
       const ackIds = normalizeUniqueTrimmedStringList(params.ids);
       const remaining = ackPendingNodeActions(trimmedNodeId, ackIds, generation.key);
+      if (!(await isNodePairingGenerationCurrent(generation))) {
+        respondPairingChanged(respond);
+        return;
+      }
       respond(
         true,
         {
@@ -1619,7 +1640,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         }
 
         const cfg = context.getRuntimeConfig();
-        let nodeSession = context.nodeRegistry.get(nodeId);
+        let nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
         if (!nodeSession) {
           const wakeReqId = req.id;
           const wakeFlowStartedAtMs = Date.now();
@@ -1652,7 +1673,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           if (!(await continuePairingWork())) {
             return;
           }
-          nodeSession = context.nodeRegistry.get(nodeId);
+          nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
           if (!nodeSession && wake.available) {
             const retryWake = await maybeWakeNodeWithApns(nodeId, {
               force: true,
@@ -1683,7 +1704,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             if (!(await continuePairingWork())) {
               return;
             }
-            nodeSession = context.nodeRegistry.get(nodeId);
+            nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
           }
           if (!nodeSession) {
             if (!(await continuePairingWork())) {
@@ -1835,7 +1856,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const dispatchSession = context.nodeRegistry.get(nodeId);
+        const dispatchSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
         if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
           respond(
             false,
@@ -1992,6 +2013,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeSession = context.nodeRegistry.get(nodeId);
+      const apnsGeneration =
+        p.event === "push.apns.register" ? await captureNodePairingGeneration(nodeId) : null;
       const presenceAllowed =
         nodeSession !== undefined &&
         nodeSession.connId === client?.connId &&
@@ -2044,6 +2067,20 @@ export const nodeHandlers: GatewayRequestHandlers = {
           connId: client?.connId,
           deviceId: client?.connect?.device?.id,
           presenceAllowed,
+          isApnsRegistrationAllowed: async () => {
+            if (!apnsGeneration || !client?.connId) {
+              return false;
+            }
+            const before = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+            if (!before || before.connId !== client.connId) {
+              return false;
+            }
+            if (!(await isNodePairingGenerationCurrent(apnsGeneration))) {
+              return false;
+            }
+            const after = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+            return after?.connId === client.connId;
+          },
         },
       );
       respond(true, result ?? { ok: true }, undefined);

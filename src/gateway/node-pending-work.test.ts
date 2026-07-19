@@ -47,7 +47,7 @@ describe("node pending work", () => {
     expect(clearNodePendingWork("node-removed")).toBe(false);
   });
 
-  it("does not drain explicit work from a replaced pairing generation", () => {
+  it("keeps explicit work isolated from a replacement pairing generation", () => {
     enqueueNodePendingWork({
       nodeId: "node-replaced",
       type: "location.request",
@@ -61,9 +61,28 @@ describe("node pending work", () => {
     expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
     expect(
       drainNodePendingWork("node-replaced", { pairingGeneration: "generation-1" }).items.map(
+        (item) => item.type,
+      ),
+    ).toEqual(["location.request", "status.request"]);
+  });
+
+  it("does not let a stale drain delete replacement-generation work", () => {
+    enqueueNodePendingWork({
+      nodeId: "node-stale-drain",
+      type: "location.request",
+      pairingGeneration: "generation-2",
+    });
+
+    expect(
+      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-1" }).items.map(
         (item) => item.id,
       ),
     ).toEqual(["baseline-status"]);
+    expect(
+      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-2" }).items.map(
+        (item) => item.type,
+      ),
+    ).toEqual(["location.request", "status.request"]);
   });
 
   it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {

@@ -218,6 +218,25 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
 }
 
 describe("gateway/node-registry", () => {
+  it("rejects dispatch through an invalidated node connection", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    const client = makeClient("conn-invalidated", "node-invalidated", frames);
+    registry.register(client, {});
+    client.invalidated = true;
+
+    expect(registry.get("node-invalidated")).toBeUndefined();
+    expect(registry.listConnected()).toEqual([]);
+    expect(registry.sendEvent("node-invalidated", "node.test", { ok: true })).toBe(false);
+    await expect(
+      registry.invoke({ nodeId: "node-invalidated", command: "system.run" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PAIRING_CHANGED" },
+    });
+    expect(frames).toEqual([]);
+  });
+
   it("routes ordered input to the pending invoke connection and rejects unknown invokes", async () => {
     const registry = new NodeRegistry();
     const frames = registerNode(registry);

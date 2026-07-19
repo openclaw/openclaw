@@ -763,14 +763,19 @@ describe("node exec events", () => {
 
   it("stores direct APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-direct", {
-      event: "push.apns.register",
-      payloadJSON: JSON.stringify({
-        token: "abcd1234abcd1234abcd1234abcd1234",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-      }),
-    });
+    await handleNodeEvent(
+      ctx,
+      "node-direct",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          token: "abcd1234abcd1234abcd1234abcd1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+        }),
+      },
+      { isApnsRegistrationAllowed: () => true },
+    );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-direct",
@@ -783,20 +788,25 @@ describe("node exec events", () => {
 
   it("stores relay APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-relay", {
-      event: "push.apns.register",
-      payloadJSON: JSON.stringify({
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        gatewayDeviceId: "gateway-device-1",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        distribution: "official",
-        tokenDebugSuffix: "abcd1234",
-      }),
-    });
+    await handleNodeEvent(
+      ctx,
+      "node-relay",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          transport: "relay",
+          relayHandle: "relay-handle-123",
+          sendGrant: "send-grant-123",
+          gatewayDeviceId: "gateway-device-1",
+          installationId: "install-123",
+          topic: "ai.openclaw.ios",
+          environment: "production",
+          distribution: "official",
+          tokenDebugSuffix: "abcd1234",
+        }),
+      },
+      { isApnsRegistrationAllowed: () => true },
+    );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-relay",
@@ -813,20 +823,25 @@ describe("node exec events", () => {
 
   it("stores sandbox relay APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-relay-sandbox", {
-      event: "push.apns.register",
-      payloadJSON: JSON.stringify({
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        gatewayDeviceId: "gateway-device-1",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-        distribution: "official",
-        tokenDebugSuffix: "abcd1234",
-      }),
-    });
+    await handleNodeEvent(
+      ctx,
+      "node-relay-sandbox",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          transport: "relay",
+          relayHandle: "relay-handle-123",
+          sendGrant: "send-grant-123",
+          gatewayDeviceId: "gateway-device-1",
+          installationId: "install-123",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          distribution: "official",
+          tokenDebugSuffix: "abcd1234",
+        }),
+      },
+      { isApnsRegistrationAllowed: () => true },
+    );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-relay-sandbox",
@@ -858,6 +873,29 @@ describe("node exec events", () => {
     });
 
     expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
+  });
+
+  it("rejects APNs registration after the source pairing session is invalidated", async () => {
+    const warn = vi.fn();
+    const ctx: NodeEventContext = { ...buildCtx(), logGateway: { warn } };
+    await handleNodeEvent(
+      ctx,
+      "node-invalidated-register",
+      {
+        event: "push.apns.register",
+        payloadJSON: JSON.stringify({
+          token: "abcd1234abcd1234abcd1234abcd1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+        }),
+      },
+      { isApnsRegistrationAllowed: async () => false },
+    );
+
+    expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "push apns register rejected node=node-invalidated-register: stale or invalidated pairing session",
+    );
   });
 });
 

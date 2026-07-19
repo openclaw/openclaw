@@ -9,6 +9,7 @@ import { nodePendingHandlers } from "./nodes-pending.js";
 const mocks = vi.hoisted(() => ({
   captureNodePairingGeneration: vi.fn(),
   captureNodeWakeLifecycle: vi.fn(),
+  clearNodePendingWork: vi.fn(),
   drainNodePendingWork: vi.fn(),
   enqueueNodePendingWork: vi.fn(),
   isNodePairingGenerationCurrent: vi.fn(),
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../node-pending-work.js", () => ({
+  clearNodePendingWork: mocks.clearNodePendingWork,
   drainNodePendingWork: mocks.drainNodePendingWork,
   enqueueNodePendingWork: mocks.enqueueNodePendingWork,
 }));
@@ -75,6 +77,7 @@ describe("node.pending handlers", () => {
       key: `generation:${nodeId}:1`,
     }));
     mocks.captureNodeWakeLifecycle.mockReset();
+    mocks.clearNodePendingWork.mockReset();
     mocks.drainNodePendingWork.mockReset();
     mocks.enqueueNodePendingWork.mockReset();
     mocks.isNodePairingGenerationCurrent.mockReset().mockResolvedValue(true);
@@ -142,6 +145,34 @@ describe("node.pending handlers", () => {
     const call = respondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.message).toContain("connected device identity");
+  });
+
+  it("does not report a stale drain as successful after the pairing changes", async () => {
+    mocks.drainNodePendingWork.mockReturnValue({
+      revision: 3,
+      items: [{ id: "replacement-work", type: "location.request", priority: "high" }],
+      hasMore: false,
+    });
+    mocks.isNodePairingGenerationCurrent.mockResolvedValue(false);
+    const respond = vi.fn();
+
+    await expectDefined(
+      nodePendingHandlers["node.pending.drain"],
+      'nodePendingHandlers["node.pending.drain"] test invariant',
+    )({
+      params: {},
+      respond: respond as never,
+      client: { connect: { device: { id: "ios-node-stale-drain" } } } as never,
+      context: makeContext() as never,
+      req: { type: "req", id: "req-node-stale-drain", method: "node.pending.drain" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(respondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "PAIRING_CHANGED" } },
+    ]);
   });
 
   it("normalizes the target identity before queueing and waking a disconnected node", async () => {
@@ -297,6 +328,10 @@ describe("node.pending handlers", () => {
     expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith(
       "ios-node-invalidated",
       wakeLifecycle,
+    );
+    expect(mocks.clearNodePendingWork).toHaveBeenCalledWith(
+      "ios-node-invalidated",
+      "generation:ios-node-invalidated:1",
     );
     const call = respondCall(respond);
     expect(call?.[0]).toBe(false);

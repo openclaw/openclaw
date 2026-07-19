@@ -58,21 +58,22 @@ const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
   default: 1,
 };
 
-const stateByNodeId = new Map<string, NodePendingWorkState>();
+const stateByNodeId = new Map<string, Map<string | undefined, NodePendingWorkState>>();
 
 function getOrCreateState(nodeId: string, pairingGeneration?: string): NodePendingWorkState {
-  let state = stateByNodeId.get(nodeId);
-  if (state && pairingGeneration && state.pairingGeneration !== pairingGeneration) {
-    stateByNodeId.delete(nodeId);
-    state = undefined;
+  let states = stateByNodeId.get(nodeId);
+  if (!states) {
+    states = new Map();
+    stateByNodeId.set(nodeId, states);
   }
+  let state = states.get(pairingGeneration);
   if (!state) {
     state = {
       revision: 0,
       itemsById: new Map(),
       ...(pairingGeneration ? { pairingGeneration } : {}),
     };
-    stateByNodeId.set(nodeId, state);
+    states.set(pairingGeneration, state);
   }
   return state;
 }
@@ -99,9 +100,17 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
   return changed;
 }
 
-function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
+function pruneStateIfEmpty(
+  nodeId: string,
+  pairingGeneration: string | undefined,
+  state: NodePendingWorkState,
+) {
   if (state.itemsById.size === 0) {
-    stateByNodeId.delete(nodeId);
+    const states = stateByNodeId.get(nodeId);
+    states?.delete(pairingGeneration);
+    if (states?.size === 0) {
+      stateByNodeId.delete(nodeId);
+    }
   }
 }
 
@@ -173,12 +182,20 @@ export function enqueueNodePendingWork(params: {
 }
 
 /** Clears explicit pending work owned by a removed node pairing. */
-export function clearNodePendingWork(nodeId: string): boolean {
+export function clearNodePendingWork(nodeId: string, pairingGeneration?: string): boolean {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
     return false;
   }
-  return stateByNodeId.delete(normalizedNodeId);
+  if (pairingGeneration === undefined) {
+    return stateByNodeId.delete(normalizedNodeId);
+  }
+  const states = stateByNodeId.get(normalizedNodeId);
+  const deleted = states?.delete(pairingGeneration) ?? false;
+  if (states?.size === 0) {
+    stateByNodeId.delete(normalizedNodeId);
+  }
+  return deleted;
 }
 
 /** Drains pending work for a node, including a baseline status request unless disabled. */
@@ -188,14 +205,10 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     return { revision: 0, items: [], hasMore: false };
   }
   const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
-  let state = stateByNodeId.get(normalizedNodeId);
-  if (state && opts.pairingGeneration && state.pairingGeneration !== opts.pairingGeneration) {
-    stateByNodeId.delete(normalizedNodeId);
-    state = undefined;
-  }
+  const state = stateByNodeId.get(normalizedNodeId)?.get(opts.pairingGeneration);
   if (state) {
     pruneExpired(state, nowMs);
-    pruneStateIfEmpty(normalizedNodeId, state);
+    pruneStateIfEmpty(normalizedNodeId, opts.pairingGeneration, state);
   }
   const revision = state?.revision ?? 0;
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
@@ -215,7 +228,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
       }
     }
     state.revision += 1;
-    pruneStateIfEmpty(normalizedNodeId, state);
+    pruneStateIfEmpty(normalizedNodeId, opts.pairingGeneration, state);
   }
   return {
     revision: state?.revision ?? revision,

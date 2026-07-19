@@ -7,6 +7,7 @@ import {
   validateNodePendingEnqueueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  clearNodePendingWork,
   drainNodePendingWork,
   enqueueNodePendingWork,
   type NodePendingWorkPriority,
@@ -96,6 +97,10 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         includeDefaultStatus: true,
         pairingGeneration: generation.key,
       });
+      if (!(await isNodePairingGenerationCurrent(generation))) {
+        respondPairingChanged(respond);
+        return;
+      }
       respond(true, { nodeId, ...drained }, undefined);
     });
   },
@@ -238,6 +243,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         if (
           !(await isPendingGenerationCurrent({ nodeId, generation, lifecycle: wakeLifecycle }))
         ) {
+          clearNodePendingWork(nodeId, generation.key);
           respondPairingChanged(respond);
           return;
         }

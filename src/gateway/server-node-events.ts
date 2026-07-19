@@ -383,7 +383,12 @@ export const handleNodeEvent = async (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: { connId?: string; deviceId?: string; presenceAllowed?: boolean },
+  opts?: {
+    connId?: string;
+    deviceId?: string;
+    presenceAllowed?: boolean;
+    isApnsRegistrationAllowed?: () => boolean | Promise<boolean>;
+  },
 ): Promise<NodeEventHandleResult | undefined> => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -847,6 +852,15 @@ export const handleNodeEvent = async (
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {
+        if (
+          !opts?.isApnsRegistrationAllowed ||
+          !(await opts.isApnsRegistrationAllowed())
+        ) {
+          ctx.logGateway.warn(
+            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
+          );
+          return undefined;
+        }
         if (transport === "relay") {
           const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
           const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;

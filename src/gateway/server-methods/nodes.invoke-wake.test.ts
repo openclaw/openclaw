@@ -117,6 +117,7 @@ type TestNodeSession = {
   commands: string[];
   declaredCommands?: string[];
   platform?: string;
+  client?: { invalidated?: boolean };
 };
 
 function requireString(value: unknown, label: string): string {
@@ -1441,6 +1442,34 @@ describe("node.invoke APNs wake path", () => {
     });
   });
 
+  it("does not dispatch through an invalidated old node session", async () => {
+    const nodeId = "ios-node-invalidated-session";
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const invalidatedSession: TestNodeSession = {
+      nodeId,
+      connId: "old-conn",
+      commands: ["camera.capture"],
+      platform: "iOS 26.4.0",
+      client: { invalidated: true },
+    };
+    const nodeRegistry = {
+      get: vi.fn(() => invalidatedSession),
+      invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-invalidated-session" },
+    });
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "NOT_CONNECTED" } },
+    ]);
+  });
+
   it("does not queue foreground work when pairing changes during node dispatch", async () => {
     const nodeId = "ios-node-replaced-during-dispatch";
     let pairingCurrent = true;
@@ -1666,7 +1695,7 @@ describe("node.invoke APNs wake path", () => {
     });
   });
 
-  it("drops queued foreground actions from a replaced pairing generation", async () => {
+  it("does not expose queued foreground actions to a replacement pairing generation", async () => {
     const nodeId = "ios-node-replaced-before-pull";
     mocks.loadApnsRegistration.mockResolvedValue(null);
     const nodeRegistry = createForegroundUnavailableNodeRegistry({
@@ -1694,6 +1723,57 @@ describe("node.invoke APNs wake path", () => {
       "replacement pull payload",
       { nodeId, actions: [] },
     );
+  });
+
+  it("does not let a stale foreground pull delete replacement-generation actions", async () => {
+    const nodeId = "ios-node-stale-pull";
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        idempotencyKey: "idem-stale-generation",
+      },
+    });
+    mocks.captureNodePairingGeneration.mockResolvedValue({
+      nodeId,
+      key: `generation:${nodeId}:2`,
+    });
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        idempotencyKey: "idem-replacement-generation",
+      },
+    });
+
+    mocks.captureNodePairingGeneration.mockResolvedValue({
+      nodeId,
+      key: `generation:${nodeId}:1`,
+    });
+    const stalePullPayload = requireRespondPayload(
+      firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+      "stale generation pull response",
+    );
+    expect((stalePullPayload.actions as unknown[] | undefined)?.length).toBe(1);
+
+    mocks.captureNodePairingGeneration.mockResolvedValue({
+      nodeId,
+      key: `generation:${nodeId}:2`,
+    });
+    const replacementPullPayload = requireRespondPayload(
+      firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+      "replacement generation pull response",
+    );
+    expect((replacementPullPayload.actions as unknown[] | undefined)?.length).toBe(1);
   });
 
   it("dedupes queued foreground actions by idempotency key", async () => {

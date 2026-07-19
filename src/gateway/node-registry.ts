@@ -423,12 +423,13 @@ export class NodeRegistry {
 
   /** List connected node sessions. */
   listConnected(): NodeSession[] {
-    return [...this.nodesById.values()];
+    return [...this.nodesById.values()].filter((node) => node.client.invalidated !== true);
   }
 
   /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
-    return this.nodesById.get(nodeId);
+    const node = this.nodesById.get(nodeId);
+    return node?.client.invalidated === true ? undefined : node;
   }
 
   /** Updates recent input activity for the exact authenticated node connection. */
@@ -462,7 +463,7 @@ export class NodeRegistry {
   getActiveNode(): NodeSession | undefined {
     let active: NodeSession | undefined;
     for (const node of this.nodesById.values()) {
-      if (node.lastActiveAtMs === undefined) {
+      if (node.client.invalidated === true || node.lastActiveAtMs === undefined) {
         continue;
       }
       if (
@@ -613,7 +614,7 @@ export class NodeRegistry {
     },
   ): NodeSession | null {
     const node = this.nodesById.get(nodeId);
-    if (!node) {
+    if (!node || node.client.invalidated === true) {
       return null;
     }
 
@@ -698,6 +699,12 @@ export class NodeRegistry {
       return {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node not connected" },
+      };
+    }
+    if (node.client.invalidated === true) {
+      return {
+        ok: false,
+        error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
       };
     }
     if (params.expectedConnId && node.connId !== params.expectedConnId) {
@@ -959,6 +966,9 @@ export class NodeRegistry {
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
+    if (node.client.invalidated === true) {
+      return false;
+    }
     const eventTransport = this.eventTransportsByConn.get(node.connId);
     if (eventTransport) {
       return eventTransport.send(event, payload);
@@ -985,6 +995,9 @@ export class NodeRegistry {
     event: string,
     payloadJSON?: SerializedEventPayload | null,
   ): boolean {
+    if (node.client.invalidated === true) {
+      return false;
+    }
     if (
       payloadJSON !== null &&
       payloadJSON !== undefined &&

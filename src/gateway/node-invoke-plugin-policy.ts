@@ -263,6 +263,13 @@ export async function applyPluginNodeInvokePolicy(params: {
         message: "node connection changed before dispatch",
       };
     }
+    if (currentNode.client.invalidated === true) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
+      };
+    }
     const currentConfig = params.context.getRuntimeConfig();
     const allowlist = resolveNodeCommandAllowlist(currentConfig, {
       ...currentNode,
