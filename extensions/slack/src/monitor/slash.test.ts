@@ -722,6 +722,48 @@ describe("Slack native command argument menus", () => {
     );
   });
 
+  it("batches non-login block streams with the terminal reply", async () => {
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (
+        implementation: (params: unknown) => Promise<unknown>,
+      ) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (
+              payload: { text: string },
+              info: { kind: "block" | "final" },
+            ) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      for (let index = 1; index <= 5; index += 1) {
+        await deliver({ text: `progress ${String(index)}` }, { kind: "block" });
+      }
+      await deliver({ text: "final answer" }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 5 } };
+    });
+
+    await runCommandHandler(agentStatusHandler);
+
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          { text: "progress 1" },
+          { text: "progress 2" },
+          { text: "progress 3" },
+          { text: "progress 4" },
+          { text: "progress 5" },
+          { text: "final answer" },
+        ],
+      }),
+    );
+  });
+
   it("prefers the configured slash command over native commands", async () => {
     const configuredHarness = createArgMenusHarness();
     (

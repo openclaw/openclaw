@@ -785,16 +785,17 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
       };
       const pendingSlashReplies: ReplyPayload[] = [];
+      const shouldDeliverBlockImmediately = commandDefinition?.key === "login";
 
       const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          // Blocks are live progress and may contain input needed before dispatch can finish.
-          // Buffer the remaining turn so its response_url calls can still be planned together.
+          // /login must expose its device code before the auth flow can finish. Other block
+          // streams stay batched so the response_url planner can honor Slack's five-call cap.
           deliver: async (payload, info) => {
-            if (info.kind === "block") {
+            if (info.kind === "block" && shouldDeliverBlockImmediately) {
               await deliverSlashPayloads([payload]);
               return;
             }
