@@ -148,28 +148,26 @@ describe("board gateway methods", () => {
     const firstResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const first = firstResponse.mock.calls[0]?.[1] as BoardSnapshot;
     const plainFrameUrl = first.widgets.find((widget) => widget.name === "plain")?.frameUrl;
+    const statusFrameUrl = first.widgets.find((widget) => widget.name === "status")?.frameUrl;
     expect(plainFrameUrl).toMatch(
       /^\/__openclaw__\/board\/agent%3Amain%3Amain\/plain\/index\.html\?bt=v1\./u,
+    );
+    expect(statusFrameUrl).toMatch(
+      /^\/__openclaw__\/board\/agent%3Amain%3Amain\/status\/index\.html\?bt=v1\./u,
     );
     expect(first.widgets.find((widget) => widget.name === "status")?.declaredSummary).toEqual([
       "Network access: https://status.example",
       "Tool access: status.refresh",
     ]);
-    expect(first.widgets.find((widget) => widget.name === "status")).not.toHaveProperty("frameUrl");
     expect(first.widgets.find((widget) => widget.name === "app")).not.toHaveProperty("frameUrl");
     expect(first.widgets.find((widget) => widget.name === "rejected")).not.toHaveProperty(
       "frameUrl",
     );
 
-    await invoke("board.widget.grant", {
-      sessionKey: "agent:main:main",
-      name: "status",
-      decision: "granted",
-    });
     const secondResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const second = secondResponse.mock.calls[0]?.[1] as BoardSnapshot;
-    expect(second.widgets.find((widget) => widget.name === "status")?.frameUrl).toMatch(
-      /^\/__openclaw__\/board\/agent%3Amain%3Amain\/status\/index\.html\?bt=v1\./u,
+    expect(second.widgets.find((widget) => widget.name === "status")?.frameUrl).not.toBe(
+      statusFrameUrl,
     );
     expect(second.widgets.find((widget) => widget.name === "plain")?.frameUrl).not.toBe(
       plainFrameUrl,

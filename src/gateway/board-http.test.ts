@@ -54,7 +54,7 @@ beforeAll(async () => {
   });
   store.putWidget({
     sessionKey: "agent:main:main",
-    name: "pending",
+    name: "grantable",
     content: { kind: "html", html: "<script>pending()</script>" },
     declared: { netOrigins: ["https://example.com"] },
   });
@@ -168,11 +168,11 @@ describe("board widget HTTP", () => {
   });
 
   it("withholds declared widget bytes until the operator grants them", async () => {
-    const ticket = ticketFor("pending");
-    expect((await request("pending", { ticket })).status).toBe(404);
+    const ticket = ticketFor("grantable");
+    expect((await request("grantable", { ticket })).status).toBe(401);
 
-    store.grant("agent:main:main", "pending", "granted");
-    const response = await request("pending", { ticket });
+    store.grant("agent:main:main", "grantable", "granted", 1);
+    const response = await request("grantable", { ticket });
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe("<script>pending()</script>");
   });
