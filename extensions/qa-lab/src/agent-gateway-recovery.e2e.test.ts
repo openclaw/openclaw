@@ -16,6 +16,7 @@ type RecoveryStep = {
 type RecoveryProxy = {
   capture: {
     droppedAcceptedConnection: boolean;
+    droppedRecoverySteps: RecoveryStep[];
     steps: RecoveryStep[];
   };
   stop: () => Promise<void>;
@@ -46,9 +47,13 @@ function parseJsonFrame(data: RawData): Record<string, unknown> | null {
   }
 }
 
-async function startRecoveryProxy(upstreamUrl: string): Promise<RecoveryProxy> {
+async function startRecoveryProxy(
+  upstreamUrl: string,
+  opts: { exhaustRecovery?: boolean } = {},
+): Promise<RecoveryProxy> {
   const capture: RecoveryProxy["capture"] = {
     droppedAcceptedConnection: false,
+    droppedRecoverySteps: [],
     steps: [],
   };
   let disconnectArmed = false;
@@ -63,10 +68,23 @@ async function startRecoveryProxy(upstreamUrl: string): Promise<RecoveryProxy> {
       const frame = parseJsonFrame(data);
       const params = frame?.params as Record<string, unknown> | undefined;
       if (frame?.method === "agent" || frame?.method === "agent.wait") {
-        capture.steps.push({
+        const step: RecoveryStep = {
           method: frame.method,
           ...(frame.method === "agent" ? { replayOnly: params?.replayOnly === true } : {}),
-        });
+        };
+        capture.steps.push(step);
+        if (
+          opts.exhaustRecovery === true &&
+          disconnectArmed &&
+          (frame.method === "agent.wait" || params?.replayOnly === true)
+        ) {
+          // Drop each recovery RPC after a successful handshake so the CLI exhausts
+          // the real wait/replay path before starting its isolated embedded fallback.
+          capture.droppedRecoverySteps.push(step);
+          downstream.terminate();
+          upstream.terminate();
+          return;
+        }
       }
       if (
         !disconnectArmed &&
@@ -139,7 +157,13 @@ async function startRecoveryProxy(upstreamUrl: string): Promise<RecoveryProxy> {
       }
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
       });
     },
   };
@@ -215,6 +239,79 @@ describe("agent Gateway recovery", () => {
         `PROOF provider-requests=${providerRequestsAfterRecovery}`,
         "PROOF cache-miss=AGENT_RESULT_NOT_FOUND",
         "PROOF cache-miss-provider-delta=0",
+      ].join("\n"),
+    );
+  }, 180_000);
+
+  it("uses an isolated embedded fallback after wait and replay recovery are exhausted", async () => {
+    const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 2_000 });
+    cleanups.push(() => mock.stop());
+    const gateway = await startQaGatewayChild({
+      repoRoot: process.cwd(),
+      useRepoCli: true,
+      providerBaseUrl: `${mock.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      runtimeEnvPatch: { OPENCLAW_TEST_RUNTIME_LOG: "1" },
+    });
+    cleanups.push(() => gateway.stop());
+    const proxy = await startRecoveryProxy(gateway.wsUrl, { exhaustRecovery: true });
+    cleanups.push(() => proxy.stop());
+    gateway.runtimeEnv.OPENCLAW_GATEWAY_URL = proxy.url;
+
+    const output = await gateway.runCli([
+      "agent",
+      "--agent",
+      "qa",
+      "--message",
+      RECOVERY_PROMPT,
+      "--json",
+      "--timeout",
+      "30",
+    ]);
+    const result = JSON.parse(output) as {
+      meta?: {
+        fallbackFrom?: string;
+        fallbackReason?: string;
+        fallbackSessionId?: string;
+        fallbackSessionKey?: string;
+        transport?: string;
+      };
+      payloads?: Array<{ text?: string }>;
+    };
+    expect(result.payloads?.some((payload) => payload.text?.includes(RECOVERED_MARKER))).toBe(true);
+    expect(result.meta).toMatchObject({
+      transport: "embedded",
+      fallbackFrom: "gateway",
+      fallbackReason: "gateway_closed",
+    });
+    expect(result.meta?.fallbackSessionId).toMatch(/^gateway-fallback-/);
+    expect(result.meta?.fallbackSessionKey).toBe(
+      `agent:qa:explicit:${result.meta?.fallbackSessionId}`,
+    );
+    expect(proxy.capture.droppedAcceptedConnection).toBe(true);
+    expect(proxy.capture.steps).toEqual([
+      { method: "agent", replayOnly: false },
+      { method: "agent.wait" },
+      { method: "agent", replayOnly: true },
+    ]);
+    expect(proxy.capture.droppedRecoverySteps).toEqual([
+      { method: "agent.wait" },
+      { method: "agent", replayOnly: true },
+    ]);
+    const providerRequests = await readMockRequestCount(mock.baseUrl);
+    expect(providerRequests).toBe(2);
+
+    console.info(
+      [
+        "PROOF exhaustion-setup=real-cli+real-gateway+websocket-fault-proxy+mock-model-provider",
+        "PROOF exhaustion-disconnect=after-agent-accepted",
+        "PROOF exhaustion-rpc-sequence=agent -> agent.wait(drop) -> agent(replayOnly=true,drop)",
+        "PROOF exhaustion-fallback-transport=embedded",
+        "PROOF exhaustion-fallback-session=gateway-fallback-*",
+        `PROOF exhaustion-output=${RECOVERED_MARKER}`,
+        `PROOF exhaustion-provider-requests=${providerRequests}`,
       ].join("\n"),
     );
   }, 180_000);
