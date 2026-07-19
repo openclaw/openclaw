@@ -173,7 +173,7 @@ export async function readClawStatus(
     records,
     summary: {
       claws: records.length,
-      partial: records.filter((record) => record.install.status === "partial").length,
+      partial: records.filter((record) => record.install.status !== "complete").length,
       missingAgents: records.filter((record) => record.agentState === "missing").length,
       driftedFiles: records
         .flatMap((record) => record.workspaceFiles)

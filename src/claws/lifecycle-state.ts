@@ -38,6 +38,8 @@ import {
   CLAW_REMOVE_PLAN_SCHEMA_VERSION,
   type ClawRemovePlan,
   type ClawRemovePlanAction,
+  type RemovedCronJob,
+  type RemovedMcpServer,
 } from "./lifecycle-remove-contract.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, deleteClawMcpServerRef, planClawMcpServerRemoval } from "./mcp.js";
@@ -57,17 +59,6 @@ export { CLAW_REMOVE_PLAN_SCHEMA_VERSION } from "./lifecycle-remove-contract.js"
 export { readClawStatus } from "./lifecycle-status.js";
 
 export const CLAW_REMOVE_RESULT_SCHEMA_VERSION = "openclaw.clawRemoveResult.v1" as const;
-type RemovedCronJob = {
-  manifestId: string;
-  schedulerJobId?: string;
-  action: "removed" | "error";
-  message?: string;
-};
-type RemovedMcpServer = {
-  name: string;
-  action: "removed" | "missing" | "released" | "error";
-  message?: string;
-};
 type ClawRemoveResult = {
   schemaVersion: typeof CLAW_REMOVE_RESULT_SCHEMA_VERSION;
   stability: typeof CLAW_OUTPUT_STABILITY;

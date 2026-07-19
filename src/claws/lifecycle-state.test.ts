@@ -487,6 +487,8 @@ describe("Claw status and remove", () => {
       config: current.getConfig(),
       commitConfig: current.commitConfig,
       cronGateway: {
+        get: async () =>
+          cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
         remove: async (id) => {
           calls.push(`cron:${id}`);
           return { ok: true };
