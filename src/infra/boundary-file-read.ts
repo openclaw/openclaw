@@ -29,7 +29,7 @@ export async function readFileDescriptorBounded(fd: number, maxBytes: number): P
   try {
     return await readFileDescriptorBoundedFsSafe(fd, maxBytes);
   } catch (error) {
-    preserveOpenClawOverflowError(error, maxBytes);
+    return preserveOpenClawOverflowError(error, maxBytes);
   }
 }
 
@@ -38,6 +38,6 @@ export function readFileDescriptorBoundedSync(fd: number, maxBytes: number): Buf
   try {
     return readFileDescriptorBoundedSyncFsSafe(fd, maxBytes);
   } catch (error) {
-    preserveOpenClawOverflowError(error, maxBytes);
+    return preserveOpenClawOverflowError(error, maxBytes);
   }
 }
