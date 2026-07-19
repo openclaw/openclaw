@@ -66,6 +66,7 @@ type ToolStreamHost = {
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
+  waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
 
@@ -330,6 +331,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
   host.planStatus = null;
+  host.waitingApprovalStatuses?.clear();
 }
 
 export type CompactionStatus = {
@@ -358,6 +360,33 @@ export type PlanStatus = {
     status: "pending" | "in_progress" | "completed";
   }>;
 };
+
+export type WaitingApprovalStatus = {
+  approvalId: string;
+  toolCallId: string | null;
+  runId: string;
+};
+
+export function clearWaitingApprovalIfMissing(
+  host: { waitingApprovalStatuses?: Map<string, WaitingApprovalStatus> },
+  queue: readonly { id: string }[],
+): boolean {
+  const waiting = host.waitingApprovalStatuses;
+  // The queue also contains detached approvals whose runs are not parked, so
+  // only lifecycle events may establish this state; the queue can invalidate it.
+  if (!waiting || waiting.size === 0) {
+    return false;
+  }
+  const queuedIds = new Set(queue.map((approval) => approval.id));
+  let changed = false;
+  for (const approvalId of waiting.keys()) {
+    if (!queuedIds.has(approvalId)) {
+      waiting.delete(approvalId);
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 type PlanHost = ToolStreamHost & {
   planStatus?: PlanStatus | null;
@@ -616,6 +645,28 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
+function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const phase = toTrimmedString(payload.data?.phase);
+  if (phase !== "waiting-approval" && phase !== "approval-resolved") {
+    return false;
+  }
+  const approvalId = toTrimmedString(payload.data?.approvalId);
+  const sessionKey = toTrimmedString(payload.sessionKey);
+  if (!approvalId || !sessionKey) {
+    return true;
+  }
+  if (phase === "waiting-approval") {
+    (host.waitingApprovalStatuses ??= new Map()).set(approvalId, {
+      approvalId,
+      toolCallId: toTrimmedString(payload.data?.toolCallId),
+      runId: payload.runId,
+    });
+    return true;
+  }
+  host.waitingApprovalStatuses?.delete(approvalId);
+  return true;
+}
+
 function readPreambleProgressEvent(
   payload: AgentEventPayload,
 ): { text: string; itemId?: string } | null {
@@ -772,6 +823,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "lifecycle") {
+    if (handleLifecycleApprovalEvent(host, payload)) {
+      return;
+    }
     handleLifecycleCompactionEvent(host as CompactionHost, payload);
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
     return;

@@ -642,6 +642,7 @@ type StreamGroupOptions = {
   authToken?: string | null;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
+  waitingApproval?: boolean;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
 
@@ -680,7 +681,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderChatWorkingIndicator(part)
+            ? renderChatWorkingIndicator(part, opts.waitingApproval === true)
             : part.kind === "question"
               ? renderQuestionStreamPart(part, opts)
               : part.kind === "plan"

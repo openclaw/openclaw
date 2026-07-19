@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
+  clearWaitingApprovalIfMissing,
   resetToolStream,
   type FallbackStatus,
   type PlanStatus,
@@ -253,6 +254,27 @@ describe("app-tool-stream plan snapshots", () => {
     resetToolStream(host);
 
     expect(host.planStatus).toBeNull();
+  });
+});
+
+describe("app-tool-stream approval lifecycle", () => {
+  it("does not infer a parked run from queue presence alone", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+
+    expect(clearWaitingApprovalIfMissing(host, [{ id: "approval-1" }])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("clears only parked runs whose approvals leave the authoritative queue", () => {
+    const host = createHost({
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "run-1" }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: "run-2" }],
+      ]),
+    });
+
+    expect(clearWaitingApprovalIfMissing(host, [{ id: "approval-2" }])).toBe(true);
+    expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
   });
 });
 

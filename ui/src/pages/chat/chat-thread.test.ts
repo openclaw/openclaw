@@ -710,6 +710,16 @@ describe("buildCachedChatItems working spark", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(false);
   });
 
+  it("keeps the approval status row beside a visible running tool", () => {
+    expect(
+      hasReadingIndicator({
+        runWorking: true,
+        waitingApproval: true,
+        toolMessages: [liveTool(false)],
+      }),
+    ).toBe(true);
+  });
+
   it("returns the spark once the running tool resolves", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(true)] })).toBe(true);
   });

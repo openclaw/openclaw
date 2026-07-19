@@ -84,6 +84,7 @@ export type ChatProps = {
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
@@ -336,6 +337,7 @@ export function renderChat(props: ChatProps) {
       showToolCalls: props.showToolCalls,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      waitingApproval: props.waitingApproval,
       planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
@@ -396,6 +398,7 @@ export function renderChat(props: ChatProps) {
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
+    waitingApproval: props.waitingApproval,
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
     planStatus: props.planStatus,

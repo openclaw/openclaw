@@ -64,6 +64,8 @@ type BuildChatItemsProps = {
   showToolCalls: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** Keeps the status row visible while a running tool is parked for approval. */
+  waitingApproval?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   planStatus?: PlanStatus | null;
@@ -1462,7 +1464,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
+    ((props.runWorking === true &&
+      (props.waitingApproval === true || !hasVisibleRunningTool) &&
+      !initialHistoryLoad) ||
       queuedSends.some(
         (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
       ));
@@ -1693,6 +1697,7 @@ function sameChatItemsStructuralInput(
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.runWorking === next.runWorking &&
+    previous.waitingApproval === next.waitingApproval &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&

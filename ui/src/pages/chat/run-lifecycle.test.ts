@@ -113,6 +113,9 @@ describe("reconcileChatRunLifecycle indicators", () => {
   it("clears plan status on terminal run end", () => {
     const host = makeHost({
       chatRunId: "r1",
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "r1" }],
+      ]),
       planStatus: {
         steps: [{ step: "Finish the run", status: "in_progress" }],
       },
@@ -125,6 +128,25 @@ describe("reconcileChatRunLifecycle indicators", () => {
     });
 
     expect(host.planStatus).toBeNull();
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("preserves a waiting approval owned by another run", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "r1" }],
+      ]),
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r2",
+      clearIndicators: true,
+      clearLocalRun: false,
+    });
+
+    expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
   });
 
   it("preserves an owned plan when another run terminates", () => {
