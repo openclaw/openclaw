@@ -727,6 +727,8 @@ export async function runBtwSideQuestion(
     : resolveSessionModelRef(preparedModelRuntime.config, params.sessionEntry, sessionAgentId);
   // BTW policy, model selection, directories, auth, and catalog must come from one generation.
   // A reload may have committed while the command waited for its transcript/session lookup.
+  // Rebind every later policy/auth/dispatch read to the generation returned above.
+  // oxlint-disable-next-line no-param-reassign -- rebinding prevents mixed generations
   params = {
     ...params,
     cfg: preparedModelRuntime.config,
