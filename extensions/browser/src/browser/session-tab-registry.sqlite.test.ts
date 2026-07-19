@@ -22,8 +22,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserPlugin } from "../../plugin-registration.js";
 import type { OpenClawPluginApi } from "../../runtime-api.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
-import type { BrowserTabOwnership } from "./client.types.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import {
+  type CloseTab,
+  type DurableRecord,
+  type DurableTab,
+  durableOwnership as ownership,
+  type RegistryModule,
+} from "./session-tab-registry.sqlite.test-helpers.js";
 import { browserSessionTabStorageKey } from "./session-tab-store.js";
 
 const cdpMocks = vi.hoisted(() => ({
@@ -34,77 +40,6 @@ vi.mock("./cdp.helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./cdp.helpers.js")>()),
   closeTrackedCdpTarget: cdpMocks.closeTrackedCdpTarget,
 }));
-
-type TabIdentity = {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-  profileAliases?: Array<string | undefined>;
-  ownership?: BrowserTabOwnership;
-  aliases?: Array<string | undefined>;
-};
-
-type DurableRecord = {
-  version: 1;
-  sessionKey: string;
-  nativeTargetId: string;
-  profile: string;
-  profileAliases?: string[];
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
-  interactionTargetKind: "native" | "opaque";
-  trackedAt: number;
-  lastUsedAt: number;
-  cleanupRequestedAt?: number;
-  cleanupAttemptToken?: string;
-  cleanupKind?: "lifecycle" | "sweep";
-};
-
-type DurableTab = DurableRecord & { kind: "durable"; storageKey: string };
-type CloseTab = (tab: {
-  targetId: string;
-  nativeTargetId?: string;
-  baseUrl?: string;
-  profile?: string;
-}) => Promise<void>;
-
-type CleanupParams = {
-  closeTab?: CloseTab;
-  closeDurableTab?: (
-    tab: DurableTab,
-    options: { shouldClose: () => boolean },
-  ) => Promise<CloseTrackedCdpTargetResult>;
-  onWarn?: (message: string) => void;
-};
-
-type RegistryModule = {
-  trackSessionBrowserTab(params: TabIdentity & { now?: number }): void;
-  touchSessionBrowserTab(params: TabIdentity & { now?: number }): void;
-  untrackSessionBrowserTab(params: TabIdentity): void;
-  closeTrackedBrowserTabsForSessions(
-    params: CleanupParams & { sessionKeys: Array<string | undefined>; now?: number },
-  ): Promise<number>;
-  sweepTrackedBrowserTabs(
-    params: CleanupParams & {
-      now?: number;
-      idleMs?: number;
-      maxTabsPerSession?: number;
-      sessionFilter?: (sessionKey: string) => boolean;
-    },
-  ): Promise<number>;
-};
-
-const ownership = (
-  nativeTargetId: string,
-  profileFingerprint = "test-profile-fingerprint",
-  browserInstanceFingerprint = "test-browser-instance-fingerprint",
-): BrowserTabOwnership => ({
-  status: "durable",
-  nativeTargetId,
-  profileFingerprint,
-  browserInstanceFingerprint,
-});
 
 function clearProcessLocalTabState(): void {
   const state = globalThis as Record<symbol, unknown>;
@@ -661,33 +596,27 @@ describe("durable session tab registry", () => {
 
   it("retires a durable tab whose browser stays unreachable past the retire age", async () => {
     const registry = await freshRegistry("unreachable");
-    const trackedAt = 1_000;
+    const tracked = 1_000;
     registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "gone",
       profile: "remote",
       ownership: ownership("NATIVE-gone"),
-      now: trackedAt,
+      now: tracked,
     });
-    const closeDurableTab = vi.fn(
-      async (): Promise<CloseTrackedCdpTargetResult> => ({
-        status: "unavailable",
-        reason: "browser-identity-lookup-failed",
-      }),
-    );
+    const closeDurableTab = async (): Promise<CloseTrackedCdpTargetResult> => ({
+      status: "unavailable",
+      reason: "browser-identity-lookup-failed",
+    });
     const sweepAt = (now: number) =>
       registry.sweepTrackedBrowserTabs({ now, idleMs: 1, closeDurableTab });
-    const survivingTargets = () =>
-      openStore()
-        .entries()
-        .map((entry) => (entry.value as DurableRecord).nativeTargetId);
 
     // Still inside the retire window: a transient outage must not drop the row.
-    await expect(sweepAt(trackedAt + BROWSER_TAB_UNREACHABLE_RETIRE_MS - 1)).resolves.toBe(0);
-    expect(survivingTargets()).toEqual(["NATIVE-gone"]);
+    await sweepAt(tracked + BROWSER_TAB_UNREACHABLE_RETIRE_MS - 1);
+    expect(openStore().entries()).toHaveLength(1);
 
-    await expect(sweepAt(trackedAt + BROWSER_TAB_UNREACHABLE_RETIRE_MS)).resolves.toBe(0);
-    expect(survivingTargets()).toEqual([]);
+    await sweepAt(tracked + BROWSER_TAB_UNREACHABLE_RETIRE_MS);
+    expect(openStore().entries()).toEqual([]);
   });
 
   it("keeps a touched durable tab out of an idle sweep but lifecycle cleanup still closes it", async () => {

@@ -2,11 +2,7 @@
  * Session-owned browser tabs. Host-local durable ownership is canonical in
  * plugin SQLite; all other tabs remain process-local.
  */
-import { randomUUID } from "node:crypto";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, type CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
@@ -14,6 +10,13 @@ import { browserCloseTabByRawTargetId } from "./client.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import {
+  type CleanupKind,
+  claimCleanup,
+  deleteClaimedTab,
+  isIgnorableTabCloseError,
+  ownsCleanupAttempt,
+} from "./session-tab-cleanup-claim.js";
 import {
   clearDurableTabAliases,
   clearVolatileTabAliases,
@@ -89,8 +92,6 @@ type CloseParams = {
   ) => Promise<CloseTrackedCdpTargetResult>;
   onWarn?: (message: string) => void;
 };
-
-type CleanupKind = "lifecycle" | "sweep";
 
 function normalizeSessionKey(value: string): string {
   return normalizeOptionalLowercaseString(value) ?? "";
@@ -490,74 +491,6 @@ async function closeCurrentDurableTab(
     expectedBrowserInstanceFingerprint: tab.browserInstanceFingerprint,
     shouldClose,
   });
-}
-
-function isIgnorableTabCloseError(error: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(String(error));
-  return (
-    message.includes("tab not found") ||
-    message.includes("target closed") ||
-    message.includes("target not found") ||
-    message.includes("no such target") ||
-    message.includes("no target with given id found")
-  );
-}
-
-function claimCleanup(tab: DurableTab, now: number, kind: CleanupKind): DurableTab | undefined {
-  const cleanupAttemptToken = randomUUID();
-  // Lifecycle intent survives periodic retries; a touch may revoke only an
-  // idle/cap sweep claim, never cleanup for a session that already ended.
-  const cleanupKind = kind === "lifecycle" ? "lifecycle" : (tab.cleanupKind ?? kind);
-  const claimed = updateBrowserSessionTab(tab.storageKey, (current) => {
-    const record = parseBrowserSessionTabRecord(current);
-    if (!record || !sameBrowserSessionTabRecord(record, tab)) {
-      return undefined;
-    }
-    return {
-      ...record,
-      cleanupRequestedAt: now,
-      cleanupAttemptToken,
-      cleanupKind,
-    };
-  });
-  return claimed
-    ? { ...tab, cleanupRequestedAt: now, cleanupAttemptToken, cleanupKind }
-    : undefined;
-}
-
-function matchesCleanupAttempt(
-  current: BrowserSessionTabRecord | undefined,
-  tab: DurableTab,
-): current is BrowserSessionTabRecord {
-  return Boolean(
-    current &&
-    current.cleanupAttemptToken === tab.cleanupAttemptToken &&
-    current.cleanupRequestedAt === tab.cleanupRequestedAt &&
-    current.cleanupKind === tab.cleanupKind &&
-    // Lifecycle activity may advance lastUsedAt without revoking mandatory
-    // cleanup. Every other field, especially the generation, must still match.
-    sameBrowserSessionTabRecord({ ...current, lastUsedAt: tab.lastUsedAt }, tab),
-  );
-}
-
-function ownsCleanupAttempt(tab: DurableTab): boolean {
-  const current = parseBrowserSessionTabRecord(getBrowserSessionTabStore().lookup(tab.storageKey));
-  return matchesCleanupAttempt(current, tab);
-}
-
-function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => void): void {
-  try {
-    const deleted = deleteBrowserSessionTabIf(tab.storageKey, (current) => {
-      const record = parseBrowserSessionTabRecord(current);
-      return matchesCleanupAttempt(record, tab);
-    });
-    if (deleted) {
-      clearDurableTabAliases(tab.storageKey);
-      activeDurableStorageKeys().delete(tab.storageKey);
-    }
-  } catch (error) {
-    onWarn?.(`failed to delete tracked browser tab ${tab.nativeTargetId}: ${String(error)}`);
-  }
 }
 
 async function performDurableCleanup(
