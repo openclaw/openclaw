@@ -222,7 +222,7 @@ export async function deliverLineAutoReply(params: {
 
   try {
     // A reply token carries five messages without consuming push quota. The
-    // same batcher owns overflow and reply failure fallback for every payload.
+    // canonical batcher owns overflow and reply failure fallback for every payload.
     await sendLineMessages(messages, true);
   } catch (err) {
     deliveryError ??= err;
