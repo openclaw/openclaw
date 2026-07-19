@@ -5886,6 +5886,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
+  - H3: Sender-aware policy in one file
   - H3: Exec environment hook
   - H3: Tool result persistence
   - H2: Prompt and model hooks
