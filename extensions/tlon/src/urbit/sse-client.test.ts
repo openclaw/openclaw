@@ -165,26 +165,29 @@ describe("UrbitSSEClient", () => {
       const onUnhandledRejection = (reason: unknown) => {
         unhandledRejections.push(reason);
       };
-      const unsubscribeCancel = vi.fn(() => {
-        throw new Error("unsubscribe cancel failed");
+      const shutdownResponses = [
+        { method: "PUT", label: "unsubscribe" },
+        { method: "DELETE", label: "delete" },
+      ].map(({ method, label }) => {
+        const cancel = vi.fn(() => {
+          throw new Error(`${label} cancel failed`);
+        });
+        const release = vi.fn().mockResolvedValue(undefined);
+        return {
+          method,
+          cancel,
+          release,
+          result: {
+            response: new Response(new ReadableStream<Uint8Array>({ cancel })),
+            finalUrl: "https://example.com",
+            release,
+          },
+        };
       });
-      const deleteCancel = vi.fn(() => {
-        throw new Error("delete cancel failed");
-      });
-      const unsubscribeRelease = vi.fn().mockResolvedValue(undefined);
-      const deleteRelease = vi.fn().mockResolvedValue(undefined);
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch
-        .mockResolvedValueOnce({
-          response: new Response(new ReadableStream<Uint8Array>({ cancel: unsubscribeCancel })),
-          finalUrl: "https://example.com",
-          release: unsubscribeRelease,
-        })
-        .mockResolvedValueOnce({
-          response: new Response(new ReadableStream<Uint8Array>({ cancel: deleteCancel })),
-          finalUrl: "https://example.com",
-          release: deleteRelease,
-        });
+        .mockResolvedValueOnce(shutdownResponses[0].result)
+        .mockResolvedValueOnce(shutdownResponses[1].result);
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
         autoReconnect: false,
       });
@@ -194,18 +197,18 @@ describe("UrbitSSEClient", () => {
         await client.close();
 
         expect(mockUrbitFetch).toHaveBeenCalledTimes(2);
-        expect(mockUrbitFetch.mock.calls[0]?.[0].init?.method).toBe("PUT");
-        expect(mockUrbitFetch.mock.calls[1]?.[0].init?.method).toBe("DELETE");
-        expect(unsubscribeCancel).toHaveBeenCalledOnce();
-        expect(deleteCancel).toHaveBeenCalledOnce();
-        expect(unsubscribeRelease).toHaveBeenCalledOnce();
-        expect(deleteRelease).toHaveBeenCalledOnce();
+        for (const [index, { method, cancel, release }] of shutdownResponses.entries()) {
+          expect(mockUrbitFetch.mock.calls[index]?.[0].init?.method).toBe(method);
+          expect(cancel).toHaveBeenCalledOnce();
+          expect(release).toHaveBeenCalledOnce();
+        }
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
         expect(unhandledRejections).toStrictEqual([]);
       } finally {
         process.off("unhandledRejection", onUnhandledRejection);
+        expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
       }
     });
   });
