@@ -1,19 +1,22 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { DURABLE_AGENT_TURN_OPERATION_KIND } from "./runtime-ids.js";
 import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 import { maybeRecordDurableGatewayStartup } from "./startup.js";
 
 describe("durable gateway startup integration", () => {
-  it("records startup without reconciling open runs unless the worker flag is explicit", async () => {
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  it("records startup without reconciling open runs in observe mode", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-startup-"));
     const dbPath = path.join(dir, "state", "openclaw.sqlite");
-    const env = {
-      OPENCLAW_DURABLE_RUNTIME: "1",
-      OPENCLAW_STATE_DIR: dir,
-    };
+    const env = { OPENCLAW_STATE_DIR: dir };
+    setRuntimeConfigSnapshot({ durable: { mode: "observe" } });
     const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
     let runningRunId = "";
     try {
@@ -71,14 +74,11 @@ describe("durable gateway startup integration", () => {
     }
   });
 
-  it("reconciles open runs on startup when the worker flag is explicit", async () => {
+  it("reconciles open runs on startup in authority mode", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-startup-"));
     const dbPath = path.join(dir, "state", "openclaw.sqlite");
-    const env = {
-      OPENCLAW_DURABLE_RUNTIME: "1",
-      OPENCLAW_DURABLE_WORKER: "1",
-      OPENCLAW_STATE_DIR: dir,
-    };
+    const env = { OPENCLAW_STATE_DIR: dir };
+    setRuntimeConfigSnapshot({ durable: { mode: "authority" } });
     const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
     let runningRunId = "";
     try {

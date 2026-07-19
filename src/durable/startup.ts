@@ -11,7 +11,7 @@ import { openDurableRuntimeStore } from "./store-factory.js";
 const log = createSubsystemLogger("durable/runtimes");
 
 export function assertDurableRuntimeAuthorityAvailable(env: NodeJS.ProcessEnv = process.env): void {
-  if (!isDurableAuthorityEnabled(env)) {
+  if (!isDurableAuthorityEnabled()) {
     return;
   }
   try {
@@ -38,7 +38,7 @@ export async function startDurableGatewayRecoveryWorker(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<() => void> {
   const env = params.env ?? process.env;
-  if (!isDurableWorkerEnabled(env)) {
+  if (!isDurableWorkerEnabled()) {
     return () => {};
   }
   const { startDurableRecoveryWorker } = await import("./recovery.js");
@@ -52,13 +52,13 @@ export async function maybeRecordDurableGatewayStartup(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const env = params.env ?? process.env;
-  if (!isDurableRuntimeEnabled(env)) {
+  if (!isDurableRuntimeEnabled()) {
     return;
   }
   let store: ReturnType<typeof openDurableRuntimeStore> | null = null;
   try {
     store = openDurableRuntimeStore({ env });
-    const recoveryEnabled = isDurableWorkerEnabled(env);
+    const recoveryEnabled = isDurableWorkerEnabled();
     let recovery = { scanned: 0, markedLost: 0 };
     let chatSendRecovery = { scanned: 0, markedLost: 0 };
     let ownerAttentionRecovery = { scanned: 0, created: 0, suspended: 0 };
@@ -123,7 +123,7 @@ export async function maybeRecordDurableGatewayStartup(params: {
       error: err,
     });
     log.warn(`durable runtime startup record failed: ${String(err)}`);
-    if (isDurableAuthorityEnabled(env)) {
+    if (isDurableAuthorityEnabled()) {
       throw err;
     }
   } finally {

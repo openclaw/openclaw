@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSubagentRegistryToSqlite } from "../agents/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue.js";
@@ -46,14 +47,12 @@ import { openDurableRuntimeStore } from "./store-factory.js";
 describe("durable canonical owner adapters", () => {
   let stateDir: string;
   let previousStateDir: string | undefined;
-  let previousDurableEnabled: string | undefined;
 
   beforeEach(() => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-owner-adapter-"));
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    previousDurableEnabled = process.env.OPENCLAW_DURABLE_RUNTIME;
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_DURABLE_RUNTIME = "1";
+    setRuntimeConfigSnapshot({ durable: { mode: "observe" } });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     resetSystemEventsForTest();
@@ -63,15 +62,11 @@ describe("durable canonical owner adapters", () => {
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     resetSystemEventsForTest();
+    resetConfigRuntimeState();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousDurableEnabled === undefined) {
-      delete process.env.OPENCLAW_DURABLE_RUNTIME;
-    } else {
-      process.env.OPENCLAW_DURABLE_RUNTIME = previousDurableEnabled;
     }
     fs.rmSync(stateDir, { recursive: true, force: true });
   });

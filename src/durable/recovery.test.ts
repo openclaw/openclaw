@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import {
   reconcileDueDurableTimers,
@@ -20,22 +21,25 @@ import {
 import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 
 describe("durable runtime recovery", () => {
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   it("derives lost-heartbeat detection from the worker lease with a safe floor", () => {
-    expect(
-      resolveDurableStaleRuntimeRunAfterMs({
-        OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS: "300000",
-      }),
-    ).toBe(600_000);
-    expect(
-      resolveDurableStaleRuntimeRunAfterMs({
-        OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS: "1000",
-      }),
-    ).toBe(120_000);
+    setRuntimeConfigSnapshot({
+      durable: { mode: "authority", worker: { claimTtlMs: 300_000 } },
+    });
+    expect(resolveDurableStaleRuntimeRunAfterMs()).toBe(600_000);
+    setRuntimeConfigSnapshot({
+      durable: { mode: "authority", worker: { claimTtlMs: 1000 } },
+    });
+    expect(resolveDurableStaleRuntimeRunAfterMs()).toBe(120_000);
   });
 
   it("does not start the recovery worker unless authority is explicit", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-recovery-worker-"));
-    const env = { OPENCLAW_DURABLE_RUNTIME: "1", OPENCLAW_STATE_DIR: stateDir };
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({ durable: { mode: "observe" } });
     vi.useFakeTimers();
     try {
       const stop = startDurableRecoveryWorker({ processInstanceId: "process-observation", env });
@@ -50,13 +54,13 @@ describe("durable runtime recovery", () => {
 
   it("uses the configured production poll interval for due recovery work", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-recovery-worker-"));
-    const env = {
-      OPENCLAW_DURABLE_RUNTIME: "1",
-      OPENCLAW_DURABLE_WORKER: "1",
-      OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS: "25",
-      OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS: "120",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({
+      durable: {
+        mode: "authority",
+        worker: { pollIntervalMs: 25, claimTtlMs: 120 },
+      },
+    });
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const store = openDurableRuntimeSqliteStore({ path: resolveDurableRuntimeSqlitePath(env) });

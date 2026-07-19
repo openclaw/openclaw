@@ -21,8 +21,8 @@ const MIN_STALE_RUNTIME_RUN_AFTER_MS = 2 * 60_000;
 const DEFAULT_STALE_SCAN_INTERVAL_MS = 60_000;
 const RECOVERY_DIAGNOSTIC_METADATA_KEY = "recoveryDiagnostic";
 
-export function resolveDurableStaleRuntimeRunAfterMs(env: NodeJS.ProcessEnv = process.env): number {
-  return Math.max(MIN_STALE_RUNTIME_RUN_AFTER_MS, resolveDurableWorkerClaimTtlMs(env) * 2);
+export function resolveDurableStaleRuntimeRunAfterMs(): number {
+  return Math.max(MIN_STALE_RUNTIME_RUN_AFTER_MS, resolveDurableWorkerClaimTtlMs() * 2);
 }
 
 export type DurableRecoveryResult = {
@@ -674,12 +674,12 @@ export function startDurableRecoveryWorker(params: {
   env?: NodeJS.ProcessEnv;
 }): () => void {
   const env = params.env ?? process.env;
-  if (!isDurableWorkerEnabled(env)) {
+  if (!isDurableWorkerEnabled()) {
     return () => {};
   }
-  const pollIntervalMs = resolveDurableWorkerPollIntervalMs(env);
-  const claimTtlMs = resolveDurableWorkerClaimTtlMs(env);
-  const staleAfterMs = resolveDurableStaleRuntimeRunAfterMs(env);
+  const pollIntervalMs = resolveDurableWorkerPollIntervalMs();
+  const claimTtlMs = resolveDurableWorkerClaimTtlMs();
+  const staleAfterMs = resolveDurableStaleRuntimeRunAfterMs();
   const staleScanIntervalMs = Math.max(DEFAULT_STALE_SCAN_INTERVAL_MS, pollIntervalMs);
   let running = false;
   let stopped = false;

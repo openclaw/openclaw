@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -13,6 +13,7 @@ import {
 describe("durable runtime config", () => {
   afterEach(() => {
     resetConfigRuntimeState();
+    vi.unstubAllEnvs();
   });
 
   it("uses normal config for mode and owner-recovery worker settings", () => {
@@ -25,26 +26,23 @@ describe("durable runtime config", () => {
     expect(OpenClawSchema.parse(config)).toMatchObject(config);
     setRuntimeConfigSnapshot(config);
 
-    expect(resolveDurableRuntimeMode({})).toBe("authority");
-    expect(isDurableAuthorityEnabled({})).toBe(true);
-    expect(isDurableObservationEnabled({})).toBe(false);
-    expect(resolveDurableWorkerPollIntervalMs({})).toBe(250);
-    expect(resolveDurableWorkerClaimTtlMs({})).toBe(20_000);
+    expect(resolveDurableRuntimeMode()).toBe("authority");
+    expect(isDurableAuthorityEnabled()).toBe(true);
+    expect(isDurableObservationEnabled()).toBe(false);
+    expect(resolveDurableWorkerPollIntervalMs()).toBe(250);
+    expect(resolveDurableWorkerClaimTtlMs()).toBe(20_000);
   });
 
-  it("keeps explicit environment flags as deployment overrides", () => {
+  it("does not expose hidden environment overrides for durable authority", () => {
     setRuntimeConfigSnapshot({ durable: { mode: "authority" } });
+    vi.stubEnv("OPENCLAW_DURABLE_RUNTIME", "0");
+    vi.stubEnv("OPENCLAW_DURABLE_WORKER", "0");
+    vi.stubEnv("OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS", "25");
+    vi.stubEnv("OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS", "120");
 
-    expect(resolveDurableRuntimeMode({ OPENCLAW_DURABLE_WORKER: "0" })).toBe("authority");
-    expect(resolveDurableRuntimeMode({ OPENCLAW_DURABLE_WORKER: "1" })).toBe("authority");
-    expect(resolveDurableRuntimeMode({ OPENCLAW_DURABLE_RUNTIME: "1" })).toBe("observe");
-    expect(
-      resolveDurableRuntimeMode({
-        OPENCLAW_DURABLE_RUNTIME: "1",
-        OPENCLAW_DURABLE_WORKER: "1",
-      }),
-    ).toBe("authority");
-    expect(resolveDurableRuntimeMode({ OPENCLAW_DURABLE_RUNTIME: "0" })).toBe("off");
+    expect(resolveDurableRuntimeMode()).toBe("authority");
+    expect(resolveDurableWorkerPollIntervalMs()).toBe(1000);
+    expect(resolveDurableWorkerClaimTtlMs()).toBe(5 * 60 * 1000);
   });
 
   it("rejects invalid durable config values", () => {
