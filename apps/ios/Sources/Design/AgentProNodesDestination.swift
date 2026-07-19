@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 struct AgentProNodesDestination: View {
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let overview: AgentOverviewSnapshot?
     let gatewayConnected: Bool
     let agentCount: Int
@@ -36,16 +36,16 @@ struct AgentProNodesDestination: View {
 
     @ViewBuilder
     private var header: some View {
-        if let headerLeadingAction {
+        if let headerSidebarAction {
             OpenClawAdaptiveHeaderRow(
                 title: "Instances",
                 subtitle: .verbatim(self.instancesDetail),
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-            } accessory: {
                 EmptyView()
+            } accessory: {
+                OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
         }

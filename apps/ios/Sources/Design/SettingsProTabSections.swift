@@ -272,11 +272,6 @@ extension SettingsProTab {
                 await self.appModel.refreshWatchMessagingStatus()
             }
             .toolbar {
-                if let headerLeadingAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-                    }
-                }
                 ToolbarItem(placement: .principal) {
                     Text(title(for: route))
                         .font(OpenClawType.headline)
@@ -292,6 +287,11 @@ extension SettingsProTab {
                         }
                         .disabled(self.connectingGateway != nil)
                         .accessibilityLabel("Scan QR")
+                    }
+                }
+                if let headerSidebarAction {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
                     }
                 }
             }

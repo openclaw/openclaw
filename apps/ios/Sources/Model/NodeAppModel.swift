@@ -462,6 +462,12 @@ final class NodeAppModel {
     var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    var newChatRequestID: Int = 0
+    // RootTabs has one chat destination; keep its acknowledgement here so recreating
+    // that destination cannot replay a request that the prior view already handled.
+    @ObservationIgnored private var consumedNewChatRequestID: Int = 0
+    var dashboardNavigationRequestID: Int = 0
+    @ObservationIgnored private var consumedDashboardNavigationRequestID: Int = 0
     var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var pendingGatewaySetupLink: GatewayConnectDeepLink?
@@ -3551,6 +3557,28 @@ extension NodeAppModel {
             self.acknowledgeChatSessionReadIfNeeded(activeKey)
         }
         self.openChatRequestID &+= 1
+    }
+
+    func requestNewChat() {
+        self.newChatRequestID &+= 1
+    }
+
+    func consumeNewChatRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.newChatRequestID,
+              requestID != self.consumedNewChatRequestID
+        else { return false }
+        self.consumedNewChatRequestID = requestID
+        return true
+    }
+
+    func consumeDashboardNavigationRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.dashboardNavigationRequestID,
+              requestID != self.consumedDashboardNavigationRequestID
+        else { return false }
+        self.consumedDashboardNavigationRequestID = requestID
+        return true
     }
 
     /// One acknowledgement per unread episode: the pending flag clears when a fresh
@@ -10252,7 +10280,7 @@ extension NodeAppModel {
         case let .gateway(link):
             self.stageGatewaySetupLink(link)
         case .dashboard:
-            break
+            self.dashboardNavigationRequestID &+= 1
         }
     }
 

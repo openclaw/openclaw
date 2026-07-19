@@ -47,20 +47,20 @@ struct ChatProTab: View {
     @State private var viewModelHasVerifiedOfflineRoutingIdentity = false
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
     let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String? = nil,
         showsAgentBadge: Bool = true,
         ownsNavigationStack: Bool = true,
         openSettings: (() -> Void)? = nil)
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.headerTitle = headerTitle
         self.showsAgentBadge = showsAgentBadge
         self.ownsNavigationStack = ownsNavigationStack
@@ -82,6 +82,7 @@ struct ChatProTab: View {
         .task {
             await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
             self.syncChatViewModel()
+            await self.handleNewChatRequest(self.appModel.newChatRequestID)
             if self.speech == nil {
                 let gateway = self.appModel.operatorSession
                 self.speech = OpenClawChatSpeechController { text in
@@ -125,6 +126,9 @@ struct ChatProTab: View {
             self.syncChatViewModel()
             self.viewModel?.refresh()
         }
+        .onChange(of: self.appModel.newChatRequestID) { _, requestID in
+            Task { await self.handleNewChatRequest(requestID) }
+        }
     }
 
     private var content: some View {
@@ -133,11 +137,6 @@ struct ChatProTab: View {
             .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if let headerLeadingAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarRevealButton(action: headerLeadingAction)
-                    }
-                }
                 if self.showsAgentBadge {
                     if #available(iOS 26.0, *) {
                         ToolbarItem(placement: .topBarLeading) {
@@ -156,6 +155,11 @@ struct ChatProTab: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     self.chatActionsMenu
+                }
+                if let headerSidebarAction {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        OpenClawSidebarRevealButton(action: headerSidebarAction)
+                    }
                 }
             }
             .sheet(item: self.$transcriptShareItem) { item in
@@ -455,6 +459,13 @@ struct ChatProTab: View {
         if !viewModel.isAttachmentOwnerPinned {
             self.captureCurrentPresentationIdentity()
         }
+    }
+
+    private func handleNewChatRequest(_ requestID: Int) async {
+        guard let viewModel,
+              self.appModel.consumeNewChatRequest(requestID)
+        else { return }
+        _ = await viewModel.startNewSession()
     }
 
     private func captureCurrentPresentationIdentity() {

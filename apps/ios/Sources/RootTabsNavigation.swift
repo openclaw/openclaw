@@ -3,21 +3,6 @@ import Foundation
 import SwiftUI
 
 extension RootTabs {
-    struct PhoneChatReturn: Equatable {
-        let destination: SidebarDestination
-        let openChatRequestID: Int
-    }
-
-    struct PhoneControlNavigationRequest: Equatable {
-        enum Target: Equatable {
-            case root
-            case detail(SidebarDestination)
-        }
-
-        let id: Int
-        let target: Target
-    }
-
     private static var sidebarPersistentWidthThreshold: CGFloat {
         980
     }
@@ -27,13 +12,6 @@ extension RootTabs {
     static let sidebarDrawerMaximumWidth: CGFloat = 340
     static let sidebarShowButtonAccessibilityIdentifier = "RootTabs.Sidebar.Show"
     static let sidebarHideButtonAccessibilityIdentifier = "RootTabs.Sidebar.Hide"
-
-    enum AppTab: Hashable {
-        case control
-        case chat
-        case agent
-        case settings
-    }
 
     enum SidebarDestination: String, CaseIterable, Hashable, Identifiable {
         case chat
@@ -66,7 +44,7 @@ extension RootTabs {
             case .workboard: String(localized: "Workboard")
             case .skillWorkshop: String(localized: "Skill Workshop")
             case .instances: String(localized: "Instances")
-            case .sessions: String(localized: "Threads")
+            case .sessions: String(localized: "Sessions")
             case .files: String(localized: "Files")
             case .dreaming: String(localized: "Dreaming")
             case .usage: String(localized: "Usage")
@@ -106,22 +84,6 @@ extension RootTabs {
             }
         }
 
-        var appTab: AppTab {
-            switch self {
-            case .chat:
-                .chat
-            case .agents:
-                .agent
-            case .settings, .gateway:
-                .settings
-            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
-                 .dreaming,
-                 .usage,
-                 .cron, .terminal, .docs:
-                .control
-            }
-        }
-
         var settingsRoute: SettingsRoute? {
             switch self {
             case .gateway:
@@ -156,7 +118,7 @@ extension RootTabs {
 
     static func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
         if isDrawerLayout {
-            return min(self.sidebarDrawerMaximumWidth, max(280, containerWidth * 0.86))
+            return min(self.sidebarDrawerMaximumWidth, containerWidth * 0.86)
         }
         return min(self.sidebarSplitMaximumWidth, max(self.sidebarSplitIdealWidth, containerWidth * 0.25))
     }
@@ -198,31 +160,6 @@ extension RootTabs {
             return false
         default:
             return nil
-        }
-    }
-
-    static func shouldOpenRootTabFromPhoneHub(_ destination: SidebarDestination) -> Bool {
-        switch destination {
-        case .chat, .agents, .gateway, .settings:
-            true
-        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
-             .dreaming,
-             .usage,
-             .cron, .terminal, .docs:
-            false
-        }
-    }
-
-    static func defaultSidebarDestination(for tab: AppTab) -> SidebarDestination {
-        switch tab {
-        case .control:
-            .overview
-        case .chat:
-            .chat
-        case .agent:
-            .agents
-        case .settings:
-            .settings
         }
     }
 
@@ -269,48 +206,20 @@ extension RootTabs {
         return discoveredGatewayCount > 0
     }
 
-    struct SidebarGroup: Identifiable {
-        let title: String
-        let destinations: [SidebarDestination]
-
-        var id: String {
-            self.title
-        }
-    }
-
-    static let sidebarGroups: [SidebarGroup] = [
-        SidebarGroup(title: "CHAT", destinations: [.chat]),
-        SidebarGroup(
-            title: "CONTROL",
-            destinations: [
-                .overview,
-                .activity,
-                .agents,
-                .workboard,
-                .skillWorkshop,
-                .instances,
-                .sessions,
-                .files,
-                .dreaming,
-                .usage,
-                .cron,
-                .terminal,
-            ]),
-        SidebarGroup(
-            title: "SETTINGS",
-            destinations: [.settings]),
-        SidebarGroup(title: "REFERENCE", destinations: [.docs]),
+    static let sidebarDestinations: [SidebarDestination] = [
+        .chat,
+        .overview,
+        .workboard,
+        .usage,
+        .cron,
+        .sessions,
+        .activity,
+        .skillWorkshop,
+        .agents,
+        .instances,
+        .files,
+        .dreaming,
+        .terminal,
+        .docs,
     ]
-
-    static var phoneControlGroups: [SidebarGroup] {
-        // Agents owns a bottom tab and its hub entry duplicated the same destination.
-        let tabOwned: Set<SidebarDestination> = [.agents]
-        return self.sidebarGroups
-            .map { group in
-                SidebarGroup(
-                    title: group.title,
-                    destinations: group.destinations.filter { !tabOwned.contains($0) })
-            }
-            .filter { !$0.destinations.isEmpty }
-    }
 }

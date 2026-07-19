@@ -1,50 +1,38 @@
 import Foundation
 
-/// Pure grouping/filtering for the macOS sessions sidebar. Kept UI-free so the
-/// pin/search/ordering rules stay unit-testable.
-enum ChatSessionSidebarModel {
-    struct Badges: Equatable {
-        let runningCount: Int
-        let failedCount: Int
-        let hasUnread: Bool
+/// Pure grouping/filtering shared by the Apple sessions sidebars. Kept UI-free
+/// so pin/search/ordering rules stay unit-testable across macOS and iOS.
+public enum ChatSessionSidebarModel {
+    public struct Badges: Equatable, Sendable {
+        public let runningCount: Int
+        public let failedCount: Int
+        public let hasUnread: Bool
     }
 
-    struct Node: Identifiable, Equatable {
-        let session: OpenClawChatSessionEntry
-        let children: [Node]
-        let badges: Badges
+    public struct Node: Identifiable, Equatable, Sendable {
+        public let session: OpenClawChatSessionEntry
+        public let children: [Node]
+        public let badges: Badges
 
-        var id: String {
+        public var id: String {
             self.session.key
         }
-
-        var outlineChildren: [Node]? {
-            self.children.isEmpty ? nil : self.children
-        }
-
-        var hasUnreadDescendant: Bool {
-            self.children.contains { $0.badges.hasUnread }
-        }
     }
 
-    struct Section: Identifiable, Equatable {
-        let id: String
-        let title: String?
-        let nodes: [Node]
-
-        var sessions: [OpenClawChatSessionEntry] {
-            self.nodes.map(\.session)
-        }
+    public struct Section: Identifiable, Equatable, Sendable {
+        public let id: String
+        public let title: String?
+        public let nodes: [Node]
     }
 
-    static func isHiddenInternalSession(_ key: String) -> Bool {
+    public static func isHiddenInternalSession(_ key: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
     @MainActor
-    static func sections(
+    public static func sections(
         sessions: [OpenClawChatSessionEntry],
         currentSessionKey: String,
         mainSessionKey: String = "main",
@@ -182,7 +170,7 @@ enum ChatSessionSidebarModel {
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
-    static func displayName(for session: OpenClawChatSessionEntry) -> String {
+    public static func displayName(for session: OpenClawChatSessionEntry) -> String {
         for candidate in [session.displayName, session.label] {
             if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
                !trimmed.isEmpty
@@ -193,13 +181,13 @@ enum ChatSessionSidebarModel {
         return self.displayName(forKey: session.key)
     }
 
-    static func canDeleteSession(key: String, mainSessionKey: String) -> Bool {
+    public static func canDeleteSession(key: String, mainSessionKey: String) -> Bool {
         let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedMain = mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized != "main" && normalized != "global" && normalized != normalizedMain
     }
 
-    static func canArchiveSession(
+    public static func canArchiveSession(
         _ session: OpenClawChatSessionEntry,
         mainSessionKey: String) -> Bool
     {
@@ -211,7 +199,7 @@ enum ChatSessionSidebarModel {
     }
 
     @MainActor
-    static func selectedSessionKey(
+    public static func selectedSessionKey(
         sessions: [OpenClawChatSessionEntry],
         currentSessionKey: String,
         mainSessionKey: String,
@@ -248,7 +236,7 @@ enum ChatSessionSidebarModel {
 
     /// Session keys read as routing ids ("agent:main:main"); show the human
     /// part and keep the owning agent as a suffix only when it disambiguates.
-    static func displayName(forKey key: String) -> String {
+    public static func displayName(forKey key: String) -> String {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = trimmed.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0] == "agent" else {
