@@ -13,7 +13,6 @@ import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-a
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
-import { renderCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
@@ -63,6 +62,7 @@ import {
   resetChatThreadPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
+import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
@@ -70,12 +70,7 @@ import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
-import {
-  visibleWorkspaceConflictPaths,
-  workspaceConflictCount,
-  workspaceConflictGitCommands,
-  type WorkspaceResultConflict,
-} from "./workspace-conflict.ts";
+import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 
 export type ChatProps = {
@@ -260,76 +255,6 @@ export type ChatProps = {
 export function resetChatViewState(paneId?: string) {
   resetChatComposerState(paneId);
   resetChatThreadPresentationState(paneId);
-}
-
-function renderWorkspaceConflictNotice(props: ChatProps) {
-  const conflict = props.workspaceConflict;
-  if (!conflict) {
-    return nothing;
-  }
-  const count = workspaceConflictCount(conflict);
-  const visible = visibleWorkspaceConflictPaths(conflict);
-  const commands = workspaceConflictGitCommands(conflict);
-  const title = t(
-    count === 1 ? "chat.workspaceConflict.titleOne" : "chat.workspaceConflict.titleMany",
-    { count: String(count) },
-  );
-  return html`
-    <div class="callout warn callout--dismissible chat-workspace-conflict-notice" role="status">
-      <div class="callout__content chat-workspace-conflict-notice__content">
-        <div class="chat-workspace-conflict-notice__title">
-          <span aria-hidden="true">${icons.alertTriangle}</span>
-          <strong>${title}</strong>
-        </div>
-        <p>${t("chat.workspaceConflict.description")}</p>
-        <ul class="chat-workspace-conflict-paths">
-          ${visible.paths.map((entryPath) => html`<li><code>${entryPath}</code></li>`)}
-        </ul>
-        ${visible.remaining > 0
-          ? html`<div class="chat-workspace-conflict-more">
-              ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
-            </div>`
-          : nothing}
-        <div class="chat-workspace-conflict-ref">
-          <span>${t("chat.workspaceConflict.stagedResult")}</span>
-          <code>${conflict.stagedResultRef}</code>
-          ${renderCopyButton(
-            conflict.stagedResultRef,
-            t("chat.workspaceConflict.copyStagedResult"),
-          )}
-        </div>
-        <div class="chat-workspace-conflict-commands">
-          <div>
-            <span>${t("chat.workspaceConflict.inspectCloud")}</span>
-            <code>${commands.inspect}</code>
-            ${renderCopyButton(commands.inspect, t("chat.workspaceConflict.copyInspectCommand"))}
-          </div>
-          <div>
-            <span>${t("chat.workspaceConflict.takeCloud")}</span>
-            <code>${commands.takeCloud}</code>
-            ${renderCopyButton(commands.takeCloud, t("chat.workspaceConflict.copyTakeCommand"))}
-          </div>
-        </div>
-        <p class="chat-workspace-conflict-command-help">
-          ${t("chat.workspaceConflict.commandHelp")}
-        </p>
-      </div>
-      ${props.onDismissWorkspaceConflict
-        ? html`
-            <openclaw-tooltip .content=${t("chat.workspaceConflict.dismiss")}>
-              <button
-                class="callout__dismiss"
-                type="button"
-                @click=${props.onDismissWorkspaceConflict}
-                aria-label=${t("chat.workspaceConflict.dismiss")}
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-    </div>
-  `;
 }
 
 export function renderChatResizableDivider(props: {
@@ -635,7 +560,10 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
-      ${renderWorkspaceConflictNotice(props)}
+      ${renderWorkspaceConflictNotice({
+        conflict: props.workspaceConflict,
+        onDismiss: props.onDismissWorkspaceConflict,
+      })}
       ${props.focusMode && props.onToggleFocusMode
         ? html`
             <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>

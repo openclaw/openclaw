@@ -1,8 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 
-export const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
-export const WORKSPACE_CONFLICT_VISIBLE_PATH_LIMIT = 5;
+const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
+const WORKSPACE_CONFLICT_VISIBLE_PATH_LIMIT = 5;
 
 export type WorkspaceResultConflict = {
   paths: string[];
