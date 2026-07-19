@@ -356,7 +356,7 @@ describe("cron service store seam coverage", () => {
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
   });
 
-  it("persists cron state when the quarantine sidecar is archived after exceeding the cap", async () => {
+  it("rejects persist when the quarantine sidecar write would exceed the byte cap", async () => {
     const { storePath } = await makeStorePath();
     const quarantinePath = resolveCronQuarantinePath(storePath);
     const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
@@ -369,12 +369,12 @@ describe("cron service store seam coverage", () => {
       }),
     );
 
-    // Pre-fill the sidecar close to the cap so the next quarantine entry triggers recovery.
-    const paddingSize = 8 * 1024 * 1024 - 1024;
-    const existingJobs = Array.from({ length: 10 }, (_, i) => ({
+    // Pre-fill the sidecar with a few entries, then append a huge entry so
+    // the merged payload exceeds the cap — persist returns false fail-closed.
+    const existingJobs = Array.from({ length: 3 }, (_, i) => ({
       sourceIndex: i,
       reason: "old-entry",
-      job: { id: `old-job-${i}`, padding: "x".repeat(Math.floor(paddingSize / 10)) },
+      job: { id: `old-job-${i}`, data: "small" },
     }));
     await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
     await fs.writeFile(
@@ -389,28 +389,16 @@ describe("cron service store seam coverage", () => {
     const job = findJobOrThrow(state, "quarantine-archive-job");
     job.state.nextRunAtMs = changedNextRunAtMs;
     state.pendingQuarantineConfigJobs = [
-      { sourceIndex: 99, reason: "invalid-schedule", job: { id: "quarantined-job" } },
+      {
+        sourceIndex: 99,
+        reason: "oversized-quarantine",
+        raw: "x".repeat(9 * 1024 * 1024),
+      },
     ];
 
+    // The quarantine write fails closed, so persist returns false.
     const persisted = await persist(state, { stateOnly: true });
-
-    expect(persisted).toBe(true);
-    expect(onEvent).toHaveBeenCalledTimes(1);
-    expect(onEvent).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        action: "scheduled",
-        jobId: job.id,
-        nextRunAtMs: changedNextRunAtMs,
-      }),
-    );
-    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
-
-    const freshQuarantine = await loadCronQuarantineFile(quarantinePath);
-    expect(freshQuarantine.jobs).toHaveLength(1);
-    expect(freshQuarantine.jobs[0]?.sourceIndex).toBe(99);
-
-    const dir = await fs.readdir(path.dirname(quarantinePath));
-    expect(dir.some((name) => name.endsWith(".archive.json"))).toBe(true);
+    expect(persisted).toBe(false);
   });
 
   it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {
