@@ -1288,8 +1288,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
     // A retry is a new model attempt. A silent retry must not inherit the
-    // completed assistant from the attempt that triggered compaction.
+    // completed assistant or pre-compaction context snapshot.
     currentAttemptAssistant = undefined;
+    lastAssistantUsage = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
