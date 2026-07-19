@@ -89,7 +89,8 @@ Skills and plugins use exact ClawHub versions:
 ```
 
 The dry run uses the existing skill and plugin preflight paths to resolve the
-exact artifact and integrity before consent. Apply installs missing artifacts
+exact artifact, integrity, and any ClawHub trust warning before consent. The
+warning remains visible in the integrity-bound plan. Apply installs missing artifacts
 or reuses matching ones and records whether the Claw introduced or referenced
 each resource. Plugins remain process-wide OpenClaw capabilities rather than
 per-agent installations.

@@ -52,6 +52,8 @@ type ClawAddPlanContext = {
     action?: "install" | "reuse";
     integrity?: string;
     installId?: string;
+    warning?: string;
+    installedVersion?: string;
     code?: string;
     message?: string;
   }>;
@@ -408,6 +410,7 @@ export async function buildClawAddPlan(params: {
         ...pkg,
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
+        ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         expectedState: !preflight.ok
           ? "unresolved"
           : preflight.action === "reuse"

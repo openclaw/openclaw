@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installClawPackages } from "./packages.js";
+import { installClawPackages, type PackageInstallerDeps } from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
@@ -64,6 +64,16 @@ const completePackageRef = vi.fn(
   }),
 );
 
+const pluginIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
+  const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
+  return {
+    ok: true,
+    pluginId,
+    clawhub: { integrity: pluginIntegrity },
+  } as Awaited<ReturnType<NonNullable<PackageInstallerDeps["probePlugin"]>>>;
+});
+
 describe("installClawPackages", () => {
   it("installs skill packages into the planned workspace with the resolved digest", async () => {
     const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
@@ -75,6 +85,7 @@ describe("installClawPackages", () => {
       targetDir: "/tmp/incident-2/skills/triage",
     });
     const persistPackageRef = vi.fn().mockReturnValue(pending);
+    const onExternalMutation = vi.fn();
 
     await installClawPackages(
       plan([
@@ -93,6 +104,7 @@ describe("installClawPackages", () => {
           persistPackageRef,
           completePackageRef,
         },
+        onExternalMutation,
       },
     );
 
@@ -113,6 +125,9 @@ describe("installClawPackages", () => {
         origin: "claw-introduced",
         independentOwner: false,
       }),
+    );
+    expect(onExternalMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "skill", ref: "@owner/triage" }),
     );
   });
 
@@ -136,7 +151,15 @@ describe("installClawPackages", () => {
           integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         },
       ]),
-      { deps: { installPlugin, preflightPlugin, persistPackageRef, completePackageRef } },
+      {
+        deps: {
+          installPlugin,
+          probePlugin,
+          preflightPlugin,
+          persistPackageRef,
+          completePackageRef,
+        },
+      },
     );
 
     expect(installPlugin).toHaveBeenCalledWith(
@@ -188,7 +211,15 @@ describe("installClawPackages", () => {
         ],
         "reuse",
       ),
-      { deps: { installPlugin, preflightPlugin, persistPackageRef, completePackageRef } },
+      {
+        deps: {
+          installPlugin,
+          probePlugin,
+          preflightPlugin,
+          persistPackageRef,
+          completePackageRef,
+        },
+      },
     );
 
     expect(installPlugin).not.toHaveBeenCalled();
@@ -229,6 +260,7 @@ describe("installClawPackages", () => {
         {
           deps: {
             installPlugin: vi.fn().mockRejectedValue(new Error("registry unavailable")),
+            probePlugin,
             preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
             persistPackageRef,
             completePackageRef,
@@ -265,6 +297,7 @@ describe("installClawPackages", () => {
           deps: {
             installPlugin,
             uninstallPlugin,
+            probePlugin,
             preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
             persistPackageRef,
             completePackageRef,
@@ -311,6 +344,7 @@ describe("installClawPackages", () => {
         {
           deps: {
             installPlugin: vi.fn().mockRejectedValue(new Error("registry unavailable")),
+            probePlugin,
             preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
             persistPackageRef: vi.fn().mockReturnValue(pending),
             completePackageRef: failingCompletePackageRef,
@@ -341,10 +375,65 @@ describe("installClawPackages", () => {
             integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           },
         ]),
-        { deps: { installPlugin, preflightPlugin, persistPackageRef, completePackageRef } },
+        {
+          deps: {
+            installPlugin,
+            probePlugin,
+            preflightPlugin,
+            persistPackageRef,
+            completePackageRef,
+          },
+        },
       ),
     ).rejects.toMatchObject({ code: "package_owner_state_changed" });
     expect(installPlugin).not.toHaveBeenCalled();
     expect(persistPackageRef).not.toHaveBeenCalled();
+  });
+
+  it("invalidates consent when a skill trust warning changes after planning", async () => {
+    const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    const planned = plan([
+      { kind: "skill", source: "clawhub", ref: "@owner/triage", version: "1.2.3", integrity },
+    ]);
+    Object.assign(planned.actions[0]!.details!, { riskWarning: "review warning one" });
+
+    await expect(
+      installClawPackages(planned, {
+        deps: {
+          preflightSkill: vi.fn().mockResolvedValue({
+            ok: true,
+            action: "install",
+            integrity,
+            warning: "review warning two",
+          }),
+        },
+      }),
+    ).rejects.toMatchObject({ code: "package_owner_state_changed" });
+  });
+
+  it("invalidates consent when a plugin trust warning changes after planning", async () => {
+    const planned = plan([
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@owner/audit",
+        version: "2.0.1",
+        integrity: pluginIntegrity,
+      },
+    ]);
+    Object.assign(planned.actions[0]!.details!, { riskWarning: "review warning one" });
+
+    await expect(
+      installClawPackages(planned, {
+        deps: {
+          probePlugin: vi.fn().mockResolvedValue({
+            ok: true,
+            pluginId: "audit",
+            warning: "review warning two",
+            clawhub: { integrity: pluginIntegrity },
+          }),
+        },
+      }),
+    ).rejects.toMatchObject({ code: "package_owner_state_changed" });
   });
 });
