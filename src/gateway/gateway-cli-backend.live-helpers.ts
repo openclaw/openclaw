@@ -141,7 +141,12 @@ export function parseJsonStringArray(name: string, raw?: string): string[] | und
   if (!trimmed) {
     return undefined;
   }
-  const parsed = JSON.parse(trimmed);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`${name} must be a JSON array of strings.`);
+  }
   if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
     throw new Error(`${name} must be a JSON array of strings.`);
   }
