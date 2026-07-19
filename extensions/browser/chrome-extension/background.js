@@ -483,7 +483,7 @@ async function connectRelay() {
   // onclose follows onerror and drives the reconnect, so no error handler needed.
 }
 
-async function capturePageShare(tab, selectionOverride) {
+async function capturePageShare(tab) {
   const tabId = tab.id;
   if (typeof tabId !== "number") {
     throw new Error("No tab.");
@@ -492,7 +492,7 @@ async function capturePageShare(tab, selectionOverride) {
   if (docId) {
     // Selection wins over the export: never send a whole private document
     // when the user asked for a highlighted passage.
-    const selection = selectionOverride || (await captureDomSelection(tabId));
+    const selection = await captureDomSelection(tabId);
     if (selection) {
       return { url: tab.url ?? "", title: tab.title ?? "", selection, content: "" };
     }
@@ -520,21 +520,23 @@ async function capturePageShare(tab, selectionOverride) {
   if (!injection?.result) {
     throw new Error("Could not read this page.");
   }
-  // A context-menu selection is authoritative: it can live in an iframe or be
-  // cleared during the relay-connect delay, both invisible to the recapture.
-  if (selectionOverride) {
-    return { ...injection.result, selection: selectionOverride };
-  }
   return injection.result;
 }
 
 async function captureDomSelection(tabId) {
   try {
-    const [injection] = await chrome.scripting.executeScript({
-      target: { tabId },
+    // allFrames: a highlighted passage can live in a same-origin child frame
+    // the main-frame probe cannot see; missing it would export the whole doc.
+    const injections = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
       func: () => window.getSelection()?.toString().trim() ?? "",
     });
-    return typeof injection?.result === "string" ? injection.result : "";
+    for (const injection of injections ?? []) {
+      if (typeof injection?.result === "string" && injection.result) {
+        return injection.result;
+      }
+    }
+    return "";
   } catch {
     return "";
   }
@@ -561,7 +563,7 @@ async function sendPageShareRequest(payload) {
   });
 }
 
-async function sendPageToOpenClaw(tabId, note, selectionOverride) {
+async function ensureRelayReady() {
   const config = await getConfig();
   if (!config.relayUrl || !config.token) {
     throw new Error("Pair the extension first.");
@@ -572,9 +574,12 @@ async function sendPageToOpenClaw(tabId, note, selectionOverride) {
       throw new Error("Relay not connected.");
     }
   }
+}
 
+async function sendPageToOpenClaw(tabId, note) {
+  await ensureRelayReady();
   const tab = await chrome.tabs.get(tabId);
-  const capture = await capturePageShare(tab, selectionOverride?.trim() || "");
+  const capture = await capturePageShare(tab);
   const payload = buildPageSharePayload({ ...capture, note });
   if (!payload.content && !payload.selection) {
     throw new Error("Nothing to send on this page.");
@@ -582,11 +587,30 @@ async function sendPageToOpenClaw(tabId, note, selectionOverride) {
   await sendPageShareRequest(payload);
 }
 
-function sendPageFromChromeEntry(tabId, selectionOverride) {
-  return sendPageToOpenClaw(tabId, "", selectionOverride).then(
+// Context-menu selections bind to the click-time document: the relay-connect
+// delay can outlive a navigation, and recapture cannot see iframe selections,
+// so the payload is built from the click snapshot without touching the tab.
+async function sendSelectionSnapshot(tab, selection) {
+  await ensureRelayReady();
+  const payload = buildPageSharePayload({
+    url: tab.url ?? "",
+    title: tab.title ?? "",
+    content: "",
+    selection,
+    note: "",
+  });
+  await sendPageShareRequest(payload);
+}
+
+function withShareBadge(promise) {
+  return promise.then(
     () => flashPageShareBadge(true),
     () => flashPageShareBadge(false),
   );
+}
+
+function sendPageFromChromeEntry(tabId) {
+  return withShareBadge(sendPageToOpenClaw(tabId, ""));
 }
 
 async function installPageShareContextMenu() {
@@ -791,9 +815,15 @@ chrome.commands.onCommand.addListener((command) => {
     .then(([tab]) => (typeof tab?.id === "number" ? sendPageFromChromeEntry(tab.id) : undefined));
 });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "openclaw-send-page" && typeof tab?.id === "number") {
-    void sendPageFromChromeEntry(tab.id, info.selectionText ?? "");
+  if (info.menuItemId !== "openclaw-send-page" || typeof tab?.id !== "number") {
+    return;
   }
+  const selection = info.selectionText?.trim() ?? "";
+  if (selection) {
+    void withShareBadge(sendSelectionSnapshot(tab, selection));
+    return;
+  }
+  void sendPageFromChromeEntry(tab.id);
 });
 
 // Watchdog: MV3 can stop this worker; the alarm revives it and re-connects.
