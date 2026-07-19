@@ -483,8 +483,9 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     // avoid importing the heavier provider-runtime-aware error classifier.
     if (shouldRewriteContextOverflowText(trimmed)) {
       return (
-        "Context overflow: the conversation has grown too large after auto-compaction was exhausted. " +
-        "Use /reset (or /new) to start a fresh session. " +
+        "Context overflow: the conversation is too large for the model. " +
+        "Try /compact to reduce the conversation size, then continue. " +
+        "If that doesn't help, use /reset (or /new) to start a fresh session. " +
         "To prevent this, limit command output (e.g. use --tail with kubectl, or pipe through head), " +
         "or switch to a model with a larger context window."
       );

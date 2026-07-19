@@ -67,11 +67,11 @@ describe("sanitizeUserFacingText", () => {
   });
 
   it.each([
-    "Context overflow: the conversation has grown too large after auto-compaction was exhausted. Use /reset (or /new) to start a fresh session. To prevent this, limit command output (e.g. use --tail with kubectl, or pipe through head), or switch to a model with a larger context window.",
+    "Context overflow: the conversation is too large for the model. Try /compact to reduce the conversation size, then continue. If that doesn't help, use /reset (or /new) to start a fresh session. To prevent this, limit command output (e.g. use --tail with kubectl, or pipe through head), or switch to a model with a larger context window.",
     "Request size exceeds model context window",
   ])("sanitizes direct context-overflow error: %s", (text) => {
     expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
-      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
+      "Context overflow: the conversation is too large for the model.",
     );
   });
 
@@ -79,7 +79,7 @@ describe("sanitizeUserFacingText", () => {
     const text =
       'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}';
     expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
-      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
+      "Context overflow: the conversation is too large for the model.",
     );
   });
 
@@ -151,7 +151,7 @@ describe("sanitizeUserFacingText", () => {
     const raw =
       '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
-      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
+      "Context overflow: the conversation is too large for the model.",
     );
   });
 
@@ -159,8 +159,21 @@ describe("sanitizeUserFacingText", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
-      "Context overflow: the conversation has grown too large after auto-compaction was exhausted.",
+      "Context overflow: the conversation is too large for the model.",
     );
+  });
+
+  it("never asserts auto-compaction was exhausted (sanitizer does not know recovery state)", () => {
+    const overflowInputs = [
+      "Request size exceeds model context window",
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
+      'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
+      '{"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}',
+    ];
+    for (const input of overflowInputs) {
+      const result = sanitizeUserFacingText(input, { errorContext: true });
+      expect(result).not.toContain("auto-compaction was exhausted");
+    }
   });
 
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
