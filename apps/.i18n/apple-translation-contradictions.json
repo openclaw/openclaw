@@ -320,7 +320,6 @@
       "source": "Agent",
       "translations": [
         "Agent",
-        "代理",
         "代理程式"
       ]
     },
@@ -862,14 +861,6 @@
       ]
     },
     {
-      "locale": "fa",
-      "source": "Attention",
-      "translations": [
-        "توجه",
-        "نیازمند توجه"
-      ]
-    },
-    {
       "locale": "id",
       "source": "Attention",
       "translations": [
@@ -883,14 +874,6 @@
       "translations": [
         "주의",
         "주의 필요"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Attention",
-      "translations": [
-        "Aandacht",
-        "Let op"
       ]
     },
     {
@@ -914,7 +897,6 @@
       "source": "Attention",
       "translations": [
         "Kräver uppmärksamhet",
-        "Observera",
         "Åtgärd krävs"
       ]
     },
@@ -923,8 +905,7 @@
       "source": "Attention",
       "translations": [
         "ต้องดำเนินการ",
-        "ต้องตรวจสอบ",
-        "โปรดทราบ"
+        "ต้องตรวจสอบ"
       ]
     },
     {
@@ -936,23 +917,7 @@
       ]
     },
     {
-      "locale": "vi",
-      "source": "Attention",
-      "translations": [
-        "Chú ý",
-        "Cần chú ý"
-      ]
-    },
-    {
       "locale": "zh-CN",
-      "source": "Attention",
-      "translations": [
-        "注意",
-        "需要注意"
-      ]
-    },
-    {
-      "locale": "zh-TW",
       "source": "Attention",
       "translations": [
         "注意",
@@ -1556,14 +1521,6 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "Connecting",
-      "translations": [
-        "Verbinden",
-        "Verbindung wird hergestellt"
-      ]
-    },
-    {
       "locale": "fr",
       "source": "Connecting",
       "translations": [
@@ -1722,22 +1679,6 @@
       "translations": [
         "Devam",
         "Devam et"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Control",
-      "translations": [
-        "कंट्रोल",
-        "नियंत्रण"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Control",
-      "translations": [
-        "การควบคุม",
-        "ควบคุม"
       ]
     },
     {
@@ -2019,8 +1960,7 @@
       "source": "Default Agent",
       "translations": [
         "Varsayılan Agent",
-        "Varsayılan Ajan",
-        "Varsayılan Temsilci"
+        "Varsayılan Ajan"
       ]
     },
     {
@@ -2044,8 +1984,7 @@
       "source": "Default Agent",
       "translations": [
         "預設 Agent",
-        "預設代理",
-        "預設代理程式"
+        "預設代理"
       ]
     },
     {
@@ -2739,8 +2678,7 @@
       "translations": [
         "Dreaming",
         "구상 중",
-        "꿈꾸는 중",
-        "드리밍"
+        "꿈꾸는 중"
       ]
     },
     {
@@ -2798,8 +2736,7 @@
         "Dreaming",
         "Düş kuruyor",
         "Düşünüyor",
-        "Hayal Kuruyor",
-        "Rüya Görüyor"
+        "Hayal Kuruyor"
       ]
     },
     {
@@ -5032,7 +4969,6 @@
       "locale": "fr",
       "source": "Needs attention",
       "translations": [
-        "Attention requise",
         "Nécessite une attention",
         "Nécessite votre attention"
       ]
@@ -5054,6 +4990,14 @@
       ]
     },
     {
+      "locale": "pt-BR",
+      "source": "Needs attention",
+      "translations": [
+        "Precisa de atenção",
+        "Requer atenção"
+      ]
+    },
+    {
       "locale": "sv",
       "source": "Needs attention",
       "translations": [
@@ -5067,7 +5011,7 @@
       "translations": [
         "ต้องการการดูแล",
         "ต้องการความสนใจ",
-        "ต้องดำเนินการ"
+        "ต้องตรวจสอบ"
       ]
     },
     {
@@ -5075,8 +5019,7 @@
       "source": "Needs attention",
       "translations": [
         "Dikkat gerekiyor",
-        "Dikkat gerektiriyor",
-        "İlgilenilmesi gerekiyor"
+        "Dikkat gerektiriyor"
       ]
     },
     {
@@ -6304,14 +6247,6 @@
         "開啟 Settings / Gateway",
         "開啟「設定」/ Gateway",
         "開啟設定 / Gateway"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Overview",
-      "translations": [
-        "अवलोकन",
-        "ओवरव्यू"
       ]
     },
     {
@@ -9221,43 +9156,11 @@
       ]
     },
     {
-      "locale": "it",
-      "source": "Threads",
-      "translations": [
-        "Conversazioni",
-        "Thread"
-      ]
-    },
-    {
       "locale": "nl",
       "source": "Threads",
       "translations": [
         "Gesprekken",
         "Threads"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Threads",
-      "translations": [
-        "Diziler",
-        "İş Parçacıkları"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Threads",
-      "translations": [
-        "Chuỗi",
-        "Luồng"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Threads",
-      "translations": [
-        "对话",
-        "话题串"
       ]
     },
     {

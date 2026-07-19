@@ -11149,6 +11149,46 @@
       "translated": "더 보기"
     },
     {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "Live"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "읽지 않음"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "토큰"
+    },
+    {
+      "id": "native.apple.6fcbd4e2c32a2334",
+      "source": "Opens Threads",
+      "translated": "Opens Threads"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "대기 중인 승인"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "Automation issues"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "31-day usage"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "Opens Usage"
+    },
+    {
       "id": "native.apple.65fb4d9ce6e5bbda",
       "source": "Gateway settings",
       "translated": "Gateway 설정"
@@ -11252,6 +11292,11 @@
       "id": "native.apple.4b9a0a6dad9d258c",
       "source": "Direct chat",
       "translated": "다이렉트 채팅"
+    },
+    {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "just now"
     },
     {
       "id": "native.apple.dbd48d25920f342b",
@@ -12100,91 +12145,6 @@
     },
     {
       "id": "native.apple.1fc3cbd16076f75f",
-      "source": "Offline",
-      "translated": "오프라인"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "제어"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "설정 / Gateway 열기"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "에이전트 채팅 및 최근 작업."
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "개요"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "인스턴스"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "파일"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "드리밍"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "사용량"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "자동화"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "기본 에이전트"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@, %2$@, %3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@, %2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "온라인"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "연결 중"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "주의"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
       "translated": "오프라인"
     },
@@ -15624,32 +15584,102 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "사이드바 숨기기"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "새 채팅"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "Search sessions"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "Clear session search"
+    },
+    {
+      "id": "native.apple.58ed7e02e09b847b",
+      "source": "Sessions",
+      "translated": "세션"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "Loading sessions"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "No recent sessions"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "All Sessions…"
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Pages"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "주의"
+    },
+    {
+      "id": "native.apple.0db406639dd48044",
+      "source": "Pending approvals",
+      "translated": "대기 중인 승인"
+    },
+    {
+      "id": "native.apple.96b2be22c750a802",
+      "source": "Automation issues",
+      "translated": "Automation issues"
+    },
+    {
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "설정"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "읽지 않음"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "연결"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
       "translated": "온라인"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "연결 중"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
       "translated": "주의 필요"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "오프라인"
     },
@@ -15694,44 +15724,19 @@
       "translated": "자동화"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "사이드바 보기"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "%@(으)로 돌아가기"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "사이드바 숨기기"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "사이드바 보기"
+    },
+    {
       "id": "native.apple.8af43f59602ec0d8",
       "source": "Close canvas",
       "translated": "캔버스 닫기"
-    },
-    {
-      "id": "native.apple.a1db6ce0aed1d18e",
-      "source": "Chat, voice active",
-      "translated": "채팅, 음성 켜짐"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "제어"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "에이전트"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "설정"
     },
     {
       "id": "native.apple.8a4751c86aa6fe77",
@@ -15794,9 +15799,9 @@
       "translated": "인스턴스"
     },
     {
-      "id": "native.apple.11fe8b9941954dfb",
-      "source": "Threads",
-      "translated": "스레드"
+      "id": "native.apple.e3e3ce1a79ebbd70",
+      "source": "Sessions",
+      "translated": "세션"
     },
     {
       "id": "native.apple.253cb2debeb51859",

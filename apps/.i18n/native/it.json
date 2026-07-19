@@ -641,7 +641,7 @@
     {
       "id": "native.android.c65b61de70a063e7",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.7cd603c40e57e819",
@@ -1241,12 +1241,12 @@
     {
       "id": "native.android.c4abd4ecd607865f",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.27c3e59e49776d1a",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.android.ff3944e9dcb605e1",
@@ -2221,7 +2221,7 @@
     {
       "id": "native.android.cac027a1232254cd",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.81dd1b93e212709e",
@@ -2236,7 +2236,7 @@
     {
       "id": "native.android.59602ad037679006",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.android.a328ef4e475c8fbe",
@@ -2596,12 +2596,12 @@
     {
       "id": "native.android.a6785924afa501a6",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.0bbe0d733b1328fd",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.android.68032afddfa2d73c",
@@ -4716,7 +4716,7 @@
     {
       "id": "native.android.326c79e18db465ce",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.c0cbf2ed1fc50e4c",
@@ -4726,7 +4726,7 @@
     {
       "id": "native.android.dd5b083db9470281",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.android.62fe76eb7c0dbddc",
@@ -5701,7 +5701,7 @@
     {
       "id": "native.android.29a2565d51411afe",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.android.2cfb87c0137347c5",
@@ -5776,7 +5776,7 @@
     {
       "id": "native.android.c093a2297a02405a",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.6b13be9783f8dfd3",
@@ -7076,7 +7076,7 @@
     {
       "id": "native.android.3ff5c1971783c590",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.d95742f0d232e1bf",
@@ -7726,7 +7726,7 @@
     {
       "id": "native.android.278e466dce078f58",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.android.6c2e520fd54edeb4",
@@ -10006,7 +10006,7 @@
     {
       "id": "native.apple.5fbed24f057edea8",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.apple.f1958c5f0d880a4a",
@@ -10631,7 +10631,7 @@
     {
       "id": "native.apple.2be2d2e1fb0c140a",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.apple.a97cdae7c8e13f0e",
@@ -11149,6 +11149,46 @@
       "translated": "Mostra altro"
     },
     {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "In diretta"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "Da leggere"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "Token"
+    },
+    {
+      "id": "native.apple.6fcbd4e2c32a2334",
+      "source": "Opens Threads",
+      "translated": "Apre le discussioni"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "Approvazioni in sospeso"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "Problemi di automazione"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "Utilizzo di 31 giorni"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "Apre Utilizzo"
+    },
+    {
       "id": "native.apple.65fb4d9ce6e5bbda",
       "source": "Gateway settings",
       "translated": "Impostazioni Gateway"
@@ -11211,7 +11251,7 @@
     {
       "id": "native.apple.e01aac63fda4c147",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.apple.a857bc74fd053781",
@@ -11226,7 +11266,7 @@
     {
       "id": "native.apple.89989b6d557090e8",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.a90a3aac6e2a6da8",
@@ -11252,6 +11292,11 @@
       "id": "native.apple.4b9a0a6dad9d258c",
       "source": "Direct chat",
       "translated": "Chat diretta"
+    },
+    {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "proprio ora"
     },
     {
       "id": "native.apple.dbd48d25920f342b",
@@ -11466,7 +11511,7 @@
     {
       "id": "native.apple.c61170392d1aa557",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.225dcb2dfdcaa76f",
@@ -12086,7 +12131,7 @@
     {
       "id": "native.apple.72baecec6cf1b462",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.apple.ca9dfb05d9034ff7",
@@ -12101,92 +12146,7 @@
     {
       "id": "native.apple.1fc3cbd16076f75f",
       "source": "Offline",
-      "translated": "Offline"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "Controllo"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "Apre Impostazioni / Gateway"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "Chat dell'agente e lavori recenti."
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "Panoramica"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "Istanze"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "File"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "Sogno"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "Utilizzo"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "Automazioni"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "Agente predefinito"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@, %2$@, %3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@, %2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "Online"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "Connessione"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "Attenzione"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
-      "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.65602c216b89032d",
@@ -12391,7 +12351,7 @@
     {
       "id": "native.apple.042fad5f44e4a00c",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.59c349b1b581354f",
@@ -14976,7 +14936,7 @@
     {
       "id": "native.apple.ae33908b61c6d70b",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.4a98b3a346be2662",
@@ -15624,34 +15584,104 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "Nascondi barra laterale"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Nuova chat"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "Cerca sessioni"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "Cancella ricerca sessioni"
+    },
+    {
+      "id": "native.apple.58ed7e02e09b847b",
+      "source": "Sessions",
+      "translated": "Sessioni"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "Caricamento sessioni"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "Nessuna sessione recente"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "Tutte le sessioni…"
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Pagine"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "Attenzione"
+    },
+    {
+      "id": "native.apple.0db406639dd48044",
+      "source": "Pending approvals",
+      "translated": "Approvazioni in sospeso"
+    },
+    {
+      "id": "native.apple.96b2be22c750a802",
+      "source": "Automation issues",
+      "translated": "Problemi di automazione"
+    },
+    {
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "Impostazioni"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "Da leggere"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "Connessione"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "Connessione"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
       "translated": "Richiede attenzione"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.a4256b2ab523ee60",
@@ -15694,44 +15724,19 @@
       "translated": "Automazioni"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "Mostra barra laterale"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "Torna a %@"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "Nascondi barra laterale"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "Mostra barra laterale"
+    },
+    {
       "id": "native.apple.8af43f59602ec0d8",
       "source": "Close canvas",
       "translated": "Chiudi canvas"
-    },
-    {
-      "id": "native.apple.a1db6ce0aed1d18e",
-      "source": "Chat, voice active",
-      "translated": "Chat, voce attiva"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "Controllo"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "Agente"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "Impostazioni"
     },
     {
       "id": "native.apple.8a4751c86aa6fe77",
@@ -15794,9 +15799,9 @@
       "translated": "Istanze"
     },
     {
-      "id": "native.apple.11fe8b9941954dfb",
-      "source": "Threads",
-      "translated": "Thread"
+      "id": "native.apple.e3e3ce1a79ebbd70",
+      "source": "Sessions",
+      "translated": "Sessioni"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -16151,7 +16156,7 @@
     {
       "id": "native.apple.c09f4e3bbef8177a",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.d91efa5ed033446a",
@@ -16561,7 +16566,7 @@
     {
       "id": "native.apple.1bbd3d2941ae7481",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.06fdaba1468c68e7",
@@ -16946,12 +16951,12 @@
     {
       "id": "native.apple.60cdcd03d8b51965",
       "source": "Online",
-      "translated": "Online"
+      "translated": "Connesso"
     },
     {
       "id": "native.apple.f748dad8f2ce22ae",
       "source": "Offline",
-      "translated": "Offline"
+      "translated": "Non in linea"
     },
     {
       "id": "native.apple.088f07637cc141c9",

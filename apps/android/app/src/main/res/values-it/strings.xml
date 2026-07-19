@@ -92,7 +92,7 @@
     <string name="native_0c79a9c222840ed0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Applicato"</string>
     <string name="native_0cab1c9617404faf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"video"</string>
     <string name="native_0cf04463c4276a62" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Promosso"</string>
-    <string name="native_0d21bd52022ca7f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Online"</string>
+    <string name="native_0d21bd52022ca7f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connesso"</string>
     <string name="native_0d5644ff52ce2ba3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ambiti"</string>
     <string name="native_0d5efd432e4fedf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Il provider vocale in tempo reale non è configurato."</string>
     <string name="native_0d8ca811c3744a6d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
@@ -971,7 +971,7 @@
     <string name="native_a10a36fa109818be" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cerca app"</string>
     <string name="native_a12db0cfcad2e5f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 modello configurato"</string>
     <string name="native_a135dd52de0ce45a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ignora avviso di approvazione"</string>
-    <string name="native_a1794783aab72d20" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Offline"</string>
+    <string name="native_a1794783aab72d20" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Non in linea"</string>
     <string name="native_a181b2c15994a7fc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Provider vocale"</string>
     <string name="native_a190013f72efad35" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"L\'approvazione del Gateway è in corso. OpenClaw riproverà automaticamente."</string>
     <string name="native_a1a5936d3b0f8a69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Massimo"</string>

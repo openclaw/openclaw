@@ -1491,7 +1491,7 @@
     {
       "id": "native.android.670121e54dbe286f",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.d38be650b1bce4a0",
@@ -3681,7 +3681,7 @@
     {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
-      "translated": "Konular"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.439b324280869527",
@@ -5751,7 +5751,7 @@
     {
       "id": "native.android.57177017a6a93826",
       "source": "Threads",
-      "translated": "İletişim Dizileri"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.43320b54a68b00a1",
@@ -8151,7 +8151,7 @@
     {
       "id": "native.android.6cf5d6fa8a4186d5",
       "source": "Threads",
-      "translated": "İletişim Dizileri"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.android.e4dc7610b0898e37",
@@ -11149,6 +11149,46 @@
       "translated": "Daha Fazla Göster"
     },
     {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "Canlı"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "Okunmamış"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "Tokenlar"
+    },
+    {
+      "id": "native.apple.6fcbd4e2c32a2334",
+      "source": "Opens Threads",
+      "translated": "Mesaj dizilerini açar"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "Bekleyen onaylar"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "Otomasyon sorunları"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "31 günlük kullanım"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "Kullanımı açar"
+    },
+    {
       "id": "native.apple.65fb4d9ce6e5bbda",
       "source": "Gateway settings",
       "translated": "Gateway ayarları"
@@ -11254,6 +11294,11 @@
       "translated": "Doğrudan sohbet"
     },
     {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "az önce"
+    },
+    {
       "id": "native.apple.dbd48d25920f342b",
       "source": "%@ on %@",
       "translated": "%@, %@ üzerinde"
@@ -11296,7 +11341,7 @@
     {
       "id": "native.apple.b6855cf19a50f477",
       "source": "Threads",
-      "translated": "İş Parçacıkları"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.9b1d0ef27a1333b0",
@@ -12100,91 +12145,6 @@
     },
     {
       "id": "native.apple.1fc3cbd16076f75f",
-      "source": "Offline",
-      "translated": "Çevrimdışı"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "Kontrol"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "Ayarlar / Gateway'i açar"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "Aracı sohbeti ve son çalışmalar."
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "Genel Bakış"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "Örnekler"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "Dosyalar"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "Rüya Görüyor"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "Kullanım"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "Otomasyonlar"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "Varsayılan Temsilci"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@, %2$@, %3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@, %2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "Çevrimiçi"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "Bağlanıyor"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "Dikkat"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
       "translated": "Çevrimdışı"
     },
@@ -15624,32 +15584,102 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "Kenar Çubuğunu Gizle"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Yeni Sohbet"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "Oturumlarda ara"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "Oturum aramasını temizle"
+    },
+    {
+      "id": "native.apple.58ed7e02e09b847b",
+      "source": "Sessions",
+      "translated": "Oturumlar"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "Oturumlar yükleniyor"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "Son oturum yok"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "Tüm Oturumlar…"
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Sayfalar"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "Dikkat"
+    },
+    {
+      "id": "native.apple.0db406639dd48044",
+      "source": "Pending approvals",
+      "translated": "Bekleyen onaylar"
+    },
+    {
+      "id": "native.apple.96b2be22c750a802",
+      "source": "Automation issues",
+      "translated": "Otomasyon sorunları"
+    },
+    {
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "Ayarlar"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "Okunmamış"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "Bağlantı"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
       "translated": "Çevrimiçi"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "Bağlanıyor"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
-      "translated": "İlgilenilmesi gerekiyor"
+      "translated": "Dikkat gerekiyor"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "Çevrimdışı"
     },
@@ -15694,44 +15724,19 @@
       "translated": "Otomasyonlar"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "Kenar Çubuğunu Göster"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "%@ uygulamasına geri dön"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "Kenar Çubuğunu Gizle"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "Kenar Çubuğunu Göster"
+    },
+    {
       "id": "native.apple.8af43f59602ec0d8",
       "source": "Close canvas",
       "translated": "Tuvali kapat"
-    },
-    {
-      "id": "native.apple.a1db6ce0aed1d18e",
-      "source": "Chat, voice active",
-      "translated": "Sohbet, ses açık"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "Kontrol"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "Aracı"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "Ayarlar"
     },
     {
       "id": "native.apple.8a4751c86aa6fe77",
@@ -15794,9 +15799,9 @@
       "translated": "Örnekler"
     },
     {
-      "id": "native.apple.11fe8b9941954dfb",
-      "source": "Threads",
-      "translated": "Diziler"
+      "id": "native.apple.e3e3ce1a79ebbd70",
+      "source": "Sessions",
+      "translated": "Oturumlar"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -21976,7 +21981,7 @@
     {
       "id": "native.apple.3ec2afcbc298c673",
       "source": "Threads",
-      "translated": "Diziler"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.74f66e96c112c3fa",
@@ -22071,7 +22076,7 @@
     {
       "id": "native.apple.52e37e3a44ae516c",
       "source": "Threads",
-      "translated": "Diziler"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.704924cd0704b5b5",
@@ -24061,7 +24066,7 @@
     {
       "id": "native.apple.c0cc6acc36f413ce",
       "source": "Threads",
-      "translated": "İş Parçacıkları"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.854d3928fe5a557c",
@@ -24436,7 +24441,7 @@
     {
       "id": "native.apple.c0ada47504425f23",
       "source": "Threads",
-      "translated": "İş Parçacıkları"
+      "translated": "Mesaj dizileri"
     },
     {
       "id": "native.apple.c13dbe6b5c01e9bd",
