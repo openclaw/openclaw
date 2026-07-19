@@ -1926,3 +1926,26 @@ CREATE TABLE IF NOT EXISTS fleet_cells (
   container_name TEXT NOT NULL,
   data_dir TEXT NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_installs (
+  agent_id TEXT NOT NULL PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  claw_name TEXT NOT NULL,
+  claw_version TEXT NOT NULL,
+  package_root TEXT NOT NULL,
+  manifest_path TEXT NOT NULL,
+  integrity_kind TEXT NOT NULL,
+  integrity TEXT NOT NULL,
+  source_byte_length INTEGER NOT NULL,
+  manifest_schema_version INTEGER NOT NULL,
+  plan_integrity TEXT NOT NULL,
+  workspace TEXT NOT NULL UNIQUE,
+  agent_config_digest TEXT NOT NULL,
+  agent_owned_paths_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial')
+  ),
+  added_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
