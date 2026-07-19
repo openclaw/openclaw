@@ -1466,6 +1466,55 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(deltas).toBe("final answer");
   });
 
+  it("includes accumulatedText in no-delta fallback when constraint prevents delta emission", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      // Emit a replace:true event with empty delta. This sets accumulatedText
+      // but does NOT set sawAssistantDelta because toolChoiceConstraint
+      // blocks the guard at line 1059.
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "buffered draft", delta: "", replace: true },
+      });
+      // Return empty payload text + meta that satisfies tool_choice constraint
+      // (pendingToolCalls matches get_weather) but with stopReason !== "tool_calls"
+      // so the L1172 tool_calls path is skipped and the L1274 fallback is reached.
+      return {
+        payloads: [{ text: "" }],
+        meta: {
+          stopReason: "stop",
+          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: "{}" }],
+        },
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+      tools: WEATHER_TOOL,
+      tool_choice: { type: "function", name: "get_weather" },
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    const completed = findSseEvent(events, "response.completed");
+    const completedData = JSON.parse(completed.data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    // resultPayloadText is empty (payload text is ""), so accumulatedText
+    // ("buffered draft") should be selected by the fallback chain:
+    // resultPayloadText || accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw."
+    expect(completedData.response?.output?.[0]?.content?.[0]?.text).toBe("buffered draft");
+    expect(collectSseEventTypes(events)).not.toContain("response.failed");
+    expect(text).toContain("[DONE]");
+  });
+
   it("falls back to payload text for streamed function_call responses", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
