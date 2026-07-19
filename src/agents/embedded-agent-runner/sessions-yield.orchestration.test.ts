@@ -161,7 +161,7 @@ describe("stripSessionsYieldArtifacts — trailing assistant stripping (#109638)
     // First loop removes yield interrupt + aborted assistant
     // Second loop removes the two trailing regular assistants
     expect(activeSession.agent.state.messages).toHaveLength(3);
-    const last = activeSession.agent.state.messages.at(-1) as any;
+    const last = activeSession.agent.state.messages.at(-1);
     expect(last.role).toBe("tool_result");
     expect(last.tool_use_id).toBe("t1");
   });
