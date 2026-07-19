@@ -554,7 +554,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       t("optionCard.skip"),
       true,
     );
-    if (outcome !== "rejected") {
+    if (outcome !== "rejected" && this.messages.includes(message)) {
       this.dismissedQuestions = new Set(this.dismissedQuestions).add(
         `${message.id}:${question.id}`,
       );
