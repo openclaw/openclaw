@@ -49,9 +49,10 @@ import {
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
+  getExpandedToolCardsVersion,
   persistedMessageEntryId,
   resetChatThreadState,
-  stableBooleanMapSignature,
+  setToolCardExpanded,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { DeletedMessages } from "../deleted-messages.ts";
@@ -1098,7 +1099,7 @@ function renderChatThreadContents(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
   const toggleToolCardExpanded = (toolCardId: string) => {
-    expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
+    setToolCardExpanded(props.sessionKey, toolCardId, !(expandedToolCards.get(toolCardId) ?? false));
     requestUpdate();
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
@@ -1144,7 +1145,11 @@ function renderChatThreadContents(
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-        expandedToolCards.set(messageId, !(expanded ?? expandedToolCards.get(messageId) ?? false));
+        setToolCardExpanded(
+          props.sessionKey,
+          messageId,
+          !(expanded ?? expandedToolCards.get(messageId) ?? false),
+        );
         requestUpdate();
       },
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
@@ -1200,7 +1205,7 @@ function renderChatThreadContents(
         ${renderWorkGroupSummary(item, {
           expanded: workExpanded,
           onToggle: () => {
-            expandedToolCards.set(item.key, !workExpanded);
+            setToolCardExpanded(props.sessionKey, item.key, !workExpanded);
             requestUpdate();
           },
         })}
@@ -1249,7 +1254,7 @@ function renderChatThreadContents(
     chatItems,
     locale,
     deletedChatItemsSignature(deleted, chatItems),
-    stableBooleanMapSignature(expandedToolCards),
+    getExpandedToolCardsVersion(props.sessionKey),
     getAssistantAttachmentAvailabilityRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
