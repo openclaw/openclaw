@@ -196,6 +196,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    dashboard: {
+      emoji: "📋",
+      title: "Dashboard",
+      detailKeys: ["action", "tabId", "name", "title"],
+    },
     nodes: {
       emoji: "📱",
       title: "Nodes",

@@ -4121,6 +4121,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Configuration
   - H3: Configuration reference
+  - H2: Automatic device approval
   - H2: Control UI pairing behavior
   - H2: Operator scopes header
   - H2: TLS termination and HSTS
@@ -9663,6 +9664,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Missing browser command or tool
   - H2: Profiles: openclaw, user, chrome
   - H2: Configuration
+  - H3: Tab cleanup ownership
   - H3: Screenshot vision (text-only model support)
   - H2: Use Brave or another Chromium-based browser
   - H2: Local vs remote control

@@ -157,6 +157,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.auth.allowTailscale": "Gateway Auth Allow Tailscale Identity",
   "gateway.auth.rateLimit": "Gateway Auth Rate Limit",
   "gateway.auth.trustedProxy": "Gateway Trusted Proxy Auth",
+  "gateway.auth.trustedProxy.deviceAutoApprove": "Trusted Proxy Device Auto-Approval",
+  "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
+    "Trusted Proxy Device Auto-Approval Enabled",
+  "gateway.auth.trustedProxy.deviceAutoApprove.scopes": "Trusted Proxy Device Auto-Approval Scopes",
   "gateway.trustedProxies": "Gateway Trusted Proxy CIDRs",
   "gateway.allowRealIpFallback": "Gateway Allow x-real-ip Fallback",
   "gateway.tools": "Gateway Tool Exposure Policy",

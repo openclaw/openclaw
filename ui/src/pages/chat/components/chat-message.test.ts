@@ -1229,6 +1229,39 @@ describe("grouped chat rendering", () => {
     expect(avatar?.tagName).toBe("DIV");
   });
 
+  it("renders a durable sender label in the user message metadata", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "attributed-user-group",
+      role: "user",
+      senderLabel: "alice",
+      messages: [
+        {
+          key: "attributed-user-message",
+          message: { role: "user", content: "hello", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        userName: "Local User",
+      }),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
+    ).toBe("alice");
+  });
+
   it("uses assistant senderLabel for forwarded assistant-side groups", () => {
     const container = document.createElement("div");
     const group: MessageGroup = {
