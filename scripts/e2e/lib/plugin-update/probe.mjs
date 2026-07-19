@@ -120,6 +120,15 @@ function appendBufferTail(tail, chunk, maxBytes) {
   return Buffer.concat([tail, chunk]).subarray(tail.length + chunk.length - maxBytes);
 }
 
+function decodeUtf8Suffix(buffer) {
+  // Byte caps can cut through the first multibyte character; drop only that prefix fragment.
+  let start = 0;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+    start += 1;
+  }
+  return buffer.subarray(start).toString("utf8");
+}
+
 async function readOutputEvidence(logPath) {
   let outputTail = Buffer.alloc(0);
   let scanWindow = "";
@@ -135,8 +144,7 @@ async function readOutputEvidence(logPath) {
     scanWindow = searchable.slice(-OUTPUT_SCAN_WINDOW_BYTES);
   }
   return {
-    outputTail: outputTail
-      .toString("utf8")
+    outputTail: decodeUtf8Suffix(outputTail)
       .split(/\r?\n/u)
       .slice(-OUTPUT_TAIL_LINES)
       .join("\n")
