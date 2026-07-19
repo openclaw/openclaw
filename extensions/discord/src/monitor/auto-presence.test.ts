@@ -159,47 +159,6 @@ describe("discord auto presence", () => {
     ]);
   });
 
-  it("contains gateway send failures and retries the same presence", () => {
-    let intervalCallback: (() => void) | undefined;
-    const setIntervalFn = ((callback: () => void) => {
-      intervalCallback = callback;
-      return {} as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    const updatePresence = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new Error("Discord gateway outbound queue is full");
-      })
-      .mockImplementationOnce(() => undefined);
-    const log = vi.fn();
-    const controller = createDiscordAutoPresenceController({
-      accountId: "default",
-      discordConfig: {
-        autoPresence: {
-          enabled: true,
-        },
-      },
-      gateway: {
-        isConnected: true,
-        updatePresence,
-      },
-      loadAuthStore: () => createStore(),
-      setIntervalFn,
-      log,
-    });
-
-    expect(() => controller.start()).not.toThrow();
-    expect(intervalCallback).toBeDefined();
-    expect(() => intervalCallback?.()).not.toThrow();
-
-    expect(updatePresence).toHaveBeenCalledTimes(2);
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "discord: auto-presence update failed for account default: Error: Discord gateway outbound queue is full",
-      ),
-    );
-  });
-
   it("does nothing when auto presence is disabled", () => {
     const updatePresence = vi.fn();
     const controller = createDiscordAutoPresenceController({

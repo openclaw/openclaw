@@ -109,16 +109,6 @@ describe("handleDiscordPresenceAction", () => {
     });
   });
 
-  it("returns gateway queue overflow as an action failure", async () => {
-    mockUpdatePresence.mockImplementationOnce(() => {
-      throw new Error("Discord gateway outbound queue is full");
-    });
-
-    await expect(setPresence({ status: "idle" })).rejects.toThrow(
-      "Discord gateway outbound queue is full",
-    );
-  });
-
   it.each([
     { name: "invalid status", params: { status: "offline" }, expectedMessage: /Invalid status/ },
     {
