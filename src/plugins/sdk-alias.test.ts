@@ -293,7 +293,7 @@ function writeInstalledPluginEntry(params: {
 }
 
 function createUserInstalledPluginSdkAliasFixture() {
-  const { fixture, sourcePluginEntryPath, sourceRootAlias, sourceChannelRuntimePath } =
+  const { fixture, sourcePluginEntryPath, sourceChannelRuntimePath } =
     createPluginSdkAliasTargetFixture();
   const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
   const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
@@ -312,7 +312,6 @@ function createUserInstalledPluginSdkAliasFixture() {
     externalPluginRoot,
     fixture,
     sourcePluginEntryPath,
-    sourceRootAlias,
     sourceChannelRuntimePath,
   };
 }
@@ -714,13 +713,8 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("builds plugin-sdk aliases from the module being loaded, not the loader location", () => {
-    const {
-      fixture,
-      sourceRootAlias,
-      distRootAlias,
-      sourceChannelRuntimePath,
-      distChannelRuntimePath,
-    } = createPluginSdkAliasTargetFixture();
+    const { fixture, sourceChannelRuntimePath, distChannelRuntimePath } =
+      createPluginSdkAliasTargetFixture();
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
@@ -730,7 +724,6 @@ describe("plugin sdk alias helpers", () => {
       buildPluginLoaderAliasMap(sourcePluginEntry),
     );
     expectPluginSdkAliasTargets(sourceAliases, {
-      rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
     });
 
@@ -743,7 +736,6 @@ describe("plugin sdk alias helpers", () => {
       buildPluginLoaderAliasMap(distPluginEntry),
     );
     expectPluginSdkAliasTargets(distAliases, {
-      rootAliasPath: distRootAlias,
       channelRuntimePath: distChannelRuntimePath,
     });
   });
@@ -1204,7 +1196,7 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
-    const { fixture, distRootAlias, distChannelRuntimePath } = createPluginSdkAliasTargetFixture();
+    const { fixture, distChannelRuntimePath } = createPluginSdkAliasTargetFixture();
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
@@ -1215,7 +1207,6 @@ describe("plugin sdk alias helpers", () => {
     );
 
     expectPluginSdkAliasTargets(distAliases, {
-      rootAliasPath: distRootAlias,
       channelRuntimePath: distChannelRuntimePath,
     });
   });
@@ -1732,10 +1723,9 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("builds source plugin-sdk subpath aliases through the wider source extension family", () => {
-    const { fixture, sourceRootAlias, sourceChannelRuntimePath } =
-      createPluginSdkAliasTargetFixture({
-        sourceChannelRuntimeExtension: ".mts",
-      });
+    const { fixture, sourceChannelRuntimePath } = createPluginSdkAliasTargetFixture({
+      sourceChannelRuntimeExtension: ".mts",
+    });
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
@@ -1746,7 +1736,6 @@ describe("plugin sdk alias helpers", () => {
     );
 
     expectPluginSdkAliasTargets(sourceAliases, {
-      rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
     });
   });
@@ -1757,7 +1746,6 @@ describe("plugin sdk alias helpers", () => {
       externalPluginRoot,
       fixture,
       sourcePluginEntryPath,
-      sourceRootAlias,
       sourceChannelRuntimePath,
     } = createUserInstalledPluginSdkAliasFixture();
 
@@ -1768,7 +1756,6 @@ describe("plugin sdk alias helpers", () => {
     );
 
     expectPluginSdkAliasTargets(aliases, {
-      rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
       pluginEntryPath: sourcePluginEntryPath,
     });
@@ -1780,7 +1767,6 @@ describe("plugin sdk alias helpers", () => {
       externalPluginRoot,
       fixture,
       sourcePluginEntryPath,
-      sourceRootAlias,
       sourceChannelRuntimePath,
     } = createUserInstalledPluginSdkAliasFixture();
 
@@ -1809,7 +1795,6 @@ describe("plugin sdk alias helpers", () => {
     );
 
     expectPluginSdkAliasTargets(aliases, {
-      rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
       pluginEntryPath: sourcePluginEntryPath,
     });

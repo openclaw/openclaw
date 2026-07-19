@@ -87,7 +87,7 @@ function expectProviderNormalizationResult(params: {
 describe("normalizeRegisteredProvider", () => {
   const primaryAuthRun = async () => ({ profiles: [] });
 
-  it.each([
+  const cases = [
     {
       name: "drops invalid and duplicate auth methods, and clears bad wizard method bindings",
       provider: makeProvider({
@@ -211,22 +211,11 @@ describe("normalizeRegisteredProvider", () => {
         ]);
       },
     },
-  ] as const)(
-    "$name",
-    ({
-      provider: inputProvider,
-      expectedProvider,
-      expectedDiagnostics,
-      expectedDiagnosticText,
-      assert,
-    }) => {
-      expectProviderNormalizationResult({
-        provider: inputProvider,
-        ...(expectedProvider ? { expectedProvider } : {}),
-        ...(expectedDiagnostics ? { expectedDiagnostics } : {}),
-        ...(expectedDiagnosticText ? { expectedDiagnosticText } : {}),
-        ...(assert ? { assert } : {}),
-      });
-    },
-  );
+  ] satisfies readonly (Parameters<typeof expectProviderNormalizationResult>[0] & {
+    name: string;
+  })[];
+
+  it.each(cases)("$name", (testCase) => {
+    expectProviderNormalizationResult(testCase);
+  });
 });

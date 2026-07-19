@@ -2,10 +2,6 @@
 import type { PluginCompatRecord } from "./types.js";
 
 const CHANNEL_RUNTIME_SDK_SURFACE = ["openclaw/plugin-sdk/channel", "runtime"].join("-");
-const LEGACY_CONFIG_MIGRATE_TEST_PATH = [
-  "src/commands/doctor/shared/legacy-config",
-  "migrate.test.ts",
-].join("-");
 
 type DeprecatedPluginSdkSubpathSeed = Pick<
   PluginCompatRecord,

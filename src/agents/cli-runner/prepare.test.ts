@@ -12,10 +12,7 @@ import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/g
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
-import {
-  registerContextEngine,
-  registerContextEngineForOwner,
-} from "../../context-engine/registry.js";
+import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
@@ -51,6 +48,15 @@ import type { RunCliAgentParams } from "./types.js";
 type McpLoopbackClientGrant = ReturnType<
   (typeof import("../../gateway/mcp-grant-store.js"))["mintMcpLoopbackClientGrant"]
 >;
+
+function registerTestContextEngine(
+  id: string,
+  factory: Parameters<typeof registerContextEngineForOwner>[1],
+) {
+  return registerContextEngineForOwner(id, factory, `test:${id}`, {
+    allowSameOwnerRefresh: true,
+  });
+}
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
@@ -1988,7 +1994,7 @@ describe("prepareCliRunContext", () => {
         dispose,
       };
     });
-    registerContextEngine(engineId, factory);
+    registerTestContextEngine(engineId, factory);
     setCliRunnerPrepareTestDeps({
       resolveOpenClawReferencePaths: vi.fn(async () => {
         throw new Error("reference path lookup failed");
@@ -2079,7 +2085,7 @@ describe("prepareCliRunContext", () => {
   it("rejects CLI runs for context engines that require pre-prompt assembly", async () => {
     const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-unsupported-engine-${Date.now().toString(36)}`;
-    registerContextEngine(engineId, (): ContextEngine => {
+    registerTestContextEngine(engineId, (): ContextEngine => {
       return {
         info: {
           id: engineId,
@@ -2139,7 +2145,7 @@ describe("prepareCliRunContext", () => {
         compact: vi.fn(async () => ({ ok: true, compacted: false })),
       };
     });
-    registerContextEngine(engineId, factory);
+    registerTestContextEngine(engineId, factory);
     getRuntimeConfigMock.mockReturnValue(runtimeConfig);
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,

@@ -522,9 +522,11 @@ function createManagedRestartSequenceHarness(
   } as OpenClawConfig;
   const invalidNoopConfig = {
     ...deferredConfig,
-    tools: {
-      web: {
-        search: { apiKey: missingHotSecret },
+    plugins: {
+      entries: {
+        brave: {
+          config: { webSearch: { apiKey: missingHotSecret } },
+        },
       },
     },
   } as OpenClawConfig;

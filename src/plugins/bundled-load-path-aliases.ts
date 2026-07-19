@@ -1,6 +1,5 @@
 // Resolves bundled plugin load-path aliases for package output.
 import path from "node:path";
-import { isPathInside } from "./path-safety.js";
 
 /** Alias class for current packaged paths and legacy bundled extension paths. */
 type BundledPluginLoadPathAliasKind = "current" | "legacy";

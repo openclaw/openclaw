@@ -34,13 +34,11 @@ import {
   classifySecretOwnerDegradationState,
   warnDegradedSecretOwner,
 } from "./runtime-owner-assignments.js";
-import { digestRuntimeWebOwnerContract } from "./runtime-owner-contract.js";
 import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
 import {
-  ensureObject,
   hasConfiguredSecretRef,
   isRecord,
   resolveRuntimeWebProviderSurface,
@@ -732,10 +730,6 @@ export async function resolveRuntimeWebTools(params: {
 
   const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
   const sourceWeb = isRecord(sourceTools?.web) ? sourceTools.web : undefined;
-  const resolvedTools = isRecord(params.resolvedConfig.tools)
-    ? params.resolvedConfig.tools
-    : undefined;
-  const resolvedWeb = isRecord(resolvedTools?.web) ? resolvedTools.web : undefined;
   let hasCustomWebSearchRisk: Promise<boolean> | undefined;
   const getHasCustomWebSearchRisk = (): Promise<boolean> => {
     hasCustomWebSearchRisk ??= hasCustomWebProviderPluginRisk({

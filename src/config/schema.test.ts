@@ -599,8 +599,8 @@ describe("config schema", () => {
     }
   });
 
-  it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
+  it("rejects removed Firecrawl config from the core web fetch schema", () => {
+    const result = ToolsSchema.safeParse({
       web: {
         fetch: {
           readability: true,
@@ -616,15 +616,7 @@ describe("config schema", () => {
       },
     });
 
-    expect(parsed?.web?.fetch?.readability).toBe(true);
-    expect(parsed?.web?.fetch?.firecrawl).toEqual({
-      enabled: true,
-      apiKey: "firecrawl-test-key",
-      baseUrl: "https://api.firecrawl.dev",
-      onlyMainContent: true,
-      maxAgeMs: 60_000,
-      timeoutSeconds: 15,
-    });
+    expect(result.success).toBe(false);
   });
 
   it("keeps top-level subagent tools schema limited to tool policy", () => {
@@ -1006,29 +998,6 @@ describe("config schema", () => {
       expect(requestIssue?.path).toEqual(["media", "image", "models", 0, "request"]);
       const requestKeys = (requestIssue as { keys?: unknown } | undefined)?.keys;
       expect(requestKeys).toEqual(["allowPrivateNetwork"]);
-    }
-  });
-
-  it("rejects unknown keys inside web fetch firecrawl config", () => {
-    const result = ToolsSchema.safeParse({
-      web: {
-        fetch: {
-          firecrawl: {
-            enabled: true,
-            nope: true,
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const firecrawlIssue = result.error.issues.find(
-        (issue) => JSON.stringify(issue.path) === JSON.stringify(["web", "fetch", "firecrawl"]),
-      );
-      expect(firecrawlIssue?.path).toEqual(["web", "fetch", "firecrawl"]);
-      const firecrawlKeys = (firecrawlIssue as { keys?: unknown } | undefined)?.keys;
-      expect(firecrawlKeys).toEqual(["nope"]);
     }
   });
 

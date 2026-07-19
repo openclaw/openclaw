@@ -30,7 +30,6 @@ import {
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
-  DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
   type PluginRegistryInstallMigrationParams,
@@ -647,16 +646,6 @@ export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<OpenClawConfig> {
   const preflight = preflightPluginRegistryInstallMigration(params);
-  for (const warning of preflight.deprecationWarnings) {
-    note(warning, "Plugin registry");
-  }
-  if (preflight.action === "disabled") {
-    note(
-      `${DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV} is set; skipping plugin registry repair.`,
-      "Plugin registry",
-    );
-    return params.config;
-  }
 
   const migrationParams = {
     ...params,

@@ -108,7 +108,10 @@ describe("plugin compatibility registry", () => {
 
   it("keeps shipped public contracts pending when live callers still depend on them", () => {
     const records = listPluginCompatRecords().filter(
-      (record) => record.status === "removal-pending" && record.removeAfter <= "2026-07-30",
+      (record) =>
+        record.status === "removal-pending" &&
+        record.removeAfter !== undefined &&
+        record.removeAfter <= "2026-07-30",
     );
 
     expect(records.map((record) => record.code)).toEqual([

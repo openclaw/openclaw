@@ -51,8 +51,6 @@ type ChannelActionAvailabilityState =
   | { kind: "disabled" }
   | { kind: "unsupported" };
 
-type ChannelApprovalInitiatingSurfaceState = ChannelActionAvailabilityState;
-
 type ChannelApprovalForwardTarget = {
   channel: string;
   to: string;
