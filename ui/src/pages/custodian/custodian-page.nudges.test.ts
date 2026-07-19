@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -640,7 +640,9 @@ describe("custodian page nudges", () => {
         reply: "Everything is healthy.",
         action: "none",
       })
-      .mockRejectedValueOnce(new Error("Request failed"));
+      .mockRejectedValueOnce(
+        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
+      );
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -663,6 +665,79 @@ describe("custodian page nudges", () => {
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
       "Telegram authentication degraded",
     );
+  });
+
+  it("consumes a delivered nudge whose reply becomes stale during reconnect", async () => {
+    let resolveNudge!: (value: { sessionId: string; reply: string; action: "none" }) => void;
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Everything is healthy.",
+        action: "none",
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNudge = resolve;
+          }),
+      );
+    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const degradedHealth = {
+      channels: { telegram: { configured: true, healthState: "stale-socket" } },
+    };
+
+    emitGatewayEvent({ event: "health", payload: degradedHealth });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    setGatewaySnapshot({ connected: false, reconnecting: true });
+    await page.updateComplete;
+    setGatewaySnapshot({ connected: true, reconnecting: false });
+    await page.updateComplete;
+    resolveNudge({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Telegram checked.",
+      action: "none",
+    });
+
+    await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
+    emitGatewayEvent({ event: "health", payload: degradedHealth });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+  });
+
+  it("consumes a transmitted nudge when its delivery outcome is unknown", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Everything is healthy.",
+        action: "none",
+      })
+      .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+        options?.onSent?.();
+        return Promise.reject(new Error("gateway closed"));
+      });
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const degradedHealth = {
+      channels: { telegram: { configured: true, healthState: "stale-socket" } },
+    };
+
+    emitGatewayEvent({ event: "health", payload: degradedHealth });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
+
+    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+    emitGatewayEvent({ event: "health", payload: degradedHealth });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
   it("keeps a newer lower-severity failure when an earlier nudge send succeeds", async () => {
