@@ -313,25 +313,29 @@ export function resolveSpawnAdmission(params: {
   const maxSpawnDepth =
     params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const collector = params.collector;
-  const childAdmission = resolveChildAdmission({
-    callerDepth,
-    maxSpawnDepth,
-    activeChildren:
-      collector?.liveChildren ??
-      countActiveRunsForSession(params.requesterSessionKey, { collect: false }) +
-        (params.additionalActiveChildren ?? 0),
-    maxActiveChildren:
-      collector?.maxChildrenPerGroup ??
-      params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
-      DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
-    ...(collector
-      ? {
-          collect: true,
-          totalChildren: collector.totalChildren,
-          maxTotalChildren: collector.maxTotalPerGroup,
-        }
-      : { collect: false }),
-  });
+  // Build each mode's params in its own branch so collector counts can never
+  // pair with the announce cap (or vice versa) through fallback chaining.
+  const childAdmission = collector
+    ? resolveChildAdmission({
+        callerDepth,
+        maxSpawnDepth,
+        collect: true,
+        activeChildren: collector.liveChildren,
+        maxActiveChildren: collector.maxChildrenPerGroup,
+        totalChildren: collector.totalChildren,
+        maxTotalChildren: collector.maxTotalPerGroup,
+      })
+    : resolveChildAdmission({
+        callerDepth,
+        maxSpawnDepth,
+        collect: false,
+        activeChildren:
+          countActiveRunsForSession(params.requesterSessionKey, { collect: false }) +
+          (params.additionalActiveChildren ?? 0),
+        maxActiveChildren:
+          params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
+          DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
+      });
   if (!childAdmission.ok) {
     return childAdmission;
   }
