@@ -26,8 +26,9 @@ export async function handleUserProfileAvatarHttpRequest(
   if (profileId === undefined) {
     return false;
   }
-  if (req.method !== "GET") {
-    sendMethodNotAllowed(res, "GET");
+  const method = req.method;
+  if (method !== "GET" && method !== "HEAD") {
+    sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
@@ -49,7 +50,7 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   const etag = formatUserProfileAvatarEtag(avatar.sha256, avatar.mime);
-  if (req.headers["if-none-match"] === etag) {
+  if (ifNoneMatchMatches(req.headers["if-none-match"], etag)) {
     res.writeHead(304, { ETag: etag });
     res.end();
     return true;
@@ -60,6 +61,19 @@ export async function handleUserProfileAvatarHttpRequest(
     "Cache-Control": "private, max-age=0, must-revalidate",
     ETag: etag,
   });
-  res.end(avatar.bytes);
+  res.end(method === "HEAD" ? undefined : avatar.bytes);
   return true;
+}
+
+// RFC 9110 §13.1.2 weak comparison: wildcard, comma-separated lists, and W/ prefixes
+// all revalidate; exact-string matching alone would miss proxy-normalized headers.
+function ifNoneMatchMatches(header: string | string[] | undefined, etag: string): boolean {
+  const value = Array.isArray(header) ? header.join(",") : header;
+  if (!value) {
+    return false;
+  }
+  return value.split(",").some((candidate) => {
+    const tag = candidate.trim();
+    return tag === "*" || tag === etag || (tag.startsWith("W/") && tag.slice(2) === etag);
+  });
 }

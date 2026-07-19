@@ -97,4 +97,49 @@ describe("profile avatar HTTP endpoint", () => {
 
     expect(getProfileAvatar).toHaveBeenCalledWith("profile-1");
   });
+
+  it("serves HEAD as GET without a body", async () => {
+    getProfileAvatar.mockReturnValue({
+      bytes: new Uint8Array([1, 2, 3]),
+      mime: "image/png",
+      sha256: "head-hash",
+      updatedAt: 42,
+    });
+    const res = response();
+
+    await handleUserProfileAvatarHttpRequest(
+      { method: "HEAD", url: "/ignored-by-handler", headers: {} } as unknown as IncomingMessage,
+      res,
+      "/api/users/profile-1/avatar",
+      { auth: {} as never },
+    );
+
+    expect(res.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({ "Content-Type": "image/png", ETag: '"head-hash-png"' }),
+    );
+    expect(res.end).toHaveBeenCalledWith(undefined);
+  });
+
+  it.each(['W/"current-hash-png"', '"other", "current-hash-png"', "*"])(
+    "revalidates If-None-Match form %s",
+    async (header) => {
+      getProfileAvatar.mockReturnValue({
+        bytes: new Uint8Array([1]),
+        mime: "image/png",
+        sha256: "current-hash",
+        updatedAt: 42,
+      });
+      const res = response();
+
+      await handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler", { "if-none-match": header }),
+        res,
+        "/api/users/profile-1/avatar",
+        { auth: {} as never },
+      );
+
+      expect(res.writeHead).toHaveBeenCalledWith(304, { ETag: '"current-hash-png"' });
+    },
+  );
 });
