@@ -77,6 +77,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   private earlierBoundaryAfterId: number | null = null;
   private lastHelloDeviceToken = "";
   private eventNudgeClosed = false;
+  private abandonedTurnOutcomeUnknown = false;
   private historyLoaded = false;
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
@@ -158,6 +159,20 @@ export class CustodianPage extends OpenClawLightDomElement {
     );
   }
 
+  /**
+   * A user turn abandoned mid-flight may already have acted on the gateway.
+   * The unknown-outcome warning must survive rotations and reconnects
+   * independently of retry state (raw text is never retained) until the
+   * operator supersedes it with a new message.
+   */
+  private abandonPendingUserTurn(pendingParams: SystemAgentChatParams | null): void {
+    if (pendingParams?.message === undefined) {
+      return;
+    }
+    this.retryParams = null;
+    this.abandonedTurnOutcomeUnknown = true;
+  }
+
   private rotateVolatileSession(
     client: GatewayBrowserClient,
     variant: "onboarding" | "new-agent" | "caretaker",
@@ -216,6 +231,9 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.chatAvailable = false;
     if (variantChanged || ownershipChanged) {
       this.eventNudge = null;
+      // A different operator or mode must not inherit the previous context's
+      // abandoned-turn warning; same-ownership paths below preserve it.
+      this.abandonedTurnOutcomeUnknown = false;
       this.sessionStarted = false;
       this.clearConversation();
     } else if (client && clientReplaced) {
@@ -223,24 +241,19 @@ export class CustodianPage extends OpenClawLightDomElement {
       // create a fresh volatile session until the new client advertises chat.
       if (!chatSupported) {
         this.sessionStarted = false;
+        this.abandonPendingUserTurn(pendingParams);
         this.error = t("custodian.unsupportedGateway");
         return;
       }
       this.chatAvailable = true;
       this.rotateVolatileSession(client, variant);
-      if (requestWasPending && pendingParams?.message !== undefined) {
-        // The abandoned user turn may have acted before the transport changed;
-        // keep that unknown outcome visible without retaining replayable text.
-        this.error = t("custodian.connectionChanged");
-      }
+      this.abandonPendingUserTurn(pendingParams);
       return;
     } else if (requestWasPending) {
-      this.error = t("custodian.connectionChanged");
-      if (pendingParams?.message !== undefined) {
-        // User turns are never replayable, and a client swap must not retain
-        // their raw text while the abandoned request remains unresolved.
-        this.retryParams = null;
+      if (pendingParams?.message === undefined) {
+        this.error = t("custodian.connectionChanged");
       }
+      this.abandonPendingUserTurn(pendingParams);
     }
     if (!client) {
       return;
@@ -252,6 +265,8 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.chatAvailable = true;
     if (this.sessionStarted) {
       if (!this.retryParams) {
+        // The abandoned-turn warning renders from its own flag; transient
+        // reconnects only clear stale request errors here.
         this.error = requestWasPending ? this.error : null;
       }
       // This rendered thread owns live questions and turns for the active
@@ -459,6 +474,8 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
+    // A new operator turn supersedes any abandoned-turn unknown-outcome warning.
+    this.abandonedTurnOutcomeUnknown = false;
     this.retireQuestions();
     this.messages = [
       ...this.messages,
@@ -660,7 +677,13 @@ export class CustodianPage extends OpenClawLightDomElement {
                 </div>
               </div>`
             : nothing}
-          ${this.error
+          ${this.abandonedTurnOutcomeUnknown
+            ? html`<div class="custodian__error" role="alert">
+                <span>${t("custodian.connectionChanged")}</span>
+              </div>`
+            : nothing}
+          ${this.error &&
+          !(this.abandonedTurnOutcomeUnknown && this.error === t("custodian.connectionChanged"))
             ? html`<div class="custodian__error" role="alert">
                 <span>${this.error}</span>
                 ${this.activeClient && this.chatAvailable && this.canRetry()
