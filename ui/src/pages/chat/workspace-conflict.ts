@@ -10,21 +10,39 @@ export type WorkspaceResultConflict = {
   totalCount?: number;
 };
 
-function isSafeWorkspaceConflictPath(entryPath: string): boolean {
+function hasTerminalControl(entryPath: string): boolean {
   // Copied commands must not preserve terminal controls: bracketed-paste terminators
   // can turn a displayed filename into executed shell input.
-  const hasTerminalControl = Array.from(entryPath).some((character) => {
+  return Array.from(entryPath).some((character) => {
     const codePoint = character.codePointAt(0);
     return (
       codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
     );
   });
-  if (!entryPath || entryPath.startsWith("/") || hasTerminalControl) {
+}
+
+function isWorkspaceConflictPath(entryPath: string): boolean {
+  if (!entryPath || entryPath.startsWith("/") || entryPath.includes("\0")) {
     return false;
   }
   return entryPath
     .split("/")
     .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+export function workspaceConflictPathForDisplay(entryPath: string): string {
+  return Array.from(entryPath)
+    .map((character) => {
+      if (character === "\\") {
+        return "\\\\";
+      }
+      const codePoint = character.codePointAt(0);
+      return codePoint !== undefined &&
+        (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+        ? `\\u{${codePoint.toString(16).padStart(4, "0")}}`
+        : character;
+    })
+    .join("");
 }
 
 function normalizeWorkspaceResultConflict(value: unknown): WorkspaceResultConflict | undefined {
@@ -34,7 +52,7 @@ function normalizeWorkspaceResultConflict(value: unknown): WorkspaceResultConfli
   }
   const paths = record.paths.filter(
     (entryPath): entryPath is string =>
-      typeof entryPath === "string" && isSafeWorkspaceConflictPath(entryPath),
+      typeof entryPath === "string" && isWorkspaceConflictPath(entryPath),
   );
   if (
     paths.length !== record.paths.length ||
@@ -90,11 +108,16 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-export function workspaceConflictGitCommands(conflict: WorkspaceResultConflict): {
-  inspect: string;
-  takeCloud: string;
-} {
-  const entryPath = conflict.paths[0] ?? "";
+export function workspaceConflictGitCommands(conflict: WorkspaceResultConflict):
+  | {
+      inspect: string;
+      takeCloud: string;
+    }
+  | undefined {
+  const entryPath = conflict.paths.find((candidate) => !hasTerminalControl(candidate));
+  if (!entryPath) {
+    return undefined;
+  }
   const stagedPath = shellQuote(`${conflict.stagedResultRef}:${entryPath}`);
   const stagedRef = shellQuote(conflict.stagedResultRef);
   const literalPathspec = shellQuote(`:(top,literal)${entryPath}`);

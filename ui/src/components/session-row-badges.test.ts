@@ -155,4 +155,13 @@ describe("session row placement badges", () => {
     expect(badge?.dataset.workspaceConflicts).toBe("2");
     expect(badge?.getAttribute("title")).toBe("Cloud worker: reclaimed · 2 workspace conflicts");
   });
+
+  it("renders descendant conflict attention without claiming a parent placement state", () => {
+    renderBadges(undefined, 2);
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.placementState).toBeUndefined();
+    expect(badge?.dataset.workspaceConflicts).toBe("2");
+    expect(badge?.getAttribute("title")).toBe("Cloud worker children: 2 workspace conflicts");
+  });
 });

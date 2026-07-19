@@ -655,6 +655,8 @@ export const en: TranslationMap = {
     cloudWorkerPlacement: "Cloud worker: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 workspace conflict",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} workspace conflicts",
+    cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
+    cloudWorkerDescendantConflicts: "Cloud worker children: {count} workspace conflicts",
     renameSession: "Rename thread",
     renameSessionPrompt: "Rename thread",
     renameSessionMenu: "Rename…",
@@ -3762,6 +3764,8 @@ export const en: TranslationMap = {
       copyTakeCommand: "Copy take-cloud command",
       commandHelp:
         "Run these in Bash or zsh (Git Bash on Windows). If inspect says the path does not exist, the cloud deleted it; verify and remove the local path manually. If checkout reports a file/directory conflict, move or remove the blocking local path, then retry. If the staged ref is missing, the notice is stale; do not change the local path.",
+      commandsUnavailable:
+        "This filename contains terminal control characters, so OpenClaw will not build a copyable shell command for it. Inspect the staged ref directly and enter the path manually with care.",
       dismiss: "Dismiss workspace conflict notice",
       eventSender: "Cloud workspace",
       eventTitleOne: "Cloud result applied with 1 conflict",

@@ -45,7 +45,10 @@ import {
 } from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
-import { workspaceResultConflictFromTranscript } from "./workspace-conflict.ts";
+import {
+  workspaceConflictPathForDisplay,
+  workspaceResultConflictFromTranscript,
+} from "./workspace-conflict.ts";
 
 const registeredAttachmentPayloads = new Map<
   string,
@@ -817,20 +820,45 @@ describe("cloud workspace conflict notice", () => {
   });
 
   it.each(["\u001b[201~echo injected\n", "\r", "\u007f", "\u0085"])(
-    "rejects terminal control bytes before building copyable commands (%j)",
+    "keeps terminal-control paths visible without building copyable commands (%j)",
     (controlSequence) => {
-      expect(
-        workspaceResultConflictFromTranscript({
-          role: "custom",
-          customType: "cloud-workspace-conflict",
-          details: {
-            paths: [`src/${controlSequence}unsafe.ts`],
-            stagedResultRef: "refs/openclaw/worker-results/claim-unsafe",
-          },
-        }),
-      ).toBeUndefined();
+      const entryPath = `src/${controlSequence}unsafe.ts`;
+      const normalizedConflict = workspaceResultConflictFromTranscript({
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        details: {
+          paths: [entryPath],
+          stagedResultRef: "refs/openclaw/worker-results/claim-unsafe",
+        },
+      });
+      expect(normalizedConflict).toBeDefined();
+      const container = renderChatView({ workspaceConflict: normalizedConflict });
+      expect(container.querySelector(".chat-workspace-conflict-paths code")?.textContent).toBe(
+        workspaceConflictPathForDisplay(entryPath),
+      );
+      expect(container.querySelector(".chat-workspace-conflict-commands")).toBeNull();
+      expect(container.textContent).toContain("will not build a copyable shell command");
     },
   );
+
+  it("builds recovery commands for the first shell-safe conflicted path", () => {
+    const normalizedConflict = workspaceResultConflictFromTranscript({
+      role: "custom",
+      customType: "cloud-workspace-conflict",
+      details: {
+        paths: ["src/unsafe\nname.ts", "src/safe.ts"],
+        stagedResultRef: "refs/openclaw/worker-results/claim-mixed",
+      },
+    });
+    const container = renderChatView({ workspaceConflict: normalizedConflict });
+    const commands = [...container.querySelectorAll(".chat-workspace-conflict-commands code")].map(
+      (element) => element.textContent,
+    );
+    expect(commands).toEqual([
+      "git show 'refs/openclaw/worker-results/claim-mixed:src/safe.ts'",
+      "git checkout 'refs/openclaw/worker-results/claim-mixed' -- ':(top,literal)src/safe.ts'",
+    ]);
+  });
 });
 
 describe("chat conversation width", () => {

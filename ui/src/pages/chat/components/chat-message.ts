@@ -62,6 +62,7 @@ import type { PlanStatus } from "../tool-stream.ts";
 import {
   visibleWorkspaceConflictPaths,
   workspaceConflictCount,
+  workspaceConflictPathForDisplay,
   workspaceResultConflictFromTranscript,
   type WorkspaceResultConflict,
 } from "../workspace-conflict.ts";
@@ -2708,7 +2709,10 @@ function renderWorkspaceConflictTranscriptMessage(
         </div>
         <p>${t("chat.workspaceConflict.eventDescription")}</p>
         <ul class="chat-workspace-conflict-paths">
-          ${visible.paths.map((entryPath) => html`<li><code>${entryPath}</code></li>`)}
+          ${visible.paths.map(
+            (entryPath) =>
+              html`<li><code>${workspaceConflictPathForDisplay(entryPath)}</code></li>`,
+          )}
         </ul>
         ${visible.remaining > 0
           ? html`<div class="chat-workspace-conflict-more">

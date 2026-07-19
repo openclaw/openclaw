@@ -259,6 +259,29 @@ describe("cloud workspace conflict transcript messages", () => {
     expect(card.querySelector(".chat-text")).toBeNull();
     expect(container.querySelector(".chat-sender-name")?.textContent).toBe("Cloud workspace");
   });
+
+  it("renders terminal-control filenames as escaped durable history", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "fallback summary",
+        details: {
+          paths: ["src/line\nbreak.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-control",
+        },
+        timestamp: 1,
+      },
+      "custom",
+    );
+
+    expect(container.querySelector(".chat-workspace-conflict-paths code")?.textContent).toBe(
+      "src/line\\u{000a}break.ts",
+    );
+    expect(container.textContent).toContain("refs/openclaw/worker-results/claim-control");
+  });
 });
 
 function createAssistantCanvasBlock(params: {
