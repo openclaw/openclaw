@@ -23,7 +23,7 @@ export function requireRecord(value: unknown, label: string): Record<string, unk
   return value as Record<string, unknown>;
 }
 
-export type MockWithCalls = { mock: { calls: unknown[][] } };
+type MockWithCalls = { mock: { calls: unknown[][] } };
 
 export function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
   const call = mock.mock.calls[0];
@@ -50,7 +50,7 @@ export function expectRecordFields(
   }
 }
 
-export function expectAckReactionRuntimeOptions(
+function expectAckReactionRuntimeOptions(
   options: unknown,
   params?: {
     accountId?: string;
@@ -87,7 +87,7 @@ export function requireReactionCall(
   return call;
 }
 
-export function expectReactionCallAt(
+function expectReactionCallAt(
   mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
   index: number,
   emoji: string,

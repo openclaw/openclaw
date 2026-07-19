@@ -230,7 +230,7 @@ export const getSessionEntry = configSessionsMocks.getSessionEntry;
 export const readLatestAssistantTextByIdentity =
   configSessionsMocks.readLatestAssistantTextByIdentity;
 export const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
-export const resolveStorePath = configSessionsMocks.resolveStorePath;
+const resolveStorePath = configSessionsMocks.resolveStorePath;
 const createDiscordRestClientSpy = vi.hoisted(() =>
   vi.fn<
     (params: unknown) => {
@@ -250,11 +250,11 @@ export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
 export const recordInboundSessionForTest = recordInboundSession;
 export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
-export let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
-export let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-export let threadBindingTesting: typeof import("./thread-bindings.js").testing;
+let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
+let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
+let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
-export let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
+let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
 export let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
 
