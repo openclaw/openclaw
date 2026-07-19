@@ -20,7 +20,6 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   kickSessionHistoryDiskBudgetMaintenance,
-  resetSessionHistoryBudgetKicksForTests,
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -294,7 +293,6 @@ describe("kickSessionHistoryDiskBudgetMaintenance", () => {
   it("throttles repeat kicks and skips warn mode entirely", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-history-kick-"));
     const storePath = path.join(tempDir, "sessions.json");
-    resetSessionHistoryBudgetKicksForTests();
     const maintenance = {
       mode: "warn",
       maxDiskBytes: 1,
@@ -325,7 +323,6 @@ describe("kickSessionHistoryDiskBudgetMaintenance", () => {
     // Give the fire-and-forget pass a tick to settle; an under-budget store
     // must leave every session untouched.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    resetSessionHistoryBudgetKicksForTests();
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

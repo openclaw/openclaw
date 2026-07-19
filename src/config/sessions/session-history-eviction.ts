@@ -63,15 +63,10 @@ function createPhysicalBudgetResult(params: {
   };
 }
 
-export type SessionHistoryDiskBudgetInspection = {
-  diskBudget: SessionDiskBudgetSweepResult | null;
-  wouldMutate: boolean;
-};
-
 /** Reports the same physical total enforce mode compares, without projecting logical row bytes. */
 export async function inspectSqliteSessionHistoryDiskBudget(
   params: SessionHistoryDiskBudgetParams,
-): Promise<SessionHistoryDiskBudgetInspection> {
+): Promise<{ diskBudget: SessionDiskBudgetSweepResult | null; wouldMutate: boolean }> {
   const { highWaterBytes, maxDiskBytes } = params.maintenance;
   if (maxDiskBytes == null || highWaterBytes == null) {
     return { diskBudget: null, wouldMutate: false };
@@ -107,7 +102,7 @@ export async function inspectSqliteSessionHistoryDiskBudget(
   return { diskBudget, wouldMutate: candidates.length > 0 };
 }
 
-export function collectProtectedHistoricalSessionIds(params: {
+function collectProtectedHistoricalSessionIds(params: {
   database: OpenClawAgentDatabase;
   storePath: string;
 }): Set<string> {
@@ -206,10 +201,6 @@ const budgetKickStateByStore = new Map<
   string,
   { lastCheckAt: number; running: boolean; pendingForce: boolean }
 >();
-
-export function resetSessionHistoryBudgetKicksForTests(): void {
-  budgetKickStateByStore.clear();
-}
 
 /** Fire-and-forget budget pass from the ordinary entry-write maintenance seam. */
 export function kickSessionHistoryDiskBudgetMaintenance(params: {

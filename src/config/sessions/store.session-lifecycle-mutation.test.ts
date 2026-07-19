@@ -203,17 +203,18 @@ describe("session store lifecycle mutations", () => {
     const sessionIds = ["delete-history-one", "delete-history-two", "delete-history-three"];
     await replaceSessionEntry(
       { sessionKey, storePath },
-      { sessionId: sessionIds[0], updatedAt: 1 },
+      { sessionId: "delete-history-one", updatedAt: 1 },
     );
     for (const [index, sessionId] of sessionIds.entries()) {
       await replaceSqliteTranscriptEvents({ sessionId, sessionKey, storePath }, [
         createSearchableTranscriptEvent(sessionId, `deleteforever generation ${index + 1}`),
       ]);
-      if (index < sessionIds.length - 1) {
+      const nextSessionId = sessionIds[index + 1];
+      if (nextSessionId) {
         await resetSessionEntryLifecycle({
           storePath,
           target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          buildNextEntry: () => ({ sessionId: sessionIds[index + 1], updatedAt: index + 2 }),
+          buildNextEntry: () => ({ sessionId: nextSessionId, updatedAt: index + 2 }),
         });
       }
     }
