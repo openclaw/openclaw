@@ -427,7 +427,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   private async runRefreshLoop(): Promise<void> {
-    let retryDelayMs = 1_000;
+    const retry = { delayMs: 1_000 };
     while (this.refreshRequested) {
       this.refreshRequested = false;
       const changedWidgets = new Set(this.changedWidgets);
@@ -450,7 +450,7 @@ export class GatewayBoardProvider implements BoardProvider {
           continue;
         }
         this.setSnapshot(snapshot, changedWidgets);
-        retryDelayMs = 1_000;
+        retry.delayMs = 1_000;
       } catch {
         this.refreshRequested = true;
         if (client !== this.client) {
@@ -459,10 +459,10 @@ export class GatewayBoardProvider implements BoardProvider {
         for (const name of changedWidgets) {
           this.changedWidgets.add(name);
         }
-        await this.waitForRetry(retryDelayMs);
+        const delayMs = retry.delayMs;
         // Carry backoff across failed loop iterations; successful refreshes reset it above.
-        // oxlint-disable-next-line eslint/no-useless-assignment
-        retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+        retry.delayMs = Math.min(delayMs * 2, 30_000);
+        await this.waitForRetry(delayMs);
         continue;
       }
     }

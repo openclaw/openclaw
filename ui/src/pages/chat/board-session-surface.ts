@@ -5,8 +5,8 @@ import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
 export type BoardChatDockSize = {
   height: number;
@@ -14,7 +14,7 @@ export type BoardChatDockSize = {
 };
 
 type BoardSessionSurfaceProps = {
-  snapshot: BoardSnapshot;
+  snapshot: BoardViewSnapshot;
   sessions: readonly GatewaySessionRow[];
   activeTabId: string;
   dock: BoardTab["chatDock"];

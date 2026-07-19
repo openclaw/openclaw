@@ -7,7 +7,7 @@ import { toCssPlacement } from "../../lib/board/grid.ts";
 import type {
   BoardGrantDecision,
   BoardTab,
-  BoardWidget,
+  BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { getBuiltinWidgetRenderer } from "../../lib/board/widgets/index.ts";
@@ -24,19 +24,19 @@ const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
-  movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
-  resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
-  moveToTab: (widget: BoardWidget, tabId: string) => Promise<void>;
-  resizeTo: (widget: BoardWidget, w: number, h: number) => Promise<void>;
-  remove: (widget: BoardWidget) => Promise<void>;
-  nudge: (widget: BoardWidget, direction: BoardGridDirection) => Promise<void>;
-  focus: (widget: BoardWidget, direction: BoardGridDirection) => void;
+  movePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
+  resizePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
+  moveToTab: (widget: BoardViewWidget, tabId: string) => Promise<void>;
+  resizeTo: (widget: BoardViewWidget, w: number, h: number) => Promise<void>;
+  remove: (widget: BoardViewWidget) => Promise<void>;
+  nudge: (widget: BoardViewWidget, direction: BoardGridDirection) => Promise<void>;
+  focus: (widget: BoardViewWidget, direction: BoardGridDirection) => void;
   focusChanged: (name: string) => void;
   frameLoadFailed: (name: string) => Promise<void>;
 };
 
 class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
-  @property({ attribute: false }) widget?: BoardWidget;
+  @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
@@ -109,7 +109,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleMenuSelect(
     event: CustomEvent<{ item: { value?: string } }>,
-    widget: BoardWidget,
+    widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
     const value = event.detail.item.value;
@@ -130,7 +130,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
   }
 
-  private renderMenu(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderMenu(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     const otherTabs = this.tabs.filter((tab) => tab.tabId !== widget.tabId);
     return html`
       <wa-dropdown
@@ -186,7 +186,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderPending(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderPending(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
     return html`
       <div class="board-widget__grant board-widget__grant--pending" data-test-id="board-pending">
         <div class="board-widget__grant-mark" aria-hidden="true">!</div>
@@ -221,7 +224,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderRejected(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderRejected(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
     return html`
       <div class="board-widget__grant board-widget__grant--rejected" data-test-id="board-rejected">
         <strong>${t("board.widget.rejected")}</strong>
@@ -238,7 +244,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private refreshFailedFrame(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): void {
+  private refreshFailedFrame(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): void {
     this.frameProbeGeneration += 1;
     const failureKey = `${widget.name}:${widget.revision}`;
     if (this.frameFailureKey !== failureKey) {
@@ -257,7 +263,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private verifyFrameAuthorization(
     event: Event,
-    widget: BoardWidget,
+    widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
     const frame = event.currentTarget;
@@ -294,7 +300,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       });
   }
 
-  private renderFrame(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderFrame(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
     if (!this.widgetFrameUrl) {
       throw new Error(t("board.widget.frameResolverMissing"));
     }
@@ -314,7 +323,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderBody(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     if (widget.grantState === "pending") {
       return this.renderPending(widget, callbacks);
     }
@@ -364,7 +373,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleKeyDown(
     event: KeyboardEvent,
-    widget: BoardWidget,
+    widget: BoardViewWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
     if (event.target !== event.currentTarget || widget.readOnly) {

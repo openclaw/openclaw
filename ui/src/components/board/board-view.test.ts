@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { BoardSnapshot, BoardViewCallbacks, BoardWidget } from "../../lib/board/view-types.ts";
+import type {
+  BoardViewCallbacks,
+  BoardViewSnapshot,
+  BoardViewWidget,
+} from "../../lib/board/view-types.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import "./board-view.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
 
-function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
+function boardWidget(overrides: Partial<BoardViewWidget> = {}): BoardViewWidget {
   return {
     name: "alpha",
     tabId: "main",
@@ -22,7 +26,7 @@ function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   };
 }
 
-function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
+function snapshot(overrides: Partial<BoardViewSnapshot> = {}): BoardViewSnapshot {
   return {
     sessionKey: "agent:main:test",
     revision: 1,
@@ -82,7 +86,7 @@ async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidget
 
 async function mount(
   options: {
-    snapshot?: BoardSnapshot;
+    snapshot?: BoardViewSnapshot;
     activeTabId?: string;
     callbacks?: BoardViewCallbacks;
     widgetFrameUrl?: (name: string, revision: number) => string;

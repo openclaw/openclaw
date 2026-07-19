@@ -1,22 +1,17 @@
-import type {
-  BoardOp,
-  BoardSnapshot as GatewayBoardSnapshot,
-  BoardTab,
-  BoardWidget as GatewayBoardWidget,
-} from "@openclaw/gateway-protocol";
+import type { BoardOp, BoardSnapshot, BoardTab, BoardWidget } from "@openclaw/gateway-protocol";
 
-export type { BoardOp, BoardTab };
+export type { BoardOp, BoardSnapshot, BoardTab, BoardWidget };
 export type BoardGrantDecision = "granted" | "rejected";
 
 /** Native Control UI card, derived from session state rather than the board store. */
-export type BoardBuiltinWidget = Omit<GatewayBoardWidget, "contentKind"> & {
+export type BoardBuiltinWidget = Omit<BoardWidget, "contentKind"> & {
   builtin: "swarm";
   contentKind: "builtin";
   readOnly: true;
 };
-export type BoardWidget = GatewayBoardWidget | BoardBuiltinWidget;
-export type BoardSnapshot = Omit<GatewayBoardSnapshot, "widgets"> & {
-  widgets: BoardWidget[];
+export type BoardViewWidget = BoardWidget | BoardBuiltinWidget;
+export type BoardViewSnapshot = Omit<BoardSnapshot, "widgets"> & {
+  widgets: BoardViewWidget[];
 };
 
 export type BoardViewCallbacks = {
