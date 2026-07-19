@@ -9,6 +9,10 @@ vi.mock("baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
 });
 
+vi.mock("./src/auth-store.js", () => {
+  throw new Error("setup auth checks must not load auth-store");
+});
+
 vi.mock("./src/setup-finalize.js", () => {
   throw new Error("setup status load must not load finalize");
 });
@@ -40,6 +44,17 @@ describe("whatsapp setup entry", () => {
   it("loads the setup plugin without installing runtime dependencies", () => {
     const whatsappSetupPlugin = setupEntry.loadSetupPlugin(setupEntryLoadOptions);
     expect(whatsappSetupPlugin.id).toBe("whatsapp");
+  });
+
+  it("checks setup auth state without importing runtime auth dependencies", async () => {
+    const whatsappSetupPlugin = setupEntry.loadSetupPlugin(setupEntryLoadOptions);
+
+    await expect(
+      whatsappSetupPlugin.config.isConfigured?.(
+        { authDir: "/tmp/openclaw-whatsapp-unconfigured-setup-entry" } as never,
+        {} as never,
+      ),
+    ).resolves.toBe(false);
   });
 
   it("loads legacy setup helpers without importing runtime dependencies", () => {
