@@ -168,10 +168,10 @@ const loadWorkerPlacementStartupModule = createLazyRuntimeModule(
   () => import("./server-worker-placement-startup.js"),
 );
 
-export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+export async function resetPreparedModelCatalogForTest(): Promise<void> {
+  const { resetPreparedModelCatalogForTest: resetPreparedModelCatalogForTestLocal } =
     await loadGatewayModelCatalogModule();
-  await resetModelCatalogCacheForTestLocal();
+  await resetPreparedModelCatalogForTestLocal();
 }
 
 ensureOpenClawCliOnPath();
@@ -1085,8 +1085,7 @@ export async function startGatewayServer(
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   };
-  const preauthHandshakeTimeoutMs =
-    cfgAtStart.gateway?.handshakeTimeoutMs ?? getRuntimeConfig().gateway?.handshakeTimeoutMs;
+  const preauthHandshakeTimeoutMs = undefined;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
