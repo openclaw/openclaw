@@ -137,7 +137,7 @@ function normalizeOpenAIProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.openai.apiKey",
+      path: "tts.providers.openai.apiKey",
     }),
     baseUrl,
     model: trimToUndefined(raw?.model) ?? "gpt-4o-mini-tts",

@@ -110,7 +110,7 @@ function hasAgentRuntimeSecretRefs(params: {
   ) {
     return true;
   }
-  if (hasNestedSecretRef(config.messages?.tts?.providers)) {
+  if (hasNestedSecretRef(config.tts?.providers)) {
     return true;
   }
   if (hasNestedSecretRef(config.skills?.entries)) {

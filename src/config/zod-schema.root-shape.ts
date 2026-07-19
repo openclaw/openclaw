@@ -12,6 +12,7 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
@@ -361,6 +362,7 @@ export const OpenClawSchemaShape = {
     })
     .optional(),
   messages: MessagesSchema,
+  tts: TtsConfigSchema,
   commands: CommandsSchema,
   approvals: ApprovalsSchema,
   session: SessionSchema,

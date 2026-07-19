@@ -182,23 +182,21 @@ OpenRouter can act as a TTS provider through its OpenAI-compatible
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "openrouter",
-      providers: {
-        openrouter: {
-          model: "hexgrad/kokoro-82m",
-          speakerVoice: "af_alloy",
-          responseFormat: "mp3",
-        },
+  tts: {
+    auto: "always",
+    provider: "openrouter",
+    providers: {
+      openrouter: {
+        model: "hexgrad/kokoro-82m",
+        speakerVoice: "af_alloy",
+        responseFormat: "mp3",
       },
     },
   },
 }
 ```
 
-If `messages.tts.providers.openrouter.apiKey` is omitted, TTS falls back to
+If `tts.providers.openrouter.apiKey` is omitted, TTS falls back to
 `models.providers.openrouter.apiKey`, then `OPENROUTER_API_KEY`.
 
 ## Speech-to-text (inbound audio)

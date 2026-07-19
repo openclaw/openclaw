@@ -161,14 +161,12 @@ describe("createOpenClawTools TTS config wiring", () => {
 
   it("passes the resolved shared config into the tts tool", async () => {
     const injectedConfig = {
-      messages: {
-        tts: {
-          auto: "always",
-          provider: "microsoft",
-          providers: {
-            microsoft: {
-              voice: "en-US-AvaNeural",
-            },
+      tts: {
+        auto: "always",
+        provider: "microsoft",
+        providers: {
+          microsoft: {
+            voice: "en-US-AvaNeural",
           },
         },
       },

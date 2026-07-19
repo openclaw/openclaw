@@ -138,12 +138,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
       async () => {
         await writeConfig({
           ...baseConfig(),
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
-                },
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
               },
             },
           },
@@ -180,7 +178,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
             }),
             expect.objectContaining({
               code: "SECRETS_OWNER_UNAVAILABLE",
-              path: "messages.tts.providers.elevenlabs.apiKey",
+              path: "tts.providers.elevenlabs.apiKey",
             }),
           ]),
         );
@@ -219,12 +217,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
-              },
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
             },
           },
         },
@@ -308,12 +304,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
                 },
               },
             },
-            messages: {
-              tts: {
-                providers: {
-                  elevenlabs: {
-                    apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
-                  },
+            tts: {
+              providers: {
+                elevenlabs: {
+                  apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
                 },
               },
             },
@@ -340,7 +334,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
               }),
               expect.objectContaining({
                 code: "SECRETS_OWNER_UNAVAILABLE",
-                path: "messages.tts.providers.elevenlabs.apiKey",
+                path: "tts.providers.elevenlabs.apiKey",
               }),
             ]),
           );
@@ -515,12 +509,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
               token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
             },
           },
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
-                },
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
               },
             },
           },

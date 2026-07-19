@@ -255,7 +255,7 @@ STT and TTS support two-level configuration with priority fallback:
 | Setting | Plugin-specific                                          | Framework fallback                               |
 | ------- | -------------------------------------------------------- | ------------------------------------------------ |
 | STT     | `channels.qqbot.stt`                                     | first audio-capable `tools.media.models[]` entry |
-| TTS     | `channels.qqbot.tts`, `channels.qqbot.accounts.<id>.tts` | `messages.tts`                                   |
+| TTS     | `channels.qqbot.tts`, `channels.qqbot.accounts.<id>.tts` | `tts`                                            |
 
 ```json5
 {
@@ -285,7 +285,7 @@ STT and TTS support two-level configuration with priority fallback:
 ```
 
 Set `enabled: false` on either to disable. Account-level TTS overrides use the
-same shape as `messages.tts` and deep-merge over channel/global TTS config.
+same shape as `tts` and deep-merge over channel/global TTS config.
 
 STT requests time out after 60 seconds by default. Plugin-specific STT uses the
 selected `models.providers.<id>.timeoutSeconds` override. Framework audio STT

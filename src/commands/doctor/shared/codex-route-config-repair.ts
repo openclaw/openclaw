@@ -353,9 +353,9 @@ function rewriteNonAgentModelRefs(params: {
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
     hits: params.hits,
-    container: asMutableRecord(params.cfg.messages?.tts),
+    container: asMutableRecord(params.cfg.tts),
     key: "summaryModel",
-    path: "messages.tts.summaryModel",
+    path: "tts.summaryModel",
     blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });

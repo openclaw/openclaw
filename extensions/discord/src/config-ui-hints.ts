@@ -229,7 +229,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
-    help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+    help: "Optional TTS overrides for Discord voice playback (merged with tts).",
   },
   "pluralkit.enabled": {
     label: "Discord PluralKit Enabled",

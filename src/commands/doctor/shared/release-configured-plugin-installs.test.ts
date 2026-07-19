@@ -284,12 +284,10 @@ describe("configured plugin install release step", () => {
             model: "groq/llama-3.3-70b-versatile",
           },
         },
-        messages: {
-          tts: {
-            provider: "gradium",
-            providers: {
-              inworld: {},
-            },
+        tts: {
+          provider: "gradium",
+          providers: {
+            inworld: {},
           },
         },
         tools: {

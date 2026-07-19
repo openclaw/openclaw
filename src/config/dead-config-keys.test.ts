@@ -54,6 +54,7 @@ describe("dead config keys", () => {
     "tools.media.video.models",
     "agents.defaults.memorySearch",
     "agents.list.0.memorySearch",
+    "messages.tts",
     "agents.defaults.compaction.reserveTokens",
     "agents.defaults.compaction.reserveTokensFloor",
     "agents.defaults.compaction.maxHistoryShare",

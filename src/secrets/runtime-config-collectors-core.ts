@@ -483,13 +483,13 @@ function collectMessagesTtsAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const messages = params.config.messages as Record<string, unknown> | undefined;
-  if (!isRecord(messages) || !isRecord(messages.tts)) {
+  const tts = params.config.tts as Record<string, unknown> | undefined;
+  if (!isRecord(tts)) {
     return;
   }
   collectTtsApiKeyAssignments({
-    tts: messages.tts,
-    pathPrefix: "messages.tts",
+    tts,
+    pathPrefix: "tts",
     defaults: params.defaults,
     context: params.context,
   });

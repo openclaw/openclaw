@@ -205,7 +205,7 @@ function normalizeGoogleTtsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.google.apiKey",
+      path: "tts.providers.google.apiKey",
     }),
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),

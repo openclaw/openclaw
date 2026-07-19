@@ -12,7 +12,7 @@ const REGISTRY_IDS = [
   "gateway.remote.token",
   "gateway.remote.password",
   "models.providers.*.apiKey",
-  "messages.tts.providers.openai.apiKey",
+  "tts.providers.openai.apiKey",
   "plugins.entries.voice-call.config.twilio.authToken",
   "plugins.entries.firecrawl.config.webFetch.apiKey",
   "plugins.entries.firecrawl.config.webSearch.apiKey",
@@ -292,7 +292,7 @@ describe("command secret target ids", () => {
     expect(ids.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
     expect(ids.has("models.providers.openai.apiKey")).toBe(false);
     expect(ids.has("memory.search.remote.apiKey")).toBe(false);
-    expect(ids.has("messages.tts.providers.openai.apiKey")).toBe(false);
+    expect(ids.has("tts.providers.openai.apiKey")).toBe(false);
     expect(ids.has("skills.entries.demo.apiKey")).toBe(false);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
@@ -304,7 +304,7 @@ describe("command secret target ids", () => {
     expect(ids.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
     expect(ids.has("models.providers.openai.apiKey")).toBe(false);
     expect(ids.has("memory.search.remote.apiKey")).toBe(false);
-    expect(ids.has("messages.tts.providers.openai.apiKey")).toBe(false);
+    expect(ids.has("tts.providers.openai.apiKey")).toBe(false);
     expect(ids.has("skills.entries.demo.apiKey")).toBe(false);
     expect(ids.has("channels.discord.token")).toBe(false);
   });

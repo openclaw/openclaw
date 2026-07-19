@@ -265,23 +265,22 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
   "messages.removeAckAfterReply":
     "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
-  "messages.tts":
-    "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
-  "messages.tts.persona":
+  tts: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
+  "tts.persona":
     "Default TTS persona id. Local TTS persona preferences can override this per host.",
-  "messages.tts.personas":
+  "tts.personas":
     "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
-  "messages.tts.personas.*":
+  "tts.personas.*":
     "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
-  "messages.tts.personas.*.prompt":
+  "tts.personas.*.prompt":
     "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
-  "messages.tts.personas.*.providers":
-    "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
-  "messages.tts.providers":
+  "tts.personas.*.providers":
+    "Provider-specific TTS persona bindings keyed by speech provider id. These merge over tts.providers for the active persona.",
+  "tts.providers":
     "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
-  "messages.tts.providers.*":
+  "tts.providers.*":
     "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
-  "messages.tts.providers.*.apiKey":
+  "tts.providers.*.apiKey":
     "Provider API key used by that speech provider when its plugin requires authenticated TTS access.", // pragma: allowlist secret
   channels:
     "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",

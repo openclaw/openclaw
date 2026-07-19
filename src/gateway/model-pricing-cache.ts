@@ -978,7 +978,7 @@ function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addResolvedModelRef({
-    raw: config.messages?.tts?.summaryModel,
+    raw: config.tts?.summaryModel,
     aliasIndex,
     refs,
     ...normalizationParams,

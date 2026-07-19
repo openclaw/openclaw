@@ -304,8 +304,8 @@ function collectRequestedSpeechProviderIds(
 ): Set<string> {
   const requested = new Set<string>();
   const tts =
-    typeof cfg?.messages?.tts === "object" && cfg.messages.tts !== null
-      ? (cfg.messages.tts as Record<string, unknown>)
+    typeof cfg?.tts === "object" && cfg.tts !== null
+      ? (cfg.tts as Record<string, unknown>)
       : undefined;
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);

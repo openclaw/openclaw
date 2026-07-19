@@ -465,7 +465,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
-    Uses core `messages.tts` configuration and provider selection. Returns PCM audio buffer + sample rate. `textToSpeechStream` is also available for streaming synthesis.
+    Uses core `tts` configuration and provider selection. Returns PCM audio buffer + sample rate. `textToSpeechStream` is also available for streaming synthesis.
 
   </Accordion>
   <Accordion title="api.runtime.mediaUnderstanding">

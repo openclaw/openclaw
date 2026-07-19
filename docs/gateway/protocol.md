@@ -531,7 +531,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `tts.enable` and `tts.disable` toggle TTS prefs state.
     - `tts.setProvider` updates the preferred TTS provider.
     - `tts.convert` runs one-shot text-to-speech conversion.
-    - `tts.speak` (`operator.write`) renders non-empty `text` with the configured general TTS provider chain and returns one whole clip inline as `audioBase64`, plus `provider` and optional `outputFormat`, `mimeType`, and `fileExtension` metadata. Unlike `tts.convert`, it does not return a Gateway-local path; unlike `talk.speak`, it does not require a Talk provider. Text above `messages.tts.maxTextLength` returns `INVALID_REQUEST`; synthesis failures return `UNAVAILABLE`.
+    - `tts.speak` (`operator.write`) renders non-empty `text` with the configured general TTS provider chain and returns one whole clip inline as `audioBase64`, plus `provider` and optional `outputFormat`, `mimeType`, and `fileExtension` metadata. Unlike `tts.convert`, it does not return a Gateway-local path; unlike `talk.speak`, it does not require a Talk provider. Text above `tts.maxTextLength` returns `INVALID_REQUEST`; synthesis failures return `UNAVAILABLE`.
 
   </Accordion>
 

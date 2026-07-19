@@ -60,7 +60,7 @@ defaults below until they move onto the same live catalog.
 | Image generation/editing | first `image-gen`-tagged entry from live catalog (static fallback `black-forest-labs/FLUX-1-schnell`) | `image_generate`, `agents.defaults.imageGenerationModel` |
 | Media understanding      | `moonshotai/Kimi-K2.5` for images                                                                     | inbound image understanding                              |
 | Speech-to-text           | `openai/whisper-large-v3-turbo`                                                                       | inbound audio transcription                              |
-| Text-to-speech           | `hexgrad/Kokoro-82M`                                                                                  | `messages.tts.provider: "deepinfra"`                     |
+| Text-to-speech           | `hexgrad/Kokoro-82M`                                                                                  | `tts.provider: "deepinfra"`                              |
 | Video generation         | static fallback `Pixverse/Pixverse-T2V` (no live video-gen rows from DeepInfra today)                 | `video_generate`, `agents.defaults.videoGenerationModel` |
 | Memory embeddings        | `BAAI/bge-m3`                                                                                         | `memory.search.provider: "deepinfra"`                    |
 

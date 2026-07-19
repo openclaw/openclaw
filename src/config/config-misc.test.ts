@@ -1277,26 +1277,24 @@ describe("config strict validation", () => {
     });
   });
 
-  it("reports legacy messages.tts provider keys without read-time auto-migration", () => {
+  it("reports legacy tts provider keys without read-time auto-migration", () => {
     const raw = {
-      messages: {
-        tts: {
-          provider: "elevenlabs",
-          elevenlabs: {
-            apiKey: "test-key",
-            voiceId: "voice-1",
-          },
+      tts: {
+        provider: "elevenlabs",
+        elevenlabs: {
+          apiKey: "test-key",
+          voiceId: "voice-1",
         },
       },
     };
     const issues = findLegacyConfigIssues(raw);
 
-    expect(issuePaths(issues)).toContain("messages.tts");
-    expect(raw.messages.tts.elevenlabs).toEqual({
+    expect(issuePaths(issues)).toContain("tts");
+    expect(raw.tts.elevenlabs).toEqual({
       apiKey: "test-key",
       voiceId: "voice-1",
     });
-    expect(raw.messages.tts).not.toHaveProperty("providers");
+    expect(raw.tts).not.toHaveProperty("providers");
   });
 
   it("reports retired plugin model refs without an agents section", () => {

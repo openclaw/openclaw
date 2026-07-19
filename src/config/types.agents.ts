@@ -127,7 +127,7 @@ export type AgentConfig = {
   };
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
-  /** Optional per-agent TTS overrides, deep-merged over messages.tts. */
+  /** Optional per-agent TTS overrides, deep-merged over top-level tts. */
   tts?: TtsConfig;
   /** Optional per-agent skills subsystem overrides. */
   skillsLimits?: Pick<SkillsLimitsConfig, "maxSkillsPromptChars">;

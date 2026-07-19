@@ -143,7 +143,7 @@ below or under known limits.
 | Server-side code execution | `code_execution` tool                   | Yes                                                  |
 | Images                     | `image_generate`                        | Yes                                                  |
 | Videos                     | `video_generate`                        | Yes                                                  |
-| Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`  | Yes                                                  |
+| Batch text-to-speech       | `tts.provider: "xai"` / `tts`           | Yes                                                  |
 | Streaming TTS              | `textToSpeechStream`                    | Yes via `wss://api.x.ai/v1/tts` (not realtime voice) |
 | Batch speech-to-text       | `tools.media.audio` media understanding | Yes                                                  |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`  | Yes                                                  |
@@ -338,13 +338,11 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     ```json5
     {
-      messages: {
-        tts: {
-          provider: "xai",
-          providers: {
-            xai: {
-              voiceId: "eve",
-            },
+      tts: {
+        provider: "xai",
+        providers: {
+          xai: {
+            voiceId: "eve",
           },
         },
       },

@@ -287,12 +287,10 @@ describe("config shared auth disconnects", () => {
 
   it("accepts an unresolved isolatable TTS SecretRef and reports the cold owner", async () => {
     const submittedConfig: OpenClawConfig = {
-      messages: {
-        tts: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-            },
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
           },
         },
       },
@@ -306,7 +304,7 @@ describe("config shared auth disconnects", () => {
           ownerId: "tts",
           state: "unavailable",
           degradationState: "cold",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason: "secret reference was not found",
         },
@@ -355,12 +353,10 @@ describe("config shared auth disconnects", () => {
     "secret reference is not allowed for this provider",
   ])("rejects non-retryable SecretRef degradation before config writes: %s", async (reason) => {
     const submittedConfig: OpenClawConfig = {
-      messages: {
-        tts: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-            },
+      tts: {
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
           },
         },
       },
@@ -374,7 +370,7 @@ describe("config shared auth disconnects", () => {
           ownerId: "tts",
           state: "unavailable",
           degradationState: "cold",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:ELEVENLABS_API_KEY"],
           reason,
         },

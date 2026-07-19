@@ -207,8 +207,8 @@ export function collectConfigModelRefs(
   });
   collectStringModelSlot({
     hits,
-    path: "messages.tts.summaryModel",
-    value: cfg.messages?.tts?.summaryModel,
+    path: "tts.summaryModel",
+    value: cfg.tts?.summaryModel,
     blockedModelIdentities,
   });
   collectStringModelSlot({

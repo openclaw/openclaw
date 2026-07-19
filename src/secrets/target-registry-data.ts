@@ -229,10 +229,10 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
-    id: "messages.tts.providers.*.apiKey",
-    targetType: "messages.tts.providers.*.apiKey",
+    id: "tts.providers.*.apiKey",
+    targetType: "tts.providers.*.apiKey",
     configFile: "openclaw.json",
-    pathPattern: "messages.tts.providers.*.apiKey",
+    pathPattern: "tts.providers.*.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,

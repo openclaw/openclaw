@@ -109,7 +109,7 @@ export function resolveEffectiveTtsConfig(
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): TtsConfig {
   const context = resolveTtsConfigContext(contextOrAgentId);
-  const base = cfg.messages?.tts ?? {};
+  const base = cfg.tts ?? {};
   const agentOverride = resolveAgentTtsOverride(cfg, context.agentId);
   const channelOverride = resolveChannelTtsOverride(cfg, context);
   const accountOverride = resolveAccountTtsOverride(cfg, context);

@@ -32,6 +32,7 @@ import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { SystemAgentConfig } from "./types.system-agent.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
 /** One persisted suppression for a known security audit finding. */
@@ -237,6 +238,8 @@ export type OpenClawConfig = {
   };
   /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
+  /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */
+  tts?: TtsConfig;
   /** Chat command settings. */
   commands?: CommandsConfig;
   /** Human approval workflow settings. */

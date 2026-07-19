@@ -295,7 +295,7 @@ describe("processMessage audio preflight transcription", () => {
       MediaTranscribedIndexes: [0],
     });
     // mediaPath and mediaType must be preserved so inboundAudio detection (used by
-    // features like messages.tts.auto: "inbound") still recognises this as audio.
+    // features like tts.auto: "inbound") still recognises this as audio.
     expectContextFields(context, {
       MediaPath: "/tmp/voice.ogg",
       MediaType: "audio/ogg; codecs=opus",

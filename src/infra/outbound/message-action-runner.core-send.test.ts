@@ -821,10 +821,8 @@ describe("runMessageAction core send routing", () => {
             enabled: true,
           },
         },
-        messages: {
-          tts: {
-            auto: "tagged",
-          },
+        tts: {
+          auto: "tagged",
         },
       } as OpenClawConfig,
       action: "send",
@@ -881,10 +879,8 @@ describe("runMessageAction core send routing", () => {
             enabled: true,
           },
         },
-        messages: {
-          tts: {
-            auto: "inbound",
-          },
+        tts: {
+          auto: "inbound",
         },
       } as OpenClawConfig,
       action: "send",

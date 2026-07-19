@@ -224,7 +224,7 @@ describe("applyPluginAutoEnable core", () => {
   it("auto-enables external speech providers selected by TTS config", () => {
     const result = applyPluginAutoEnable({
       config: {
-        messages: { tts: { provider: "gradium" } },
+        tts: { provider: "gradium" },
         plugins: { allow: ["telegram"] },
       },
       env,

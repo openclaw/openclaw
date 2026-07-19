@@ -105,12 +105,7 @@ export function collectConfiguredModelRefs(
     }
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
-  pushModelRef(
-    "messages.tts.summaryModel",
-    isRecord(root.messages) && isRecord(root.messages.tts)
-      ? root.messages.tts.summaryModel
-      : undefined,
-  );
+  pushModelRef("tts.summaryModel", isRecord(root.tts) ? root.tts.summaryModel : undefined);
   pushModelRef(
     "channels.discord.voice.model",
     isRecord(root.channels) &&

@@ -2122,10 +2122,8 @@ describe("collectCodexRouteWarnings", () => {
             model: "openai-codex/gpt-5.4",
           },
         },
-        messages: {
-          tts: {
-            summaryModel: "openai-codex/gpt-5.4-mini",
-          },
+        tts: {
+          summaryModel: "openai-codex/gpt-5.4-mini",
         },
       } as unknown as OpenClawConfig,
       shouldRepair: true,
@@ -2150,7 +2148,7 @@ describe("collectCodexRouteWarnings", () => {
         "- channels.modelByChannel.telegram.default: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- hooks.mappings.0.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- hooks.gmail.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
-        "- messages.tts.summaryModel: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- tts.summaryModel: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
       ].join("\n"),
       'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
       'Set agents.defaults.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
@@ -2191,7 +2189,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.4");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.gmail?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
+    expect(result.cfg.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
   });
 
   it("keeps whole-agent runtime pins while repairing compaction-only model refs and overrides", () => {
@@ -3926,10 +3924,8 @@ describe("collectCodexRouteWarnings", () => {
         hooks: {
           mappings: [{ model: "openai-codex/gpt-5.4" }],
         },
-        messages: {
-          tts: {
-            summaryModel: "openai-codex/gpt-5.4",
-          },
+        tts: {
+          summaryModel: "openai-codex/gpt-5.4",
         },
       } as unknown as OpenClawConfig,
       shouldRepair: true,
@@ -3939,7 +3935,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.5");
     expect(result.cfg.channels?.discord?.voice?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4");
+    expect(result.cfg.tts?.summaryModel).toBe("openai/gpt-5.4");
     expect(result.cfg.agents?.defaults?.models).toBeUndefined();
   });
 

@@ -372,9 +372,7 @@ describe("secrets runtime snapshot", () => {
     const secret = "test-secret";
     await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        messages: {
-          tts: { providers: { elevenlabs: { apiKey: TTS_REF } } },
-        },
+        tts: { providers: { elevenlabs: { apiKey: TTS_REF } } },
       }),
       env: { ELEVENLABS_API_KEY: secret },
       includeAuthStoreRefs: false,
@@ -680,12 +678,10 @@ describe("secrets runtime snapshot", () => {
   it("isolates the TTS owner when its SecretRef is missing during cold startup", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: TTS_REF,
-              },
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: TTS_REF,
             },
           },
         },
@@ -696,17 +692,17 @@ describe("secrets runtime snapshot", () => {
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual(TTS_REF);
+    expect(snapshot.config.tts?.providers?.elevenlabs?.apiKey).toEqual(TTS_REF);
     expectWarning(snapshot, {
       code: "SECRETS_OWNER_UNAVAILABLE",
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
     });
     expect(snapshot.degradedOwners).toMatchObject([
       {
         ownerKind: "capability",
         ownerId: "tts",
         state: "unavailable",
-        paths: ["messages.tts.providers.elevenlabs.apiKey"],
+        paths: ["tts.providers.elevenlabs.apiKey"],
         reason: "secret reference was not found",
       },
     ]);
@@ -733,15 +729,13 @@ describe("secrets runtime snapshot", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: {
-                  source: "file",
-                  provider: "ttsfile",
-                  id: "/providers/elevenlabs/apiKey",
-                },
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: {
+                source: "file",
+                provider: "ttsfile",
+                id: "/providers/elevenlabs/apiKey",
               },
             },
           },
@@ -753,14 +747,14 @@ describe("secrets runtime snapshot", () => {
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual({
+    expect(snapshot.config.tts?.providers?.elevenlabs?.apiKey).toEqual({
       source: "file",
       provider: "ttsfile",
       id: "/providers/elevenlabs/apiKey",
     });
     expectWarning(snapshot, {
       code: "SECRETS_OWNER_UNAVAILABLE",
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
     });
     expect(snapshot.warnings[0]?.message).toContain("secret reference was not found");
   });
@@ -777,12 +771,10 @@ describe("secrets runtime snapshot", () => {
               },
             },
           },
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: TTS_REF,
-                },
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: TTS_REF,
               },
             },
           },
@@ -801,12 +793,10 @@ describe("secrets runtime snapshot", () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
         config: asConfig({
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: { source: "env", provider: "default", id: "elevenlabs_api_key" },
-                },
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "env", provider: "default", id: "elevenlabs_api_key" },
               },
             },
           },
@@ -825,12 +815,10 @@ describe("secrets runtime snapshot", () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
         config: asConfig({
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: { source: "env", provider: "missing", id: "ELEVENLABS_API_KEY" },
-                },
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "env", provider: "missing", id: "ELEVENLABS_API_KEY" },
               },
             },
           },

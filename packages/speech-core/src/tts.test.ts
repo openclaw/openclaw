@@ -162,12 +162,10 @@ function prefsPathFor(prefsName: string): string {
 
 function createTtsConfig(prefsName: string): OpenClawConfig {
   return {
-    messages: {
-      tts: {
-        enabled: true,
-        provider: "mock",
-        prefsPath: prefsPathFor(prefsName),
-      },
+    tts: {
+      enabled: true,
+      provider: "mock",
+      prefsPath: prefsPathFor(prefsName),
     },
   };
 }
@@ -274,15 +272,13 @@ describe("speech-core native voice-note routing", () => {
 
   it("prepares deep-merged surface config and directive inputs", () => {
     const cfg: OpenClawConfig = {
-      messages: {
-        tts: {
-          provider: "mock",
-          modelOverrides: { allowProvider: false },
-          providers: {
-            mock: {
-              model: "base-model",
-              voiceSettings: { stability: 0.4 },
-            },
+      tts: {
+        provider: "mock",
+        modelOverrides: { allowProvider: false },
+        providers: {
+          mock: {
+            model: "base-model",
+            voiceSettings: { stability: 0.4 },
           },
         },
       },
@@ -303,12 +299,12 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect(prepared.cfg).not.toBe(cfg);
-    expect(prepared.cfg.messages?.tts?.providers?.mock).toEqual({
+    expect(prepared.cfg.tts?.providers?.mock).toEqual({
       model: "base-model",
       voice: "surface-voice",
       voiceSettings: { stability: 0.4, speed: 1.1 },
     });
-    expect(prepared.cfg.messages?.tts?.modelOverrides?.allowProvider).toBe(true);
+    expect(prepared.cfg.tts?.modelOverrides?.allowProvider).toBe(true);
     expect(prepared.directives).toEqual({
       cleanedText: "Hello  caller",
       hasDirective: true,
@@ -318,7 +314,7 @@ describe("speech-core native voice-note routing", () => {
       ttsText: "Speak this instead",
       warnings: [],
     });
-    expect(cfg.messages?.tts?.providers?.mock).toEqual({
+    expect(cfg.tts?.providers?.mock).toEqual({
       model: "base-model",
       voiceSettings: { stability: 0.4 },
     });
@@ -327,11 +323,9 @@ describe("speech-core native voice-note routing", () => {
   it("sanitizes blocked override keys while preparing TTS config", () => {
     const prepared = prepareTtsRequest({
       cfg: {
-        messages: {
-          tts: {
-            provider: "mock",
-            providers: { mock: { model: "base-model" } },
-          },
+        tts: {
+          provider: "mock",
+          providers: { mock: { model: "base-model" } },
         },
       },
       override: JSON.parse(
@@ -341,8 +335,8 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
-    expect(prepared.cfg.messages?.tts).not.toHaveProperty("polluted");
-    expect(prepared.cfg.messages?.tts?.providers?.mock).toEqual({
+    expect(prepared.cfg.tts).not.toHaveProperty("polluted");
+    expect(prepared.cfg.tts?.providers?.mock).toEqual({
       model: "base-model",
       voice: "safe",
     });
@@ -443,27 +437,23 @@ describe("speech-core native voice-note routing", () => {
 
   it("uses the active runtime snapshot when source config still contains TTS SecretRefs", async () => {
     const sourceConfig = {
-      messages: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          providers: {
-            mock: {
-              apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
-            },
+      tts: {
+        enabled: true,
+        provider: "mock",
+        providers: {
+          mock: {
+            apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
           },
         },
       },
     } as unknown as OpenClawConfig;
     const runtimeConfig = {
-      messages: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          providers: {
-            mock: {
-              apiKey: "resolved-minimax-key",
-            },
+      tts: {
+        enabled: true,
+        provider: "mock",
+        providers: {
+          mock: {
+            apiKey: "resolved-minimax-key",
           },
         },
       },
@@ -501,11 +491,9 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use provider timeout.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-          },
+        tts: {
+          enabled: true,
+          provider: "mock",
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -560,12 +548,10 @@ describe("speech-core native voice-note routing", () => {
     await listSpeechVoices({
       provider: "mock",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            timeoutMs: 45_000,
-          },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          timeoutMs: 45_000,
         },
       } as OpenClawConfig,
     });
@@ -581,11 +567,9 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use capped provider timeout.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-          },
+        tts: {
+          enabled: true,
+          provider: "mock",
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -602,11 +586,9 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use fallback timeout.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-          },
+        tts: {
+          enabled: true,
+          provider: "mock",
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -623,12 +605,10 @@ describe("speech-core native voice-note routing", () => {
     await synthesizeSpeech({
       text: "Use configured timeout.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            timeoutMs: 45_000,
-          },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          timeoutMs: 45_000,
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -651,11 +631,9 @@ describe("speech-core native voice-note routing", () => {
             voiceModel: { primary: "mock/mock-tts", timeoutMs: Number.MAX_SAFE_INTEGER },
           },
         },
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-          },
+        tts: {
+          enabled: true,
+          provider: "mock",
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -691,11 +669,9 @@ describe("speech-core native voice-note routing", () => {
             voiceModel: { primary: "openai/gpt-4o-mini-tts", timeoutMs: 12_345 },
           },
         },
-        messages: {
-          tts: {
-            enabled: true,
-            prefsPath: "/tmp/openclaw-speech-core-voice-model-default-test.json",
-          },
+        tts: {
+          enabled: true,
+          prefsPath: "/tmp/openclaw-speech-core-voice-model-default-test.json",
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -731,15 +707,13 @@ describe("speech-core native voice-note routing", () => {
             voiceModel: { primary: "openrouter/default-model" },
           },
         },
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "openrouter",
-            prefsPath: "/tmp/openclaw-speech-core-explicit-model-alias-test.json",
-            providers: {
-              openrouter: {
-                modelId: "explicit-model",
-              },
+        tts: {
+          enabled: true,
+          provider: "openrouter",
+          prefsPath: "/tmp/openclaw-speech-core-explicit-model-alias-test.json",
+          providers: {
+            openrouter: {
+              modelId: "explicit-model",
             },
           },
         },
@@ -781,11 +755,9 @@ describe("speech-core native voice-note routing", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            enabled: true,
-            prefsPath: "/tmp/openclaw-speech-core-voice-model-fallback-test.json",
-          },
+        tts: {
+          enabled: true,
+          prefsPath: "/tmp/openclaw-speech-core-voice-model-fallback-test.json",
         },
       } as OpenClawConfig,
     });
@@ -827,11 +799,9 @@ describe("speech-core native voice-note routing", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            enabled: true,
-            prefsPath: "/tmp/openclaw-speech-core-same-provider-voice-model-fallback-test.json",
-          },
+        tts: {
+          enabled: true,
+          prefsPath: "/tmp/openclaw-speech-core-same-provider-voice-model-fallback-test.json",
         },
       } as OpenClawConfig,
     });
@@ -871,12 +841,10 @@ describe("speech-core native voice-note routing", () => {
             voiceModel: { primary: "openai/gpt-realtime-2" },
           },
         },
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "openai",
-            prefsPath: "/tmp/openclaw-speech-core-realtime-voice-model-ignored-test.json",
-          },
+        tts: {
+          enabled: true,
+          provider: "openai",
+          prefsPath: "/tmp/openclaw-speech-core-realtime-voice-model-ignored-test.json",
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -915,11 +883,9 @@ describe("speech-core native voice-note routing", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            enabled: true,
-            prefsPath: "/tmp/openclaw-speech-core-supported-voice-model-provider-test.json",
-          },
+        tts: {
+          enabled: true,
+          prefsPath: "/tmp/openclaw-speech-core-supported-voice-model-provider-test.json",
         },
       } as OpenClawConfig,
     });
@@ -934,18 +900,16 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use the configured speaker.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            providers: {
-              mock: {
-                speakerVoice: "cedar",
-                speakerVoiceId: "voice-123",
-                voice: "legacy-voice",
-                voiceName: "legacy-name",
-                voiceId: "legacy-id",
-              },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              speakerVoice: "cedar",
+              speakerVoiceId: "voice-123",
+              voice: "legacy-voice",
+              voiceName: "legacy-name",
+              voiceId: "legacy-id",
             },
           },
         },
@@ -979,13 +943,11 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use alias provider config.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "xiaomi",
-            providers: {
-              mimo: { apiKey: "mimo-key" },
-            },
+        tts: {
+          enabled: true,
+          provider: "xiaomi",
+          providers: {
+            mimo: { apiKey: "mimo-key" },
           },
         },
       } as OpenClawConfig,
@@ -1001,17 +963,15 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use the persona speaker.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            persona: "narrator",
-            personas: {
-              narrator: {
-                providers: {
-                  mock: {
-                    speakerVoice: "marin",
-                  },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          persona: "narrator",
+          personas: {
+            narrator: {
+              providers: {
+                mock: {
+                  speakerVoice: "marin",
                 },
               },
             },
@@ -1267,19 +1227,17 @@ describe("speech-core native voice-note routing", () => {
 
   it("selects persona preferred provider before config fallback", () => {
     const cfg: OpenClawConfig = {
-      messages: {
-        tts: {
-          enabled: true,
-          provider: "other",
-          persona: "alfred",
-          personas: {
-            alfred: {
-              label: "Alfred",
-              provider: "mock",
-              providers: {
-                mock: {
-                  voice: "Algieba",
-                },
+      tts: {
+        enabled: true,
+        provider: "other",
+        persona: "alfred",
+        personas: {
+          alfred: {
+            label: "Alfred",
+            provider: "mock",
+            providers: {
+              mock: {
+                voice: "Algieba",
               },
             },
           },
@@ -1302,11 +1260,9 @@ describe("speech-core native voice-note routing", () => {
       }),
     ]);
     const cfg = {
-      messages: {
-        tts: {
-          providers: { broken: {} },
-          prefsPath: "/tmp/openclaw-speech-core-invalid-provider.json",
-        },
+      tts: {
+        providers: { broken: {} },
+        prefsPath: "/tmp/openclaw-speech-core-invalid-provider.json",
       },
     } as OpenClawConfig;
     const config = resolveTtsConfig(cfg);
@@ -1317,26 +1273,24 @@ describe("speech-core native voice-note routing", () => {
 
   it("merges active persona provider binding into synthesis config", async () => {
     const cfg: OpenClawConfig = {
-      messages: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          prefsPath: "/tmp/openclaw-speech-core-persona-merge.json",
-          providers: {
-            mock: {
-              model: "base-model",
-              voice: "base-voice",
-            },
+      tts: {
+        enabled: true,
+        provider: "mock",
+        prefsPath: "/tmp/openclaw-speech-core-persona-merge.json",
+        providers: {
+          mock: {
+            model: "base-model",
+            voice: "base-voice",
           },
-          persona: "alfred",
-          personas: {
-            alfred: {
-              provider: "mock",
-              providers: {
-                mock: {
-                  voice: "persona-voice",
-                  style: "dry",
-                },
+        },
+        persona: "alfred",
+        personas: {
+          alfred: {
+            provider: "mock",
+            providers: {
+              mock: {
+                voice: "persona-voice",
+                style: "dry",
               },
             },
           },
@@ -1377,17 +1331,15 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use fallback provider.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "missing",
-            persona: "alfred",
-            personas: {
-              alfred: {
-                providers: {
-                  missing: {
-                    voice: "configured-but-unregistered",
-                  },
+        tts: {
+          enabled: true,
+          provider: "missing",
+          persona: "alfred",
+          personas: {
+            alfred: {
+              providers: {
+                missing: {
+                  voice: "configured-but-unregistered",
                 },
               },
             },
@@ -1409,17 +1361,15 @@ describe("speech-core native voice-note routing", () => {
     const result = await textToSpeechTelephony({
       text: "Use telephony provider.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            persona: "alfred",
-            personas: {
-              alfred: {
-                providers: {
-                  mock: {
-                    voice: "persona-voice",
-                  },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          persona: "alfred",
+          personas: {
+            alfred: {
+              providers: {
+                mock: {
+                  voice: "persona-voice",
                 },
               },
             },
@@ -1452,15 +1402,13 @@ describe("speech-core native voice-note routing", () => {
     const result = await textToSpeechTelephony({
       text: "Use a directed telephony voice.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            providers: {
-              mock: {
-                modelId: "telephony-model",
-                voiceId: "default-voice",
-              },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              modelId: "telephony-model",
+              voiceId: "default-voice",
             },
           },
         },
@@ -1493,17 +1441,15 @@ describe("speech-core native voice-note routing", () => {
     await synthesizeSpeech({
       text: "Use neutral provider defaults.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            persona: "alfred",
-            personas: {
-              alfred: {
-                fallbackPolicy: "provider-defaults",
-                prompt: {
-                  profile: "A precise butler.",
-                },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          persona: "alfred",
+          personas: {
+            alfred: {
+              fallbackPolicy: "provider-defaults",
+              prompt: {
+                profile: "A precise butler.",
               },
             },
           },
@@ -1524,16 +1470,14 @@ describe("speech-core native voice-note routing", () => {
     await synthesizeSpeech({
       text: "Use persona prompt.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            persona: "alfred",
-            personas: {
-              alfred: {
-                prompt: {
-                  profile: "A precise butler.",
-                },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          persona: "alfred",
+          personas: {
+            alfred: {
+              prompt: {
+                profile: "A precise butler.",
               },
             },
           },
@@ -1560,18 +1504,16 @@ describe("speech-core native voice-note routing", () => {
     const result = await synthesizeSpeech({
       text: "Use the first persona-bound provider.",
       cfg: {
-        messages: {
-          tts: {
-            enabled: true,
-            provider: "mock",
-            persona: "alfred",
-            personas: {
-              alfred: {
-                fallbackPolicy: "fail",
-                providers: {
-                  fallback: {
-                    voice: "fallback-voice",
-                  },
+        tts: {
+          enabled: true,
+          provider: "mock",
+          persona: "alfred",
+          personas: {
+            alfred: {
+              fallbackPolicy: "fail",
+              providers: {
+                fallback: {
+                  voice: "fallback-voice",
                 },
               },
             },
@@ -1599,18 +1541,16 @@ describe("speech-core native voice-note routing", () => {
 });
 
 describe("speech-core per-agent TTS config", () => {
-  it("deep-merges the active agent TTS override over messages.tts", () => {
+  it("deep-merges the active agent TTS override over tts", () => {
     const cfg = {
-      messages: {
-        tts: {
-          enabled: true,
-          provider: "openai",
-          providers: {
-            openai: {
-              apiKey: "${OPENAI_API_KEY}",
-              voice: "coral",
-              speed: 1,
-            },
+      tts: {
+        enabled: true,
+        provider: "openai",
+        providers: {
+          openai: {
+            apiKey: "${OPENAI_API_KEY}",
+            voice: "coral",
+            speed: 1,
           },
         },
       },
@@ -1645,32 +1585,30 @@ describe("speech-core per-agent TTS config", () => {
 
   it("composes per-agent TTS overrides with active persona bindings", async () => {
     const cfg = {
-      messages: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          providers: {
-            mock: {
-              model: "base-model",
-              voice: "base-voice",
-            },
+      tts: {
+        enabled: true,
+        provider: "mock",
+        providers: {
+          mock: {
+            model: "base-model",
+            voice: "base-voice",
           },
-          persona: "alfred",
-          personas: {
-            alfred: {
-              provider: "mock",
-              providers: {
-                mock: {
-                  voice: "alfred-voice",
-                },
+        },
+        persona: "alfred",
+        personas: {
+          alfred: {
+            provider: "mock",
+            providers: {
+              mock: {
+                voice: "alfred-voice",
               },
             },
-            jarvis: {
-              provider: "mock",
-              providers: {
-                mock: {
-                  style: "jarvis-style",
-                },
+          },
+          jarvis: {
+            provider: "mock",
+            providers: {
+              mock: {
+                style: "jarvis-style",
               },
             },
           },
@@ -1720,13 +1658,11 @@ describe("speech-core per-agent TTS config", () => {
 
   it("ignores prototype-pollution keys in agent TTS overrides", () => {
     const cfg = {
-      messages: {
-        tts: {
-          provider: "openai",
-          providers: {
-            openai: {
-              voice: "coral",
-            },
+      tts: {
+        provider: "openai",
+        providers: {
+          openai: {
+            voice: "coral",
           },
         },
       },

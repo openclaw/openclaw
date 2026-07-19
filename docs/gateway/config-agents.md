@@ -987,7 +987,7 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
 
 Use `agents.list[].tts` to give an agent its own TTS provider, voice, model,
 style, or auto-TTS mode. The agent block deep-merges over global
-`messages.tts`, so shared credentials can stay in one place while individual
+`tts`, so shared credentials can stay in one place while individual
 agents override only the voice or provider fields they need. The active agent's
 override applies to automatic spoken replies, `/tts audio`, `/tts status`, and
 the `tts` agent tool. See [Text-to-speech](/tools/tts#per-agent-voice-overrides)
@@ -1050,7 +1050,7 @@ for provider examples and precedence.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
-- `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `messages.tts`, so keep shared provider credentials and fallback policy in `messages.tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
+- `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `tts`, so keep shared provider credentials and fallback policy in `tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
@@ -1387,44 +1387,42 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "off", // off (default) | always | inbound | tagged
-      mode: "final", // final | all
-      provider: "elevenlabs",
-      summaryModel: "openai/gpt-5.4-mini",
-      modelOverrides: { enabled: true },
-      maxTextLength: 4000,
-      timeoutMs: 30000,
-      prefsPath: "~/.openclaw/settings/tts.json",
-      providers: {
-        elevenlabs: {
-          apiKey: "elevenlabs_api_key",
-          baseUrl: "https://api.elevenlabs.io",
-          speakerVoiceId: "voice_id",
-          modelId: "eleven_multilingual_v2",
-          seed: 42,
-          applyTextNormalization: "auto",
-          languageCode: "en",
-          voiceSettings: {
-            stability: 0.5,
-            similarityBoost: 0.75,
-            style: 0.0,
-            useSpeakerBoost: true,
-            speed: 1.0,
-          },
+  tts: {
+    auto: "off", // off (default) | always | inbound | tagged
+    mode: "final", // final | all
+    provider: "elevenlabs",
+    summaryModel: "openai/gpt-5.4-mini",
+    modelOverrides: { enabled: true },
+    maxTextLength: 4000,
+    timeoutMs: 30000,
+    prefsPath: "~/.openclaw/settings/tts.json",
+    providers: {
+      elevenlabs: {
+        apiKey: "elevenlabs_api_key",
+        baseUrl: "https://api.elevenlabs.io",
+        speakerVoiceId: "voice_id",
+        modelId: "eleven_multilingual_v2",
+        seed: 42,
+        applyTextNormalization: "auto",
+        languageCode: "en",
+        voiceSettings: {
+          stability: 0.5,
+          similarityBoost: 0.75,
+          style: 0.0,
+          useSpeakerBoost: true,
+          speed: 1.0,
         },
-        microsoft: {
-          speakerVoice: "en-US-MichelleNeural",
-          lang: "en-US",
-          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-        },
-        openai: {
-          apiKey: "openai_api_key",
-          baseUrl: "https://api.openai.com/v1",
-          model: "gpt-4o-mini-tts",
-          speakerVoice: "coral",
-        },
+      },
+      microsoft: {
+        speakerVoice: "en-US-MichelleNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      },
+      openai: {
+        apiKey: "openai_api_key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        speakerVoice: "coral",
       },
     },
   },

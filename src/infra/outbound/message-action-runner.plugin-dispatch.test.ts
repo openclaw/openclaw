@@ -2312,10 +2312,8 @@ describe("runMessageAction plugin dispatch", () => {
               enabled: true,
             },
           },
-          messages: {
-            tts: {
-              auto: "tagged",
-            },
+          tts: {
+            auto: "tagged",
           },
         } as OpenClawConfig,
         action: "send",
@@ -2389,10 +2387,8 @@ describe("runMessageAction plugin dispatch", () => {
               enabled: true,
             },
           },
-          messages: {
-            tts: {
-              auto: "tagged",
-            },
+          tts: {
+            auto: "tagged",
           },
         } as OpenClawConfig,
         action: "send",

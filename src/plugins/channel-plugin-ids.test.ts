@@ -820,7 +820,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes configured bundled speech providers at startup",
       {
         channels: {},
-        messages: { tts: { provider: "microsoft" } },
+        tts: { provider: "microsoft" },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
     ],
@@ -828,7 +828,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes bundled speech providers configured by provider block",
       {
         channels: {},
-        messages: { tts: { providers: { "tts-local-cli": { command: "say" } } } },
+        tts: { providers: { "tts-local-cli": { command: "say" } } },
       } as OpenClawConfig,
       ["browser", "tts-local-cli", "memory-core"],
     ],
@@ -836,7 +836,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "maps legacy edge TTS selection to the Microsoft speech plugin",
       {
         channels: {},
-        messages: { tts: { provider: "edge" } },
+        tts: { provider: "edge" },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
     ],
@@ -844,7 +844,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes explicitly enabled external speech providers at startup",
       {
         channels: {},
-        messages: { tts: { provider: "gradium" } },
+        tts: { provider: "gradium" },
         plugins: { entries: { gradium: { enabled: true } } },
       } as OpenClawConfig,
       ["browser", "gradium", "memory-core"],
@@ -853,14 +853,12 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes active persona speech providers at startup",
       {
         channels: {},
-        messages: {
-          tts: {
-            persona: "narrator",
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          persona: "narrator",
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -871,13 +869,11 @@ describe("resolveGatewayStartupPluginIds", () => {
       "includes agent-inherited active persona speech providers at startup",
       {
         channels: {},
-        messages: {
-          tts: {
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -893,13 +889,11 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {
           "demo-channel": { tts: { persona: "narrator" } },
         },
-        messages: {
-          tts: {
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -916,13 +910,11 @@ describe("resolveGatewayStartupPluginIds", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            personas: {
-              narrator: {
-                label: "Narrator",
-                provider: "microsoft",
-              },
+        tts: {
+          personas: {
+            narrator: {
+              label: "Narrator",
+              provider: "microsoft",
             },
           },
         },
@@ -933,11 +925,9 @@ describe("resolveGatewayStartupPluginIds", () => {
       "honors disabled speech provider config blocks at startup",
       {
         channels: {},
-        messages: {
-          tts: {
-            provider: "microsoft",
-            providers: { microsoft: { enabled: false } },
-          },
+        tts: {
+          provider: "microsoft",
+          providers: { microsoft: { enabled: false } },
         },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -946,7 +936,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       "honors explicit plugin disablement for configured speech providers",
       {
         channels: {},
-        messages: { tts: { provider: "microsoft" } },
+        tts: { provider: "microsoft" },
         plugins: { entries: { microsoft: { enabled: false } } },
       } as OpenClawConfig,
       ["browser", "memory-core"],

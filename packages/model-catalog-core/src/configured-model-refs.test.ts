@@ -26,9 +26,7 @@ describe("configured model refs", () => {
         hooks: {
           mappings: [{ model: "openai/gpt-5.5-nano" }],
         },
-        messages: {
-          tts: { summaryModel: "openai/gpt-5.5-mini" },
-        },
+        tts: { summaryModel: "openai/gpt-5.5-mini" },
         channels: {
           modelByChannel: {
             discord: {
@@ -49,7 +47,7 @@ describe("configured model refs", () => {
       { path: "agents.list.0.utilityModel", value: "openai/gpt-5.5-nano" },
       { path: "channels.modelByChannel.discord.guild", value: "anthropic/claude-opus-4-8" },
       { path: "hooks.mappings.0.model", value: "openai/gpt-5.5-nano" },
-      { path: "messages.tts.summaryModel", value: "openai/gpt-5.5-mini" },
+      { path: "tts.summaryModel", value: "openai/gpt-5.5-mini" },
     ]);
   });
 
