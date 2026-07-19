@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { applyCliProfileEnv } from "./profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
@@ -28,6 +29,7 @@ const mockWriteConfigFile = vi.fn<
   ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
+const mockValidateTouchedTextModelRefs = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
@@ -59,6 +61,10 @@ vi.mock("../secrets/resolve.js", () => ({
 
 vi.mock("../config/runtime-schema.js", () => ({
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
+}));
+
+vi.mock("./config-model-validation.js", () => ({
+  validateTouchedTextModelRefs: (...args: unknown[]) => mockValidateTouchedTextModelRefs(...args),
 }));
 
 vi.mock("../gateway/config-reload-plan.js", () => ({
@@ -497,6 +503,7 @@ describe("config cli", () => {
       throw new ExitError(code, errorMessages || undefined);
     });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
+    mockValidateTouchedTextModelRefs.mockResolvedValue(0);
   });
 
   describe("config set - issue #6070", () => {
@@ -677,6 +684,67 @@ describe("config cli", () => {
       });
       expect(written.agents?.defaults?.models).toEqual({
         "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+      expect(mockValidateTouchedTextModelRefs).toHaveBeenCalledWith({
+        config: written,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+      });
+    });
+
+    it("rejects an unresolved primary model before writing config", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockValidateTouchedTextModelRefs.mockRejectedValueOnce(
+        new Error(
+          'Cannot set model reference "missing/nope" at agents.defaults.model.primary: Unknown model: missing/nope. Run openclaw models list to list available models.',
+        ),
+      );
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.defaults.model.primary", "missing/nope"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes('Cannot set model reference "missing/nope"');
+      expectErrorIncludes("openclaw models list");
+    });
+
+    it("reports an unresolved primary model in dry-run JSON without writing config", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockValidateTouchedTextModelRefs.mockRejectedValueOnce(
+        new Error(
+          'Cannot set model reference "missing/nope" at agents.defaults.model.primary: Unknown model: missing/nope. Run openclaw models list to list available models.',
+        ),
+      );
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "agents.defaults.model.primary",
+          '"missing/nope"',
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as ConfigSetDryRunResult;
+      expect(payload).toMatchObject({
+        ok: false,
+        checks: { resolvability: true, resolvabilityComplete: true },
+        refsChecked: 1,
+        errors: [
+          {
+            kind: "model",
+            message: expect.stringContaining('Cannot set model reference "missing/nope"'),
+          },
+        ],
       });
     });
 

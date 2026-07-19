@@ -73,6 +73,7 @@ import {
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { validateTouchedTextModelRefs } from "./config-model-validation.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type {
   ConfigSetDryRunError,
@@ -2106,6 +2107,7 @@ function formatDryRunFailureMessage(params: {
   const missingPathErrors = errors.filter((error) => error.kind === "missing-path");
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
+  const modelErrors = errors.filter((error) => error.kind === "model");
   const lines: string[] = [];
   if (missingPathErrors.length > 0) {
     lines.push(...missingPathErrors.map((error) => error.message));
@@ -2126,6 +2128,10 @@ function formatDryRunFailureMessage(params: {
     if (resolveErrors.length > 5) {
       lines.push(`- ... ${resolveErrors.length - 5} more`);
     }
+  }
+  if (modelErrors.length > 0) {
+    lines.push("Dry run failed: model reference validation failed.");
+    lines.push(...modelErrors.map((error) => `- ${error.message}`));
   }
   if (skippedExecRefs > 0) {
     lines.push(
@@ -2227,6 +2233,13 @@ async function runConfigOperations(params: {
       allowExecInDryRun: Boolean(options.allowExec),
     });
     const errors: ConfigSetDryRunError[] = [];
+    const modelRefsChecked = await validateTouchedTextModelRefs({
+      config: nextConfig,
+      touchedPaths: operations.map((operation) => operation.setPath),
+    }).catch((error: unknown) => {
+      errors.push({ kind: "model", message: String(error) });
+      return 1;
+    });
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
       errors.push(
         ...policyIssueLines.map((message) => ({
@@ -2268,12 +2281,12 @@ async function runConfigOperations(params: {
           requiresFullSchemaValidation ||
           policyIssueLines.length > 0 ||
           pluginIntegrationProviderErrors.length > 0,
-        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
+        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefsChecked > 0,
         resolvabilityComplete:
-          (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
+          (hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefsChecked > 0) &&
           selectedDryRunRefs.skippedExecRefs.length === 0,
       },
-      refsChecked: selectedDryRunRefs.refsToResolve.length,
+      refsChecked: selectedDryRunRefs.refsToResolve.length + modelRefsChecked,
       skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
       ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
     };
@@ -2324,6 +2337,11 @@ async function runConfigOperations(params: {
       ].join("\n"),
     );
   }
+
+  await validateTouchedTextModelRefs({
+    config: nextConfig,
+    touchedPaths: operations.map((operation) => operation.setPath),
+  });
 
   await replaceConfigFile({
     nextConfig,
