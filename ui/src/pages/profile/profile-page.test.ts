@@ -356,6 +356,12 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   document.body.append(provider);
 
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
+  const identityState = page as unknown as {
+    selfUser: AuthenticatedUser | null;
+    ownProfile: UserProfile | null;
+  };
+  expect(identityState.selfUser?.id).toBe(profile.id);
+  expect(identityState.ownProfile?.id).toBe(profile.id);
   expect(page.textContent).toContain("ada@example.test, ada@work.test");
   expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
 
