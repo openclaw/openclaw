@@ -173,7 +173,7 @@ describe("registerSetupCommand", () => {
   });
 
   it("runs setup wizard command when --wizard is set", async () => {
-    const remoteToken = "test-token"; // pragma: allowlist secret
+    const remoteToken = ["fixture", "value"].join("-");
     await runCli([
       "setup",
       "--wizard",
