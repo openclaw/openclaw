@@ -650,7 +650,7 @@ export async function runDoctorConfigPreflight(
             !w.includes("already existed in shared state") &&
             !w.includes("already exists in shared state") &&
             !w.includes("conflicting plugin install metadata") &&
-            !w.includes("State dir migration skipped")
+            !w.includes("State dir migration skipped"),
         );
         if (realWarnings.length > 0) {
           throwStartupMigrationRefusal(
