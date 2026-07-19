@@ -202,6 +202,27 @@ describe("applyClawUpdatePlan", () => {
   });
 
   it("stops before agent mutation when a package update fails", async () => {
+    const targetPackage = {
+      kind: "skill" as const,
+      source: "clawhub" as const,
+      ref: "search",
+      version: "1.0.0",
+    };
+    const packageDetails = {
+      ...targetPackage,
+      integrity: "sha256:search",
+      ownerAction: "install" as const,
+    };
+    const desiredDigest = `sha256:${createHash("sha256")
+      .update(
+        stableStringify({
+          package: targetPackage,
+          integrity: packageDetails.integrity,
+          installId: undefined,
+          riskWarning: undefined,
+        }),
+      )
+      .digest("hex")}`;
     const updatePlan = plan([
       {
         kind: "package",
@@ -210,19 +231,34 @@ describe("applyClawUpdatePlan", () => {
         target: "packages.skill:search",
         blocked: false,
         reason: "target adds package",
+        desiredDigest,
       },
     ]);
+    const packageManifest = { ...manifest, packages: [targetPackage] };
+    const packageAddPlan = {
+      ...addPlan,
+      actions: [
+        {
+          kind: "package" as const,
+          id: "skill:search",
+          action: "install" as const,
+          target: "clawhub:search@1.0.0",
+          details: packageDetails,
+          blocked: false,
+        },
+      ],
+    };
     const commitConfig = vi.fn();
 
     await expect(
       applyClawUpdatePlan(
         updatePlan,
-        { targetManifest: manifest, targetSource: source },
+        { targetManifest: packageManifest, targetSource: source },
         {
           config: {},
           ...consent(updatePlan),
           rebuildPlan: vi.fn(async () => updatePlan),
-          buildAddPlan: vi.fn(async () => addPlan),
+          buildAddPlan: vi.fn(async () => packageAddPlan),
           readInstall: vi.fn(() => install),
           persistInstall: vi.fn(),
           applyPackage: vi.fn(async () => {

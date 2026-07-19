@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { applyClawCronUpdate } from "./cron-update.js";
-import { CLAW_CRON_REF_SCHEMA_VERSION, type PersistedClawCronRef } from "./cron.js";
+import {
+  CLAW_CRON_REF_SCHEMA_VERSION,
+  clawCronGatewayInput,
+  type PersistedClawCronRef,
+} from "./cron.js";
 import { CLAW_OUTPUT_STABILITY, type ClawCronJob, type ClawManifest } from "./types.js";
 import { CLAW_UPDATE_PLAN_SCHEMA_VERSION, type ClawUpdatePlan } from "./update-plan.js";
 
@@ -35,6 +40,20 @@ function ref(job: ClawCronJob, schedulerJobId: string): PersistedClawCronRef {
     job,
     createdAtMs: 10,
     updatedAtMs: 10,
+  };
+}
+
+function cronReadView(agentId: string, value: PersistedClawCronRef) {
+  const normalized = normalizeCronJobCreate(clawCronGatewayInput(agentId, value));
+  if (!normalized || !value.schedulerJobId) {
+    throw new Error("expected complete cron provenance");
+  }
+  return {
+    ...normalized,
+    id: value.schedulerJobId,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    state: {},
   };
 }
 
@@ -94,6 +113,7 @@ describe("applyClawCronUpdate", () => {
     const remove = vi.fn(async () => ({ ok: true }));
     const upsertRef = vi.fn();
     const deleteRef = vi.fn();
+    const refs = [ref(oldDaily, "scheduler-daily"), ref(legacy, "scheduler-legacy")];
     const execution = await applyClawCronUpdate(
       plan([
         {
@@ -123,8 +143,13 @@ describe("applyClawCronUpdate", () => {
       ]),
       manifest(),
       {
-        cronGateway: { add, remove },
-        readRefs: () => [ref(oldDaily, "scheduler-daily"), ref(legacy, "scheduler-legacy")],
+        cronGateway: {
+          add,
+          get: async (id) =>
+            cronReadView("worker", refs.find((item) => item.schedulerJobId === id)!),
+          remove,
+        },
+        readRefs: () => refs,
         upsertRef,
         deleteRef,
         nowMs: 20,
@@ -133,14 +158,14 @@ describe("applyClawCronUpdate", () => {
 
     expect(execution.appliedIds).toEqual(["daily", "weekly", "legacy"]);
     expect(remove).toHaveBeenCalledWith("scheduler-legacy");
-    expect(upsertRef).toHaveBeenCalledTimes(2);
+    expect(upsertRef).toHaveBeenCalledTimes(5);
     expect(deleteRef).toHaveBeenCalledTimes(1);
 
     await execution.rollback();
 
     expect(remove).toHaveBeenCalledWith("scheduler-weekly");
     expect(add).toHaveBeenCalledTimes(4);
-    expect(upsertRef).toHaveBeenCalledTimes(4);
+    expect(upsertRef).toHaveBeenCalledTimes(7);
     expect(deleteRef).toHaveBeenCalledTimes(2);
   });
 
@@ -160,8 +185,13 @@ describe("applyClawCronUpdate", () => {
         ]),
         manifest(),
         {
-          cronGateway: { add: async () => ({ id: "unexpected-copy" }), remove },
+          cronGateway: {
+            add: async () => ({ id: "unexpected-copy" }),
+            get: async () => cronReadView("worker", ref(oldDaily, "scheduler-daily")),
+            remove,
+          },
           readRefs: () => [ref(oldDaily, "scheduler-daily")],
+          upsertRef: vi.fn(),
         },
       ),
     ).rejects.toThrow("did not converge");
@@ -187,11 +217,44 @@ describe("applyClawCronUpdate", () => {
             add: async () => {
               throw new Error("connection lost");
             },
+            get: vi.fn(),
             remove: vi.fn(),
           },
           readRefs: () => [],
+          upsertRef: vi.fn(),
         },
       ),
     ).rejects.toMatchObject({ partial: true });
+  });
+
+  it("rejects a live cron definition changed after planning", async () => {
+    const remove = vi.fn();
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "legacy",
+            action: "remove",
+            target: "scheduler-legacy",
+            blocked: false,
+            reason: "removed",
+          },
+        ]),
+        manifest(),
+        {
+          cronGateway: {
+            add: vi.fn(),
+            get: async () => ({
+              ...cronReadView("worker", ref(legacy, "scheduler-legacy")),
+              payload: { kind: "agentTurn", message: "Operator edit" },
+            }),
+            remove,
+          },
+          readRefs: () => [ref(legacy, "scheduler-legacy")],
+        },
+      ),
+    ).rejects.toThrow("changed after planning");
+    expect(remove).not.toHaveBeenCalled();
   });
 });

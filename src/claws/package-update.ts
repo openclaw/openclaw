@@ -3,18 +3,12 @@ import { stableStringify } from "../agents/stable-stringify.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
-  applyClawPackageRemovals,
-  planClawPackageRemovals,
-  type PackageRemovalDeps,
-} from "./package-remove.js";
-import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
 } from "./package-update-provenance.js";
 import { installClawPackages, type PackageInstallerDeps } from "./packages.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
-  readClawInstallRecord,
   readClawPackageRefs,
   type PersistedClawPackageRef,
 } from "./provenance.js";
@@ -53,10 +47,6 @@ export async function applyClawPackageUpdate(
     readRefs?: typeof readClawPackageRefs;
     replaceExpected?: typeof replaceClawPackageRefExpected;
     packageDeps?: PackageInstallerDeps;
-    packageRemovalDeps?: PackageRemovalDeps;
-    readInstall?: typeof readClawInstallRecord;
-    planRemovals?: typeof planClawPackageRemovals;
-    applyRemovals?: typeof applyClawPackageRemovals;
     nowMs?: number;
   },
 ): Promise<ClawPackageUpdateExecution> {
@@ -69,9 +59,6 @@ export async function applyClawPackageUpdate(
   const installPackages = options.installPackages ?? installClawPackages;
   const readRefs = options.readRefs ?? readClawPackageRefs;
   const replaceExpected = options.replaceExpected ?? replaceClawPackageRefExpected;
-  const readInstall = options.readInstall ?? readClawInstallRecord;
-  const planRemovals = options.planRemovals ?? planClawPackageRemovals;
-  const applyRemovals = options.applyRemovals ?? applyClawPackageRemovals;
   const currentRefs = new Map(
     readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [packageKey(ref), ref]),
   );
@@ -111,7 +98,7 @@ export async function applyClawPackageUpdate(
           false,
         );
       }
-      if (action.action === "release") {
+      if (action.action === "release" || action.action === "remove") {
         if (!previous) {
           throw new ClawPackageUpdateError(
             `Package reference ${JSON.stringify(action.id)} disappeared.`,
@@ -123,54 +110,6 @@ export async function applyClawPackageUpdate(
         appliedIds.push(action.id);
         continue;
       }
-      if (action.action === "remove") {
-        if (!previous) {
-          throw new ClawPackageUpdateError(
-            `Package reference ${JSON.stringify(action.id)} disappeared.`,
-            false,
-          );
-        }
-        const install = readInstall(updatePlan.agentId, options);
-        if (!install) {
-          throw new ClawPackageUpdateError("The Claw install record disappeared.", false);
-        }
-        const decisions = await planRemovals(install, [previous], {
-          ...options,
-          deps: options.packageRemovalDeps,
-        });
-        const decision = decisions[0];
-        if (!decision || decision.action !== "uninstall" || decision.blocked) {
-          throw new ClawPackageUpdateError(
-            decision?.reason ?? `Package ${JSON.stringify(action.id)} is no longer removable.`,
-            false,
-          );
-        }
-        externalMutations.push(`${previous.kind}:${previous.ref}@${previous.version}`);
-        const results = await applyRemovals(decisions, {
-          ...options,
-          deps: options.packageRemovalDeps,
-        });
-        const result = results[0];
-        if (!result || result.action !== "uninstalled") {
-          throw new ClawPackageUpdateError(
-            result?.reason ?? `Package ${JSON.stringify(action.id)} was not removed.`,
-            true,
-          );
-        }
-        const removedRef = readRefs({ ...options, agentId: updatePlan.agentId }).find(
-          (ref) => packageKey(ref) === action.id,
-        );
-        if (!removedRef) {
-          throw new ClawPackageUpdateError(
-            `Package reference ${JSON.stringify(action.id)} disappeared after uninstall.`,
-            true,
-          );
-        }
-        replaceExpected(removedRef, undefined, options);
-        appliedIds.push(action.id);
-        continue;
-      }
-
       const target = targets.get(action.id);
       const targetAction = targetAddPlan.actions.find(
         (candidate) => candidate.kind === "package" && candidate.id === action.id,
@@ -293,6 +232,12 @@ export async function applyClawPackageUpdate(
       appliedIds.push(action.id);
     }
   } catch (error) {
+    if (externalMutations.length > 0) {
+      throw new ClawPackageUpdateError(
+        `${error instanceof Error ? error.message : String(error)}; package artifact outcome requires reconciliation`,
+        true,
+      );
+    }
     try {
       await rollback();
     } catch (rollbackError) {
