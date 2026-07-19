@@ -132,13 +132,11 @@ async function main(): Promise<void> {
             "gateway",
             "call",
             "safety.events.list",
-            "--url",
-            `ws://127.0.0.1:${port}`,
             "--params",
             JSON.stringify({ eventType: "ai_safety.external_content.consumed", limit: 10 }),
             "--json",
           ],
-          { cwd: process.cwd(), env, timeout: 2_000 },
+          { cwd: process.cwd(), env, timeout: 10_000 },
         );
         queryText = result.stdout;
         const parsed = JSON.parse(queryText) as { events?: unknown[] };
