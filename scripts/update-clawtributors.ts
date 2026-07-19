@@ -310,16 +310,16 @@ visibleEntries.sort((a, b) => {
   return a.display.localeCompare(b.display);
 });
 
-const markdownLines: string[] = [];
+const avatarLines: string[] = [];
 for (let i = 0; i < visibleEntries.length; i += PER_LINE) {
   const chunk = visibleEntries.slice(i, i + PER_LINE);
   const parts = chunk.map((entry) => {
-    return `[![${escapeMarkdownLabel(entry.display)}](${entry.avatar_url})](${entry.html_url})`;
+    return `<a href="${entry.html_url}"><img src="${entry.avatar_url}" width="${AVATAR_SIZE}" height="${AVATAR_SIZE}" alt="${escapeHtmlAttribute(entry.display)}"></a>`;
   });
-  markdownLines.push(parts.join(" "));
+  avatarLines.push(parts.join(" "));
 }
 
-const block = `${CLAWTRIBUTORS_START}\n${markdownLines.join("\n")}\n${CLAWTRIBUTORS_END}`;
+const block = `${CLAWTRIBUTORS_START}\n${avatarLines.join("\n")}\n${CLAWTRIBUTORS_END}`;
 const hiddenBlock = buildHiddenReadmeBlock(entries, visibleEntries);
 const hiddenRange = findHiddenReadmeRange(currentReadme);
 const readmeWithoutMeta = hiddenRange
@@ -836,8 +836,12 @@ function normalizeIdentifier(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function escapeMarkdownLabel(value: string): string {
-  return value.replace(/([\\[\]])/g, "\\$1");
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function parseReadmeEntries(
@@ -867,7 +871,7 @@ function parseReadmeEntries(
     if (!href || !src || !alt) {
       continue;
     }
-    entriesValue.push({ html_url: href, avatar_url: src, display: alt });
+    entriesValue.push({ html_url: href, avatar_url: src, display: decodeHtmlAttribute(alt) });
   }
   const standalone = /<img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of blockValue.matchAll(standalone)) {
@@ -878,9 +882,21 @@ function parseReadmeEntries(
     if (entriesValue.some((entry) => entry.display === alt && entry.avatar_url === src)) {
       continue;
     }
-    entriesValue.push({ html_url: fallbackHref(alt), avatar_url: src, display: alt });
+    entriesValue.push({
+      html_url: fallbackHref(alt),
+      avatar_url: src,
+      display: decodeHtmlAttribute(alt),
+    });
   }
   return entriesValue;
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
 }
 
 function parseHiddenReadmeLogins(content: string): string[] {
