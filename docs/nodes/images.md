@@ -33,7 +33,7 @@ The WhatsApp channel runs on Baileys Web. This page covers media handling rules 
   - **Video:** pass-through up to 16MB.
   - **Documents:** anything else, up to 100MB, with filename preserved when available.
 - WhatsApp GIF-style playback: send an MP4 with `gifPlayback: true` (CLI: `--gif-playback`) so mobile clients loop it inline.
-- MIME detection prefers sniffed magic bytes, then the file extension, then response headers; a generic sniffed container (`application/octet-stream`, `zip`) never overrides a more specific extension mapping (for example XLSX vs ZIP).
+- MIME detection prefers sniffed magic bytes, then the file extension, then response headers. A generic sniffed container (`application/octet-stream`, `zip`) overrides image, audio, and video extension or header claims so misleading media filenames cannot reclassify ZIP-like bytes; document refinements such as XLSX over ZIP remain trusted.
 - Caption comes from `--message` or `reply.text`; empty caption is allowed.
 - Logging: non-verbose shows `↩️`/`✅`; verbose includes size and source path/URL.
 

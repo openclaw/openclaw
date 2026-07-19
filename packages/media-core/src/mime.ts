@@ -1,7 +1,7 @@
 // Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
-import { extnameFromAnyPath } from "./file-name.js";
+import { createLazyImportLoader } from "./lazy-import.js";
 
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
@@ -86,55 +86,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".yml": "application/yaml",
 };
 
-const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
-  "audio/mp4": "video/mp4",
-  "audio/webm": "video/webm",
-};
-
-// file-type can return generic ZIP when package metadata is outside its sniff window.
-// Only ZIP-backed MIME families may refine that result; arbitrary headers cannot.
-const ZIP_CONTAINER_MIMES = new Set([
-  "application/java-archive",
-  "application/vnd.android.package-archive",
-  "application/vnd.apple.keynote",
-  "application/vnd.apple.numbers",
-  "application/vnd.apple.pages",
-  "application/vnd.google-earth.kmz",
-  "application/vnd.ms-excel.sheet.macroenabled.12",
-  "application/vnd.ms-excel.template.macroenabled.12",
-  "application/vnd.ms-powerpoint.presentation.macroenabled.12",
-  "application/vnd.ms-powerpoint.slideshow.macroenabled.12",
-  "application/vnd.ms-powerpoint.template.macroenabled.12",
-  "application/vnd.ms-visio.drawing",
-  "application/vnd.ms-visio.drawing.macroenabled.12",
-  "application/vnd.ms-visio.stencil",
-  "application/vnd.ms-visio.stencil.macroenabled.12",
-  "application/vnd.ms-visio.template",
-  "application/vnd.ms-visio.template.macroenabled.12",
-  "application/vnd.ms-word.document.macroenabled.12",
-  "application/vnd.ms-word.template.macroenabled.12",
-  "application/vnd.oasis.opendocument.graphics",
-  "application/vnd.oasis.opendocument.graphics-template",
-  "application/vnd.oasis.opendocument.presentation",
-  "application/vnd.oasis.opendocument.presentation-template",
-  "application/vnd.oasis.opendocument.spreadsheet",
-  "application/vnd.oasis.opendocument.spreadsheet-template",
-  "application/vnd.oasis.opendocument.text",
-  "application/vnd.oasis.opendocument.text-template",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/vnd.openxmlformats-officedocument.presentationml.slideshow",
-  "application/vnd.openxmlformats-officedocument.presentationml.template",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
-  "application/x-xpinstall",
-  "model/3mf",
-]);
-
-function isZipContainerMime(mime: string): boolean {
-  return mime.endsWith("+zip") || ZIP_CONTAINER_MIMES.has(mime);
-}
+const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
 
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
@@ -161,7 +113,7 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     return undefined;
   }
   try {
-    const { fileTypeFromBuffer } = await import("file-type");
+    const { fileTypeFromBuffer } = await fileTypeModuleLoader.load();
     const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
     if (type?.mime) {
       return normalizeMimeType(type.mime);
@@ -169,8 +121,19 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   } catch {
     // fall through to manual magic-byte sniffs
   }
-  // Preserve iMessage CAF voice memos; file-type v22 does not detect them.
-  return buffer.toString("ascii", 0, 4) === "caff" ? "audio/x-caf" : undefined;
+  return sniffKnownAudioMagic(buffer);
+}
+
+// Fallbacks for audio containers `file-type` doesn't recognize natively (e.g.
+// Apple's CAF, used by iMessage voice memos when produced by `afconvert`).
+// Without this the host-local-media validator drops these buffers as unknown
+// binary blobs because the sniff returns undefined, even though the file is
+// a valid audio container.
+function sniffKnownAudioMagic(buffer: Buffer): string | undefined {
+  if (buffer.byteLength >= 4 && buffer.toString("ascii", 0, 4) === "caff") {
+    return "audio/x-caf";
+  }
+  return undefined;
 }
 
 /** Extracts a lowercase extension from a local path or HTTP URL pathname. */
@@ -194,7 +157,7 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   } catch {
     // fall back to plain path parsing
   }
-  const ext = extnameFromAnyPath(filePath).toLowerCase();
+  const ext = path.extname(filePath).toLowerCase();
   return ext || undefined;
 }
 
@@ -213,43 +176,68 @@ export function isAudioFileName(fileName?: string | null): boolean {
 }
 
 /** Detects the best MIME type from bytes, file path, and header metadata. */
-export async function detectMime(opts: {
+export function detectMime(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
-  additionalMimeHints?: readonly (string | null | undefined)[];
   filePath?: string;
 }): Promise<string | undefined> {
-  const extMime = MIME_BY_EXT[getFileExtension(opts.filePath) ?? ""];
-  const mimeHints = [opts.headerMime, ...(opts.additionalMimeHints ?? [])]
-    .map((mime) => normalizeMimeType(mime))
-    .filter((mime): mime is string => Boolean(mime));
-  const headerMime = mimeHints[0];
+  return detectMimeImpl(opts);
+}
+
+function isGenericMime(mime?: string): boolean {
+  if (!mime) {
+    return true;
+  }
+  const m = mime.toLowerCase();
+  return m === "application/octet-stream" || m === "application/zip";
+}
+
+/**
+ * Image/audio/video extension or header claims conflict with a generic sniffed
+ * container (ZIP / octet-stream). Document types (e.g. XLSX) may still refine
+ * generic ZIP bytes; media families must not.
+ */
+function conflictsWithGenericContainer(mime?: string): boolean {
+  const kind = mediaKindFromMime(normalizeMimeType(mime));
+  return kind === "image" || kind === "audio" || kind === "video";
+}
+
+async function detectMimeImpl(opts: {
+  buffer?: Buffer;
+  headerMime?: string | null;
+  filePath?: string;
+}): Promise<string | undefined> {
+  const ext = getFileExtension(opts.filePath);
+  const extMime = ext ? MIME_BY_EXT[ext] : undefined;
+
+  const headerMime = normalizeMimeType(opts.headerMime);
   const sniffed = await sniffMime(opts.buffer);
-  const sniffedGenericContainer =
-    sniffed === "application/octet-stream" || sniffed === "application/zip";
+  const sniffedGenericContainer = sniffed && isGenericMime(sniffed);
+  const trustedExtMime =
+    sniffedGenericContainer && conflictsWithGenericContainer(extMime) ? undefined : extMime;
+  const trustedHeaderMime =
+    sniffedGenericContainer && conflictsWithGenericContainer(headerMime) ? undefined : headerMime;
 
   // Prefer sniffed types, but don't let generic container types override a more
-  // specific extension or known container metadata (e.g. XLSX vs ZIP).
-  const specificExtMime =
-    extMime && extMime !== sniffed && !extMime.startsWith("image/") ? extMime : undefined;
-  const genericContainerMime =
-    sniffed === "application/zip"
-      ? [extMime, ...mimeHints].find((mime) => mime && isZipContainerMime(mime))
-      : sniffed === "application/octet-stream"
-        ? (specificExtMime ?? mimeHints.find((mime) => mime !== "application/octet-stream"))
-        : undefined;
-  const inferred = sniffedGenericContainer
-    ? (genericContainerMime ?? sniffed)
-    : (sniffed ?? extMime);
-  // file-type defaults these containers to video without parsing their tracks.
-  // Preserve a concrete audio hint only for those documented ambiguous results.
-  const audioContainerHint = mimeHints.find(
-    (mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred,
-  );
-  if (audioContainerHint) {
-    return audioContainerHint;
+  // specific document extension mapping (e.g. XLSX vs ZIP). Image/audio/video
+  // claims against generic containers are untrusted so families stay consistent.
+  if (sniffed && (!isGenericMime(sniffed) || !trustedExtMime)) {
+    return sniffed;
   }
-  return inferred ?? headerMime;
+  if (trustedExtMime) {
+    return trustedExtMime;
+  }
+  if (trustedHeaderMime && !isGenericMime(trustedHeaderMime)) {
+    return trustedHeaderMime;
+  }
+  if (sniffed) {
+    return sniffed;
+  }
+  if (trustedHeaderMime) {
+    return trustedHeaderMime;
+  }
+
+  return undefined;
 }
 
 /** Returns the preferred file extension for a normalized or raw MIME string. */

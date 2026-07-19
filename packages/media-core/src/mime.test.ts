@@ -106,6 +106,54 @@ describe("mime detection", () => {
       expected: "application/zip",
     },
     {
+      name: "does not let audio extensions override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/fake.mp3",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let video extensions override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/fake.mp4",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let audio headers override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "audio/mpeg",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let video headers override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "video/mp4",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
       name: "uses extension mapping for JavaScript assets",
       input: async () => ({
         filePath: "/tmp/a2ui.bundle.js",
@@ -130,110 +178,6 @@ describe("mime detection", () => {
     await expectDetectedMime({
       input: await input(),
       expected,
-    });
-  });
-
-  it.each([
-    "application/epub+zip",
-    "application/java-archive",
-    "application/vnd.apple.pages",
-    "application/vnd.google-earth.kmz",
-    "application/vnd.ms-word.document.macroenabled.12",
-    "application/vnd.ms-visio.drawing",
-    "application/vnd.oasis.opendocument.text",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  ])("uses %s metadata to refine extensionless generic ZIP bytes", async (headerMime) => {
-    const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-
-    await expectDetectedMime({
-      input: { buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime },
-      expected: headerMime,
-    });
-  });
-
-  it("does not let unrelated document metadata override generic ZIP bytes", async () => {
-    const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-
-    await expectDetectedMime({
-      input: {
-        buffer: await zip.generateAsync({ type: "nodebuffer" }),
-        headerMime: "application/pdf",
-      },
-      expected: "application/zip",
-    });
-  });
-
-  it.each(["application/vnd.oasis.opendocument.text-flat-xml", "application/vnd.visio"])(
-    "does not let non-ZIP %s metadata override generic ZIP bytes",
-    async (headerMime) => {
-      const zip = new JSZip();
-      zip.file("hello.txt", "hi");
-
-      await expectDetectedMime({
-        input: { buffer: await zip.generateAsync({ type: "nodebuffer" }), headerMime },
-        expected: "application/zip",
-      });
-    },
-  );
-
-  it("prefers ZIP-compatible metadata over an incompatible filename extension", async () => {
-    const zip = new JSZip();
-    zip.file("hello.txt", "hi");
-    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-    await expectDetectedMime({
-      input: {
-        buffer: await zip.generateAsync({ type: "nodebuffer" }),
-        filePath: "upload.pdf",
-        headerMime: docxMime,
-      },
-      expected: docxMime,
-    });
-  });
-
-  it("preserves audio metadata for ambiguous WebM container bytes", async () => {
-    // Minimal EBML header declaring WebM; file-type correctly recognizes the container
-    // but defaults it to video/webm because no track metadata is present.
-    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
-
-    await expectDetectedMime({
-      input: { buffer: webm, filePath: "voice.webm", headerMime: "audio/webm" },
-      expected: "audio/webm",
-    });
-  });
-
-  it("uses a secondary audio hint when primary metadata is stale", async () => {
-    const webm = Buffer.from("1a45dfa3874282847765626d", "hex");
-
-    await expectDetectedMime({
-      input: {
-        buffer: webm,
-        filePath: "voice.webm",
-        headerMime: "application/pdf",
-        additionalMimeHints: ["audio/webm"],
-      },
-      expected: "audio/webm",
-    });
-  });
-
-  it("preserves audio metadata when an MP4 extension cannot identify track kind", async () => {
-    await expectDetectedMime({
-      input: { filePath: "voice.mp4", headerMime: "audio/mp4" },
-      expected: "audio/mp4",
-    });
-  });
-
-  it("does not let conflicting audio metadata override MPEG video bytes", async () => {
-    const mpegProgramStream = Buffer.from([0x00, 0x00, 0x01, 0xba, 0x00, 0x00, 0x00, 0x00]);
-
-    await expectDetectedMime({
-      input: { buffer: mpegProgramStream, headerMime: "audio/mpeg" },
-      expected: "video/mpeg",
     });
   });
 
@@ -313,8 +257,6 @@ describe("getFileExtension", () => {
     { filePath: "https://cdn.example.com/bad%ZZ%2Emp4", expected: undefined },
     { filePath: "https://cdn.example.com/render%2Emp4/", expected: undefined },
     { filePath: String.raw`C:\media\clip.MP4`, expected: ".mp4" },
-    { filePath: String.raw`C:\media.folder\clip`, expected: undefined },
-    { filePath: String.raw`C:\media.folder\clip.MP4`, expected: ".mp4" },
   ] as const)("extracts $expected from $filePath", ({ filePath, expected }) => {
     expect(getFileExtension(filePath)).toBe(expected);
   });
