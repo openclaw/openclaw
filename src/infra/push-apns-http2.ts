@@ -37,6 +37,7 @@ type ApnsResponseBodyCapture = {
 type ConnectApnsHttp2SessionParams = {
   authority: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 };
 
 /** Parameters for validating APNs reachability through an explicit proxy. */
@@ -54,6 +55,56 @@ type ProbeApnsHttp2ReachabilityViaProxyResult = {
   /** Raw response headers from APNs. Includes apns-id when the connection was truly tunneled to Apple. */
   responseHeaders: Record<string, string>;
 };
+
+function apnsAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
+}
+
+async function awaitAbortableDestroyable<T extends { destroy: () => void }>(
+  pending: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (!signal) {
+    return await pending;
+  }
+  if (signal.aborted) {
+    void pending.then((value) => value.destroy()).catch(() => undefined);
+    throw apnsAbortError(signal);
+  }
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      void pending.then((value) => value.destroy()).catch(() => undefined);
+      reject(apnsAbortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void pending.then(
+      (value) => {
+        if (settled) {
+          value.destroy();
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
 
 function assertApnsAuthority(authority: string): ApnsAuthority {
   let parsed: URL;
@@ -106,20 +157,29 @@ async function openApnsTlsTunnel(params: {
   targetHost: string;
   targetPort: number;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<tls.TLSSocket> {
   // CONNECT ignores URL paths. Strip path metadata before Proxyline sees it so
   // tokens embedded in a configured proxy URL cannot surface in errors.
   const proxyUrl = normalizeConnectProxyUrl(params.proxyUrl);
   const deadline = Date.now() + params.timeoutMs;
-  const proxySocket = await openProxyConnectTunnel({
-    proxyUrl,
-    ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-    targetHost: params.targetHost,
-    targetPort: params.targetPort,
-    timeoutMs: params.timeoutMs,
-  });
+  const proxySocket = await awaitAbortableDestroyable(
+    openProxyConnectTunnel({
+      proxyUrl,
+      ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
+      targetHost: params.targetHost,
+      targetPort: params.targetPort,
+      timeoutMs: params.timeoutMs,
+    }),
+    params.signal,
+  );
 
   const abortController = new AbortController();
+  const abortFromCaller = () => abortController.abort(apnsAbortError(params.signal!));
+  params.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  if (params.signal?.aborted) {
+    abortFromCaller();
+  }
   let targetTlsSocket: tls.TLSSocket | undefined;
   let timeout: NodeJS.Timeout | undefined;
   try {
@@ -157,6 +217,7 @@ async function openApnsTlsTunnel(params: {
     if (timeout) {
       clearTimeout(timeout);
     }
+    params.signal?.removeEventListener("abort", abortFromCaller);
     abortController.abort();
   }
 }
@@ -166,6 +227,7 @@ async function openProxiedApnsHttp2Session(params: {
   proxyUrl: ActiveManagedProxyUrl;
   proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<http2.ClientHttp2Session> {
   const apnsHost = new URL(params.authority).hostname;
   const tlsSocket = await openApnsTlsTunnel({
@@ -174,13 +236,24 @@ async function openProxiedApnsHttp2Session(params: {
     targetHost: apnsHost,
     targetPort: 443,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
+
+  if (params.signal?.aborted) {
+    tlsSocket.destroy();
+    throw apnsAbortError(params.signal);
+  }
 
   // The CONNECT helper already completed the target TLS handshake; reuse that
   // socket so the session cannot open a separate direct route.
-  return http2.connect(params.authority, {
+  const session = http2.connect(params.authority, {
     createConnection: () => tlsSocket,
   });
+  if (params.signal?.aborted) {
+    session.destroy();
+    throw apnsAbortError(params.signal);
+  }
+  return session;
 }
 
 /** Connects to APNs directly, or through the active managed proxy when present. */
@@ -191,7 +264,15 @@ export async function connectApnsHttp2Session(
   const timeoutMs = resolveApnsHttp2TimeoutMs(params.timeoutMs);
   const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
-    return http2.connect(authority);
+    if (params.signal?.aborted) {
+      throw apnsAbortError(params.signal);
+    }
+    const session = http2.connect(authority);
+    if (params.signal?.aborted) {
+      session.destroy();
+      throw apnsAbortError(params.signal);
+    }
+    return session;
   }
 
   return await openProxiedApnsHttp2Session({
@@ -199,6 +280,7 @@ export async function connectApnsHttp2Session(
     proxyUrl,
     proxyTls: getActiveManagedProxyTlsOptions(),
     timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 

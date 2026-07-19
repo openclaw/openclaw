@@ -510,6 +510,47 @@ describe("push APNs send semantics", () => {
     expect(result.transport).toBe("direct");
   });
 
+  it("guards direct wake transport with current ownership and lifecycle", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-guarded-wake",
+      environment: "production",
+      sendResult: {
+        status: 200,
+        apnsId: "apns-guarded-wake-id",
+        body: "",
+      },
+    });
+    const controller = new AbortController();
+    const isCurrent = vi.fn().mockResolvedValue(true);
+
+    await sendApnsBackgroundWake({
+      registration,
+      nodeId: "ios-node-guarded-wake",
+      wakeReason: "node.invoke",
+      auth,
+      requestSender: send,
+      signal: controller.signal,
+      isCurrent,
+    });
+
+    expect(isCurrent).toHaveBeenCalledTimes(1);
+    const sent = requireSendRequest(send);
+    expect(sent.signal).toBe(controller.signal);
+    expect(sent.isCurrent).toBe(isCurrent);
+
+    await expect(
+      sendApnsBackgroundWake({
+        registration,
+        nodeId: "ios-node-guarded-wake",
+        wakeReason: "node.invoke",
+        auth,
+        requestSender: send,
+        isCurrent: vi.fn().mockResolvedValue(false),
+      }),
+    ).rejects.toThrow("APNs send invalidated");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("sends exec approval alert pushes with generic modal-only metadata", async () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-approval-alert",

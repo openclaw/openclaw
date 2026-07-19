@@ -196,6 +196,22 @@ describe("connectApnsHttp2Session", () => {
     expect(connectSpy).toHaveBeenCalledWith("https://api.sandbox.push.apple.com");
   });
 
+  it("rejects an already invalidated direct APNs setup before opening a session", async () => {
+    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+    const controller = new AbortController();
+    controller.abort(new Error("pairing removed"));
+
+    await expect(
+      connectApnsHttp2Session({
+        authority: "https://api.sandbox.push.apple.com",
+        timeoutMs: 10_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("pairing removed");
+
+    expect(connectSpy).not.toHaveBeenCalled();
+  });
+
   it("normalizes the default APNs HTTPS port", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
@@ -262,6 +278,35 @@ describe("connectApnsHttp2Session", () => {
     const createConnection = connectCall[1].createConnection;
     expect(typeof createConnection).toBe("function");
     expect(createConnection?.(new URL("https://api.push.apple.com"), {})).toBe(fakeTlsSocket);
+  });
+
+  it("rejects an invalidated proxy setup and destroys the late tunnel socket", async () => {
+    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
+      loopbackMode: "gateway-only",
+    });
+    const controller = new AbortController();
+    let resolveTunnel!: (value: typeof fakeProxySocket) => void;
+    tunnelSpy.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveTunnel = resolve;
+      }),
+    );
+    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+
+    const connecting = connectApnsHttp2Session({
+      authority: "https://api.push.apple.com",
+      timeoutMs: 10_000,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(tunnelSpy).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("pairing removed"));
+
+    await expect(connecting).rejects.toThrow("pairing removed");
+    resolveTunnel(fakeProxySocket);
+    await vi.waitFor(() => expect(fakeProxySocket.destroy).toHaveBeenCalledTimes(1));
+    expect(tlsConnectSpy).not.toHaveBeenCalled();
+    expect(connectSpy).not.toHaveBeenCalled();
+    stopActiveManagedProxyRegistration(registration);
   });
 
   it("rejects a non-h2 target tunnel without exposing proxy URL details", async () => {

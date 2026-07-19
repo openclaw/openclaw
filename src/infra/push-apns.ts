@@ -89,6 +89,8 @@ type ApnsRequestParams = {
   timeoutMs: number;
   pushType: ApnsPushType;
   priority: "10" | "5";
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
 };
 
 type ApnsRequestResponse = { status: number; apnsId?: string; body: string };
@@ -99,6 +101,24 @@ const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
+
+function throwIfApnsSendAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
+}
+
+async function requireCurrentApnsSend(params: {
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
+}): Promise<void> {
+  throwIfApnsSendAborted(params.signal);
+  if (params.isCurrent && !(await params.isCurrent())) {
+    throw new Error("APNs send invalidated");
+  }
+  throwIfApnsSendAborted(params.signal);
+}
 
 function parseReason(body: string): string | undefined {
   const trimmed = body.trim();
@@ -255,6 +275,8 @@ async function sendApnsRequest(params: {
   timeoutMs: number;
   pushType: ApnsPushType;
   priority: "10" | "5";
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
 }): Promise<ApnsRequestResponse> {
   const authority =
     params.environment === "production"
@@ -267,15 +289,34 @@ async function sendApnsRequest(params: {
   const client = await connectApnsHttp2Session({
     authority,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
+
+  try {
+    await requireCurrentApnsSend(params);
+  } catch (error) {
+    client.destroy();
+    throw error;
+  }
 
   return await new Promise((resolve, reject) => {
     let settled = false;
+    const onAbort = () =>
+      fail(
+        params.signal?.reason instanceof Error
+          ? params.signal.reason
+          : new Error("APNs send invalidated"),
+      );
+    const cleanup = () => {
+      client.off("error", fail);
+      params.signal?.removeEventListener("abort", onAbort);
+    };
     const fail = (err: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
+      cleanup();
       client.destroy();
       reject(toErrorObject(err, "Non-Error rejection"));
     };
@@ -284,11 +325,17 @@ async function sendApnsRequest(params: {
         return;
       }
       settled = true;
+      cleanup();
       client.close();
       resolve(result);
     };
 
-    client.once("error", (err) => fail(err));
+    client.once("error", fail);
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    if (params.signal?.aborted) {
+      onAbort();
+      return;
+    }
 
     const req = client.request({
       ":method": "POST",
@@ -326,6 +373,11 @@ async function sendApnsRequest(params: {
     });
     req.on("error", (err) => fail(err));
 
+    if (params.signal?.aborted) {
+      req.close(APNS_HTTP2_CANCEL_CODE);
+      onAbort();
+      return;
+    }
     req.end(body);
   });
 }
@@ -412,11 +464,14 @@ async function sendDirectApnsPush(params: {
   requestSender?: ApnsRequestSender;
   pushType: ApnsPushType;
   priority: "10" | "5";
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
 }): Promise<ApnsPushResult> {
   const { token, topic, environment, bearerToken } = resolveDirectSendContext({
     auth: params.auth,
     registration: params.registration,
   });
+  await requireCurrentApnsSend(params);
   const sender = params.requestSender ?? sendApnsRequest;
   const response = await sender({
     token,
@@ -427,6 +482,8 @@ async function sendDirectApnsPush(params: {
     timeoutMs: resolveApnsTimeoutMs(params.timeoutMs),
     pushType: params.pushType,
     priority: params.priority,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
   });
   return toPushResult({
     registration: params.registration,
@@ -443,6 +500,8 @@ async function sendRelayApnsPush(params: {
   priority: "10" | "5";
   gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
   requestSender?: ApnsRelayRequestSender;
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
 }): Promise<ApnsPushResult> {
   const response = await sendApnsRelayPush({
     relayConfig: params.relayConfig,
@@ -453,6 +512,8 @@ async function sendRelayApnsPush(params: {
     priority: params.priority,
     gatewayIdentity: params.gatewayIdentity,
     requestSender: params.requestSender,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
   });
   return toPushResult({ registration: params.registration, response });
 }
@@ -462,6 +523,8 @@ type ApnsAlertCommonParams = {
   title: string;
   body: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
 };
 
 type DirectApnsAlertParams = ApnsAlertCommonParams & {
@@ -485,6 +548,8 @@ type ApnsBackgroundWakeCommonParams = {
   nodeId: string;
   wakeReason?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  isCurrent?: () => Promise<boolean>;
 };
 
 type DirectApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
@@ -555,6 +620,8 @@ export async function sendApnsAlert(
       priority: "10",
       gatewayIdentity: relayParams.relayGatewayIdentity,
       requestSender: relayParams.relayRequestSender,
+      ...(relayParams.signal ? { signal: relayParams.signal } : {}),
+      ...(relayParams.isCurrent ? { isCurrent: relayParams.isCurrent } : {}),
     });
   }
   const directParams = params as DirectApnsAlertParams;
@@ -566,6 +633,8 @@ export async function sendApnsAlert(
     requestSender: directParams.requestSender,
     pushType: "alert",
     priority: "10",
+    ...(directParams.signal ? { signal: directParams.signal } : {}),
+    ...(directParams.isCurrent ? { isCurrent: directParams.isCurrent } : {}),
   });
 }
 
@@ -588,6 +657,8 @@ export async function sendApnsBackgroundWake(
       priority: "5",
       gatewayIdentity: relayParams.relayGatewayIdentity,
       requestSender: relayParams.relayRequestSender,
+      ...(relayParams.signal ? { signal: relayParams.signal } : {}),
+      ...(relayParams.isCurrent ? { isCurrent: relayParams.isCurrent } : {}),
     });
   }
   const directParams = params as DirectApnsBackgroundWakeParams;
@@ -599,6 +670,8 @@ export async function sendApnsBackgroundWake(
     requestSender: directParams.requestSender,
     pushType: "background",
     priority: "5",
+    ...(directParams.signal ? { signal: directParams.signal } : {}),
+    ...(directParams.isCurrent ? { isCurrent: directParams.isCurrent } : {}),
   });
 }
 

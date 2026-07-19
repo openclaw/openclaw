@@ -883,6 +883,8 @@ export async function maybeWakeNodeWithApns(
             nodeId,
             wakeReason: opts?.wakeReason ?? "node.invoke",
             relayConfig: relay.relayConfig,
+            signal: lifecycle,
+            isCurrent: isAttemptCurrent,
           });
         } else {
           const auth = await resolveDirectNodePushConfig();
@@ -903,6 +905,8 @@ export async function maybeWakeNodeWithApns(
             nodeId,
             wakeReason: opts?.wakeReason ?? "node.invoke",
             auth: auth.auth,
+            signal: lifecycle,
+            isCurrent: isAttemptCurrent,
           });
         }
         if (!(await isAttemptCurrent())) {
@@ -1017,6 +1021,8 @@ export async function maybeSendNodeWakeNudge(
           title: "OpenClaw needs a quick reopen",
           body: "Tap to reopen OpenClaw and restore the node connection.",
           relayConfig: relay.relayConfig,
+          signal: lifecycle,
+          isCurrent: isAttemptCurrent,
         });
       } else {
         const auth = await resolveDirectNodePushConfig();
@@ -1037,6 +1043,8 @@ export async function maybeSendNodeWakeNudge(
           title: "OpenClaw needs a quick reopen",
           body: "Tap to reopen OpenClaw and restore the node connection.",
           auth: auth.auth,
+          signal: lifecycle,
+          isCurrent: isAttemptCurrent,
         });
       }
       if (!(await isAttemptCurrent())) {

@@ -496,6 +496,13 @@ describe("nodeHandlers node.pair.remove", () => {
     const state = await createState("node-remove-mixed-role-device");
     const nodeId = "mixed-role-android-node-1";
     await pairMixedRoleAndroidDevice(state.stateDir, nodeId);
+    await registerApnsRegistration({
+      nodeId,
+      transport: "direct",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+    });
 
     const before = await readPaired(state.stateDir);
     expect(
@@ -524,6 +531,11 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(
       Object.hasOwn((after[nodeId] as { tokens?: Record<string, unknown> }).tokens ?? {}, "node"),
     ).toBe(false);
+    await expect(loadApnsRegistration(nodeId)).resolves.toMatchObject({
+      nodeId,
+      transport: "direct",
+      token: "abcd1234abcd1234abcd1234abcd1234",
+    });
     expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
       role: "node",
       reason: "device-pair-removed",

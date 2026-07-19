@@ -1222,7 +1222,7 @@ export async function removePairedDeviceRole(params: {
       }
       delete state.pairedByDeviceId[normalizedDeviceId];
       persistState(state, params.baseDir, "both", {
-        clearApnsNodeIds: role === "node" ? [normalizedDeviceId] : [],
+        clearApnsNodeIds: [normalizedDeviceId],
       });
       return { deviceId: normalizedDeviceId, role, removedDevice: true };
     }
@@ -1277,9 +1277,7 @@ export async function removePairedDeviceRole(params: {
       delete next.pendingNodeSurface;
     }
     state.pairedByDeviceId[normalizedDeviceId] = next;
-    persistState(state, params.baseDir, "both", {
-      clearApnsNodeIds: role === "node" ? [normalizedDeviceId] : [],
-    });
+    persistState(state, params.baseDir, "both");
     return { deviceId: normalizedDeviceId, role, removedDevice: false };
   });
 }

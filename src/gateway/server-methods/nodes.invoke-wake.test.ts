@@ -1476,6 +1476,35 @@ describe("node.invoke APNs wake path", () => {
     invalidateNodeWakeState(nodeId);
   });
 
+  it("passes lifecycle and persistent currentness into direct APNs transport", async () => {
+    const nodeId = "ios-node-transport-generation-guard";
+    const generation = { nodeId, key: "generation-1" };
+    const lifecycle = captureNodeWakeLifecycle(nodeId);
+    let pairingCurrent = true;
+    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
+    mocks.loadApnsRegistration.mockResolvedValue(directRegistration(nodeId));
+    mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+
+    await maybeWakeNodeWithApns(nodeId, { lifecycle, generation });
+
+    const transport = requireRecord(
+      mockArg(mocks.sendApnsBackgroundWake, 0, 0),
+      "guarded APNs transport",
+    );
+    expect(transport.signal).toBe(lifecycle);
+    expect(transport.isCurrent).toBeTypeOf("function");
+    pairingCurrent = false;
+    await expect((transport.isCurrent as () => Promise<boolean>)()).resolves.toBe(false);
+    invalidateNodeWakeState(nodeId);
+  });
+
   it("revalidates pairing generation after direct nudge auth resolves", async () => {
     const nodeId = "ios-node-generation-change-during-nudge-auth";
     const generation = { nodeId, key: "generation-1" };
@@ -1589,9 +1618,8 @@ describe("node.invoke APNs wake path", () => {
     };
     const nodeRegistry = {
       get: vi.fn(() => oldSession),
-      getForPairingGeneration: vi.fn(
-        (_requestedNodeId: string, generation: string) =>
-          generation === oldSession.pairingGeneration ? oldSession : undefined,
+      getForPairingGeneration: vi.fn((_requestedNodeId: string, generation: string) =>
+        generation === oldSession.pairingGeneration ? oldSession : undefined,
       ),
       invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
     };
@@ -1905,10 +1933,12 @@ describe("node.invoke APNs wake path", () => {
       firstRespondCall(await ackPending(nodeId, [queuedActionId], ["canvas.navigate"], null)),
     ).toMatchObject([false, undefined, { details: { code: "PAIRING_CHANGED" } }]);
     expect(
-      (requireRespondPayload(
-        firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
-        "post-stale-ack pull response",
-      ).actions as unknown[] | undefined)?.length,
+      (
+        requireRespondPayload(
+          firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+          "post-stale-ack pull response",
+        ).actions as unknown[] | undefined
+      )?.length,
     ).toBe(1);
   });
 
