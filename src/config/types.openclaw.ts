@@ -217,6 +217,8 @@ export type OpenClawConfig = {
       chatSendShortcut?: "enter" | "modifier-enter";
       /** Follow-up handling while a run is active; unset uses the server queue mode. */
       chatFollowUpMode?: "steer" | "queue";
+      /** Show live agent activity beneath running Control UI sidebar sessions. */
+      sidebarLiveActivity?: boolean;
     };
   };
   /** Terminal UI display settings. */
