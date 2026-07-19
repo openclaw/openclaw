@@ -303,7 +303,7 @@ export function readClawMcpServerRefs(
   return rows.map(rowToRef);
 }
 
-function readClawMcpServerRefsByName(
+export function readClawMcpServerRefsByName(
   name: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawMcpServerRef[] {
