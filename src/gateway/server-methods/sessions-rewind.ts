@@ -24,6 +24,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
+  deleteSessionUpstreamLink,
   readSessionUpstreamLink,
   upsertSessionUpstreamLink,
   type SessionUpstreamLink,
@@ -399,34 +400,9 @@ async function mutateSessionAtMessage(
         return;
       }
       if (upstreamLink && upstreamFork?.status === "forked") {
-        try {
-          await upstreamFork.attach({
-            agentId: current.target.agentId,
-            sessionId: result.entry.sessionId,
-            sessionKey: result.key,
-          });
-        } catch {
-          await upstreamFork.archive().catch(() => undefined);
-          await deleteSessionEntryLifecycle({
-            agentId: current.target.agentId,
-            archiveTranscript: true,
-            expectedEntry: result.entry,
-            expectedSessionId: result.entry.sessionId,
-            expectedUpdatedAt: result.entry.updatedAt,
-            storePath: current.storePath,
-            target: { canonicalKey: result.key, storeKeys: [result.key] },
-          }).catch(() => undefined);
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "The Codex fork was created but could not be attached. Refresh sessions and try again.",
-              { details: { reason: "upstream-unavailable" } },
-            ),
-          );
-          return;
-        }
+        // Link BEFORE attach: a crash between the two leaves the session marked
+        // upstream-owned with no binding (rewind/switch stay rejected), never a
+        // bound session the local mutation path could silently diverge.
         const linked = upsertSessionUpstreamLink({
           sessionKey: result.key,
           agentId: current.target.agentId,
@@ -438,7 +414,31 @@ async function mutateSessionAtMessage(
           marker: upstreamFork.upstream.marker,
         });
         if (!linked) {
+          await abandonForkedSession(
+            "The Codex fork could not be linked to the new session. Refresh sessions and try again.",
+          );
+          return;
+        }
+        try {
+          await upstreamFork.attach({
+            agentId: current.target.agentId,
+            sessionId: result.entry.sessionId,
+            sessionKey: result.key,
+          });
+        } catch {
+          deleteSessionUpstreamLink(result.key, current.target.agentId);
+          await abandonForkedSession(
+            "The Codex fork was created but could not be attached. Refresh sessions and try again.",
+          );
+          return;
+        }
+      }
+
+      async function abandonForkedSession(message: string): Promise<void> {
+        if (upstreamFork?.status === "forked") {
           await upstreamFork.archive().catch(() => undefined);
+        }
+        if (result.status === "created") {
           await deleteSessionEntryLifecycle({
             agentId: current.target.agentId,
             archiveTranscript: true,
@@ -448,17 +448,14 @@ async function mutateSessionAtMessage(
             storePath: current.storePath,
             target: { canonicalKey: result.key, storeKeys: [result.key] },
           }).catch(() => undefined);
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "The Codex fork could not be linked to the new session. Refresh sessions and try again.",
-              { details: { reason: "upstream-unavailable" } },
-            ),
-          );
-          return;
         }
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, message, {
+            details: { reason: "upstream-unavailable" },
+          }),
+        );
       }
       if (action !== "fork") {
         clearSessionQueues(lifecycleIdentities);

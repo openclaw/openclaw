@@ -22,7 +22,7 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     const result = resolveCodexUpstreamForkBoundaryFromTurns({
       turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("two")])],
       userMessageOrdinal: 1,
-      localText: "two",
+      localPrefixTexts: ["one", "two"],
     });
 
     expect(result).toEqual({
@@ -39,7 +39,7 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     const result = resolveCodexUpstreamForkBoundaryFromTurns({
       turns: [turn("turn-1", [user("one")])],
       userMessageOrdinal: 0,
-      localText: "one",
+      localPrefixTexts: ["one"],
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -51,7 +51,7 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     const result = resolveCodexUpstreamForkBoundaryFromTurns({
       turns: [turn("turn-1", [user("one"), user("steer")])],
       userMessageOrdinal: 1,
-      localText: "steer",
+      localPrefixTexts: ["one", "steer"],
     });
 
     expect(result).toMatchObject({ ok: false, code: "steer-message" });
@@ -68,7 +68,7 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
         turn("turn-2", [user("visible")]),
       ],
       userMessageOrdinal: 0,
-      localText: "visible",
+      localPrefixTexts: ["visible"],
     });
 
     expect(result).toEqual({
@@ -85,7 +85,7 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     const result = resolveCodexUpstreamForkBoundaryFromTurns({
       turns: [turn("turn-1", [user("one")], { status: "inProgress" })],
       userMessageOrdinal: 0,
-      localText: "one",
+      localPrefixTexts: ["one"],
     });
 
     expect(result).toMatchObject({ ok: false, code: "in-progress-turn" });
@@ -95,7 +95,27 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     const result = resolveCodexUpstreamForkBoundaryFromTurns({
       turns: [turn("turn-1", [user("persisted")])],
       userMessageOrdinal: 0,
-      localText: "local mirror",
+      localPrefixTexts: ["local mirror"],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
+  });
+
+  it("rejects equal targets over divergent prefixes", () => {
+    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+      turns: [turn("turn-1", [user("upstream-old")]), turn("turn-2", [user("target")])],
+      userMessageOrdinal: 1,
+      localPrefixTexts: ["local-old", "target"],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
+  });
+
+  it("rejects prefixes whose content identity cannot be verified", () => {
+    const result = resolveCodexUpstreamForkBoundaryFromTurns({
+      turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("target")])],
+      userMessageOrdinal: 1,
+      localPrefixTexts: [undefined, "target"],
     });
 
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });

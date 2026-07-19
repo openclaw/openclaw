@@ -45,6 +45,7 @@ function asInputs(item: CodexThreadItem): UserInput[] {
 function userMessageDisplay(item: CodexThreadItem): {
   text: string;
   visible: boolean;
+  hasImage: boolean;
 } {
   let text = "";
   let hasTextElement = false;
@@ -59,7 +60,7 @@ function userMessageDisplay(item: CodexThreadItem): {
       hasImage = true;
     }
   }
-  return { text, visible: Boolean(text.trim()) || hasTextElement || hasImage };
+  return { text, visible: Boolean(text.trim()) || hasTextElement || hasImage, hasImage };
 }
 
 function isHiddenNestedReviewTurn(previous: CodexTurn | undefined, turn: CodexTurn): boolean {
@@ -86,23 +87,28 @@ function localMessageText(content: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  // Image-only prompts canonicalize to "" on both sides; the text-equality drift
-  // guard then degrades to ordinal matching for them instead of hard-failing.
-  return content
-    .flatMap((block) => {
-      if (!block || typeof block !== "object" || Array.isArray(block)) {
-        return [];
-      }
-      const typed = block as { type?: unknown; text?: unknown };
-      return typed.type === "text" && typeof typed.text === "string" ? [typed.text] : [];
-    })
-    .join("");
+  // Non-text blocks (images/attachments) have no canonical cross-system identity;
+  // undefined marks the message unverifiable so boundary resolution fails closed.
+  const texts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      return undefined;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return undefined;
+    }
+    texts.push(typed.text);
+  }
+  return texts.join("");
 }
 
 export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
   turns: readonly CodexTurn[];
   userMessageOrdinal: number;
-  localText: string;
+  /** Canonical text for every visible local user message through the target ordinal;
+   * undefined marks content (images/attachments) whose identity cannot be verified. */
+  localPrefixTexts: readonly (string | undefined)[];
 }): CodexUpstreamForkBoundaryResult {
   let visibleUserMessagesSeen = 0;
   let reviewMode = false;
@@ -130,7 +136,26 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
       if (!display.visible) {
         continue;
       }
-      if (visibleUserMessagesSeen !== params.userMessageOrdinal) {
+      const ordinal = visibleUserMessagesSeen;
+      if (ordinal > params.userMessageOrdinal) {
+        break;
+      }
+      // The local transcript is only a mirror; every prefix message must match, not just
+      // the target — equal tails over different prefixes would bind divergent histories.
+      const localText = params.localPrefixTexts[ordinal];
+      if (localText === undefined || display.hasImage) {
+        return failure(
+          "drift-mismatch",
+          "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
+        );
+      }
+      if (display.text !== localText) {
+        return failure(
+          "drift-mismatch",
+          "The local conversation no longer matches the Codex thread. Refresh the session and try again.",
+        );
+      }
+      if (ordinal !== params.userMessageOrdinal) {
         visibleUserMessagesSeen += 1;
         continue;
       }
@@ -144,13 +169,6 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         return failure(
           "in-progress-turn",
           "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-        );
-      }
-      // The local transcript is only a mirror; never cut the authoritative rollout on ordinal alone.
-      if (display.text !== params.localText) {
-        return failure(
-          "drift-mismatch",
-          "The local message no longer matches the Codex thread. Refresh the session and try again.",
         );
       }
       if (turnIndex === 0) {
@@ -245,18 +263,20 @@ export async function resolveCodexUpstreamForkBoundary(params: {
     const userMessageOrdinal = visibleUserEntries.findIndex(
       (entry) => entry.entryId === params.entryId,
     );
-    const localText = localMessageText(visibleUserEntries[userMessageOrdinal]?.message.content);
-    if (userMessageOrdinal < 0 || localText === undefined) {
+    if (userMessageOrdinal < 0) {
       return failure(
         "drift-mismatch",
         "The local message could not be mapped to the Codex thread. Refresh the session and try again.",
       );
     }
+    const localPrefixTexts = visibleUserEntries
+      .slice(0, userMessageOrdinal + 1)
+      .map((entry) => localMessageText(entry.message.content));
     const turns = await listCodexUpstreamTurns(params.control, params.threadId);
     return resolveCodexUpstreamForkBoundaryFromTurns({
       turns,
       userMessageOrdinal,
-      localText,
+      localPrefixTexts,
     });
   } catch {
     return failure(

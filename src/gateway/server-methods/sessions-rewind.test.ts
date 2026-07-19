@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   attach: vi.fn(),
   upstreamFork: vi.fn(),
   upstreamUpsert: vi.fn(),
+  upstreamDelete: vi.fn(),
   queueClear: vi.fn(),
 }));
 
@@ -52,6 +53,7 @@ vi.mock("../../sessions/session-upstream-links.js", () => ({
         }
       : undefined,
   upsertSessionUpstreamLink: mocks.upstreamUpsert,
+  deleteSessionUpstreamLink: mocks.upstreamDelete,
 }));
 
 vi.mock("./session-active-runs.js", () => {
@@ -79,6 +81,7 @@ beforeEach(async () => {
   mocks.attach.mockReset();
   mocks.upstreamFork.mockReset();
   mocks.upstreamUpsert.mockReset().mockReturnValue(true);
+  mocks.upstreamDelete.mockReset();
   mocks.queueClear.mockReset();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
   await upsertSessionEntry(
@@ -414,7 +417,8 @@ describe("session message-cut methods", () => {
       }),
     );
     expect(mocks.archive).toHaveBeenCalledOnce();
-    expect(mocks.upstreamUpsert).not.toHaveBeenCalled();
+    expect(mocks.upstreamUpsert).toHaveBeenCalledOnce();
+    expect(mocks.upstreamDelete).toHaveBeenCalledOnce();
     expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
   });
 
@@ -445,7 +449,7 @@ describe("session message-cut methods", () => {
       }),
     );
     expect(mocks.archive).toHaveBeenCalledOnce();
-    expect(mocks.attach).toHaveBeenCalledOnce();
+    expect(mocks.attach).not.toHaveBeenCalled();
     expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
   });
 
