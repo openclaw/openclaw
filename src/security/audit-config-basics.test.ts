@@ -5,12 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
-import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
+import {
+  collectMinimalProfileOverrideFindings,
+  collectSecretsInConfigFindings,
+} from "./audit-extra.sync.js";
 import { runSecurityAudit } from "./audit.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
@@ -539,6 +543,136 @@ describe("security audit config basics", () => {
         }),
       ]),
     );
+  });
+
+  function makeAuditConfigSnapshot(params: {
+    includedSourceConfig: Record<string, unknown>;
+    sourceConfig?: Record<string, unknown>;
+    runtimeConfig?: Record<string, unknown>;
+  }): ConfigFileSnapshot {
+    const sourceConfig = params.sourceConfig ?? params.includedSourceConfig;
+    const runtimeConfig = params.runtimeConfig ?? {};
+    return {
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      includedSourceConfig:
+        params.includedSourceConfig as ConfigFileSnapshot["includedSourceConfig"],
+      sourceConfig: sourceConfig as ConfigFileSnapshot["sourceConfig"],
+      resolved: sourceConfig as ConfigFileSnapshot["sourceConfig"],
+      valid: true,
+      runtimeConfig: runtimeConfig as ConfigFileSnapshot["runtimeConfig"],
+      config: runtimeConfig as ConfigFileSnapshot["runtimeConfig"],
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+  }
+
+  describe("collectSecretsInConfigFindings env-ref suppression", () => {
+    it("suppresses findings for external ${VAR} env references", () => {
+      const cfg = {
+        gateway: { auth: { password: "resolved-password" } },
+        hooks: { enabled: true, token: "resolved-token" },
+      };
+      const snapshot = makeAuditConfigSnapshot({
+        includedSourceConfig: {
+          gateway: { auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" } },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        runtimeConfig: cfg,
+      });
+
+      const findings = collectSecretsInConfigFindings(
+        cfg as OpenClawConfig,
+        snapshot.includedSourceConfig,
+      );
+      expect(findings.map((f) => f.checkId)).not.toContain(
+        "config.secrets.gateway_password_in_config",
+      );
+      expect(findings.map((f) => f.checkId)).not.toContain("config.secrets.hooks_token_in_config");
+    });
+
+    it("keeps findings for plaintext literals", () => {
+      const cfg = {
+        gateway: { auth: { password: "literal-password" } },
+        hooks: { enabled: true, token: "literal-token" },
+      };
+      const snapshot = makeAuditConfigSnapshot({
+        includedSourceConfig: cfg,
+        runtimeConfig: cfg,
+      });
+
+      const findings = collectSecretsInConfigFindings(
+        cfg as OpenClawConfig,
+        snapshot.includedSourceConfig,
+      );
+      expect(findings.map((f) => f.checkId)).toContain("config.secrets.gateway_password_in_config");
+      expect(findings.map((f) => f.checkId)).toContain("config.secrets.hooks_token_in_config");
+    });
+
+    it("keeps findings when the env var is owned by env.vars.NAME", () => {
+      const cfg = {
+        env: {
+          vars: {
+            OPENCLAW_GATEWAY_PASSWORD: "owned-password",
+            OPENCLAW_HOOKS_TOKEN: "owned-token",
+          },
+        },
+        gateway: { auth: { password: "resolved-password" } },
+        hooks: { enabled: true, token: "resolved-token" },
+      };
+      const snapshot = makeAuditConfigSnapshot({
+        includedSourceConfig: {
+          env: {
+            vars: {
+              OPENCLAW_GATEWAY_PASSWORD: "owned-password",
+              OPENCLAW_HOOKS_TOKEN: "owned-token",
+            },
+          },
+          gateway: { auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" } },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        runtimeConfig: cfg,
+      });
+
+      const findings = collectSecretsInConfigFindings(
+        cfg as OpenClawConfig,
+        snapshot.includedSourceConfig,
+      );
+      expect(findings.map((f) => f.checkId)).toContain("config.secrets.gateway_password_in_config");
+      expect(findings.map((f) => f.checkId)).toContain("config.secrets.hooks_token_in_config");
+    });
+
+    it("keeps findings when the env var is owned by direct env.NAME", () => {
+      const cfg = {
+        env: {
+          OPENCLAW_GATEWAY_PASSWORD: "owned-password",
+          OPENCLAW_HOOKS_TOKEN: "owned-token",
+        },
+        gateway: { auth: { password: "resolved-password" } },
+        hooks: { enabled: true, token: "resolved-token" },
+      };
+      const snapshot = makeAuditConfigSnapshot({
+        includedSourceConfig: {
+          env: {
+            OPENCLAW_GATEWAY_PASSWORD: "owned-password",
+            OPENCLAW_HOOKS_TOKEN: "owned-token",
+          },
+          gateway: { auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" } },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        runtimeConfig: cfg,
+      });
+
+      const findings = collectSecretsInConfigFindings(
+        cfg as OpenClawConfig,
+        snapshot.includedSourceConfig,
+      );
+      expect(findings.map((f) => f.checkId)).toContain("config.secrets.gateway_password_in_config");
+      expect(findings.map((f) => f.checkId)).toContain("config.secrets.hooks_token_in_config");
+    });
   });
 
   it("emits a redacted security audit summary event", async () => {

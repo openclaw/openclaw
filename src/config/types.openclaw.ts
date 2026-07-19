@@ -335,6 +335,11 @@ export type ConfigFileSnapshot = {
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
   /**
+   * Config after $include resolution but BEFORE ${ENV} substitution and runtime
+   * defaults. Use this to inspect authored env references in their original form.
+   */
+  includedSourceConfig?: OpenClawConfig;
+  /**
    * Config authored on disk after $include resolution and ${ENV} substitution,
    * but BEFORE runtime defaults are applied.
    */

@@ -58,6 +58,7 @@ export async function readConfigFileSnapshotInternal(
         exists: false,
         raw: null,
         parsed: {},
+        includedSourceConfig: {},
         sourceConfig: {},
         valid: true,
         runtimeConfig: config,
@@ -94,6 +95,7 @@ export async function readConfigFileSnapshotInternal(
           exists: true,
           raw,
           parsed: {},
+          includedSourceConfig: {},
           sourceConfig: {},
           valid: false,
           runtimeConfig: {},
@@ -124,15 +126,17 @@ export async function readConfigFileSnapshotInternal(
         error instanceof ConfigIncludeError
           ? error.message
           : `Include resolution failed: ${String(error)}`;
+      const fallbackConfig = coerceConfig(effectiveParsed);
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: true,
           raw,
           parsed: effectiveParsed,
-          sourceConfig: coerceConfig(effectiveParsed),
+          includedSourceConfig: fallbackConfig,
+          sourceConfig: fallbackConfig,
           valid: false,
-          runtimeConfig: coerceConfig(effectiveParsed),
+          runtimeConfig: fallbackConfig,
           hash: rawHash,
           issues: [{ path: "", message }],
           warnings: [],
@@ -142,6 +146,8 @@ export async function readConfigFileSnapshotInternal(
         includeFileTargetsForWrite,
       });
     }
+
+    const includedSourceConfigRaw = coerceConfig(resolved);
 
     const readResolution = await deps.measure("config.snapshot.read.env", () =>
       resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv),
@@ -194,6 +200,7 @@ export async function readConfigFileSnapshotInternal(
           exists: true,
           raw: snapshotRaw,
           parsed: snapshotParsed,
+          includedSourceConfig: includedSourceConfigRaw,
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: false,
           runtimeConfig: coerceConfig(effectiveConfigRaw),
@@ -271,6 +278,7 @@ export async function readConfigFileSnapshotInternal(
             exists: true,
             raw: snapshotRaw,
             parsed: snapshotParsed,
+            includedSourceConfig: includedSourceConfigRaw,
             sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: true,
             runtimeConfig: snapshotConfig,
@@ -311,6 +319,7 @@ export async function readConfigFileSnapshotInternal(
         exists: true,
         raw: fallbackRaw,
         parsed: fallbackParsed,
+        includedSourceConfig: fallbackSourceConfig,
         sourceConfig: fallbackSourceConfig,
         valid: false,
         runtimeConfig: fallbackSourceConfig,
