@@ -115,6 +115,30 @@ describe("custodian page", () => {
     ]);
   });
 
+  it("continues to the welcome when the bounded history request times out", async () => {
+    const request = vi.fn(
+      async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
+        if (method === "openclaw.chat.history") {
+          expect(options).toEqual({ timeoutMs: 15_000 });
+          throw new Error("history request timed out");
+        }
+        return {
+          sessionId: "engine-session-after-history-timeout",
+          reply: "Welcome without history.",
+          action: "none",
+        };
+      },
+    );
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const { page } = await mountPage(context);
+
+    await waitForFast(() => expect(page.textContent).toContain("Welcome without history."));
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+  });
+
   it("keeps rows for a same-ownership client replacement and requests a fresh welcome", async () => {
     let chatCalls = 0;
     const request = vi.fn(async (method: string) => {
@@ -241,16 +265,33 @@ describe("custodian page", () => {
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
 
-  it("preserves the onboarding session across a same-gateway reconnect", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Hello from OpenClaw.",
-      action: "none",
+  it("keeps an unanswered structured question across a same-client reconnect", async () => {
+    const question = {
+      id: "reconnect-choice",
+      header: "Next step",
+      question: "What should happen next?",
+      options: [{ label: "Continue" }, { label: "Pause" }],
+      isOther: false,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "openclaw.chat.history") {
+        return { turns: [{ role: "assistant", text: "Earlier row", at: 1 }] };
+      }
+      return {
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Choose the next step.",
+        question,
+        action: "none",
+      };
     });
-    const { context, setGatewaySnapshot } = createContext(request);
+    const { context, setGatewaySnapshot } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
     const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await page.updateComplete;
+    expect(page.querySelector("openclaw-option-card")).not.toBeNull();
 
     setGatewaySnapshot({ connected: false, reconnecting: true });
     await page.updateComplete;
@@ -260,8 +301,12 @@ describe("custodian page", () => {
     });
     await page.updateComplete;
 
-    expect(request).toHaveBeenCalledOnce();
-    expect(page.textContent).toContain("Hello from OpenClaw.");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+    expect(page.querySelector("openclaw-option-card")).not.toBeNull();
+    expect(page.textContent).toContain("Choose the next step.");
   });
 
   it("requests a fresh welcome when a connected client is replaced mid-request", async () => {

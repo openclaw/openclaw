@@ -249,7 +249,8 @@ export class CustodianPage extends OpenClawLightDomElement {
       if (!this.retryParams) {
         this.error = requestWasPending ? this.error : null;
       }
-      void this.refreshTranscriptHistory(client, this.requestEpoch);
+      // This rendered thread owns live questions and turns for the active
+      // session; durable history is projected only during its cold start.
       return;
     }
     this.clearConversation();

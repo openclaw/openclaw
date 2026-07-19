@@ -9,6 +9,8 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import type { CustodianStructuredQuestion } from "./structured-question.ts";
 
+const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
+
 export type CustodianMessage = {
   id: number;
   role: "assistant" | "user";
@@ -49,7 +51,15 @@ export async function readCustodianTranscript(
   client: GatewayBrowserClient,
 ): Promise<SystemAgentChatHistoryResult["turns"] | null> {
   try {
-    return (await client.request<SystemAgentChatHistoryResult>("openclaw.chat.history", {})).turns;
+    return (
+      await client.request<SystemAgentChatHistoryResult>(
+        "openclaw.chat.history",
+        {},
+        {
+          timeoutMs: CUSTODIAN_TRANSCRIPT_TIMEOUT_MS,
+        },
+      )
+    ).turns;
   } catch {
     return null;
   }
