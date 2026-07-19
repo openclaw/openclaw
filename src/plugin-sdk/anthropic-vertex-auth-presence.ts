@@ -1,5 +1,4 @@
 // Anthropic Vertex auth helpers detect local credential presence for provider setup flows.
-import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +6,12 @@ import {
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { tryReadSecretFileSync } from "./secret-file-runtime.js";
+
+// Bound ADC credential reads so an oversized GOOGLE_APPLICATION_CREDENTIALS file
+// cannot trigger an unbounded memory read. Mirrors the provider-local copy in
+// extensions/anthropic-vertex/region.ts (#109260).
+const ANTHROPIC_VERTEX_ADC_FILE_MAX_BYTES = 1024 * 1024;
 
 const GCLOUD_DEFAULT_ADC_PATH = join(
   homedir(),
@@ -53,9 +58,15 @@ function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolea
   if (!credentialsPath) {
     return false;
   }
+  // Presence check only: the contents are discarded, so a bounded read is
+  // sufficient and avoids slurping an oversized credential file into memory.
+  // tryReadSecretFileSync still throws on oversize, so guard like region.ts.
   try {
-    readFileSync(credentialsPath, "utf8");
-    return true;
+    const text = tryReadSecretFileSync(credentialsPath, "Anthropic Vertex ADC credentials", {
+      maxBytes: ANTHROPIC_VERTEX_ADC_FILE_MAX_BYTES,
+      rejectHardlinks: false,
+    });
+    return text !== undefined;
   } catch {
     return false;
   }

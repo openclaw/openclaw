@@ -10,12 +10,6 @@ const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  existsSyncMock.mockImplementation((pathname) => actual.existsSync(pathname));
-  readFileSyncMock.mockImplementation((pathname, options) =>
-    String(pathname) === "/tmp/vertex-adc.json"
-      ? '{"client_id":"vertex-client"}'
-      : actual.readFileSync(pathname, options as never),
-  );
   return {
     ...actual,
     existsSync: existsSyncMock,
@@ -28,19 +22,25 @@ vi.mock("node:fs", async () => {
   };
 });
 
+vi.mock("./secret-file-runtime.js", () => ({
+  tryReadSecretFileSync: (pathname: string) => readFileSyncMock(pathname, "utf8"),
+}));
+
 describe("hasAnthropicVertexAvailableAuth ADC preflight", () => {
   beforeEach(() => {
     vi.resetModules();
+    existsSyncMock.mockImplementation(() => false);
+    readFileSyncMock.mockImplementation((pathname: string) =>
+      pathname === "/tmp/vertex-adc.json" ? '{"client_id":"vertex-client"}' : "",
+    );
   });
 
   afterEach(() => {
-    existsSyncMock.mockClear();
-    readFileSyncMock.mockClear();
+    existsSyncMock.mockReset();
+    readFileSyncMock.mockReset();
   });
 
   it("reads explicit ADC credentials without an existsSync preflight", async () => {
-    existsSyncMock.mockClear();
-    readFileSyncMock.mockClear();
     const { hasAnthropicVertexAvailableAuth } = await import("./anthropic-vertex-auth-presence.js");
 
     expect(

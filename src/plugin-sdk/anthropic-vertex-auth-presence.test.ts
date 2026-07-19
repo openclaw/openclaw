@@ -23,4 +23,18 @@ describe("hasAnthropicVertexAvailableAuth", () => {
       } as NodeJS.ProcessEnv),
     ).toBe(true);
   });
+
+  it("rejects oversized ADC credential files instead of reading them fully", async () => {
+    const root = await createTempDir("openclaw-vertex-auth-");
+    const credentialsPath = path.join(root, "application_default_credentials.json");
+    // 2 MiB exceeds the 1 MiB ADC read bound; the old unbounded readFileSync
+    // would have slurped the whole file just to report it as readable.
+    await fs.writeFile(credentialsPath, " ".repeat(2 * 1024 * 1024), "utf8");
+
+    expect(
+      hasAnthropicVertexAvailableAuth({
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+      } as NodeJS.ProcessEnv),
+    ).toBe(false);
+  });
 });
