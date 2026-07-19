@@ -85,6 +85,7 @@ export function attachGatewayWsForTest(params: {
   clients?: Set<unknown>;
   headers?: Record<string, string>;
   host?: string;
+  remoteAddress?: string;
   options?: Partial<AttachGatewayWsConnectionParams>;
   socket?: GatewayWsTestSocket;
 }) {
@@ -97,7 +98,10 @@ export function attachGatewayWsForTest(params: {
   const socket = params.socket ?? createGatewayWsTestSocket();
   const upgradeReq = {
     headers: { host: params.host ?? "127.0.0.1:19001", ...params.headers },
-    socket: { localAddress: "127.0.0.1" },
+    socket: {
+      localAddress: "127.0.0.1",
+      ...(params.remoteAddress ? { remoteAddress: params.remoteAddress } : {}),
+    },
   };
   const clients = params.clients ?? new Set<unknown>();
 

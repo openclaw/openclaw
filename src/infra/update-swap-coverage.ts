@@ -6,7 +6,7 @@ import path from "node:path";
 type UpdateSwapCoverage =
   | {
       kind: "managed-prefix";
-      protection: "retention-only";
+      protection: "transactional-rollback";
       prefix: string;
       nodePath: string;
     }
@@ -109,7 +109,7 @@ export async function resolveUpdateSwapCoverage(params: {
     if (await hasManagedPrefixProvenance({ prefix, packageRoot: normalized, nodeSegment })) {
       return {
         kind: "managed-prefix",
-        protection: "retention-only",
+        protection: "transactional-rollback",
         prefix,
         nodePath: path.join(prefix, "tools", "node", "bin", "node"),
       };
@@ -149,8 +149,8 @@ export async function resolveUpdateSwapCoverage(params: {
 }
 
 export function formatUpdateSwapCoverageWarning(coverage: UpdateSwapCoverage): string | null {
-  if (coverage.protection === "retention-only") {
+  if (coverage.protection === "transactional-rollback") {
     return null;
   }
-  return `Automatic update rollback is unavailable for this ${coverage.kind} install: ${coverage.reason}. If startup fails after migration, restore compatible state before running an older version; otherwise repair or update forward with the current version.`;
+  return `Automatic update rollback is unavailable for this ${coverage.kind} install: ${coverage.reason}. Reinstall with the managed website installer for protected updates: https://openclaw.ai/install.sh`;
 }

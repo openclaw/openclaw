@@ -11,6 +11,7 @@ import {
   commitStagedDeliveryQueueEntryOnce,
   deleteDeliveryQueueEntry,
   failPendingDeliveryQueueEntry,
+  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -371,6 +372,14 @@ export async function loadPendingDelivery(
     id,
     stateDir,
   ) as QueuedDelivery | null;
+}
+
+/** Read pending, failed, or completed ownership for a stable delivery ID. */
+export function readDeliveryStatus(
+  id: string,
+  stateDir?: string,
+): "pending" | "failed" | "completed" | undefined {
+  return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
 }
 
 /** Load all pending delivery entries from the queue. */

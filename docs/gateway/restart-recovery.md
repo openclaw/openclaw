@@ -44,21 +44,58 @@ affected session is marked for recovery.
 ### Update retention boundary
 
 An owned launchd/systemd Gateway installed through the local-prefix npm
-installer retains one launchable previous package before mutation after
-verifying installer provenance, ownership, and write permissions. Automatic
-rollback is not enabled: package lifecycle/Doctor migrations currently commit
-before restart confirmation, and restoring only the old package could run it
-against newer state. State snapshot/restore and deferred migration commit must
-land before package swapping is safe.
+installer can use transactional update rollback. The detached updater installs
+the candidate into a staged prefix with lifecycle state/config isolated, then
+runs the candidate package's read-only `gateway verify` probe. Only after that
+passes does it snapshot state using APFS clone copy, reflink copy, or verified
+per-SQLite `VACUUM INTO` plus a complete copy of non-database state and persist
+the recovery marker. The normal restart still owns Doctor and package
+migrations.
 
-Resident old/new Gateway handover and its exclusive channel pause/resume and
-delivery/human confirmation tiers are also not enabled. Ordinary npm-global,
-pnpm, Git, Windows, unowned service layouts, and unverifiable lookalike prefixes
-do not get retention or swapping. If startup fails after migration, restore
-compatible state before running an older version; otherwise repair or update
-forward with the current version. Set
+After restart, the new Gateway initializes its channels, plugin services,
+sidecars, and worker runtime before it sends a durable notice to the initiating
+channel and records its acknowledgement in the update marker. The optional human tier
+also includes a fresh random confirmation challenge and waits for the exact
+`confirm <challenge>` reply in that session. A queued pre-update event cannot
+know the challenge, so provider clock skew and timestamp precision are
+irrelevant. Until confirmation, the Gateway admits probe health but keeps
+operator RPC, scheduled work, and normal channel turns behind the startup gate.
+Non-confirming dispatch callbacks are durably deferred in both the candidate
+queue and the retained snapshot's existing SQLite session-delivery table
+without schema setup there. An observe-only callback cannot be represented by
+the retained package's older queue contract, so it fails the transaction and
+remains unacknowledged while rollback restores the old Gateway. A durable
+admission count blocks confirmation across both dispatch-queue writes; an
+interrupted or failed admission requests rollback before startup continues.
+Confirmation releases the candidate replay; after rollback, the
+retained package replays the compatible queued text, route, and compact media note.
+Missing health or confirmation
+causes the detached updater to stop the service, restore the retained package,
+restore the state snapshot, and start the old service, in that order. Confirmed
+updates discard the state snapshot, retain one previous package, and clear the
+marker. No resident old/new Gateway pair is used.
+
+The detached updater refreshes a bounded owner lease in the marker. An expired
+lease is claimed atomically by the probationary Gateway; it exits so the service
+supervisor can restore the retained package and snapshot before serving again.
+State restoration keeps the canonical directory present and replaces files
+atomically. It first injects a nonterminal rollback marker into restored SQLite
+state, restores external configuration, and only then records terminal rollback,
+so restoration cannot erase or prematurely complete recovery ownership.
+
+If the update child is interrupted before probation, the durable marker contains
+the retained package and state-snapshot roots. Its handoff parent lives outside
+the mutable package root, proves the service stopped, restores the retained
+package, and reactivates the supervisor. The next Gateway bootstrap restores
+state before binding, records the interrupted rollback, and exits so the
+supervisor restarts the retained package. Destruction of that outer handoff
+process while the service is unloaded remains a manual recovery case.
+
+Ordinary npm-global, pnpm, Git, Windows, unowned service layouts, and
+unverifiable lookalike prefixes do not get transactional rollback; the warning
+points to `https://openclaw.ai/install.sh` for a managed install. Set
 `OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to bypass
-retention; there is no config surface.
+retention and rollback; there is no config surface.
 
 ## How interrupted work is detected
 

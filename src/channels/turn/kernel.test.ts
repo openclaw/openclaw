@@ -36,6 +36,7 @@ const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
 const sendDurableMessageBatch = vi.hoisted(() => vi.fn());
 const recordInboundSessionCore = vi.hoisted(() => vi.fn(async () => undefined));
 const dispatchReplyWithBufferedBlockDispatcherCore = vi.hoisted(() => vi.fn());
+const handleUpdateProbationInbound = vi.hoisted(() => vi.fn());
 
 vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
   const actual =
@@ -66,6 +67,12 @@ vi.mock("../message/send.js", async (importOriginal) => {
 vi.mock("../session.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session.js")>();
   return { ...actual, recordInboundSession: recordInboundSessionCore };
+});
+
+vi.mock("../../infra/update-confirmation-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../infra/update-confirmation-runtime.js")>();
+  return { ...actual, handleUpdateProbationInbound };
 });
 
 const cfg = {} as OpenClawConfig;
@@ -212,6 +219,7 @@ describe("channel turn kernel", () => {
     resetLogger();
     setLoggerOverride({ level: "info" });
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
+    handleUpdateProbationInbound.mockResolvedValue("continue");
   });
 
   afterEach(() => {
@@ -979,6 +987,8 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "dispatch"]);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(runDispatch).toHaveBeenCalledTimes(1);
+    // The admitted first turn may confirm; the bot-loop-dropped second turn may not.
+    expect(handleUpdateProbationInbound).toHaveBeenCalledOnce();
     expect(historyMap.get("room")).toStrictEqual([]);
     expect(loggedEvents(log)).toEqual([
       { stage: "authorize", event: "drop", messageId: "msg-loop" },
@@ -1013,6 +1023,12 @@ describe("channel turn kernel", () => {
 
     expect(events).toEqual(["record"]);
     expect(runDispatch).not.toHaveBeenCalled();
+    expect(handleUpdateProbationInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confirmationEligible: false,
+        rollbackReplay: expect.objectContaining({ admission: "observeOnly" }),
+      }),
+    );
     expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
     expect(result.dispatched).toBe(true);
     expect(result.dispatchResult).toBe(observeOnlyDispatchResult);

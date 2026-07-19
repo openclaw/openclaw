@@ -18,6 +18,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
+import { UPDATE_RECOVERY_LOCATOR_ENV } from "./update-recovery-journal.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
 // The Gateway may spend its full restart-drain budget before entering the
@@ -81,6 +82,15 @@ function cleanupSensitiveFiles() {
   }
 }
 
+function cleanupRecoveryLocator() {
+  if (typeof params.recoveryLocatorPath !== "string") return;
+  try {
+    fs.rmSync(params.recoveryLocatorPath, { force: true });
+  } catch {
+    // Preserve service recovery; stale artifact cleanup is secondary.
+  }
+}
+
 function resolveExistingDirectory(candidates) {
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "string") {
@@ -108,11 +118,29 @@ function readJsonFile(filePath) {
 
 function isPendingUpdatePayload(payload) {
   const reason = payload && payload.stats && payload.stats.reason;
+  const phase = payload && payload.stats && payload.stats.updatePhase;
   return (
     payload &&
     payload.kind === "update" &&
-    payload.status === "skipped" &&
-    (reason === "managed-service-handoff-started" || reason === "restart-health-pending")
+    !isConfirmedUpdatePayload(payload) &&
+    ((payload.status === "skipped" &&
+      (reason === "managed-service-handoff-started" ||
+        reason === "restart-health-pending" ||
+        reason === "update-confirmation-pending")) ||
+      (typeof payload.stats?.handoffId === "string" &&
+        typeof phase === "string" &&
+        phase !== "complete" &&
+        phase !== "rolled-back"))
+  );
+}
+
+function isConfirmedUpdatePayload(payload) {
+  const stats = payload && payload.stats;
+  return Boolean(
+    stats &&
+      (stats.confirmationTier === "human"
+        ? stats.confirmationStatus === "human-confirmed"
+        : stats.confirmationStatus === "delivery-acked"),
   );
 }
 
@@ -369,12 +397,12 @@ function buildFallbackFailurePayload(reason) {
 
 function markUpdateSentinelFailureIfPending(reason) {
   const snapshotDb = openStateDatabase();
-  if (!snapshotDb) return;
+  if (!snapshotDb) return "unavailable";
   let snapshot;
   try {
     snapshot = readRestartSentinelRecord(snapshotDb);
   } catch {
-    return;
+    return "unavailable";
   } finally {
     try {
       snapshotDb.close();
@@ -383,7 +411,7 @@ function markUpdateSentinelFailureIfPending(reason) {
   const fallbackPayload = snapshot === null ? buildFallbackFailurePayload(reason) : null;
 
   const db = openStateDatabase();
-  if (!db) return;
+  if (!db) return "unavailable";
   let transactionOpen = false;
   try {
     db.exec("BEGIN IMMEDIATE;");
@@ -396,25 +424,31 @@ function markUpdateSentinelFailureIfPending(reason) {
     ) {
       db.exec("COMMIT;");
       transactionOpen = false;
-      return;
+      return "rejected";
     }
 
     let payload = current && current.payload;
     if (payload && (payload.kind !== "update" || !isPendingUpdatePayload(payload))) {
       db.exec("COMMIT;");
       transactionOpen = false;
-      return;
+      return "rejected";
     }
     const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
     if (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId)) {
       db.exec("COMMIT;");
       transactionOpen = false;
-      return;
+      return "rejected";
     }
     if (payload) {
       payload = { ...payload, status: "error" };
       delete payload.continuation;
       payload.stats = { ...(payload.stats || {}), reason };
+      if (typeof payload.stats.handoffId === "string" && payload.stats.updatePhase) {
+        payload.stats.updatePhase = "rolling-back";
+        payload.stats.confirmationStatus = "failed";
+        payload.stats.updateOwnerLeaseExpiresAtMs = 0;
+        delete payload.stats.updateRollbackOwner;
+      }
     } else {
       payload = fallbackPayload;
     }
@@ -426,6 +460,7 @@ function markUpdateSentinelFailureIfPending(reason) {
     }
     db.exec("COMMIT;");
     transactionOpen = false;
+    return "claimed";
   } catch (err) {
     if (transactionOpen) {
       try {
@@ -433,6 +468,7 @@ function markUpdateSentinelFailureIfPending(reason) {
       } catch {}
     }
     appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
+    return "unavailable";
   } finally {
     hardenStateDatabaseFiles();
     try {
@@ -441,19 +477,609 @@ function markUpdateSentinelFailureIfPending(reason) {
   }
 }
 
-function runServiceCommand(command, args) {
+function runServiceCommandResult(command, args) {
   try {
-    const result = spawnSync(command, args, { stdio: "ignore", timeout: 30000 });
-    return typeof result.status === "number" ? result.status : 1;
-  } catch {
-    return 1;
+    const result = spawnSync(command, args, { encoding: "utf8", timeout: 30000 });
+    return {
+      status: typeof result.status === "number" ? result.status : 1,
+      stdout: typeof result.stdout === "string" ? result.stdout : "",
+      stderr: typeof result.stderr === "string" ? result.stderr : "",
+    };
+  } catch (err) {
+    return { status: 1, stdout: "", stderr: err && err.message ? err.message : String(err) };
   }
+}
+
+function runServiceCommand(command, args) {
+  return runServiceCommandResult(command, args).status;
+}
+
+function readExternalRecoveryJournal() {
+  if (
+    typeof params.recoveryLocatorPath !== "string" ||
+    !fs.existsSync(params.recoveryLocatorPath)
+  ) {
+    return null;
+  }
+  const locator = JSON.parse(fs.readFileSync(params.recoveryLocatorPath, "utf8"));
+  if (
+    locator.version !== 1 ||
+    locator.handoffId !== params.handoffId ||
+    typeof locator.journalPath !== "string"
+  ) {
+    throw new Error("invalid update recovery locator");
+  }
+  const journalPath = path.resolve(locator.journalPath);
+  const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+  return { journalPath, journal };
+}
+
+function replaceExternalRecoveryJournal(external, journal) {
+  const staged = external.journalPath + ".helper-stage-" + process.pid;
+  fs.writeFileSync(staged, JSON.stringify(journal, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(staged, external.journalPath);
+}
+
+function writeExternalRecoveryJournalStatus(phase, reason) {
+  try {
+    const external = readExternalRecoveryJournal();
+    if (!external) return true;
+    const journal = external.journal;
+    if (
+      journal.version !== 1 ||
+      journal.handoffId !== params.handoffId ||
+      !journal.payload ||
+      !journal.payload.stats ||
+      !journal.committedPayload ||
+      !journal.committedPayload.stats
+    ) {
+      throw new Error("invalid update recovery journal");
+    }
+    for (const payload of [journal.payload, journal.committedPayload]) {
+      payload.status = "error";
+      payload.stats.updatePhase = phase;
+      payload.stats.confirmationStatus = "failed";
+      payload.stats.reason = reason;
+      if (phase === "rolled-back") {
+        payload.stats.updateOwnerLeaseExpiresAtMs = 0;
+        delete payload.stats.updateRollbackOwner;
+        delete payload.continuation;
+      }
+    }
+    replaceExternalRecoveryJournal(external, journal);
+    return true;
+  } catch (err) {
+    appendLog("failed to update external recovery journal: " + (err && err.stack ? err.stack : String(err)));
+    return false;
+  }
+}
+
+function persistExternalRecoveryJournalToStateDatabase() {
+  let db;
+  let transactionOpen = false;
+  try {
+    const external = readExternalRecoveryJournal();
+    if (!external) return true;
+    const payload = external.journal && external.journal.committedPayload;
+    if (!payload || !payload.stats || payload.stats.handoffId !== params.handoffId) {
+      throw new Error("invalid committed recovery payload");
+    }
+    db = openStateDatabase();
+    if (!db) throw new Error("restored state database is unavailable");
+    db.exec("BEGIN IMMEDIATE;");
+    transactionOpen = true;
+    const current = readRestartSentinelRecord(db);
+    if (!writeRestartSentinelPayload(db, payload, current ? current.revision : null)) {
+      throw new Error("restored state marker changed before recovery result persisted");
+    }
+    db.exec("COMMIT;");
+    transactionOpen = false;
+    return true;
+  } catch (err) {
+    if (transactionOpen && db) {
+      try {
+        db.exec("ROLLBACK;");
+      } catch {}
+    }
+    appendLog("failed to persist recovery result in restored state: " + (err && err.stack ? err.stack : String(err)));
+    return false;
+  } finally {
+    if (db) {
+      try {
+        db.close();
+      } catch {}
+    }
+  }
+}
+
+function clearConfirmedUpdateMarker() {
+  const db = openStateDatabase();
+  if (!db) return false;
+  let transactionOpen = false;
+  try {
+    db.exec("BEGIN IMMEDIATE;");
+    transactionOpen = true;
+    const current = readRestartSentinelRecord(db);
+    if (
+      !current ||
+      !isConfirmedUpdatePayload(current.payload) ||
+      current.payload.stats?.handoffId !== params.handoffId ||
+      (typeof current.payload.stats?.updateProbationReleasedAtMs !== "number" &&
+        current.payload.stats?.updatePhase !== "complete")
+    ) {
+      db.exec("COMMIT;");
+      transactionOpen = false;
+      return false;
+    }
+    const revisionFloor = readRestartSentinelRevisionFloor(db);
+    const nextRevision = Math.max(Date.now(), Math.max(current.revision, revisionFloor || 0) + 1);
+    if (!Number.isSafeInteger(nextRevision)) {
+      throw new Error("restart sentinel revision exhausted the safe integer range");
+    }
+    advanceRestartSentinelRevisionFloor(db, nextRevision);
+    const deleted =
+      db
+        .prepare(
+          "DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current' AND updated_at_ms = ?",
+        )
+        .run(current.revision).changes === 1;
+    if (!deleted) {
+      throw new Error("confirmed update marker changed before cleanup");
+    }
+    db.exec("COMMIT;");
+    transactionOpen = false;
+    return true;
+  } catch (err) {
+    if (transactionOpen) {
+      try {
+        db.exec("ROLLBACK;");
+      } catch {}
+    }
+    appendLog("failed to clear confirmed update marker: " + (err && err.stack ? err.stack : String(err)));
+    return false;
+  } finally {
+    try {
+      db.close();
+    } catch {}
+  }
+}
+
+function cleanupConfirmedUpdateArtifacts(rollbackState) {
+  if (!rollbackState.cleanupReady) return false;
+  if (!persistExternalRecoveryJournalToStateDatabase()) return false;
+  if (rollbackState.stateSnapshotRoot) {
+    try {
+      fs.rmSync(rollbackState.stateSnapshotRoot, { recursive: true, force: true });
+    } catch (err) {
+      appendLog("failed to remove confirmed state snapshot: " + (err && err.stack ? err.stack : String(err)));
+      return false;
+    }
+  }
+  return clearConfirmedUpdateMarker();
+}
+
+function readPendingPackageRollback() {
+  if (
+    typeof params.recoveryLocatorPath === "string" &&
+    fs.existsSync(params.recoveryLocatorPath)
+  ) {
+    try {
+      const external = readExternalRecoveryJournal();
+      const journal = external.journal;
+      let payload = journal && journal.committedPayload;
+      if (
+        journal?.payload &&
+        isConfirmedUpdatePayload(journal.payload) &&
+        !isConfirmedUpdatePayload(payload)
+      ) {
+        const db = openStateDatabase();
+        try {
+          const current = db && readRestartSentinelRecord(db);
+          if (
+            current &&
+            isConfirmedUpdatePayload(current.payload) &&
+            isConfirmedUpdatePayload(journal.payload)
+          ) {
+            journal.payload = current.payload;
+            journal.committedPayload = current.payload;
+            replaceExternalRecoveryJournal(external, journal);
+            payload = current.payload;
+          }
+        } finally {
+          try {
+            db?.close();
+          } catch {}
+        }
+      }
+      const stats = payload && payload.stats;
+      if (
+        journal.version !== 1 ||
+        typeof journal.handoffId !== "string" ||
+        journal.handoffId !== params.handoffId ||
+        !payload ||
+        payload.kind !== "update" ||
+        !stats ||
+        stats.handoffId !== journal.handoffId
+      ) {
+        throw new Error("invalid update recovery journal");
+      }
+      if (isConfirmedUpdatePayload(payload)) {
+        return {
+          status: "confirmed",
+          cleanupReady:
+            typeof stats.updateProbationReleasedAtMs === "number" ||
+            stats.updatePhase === "complete",
+          stateSnapshotRoot:
+            typeof stats.stateSnapshotRoot === "string"
+              ? path.resolve(stats.stateSnapshotRoot)
+              : null,
+        };
+      }
+      if (stats.updatePhase === "complete" || stats.updatePhase === "rolled-back") {
+        return { status: "none" };
+      }
+      if (
+        typeof stats.packageRoot !== "string" ||
+        typeof stats.retainedPackageRoot !== "string" ||
+        typeof stats.stateSnapshotRoot !== "string"
+      ) {
+        throw new Error("update recovery journal is missing rollback paths");
+      }
+      return {
+        status: "pending",
+        rollback: {
+          packageRoot: path.resolve(stats.packageRoot),
+          retainedPackageRoot: path.resolve(stats.retainedPackageRoot),
+          stateSnapshotRoot: path.resolve(stats.stateSnapshotRoot),
+        },
+      };
+    } catch (err) {
+      appendLog("failed to read update recovery journal: " + (err && err.stack ? err.stack : String(err)));
+      return { status: "read-error" };
+    }
+  }
+  const db = openStateDatabase();
+  if (!db) return { status: "read-error" };
+  try {
+    const current = readRestartSentinelRecord(db);
+    const payload = current && current.payload;
+    const stats = payload && payload.stats;
+    if (payload && payload.kind === "update" && stats && isConfirmedUpdatePayload(payload)) {
+      return {
+        status: "confirmed",
+        cleanupReady:
+          typeof stats.updateProbationReleasedAtMs === "number" ||
+          stats.updatePhase === "complete",
+        stateSnapshotRoot:
+          typeof stats.stateSnapshotRoot === "string" ? path.resolve(stats.stateSnapshotRoot) : null,
+      };
+    }
+    if (
+      !payload ||
+      payload.kind !== "update" ||
+      !stats ||
+      stats.updatePhase === "complete" ||
+      stats.updatePhase === "rolled-back" ||
+      typeof stats.packageRoot !== "string" ||
+      typeof stats.retainedPackageRoot !== "string" ||
+      typeof stats.stateSnapshotRoot !== "string"
+    ) {
+      return { status: "none" };
+    }
+    return {
+      status: "pending",
+      rollback: {
+        packageRoot: path.resolve(stats.packageRoot),
+        retainedPackageRoot: path.resolve(stats.retainedPackageRoot),
+        stateSnapshotRoot: path.resolve(stats.stateSnapshotRoot),
+      },
+    };
+  } catch (err) {
+    appendLog("failed to read package rollback marker: " + (err && err.stack ? err.stack : String(err)));
+    return { status: "read-error" };
+  } finally {
+    try {
+      db.close();
+    } catch {}
+  }
+}
+
+function stopGatewayServiceBestEffort() {
+  const recovery = params.serviceRecovery;
+  if (!recovery || typeof recovery !== "object" || !recovery.kind) {
+    return false;
+  }
+  let status = 1;
+  if (recovery.kind === "systemd") {
+    const stopped = runServiceCommandResult("systemctl", ["--user", "stop", recovery.unit]);
+    const inactive = runServiceCommandResult("systemctl", [
+      "--user",
+      "is-active",
+      "--quiet",
+      recovery.unit,
+    ]);
+    status = stopped.status === 0 && inactive.status === 3 ? 0 : 1;
+  } else if (recovery.kind === "launchd") {
+    runServiceCommandResult("launchctl", [
+      "bootout",
+      "gui/" + recovery.uid,
+      recovery.plistPath,
+    ]);
+    const inactive = runServiceCommandResult("launchctl", [
+      "print",
+      "gui/" + recovery.uid + "/" + recovery.label,
+    ]);
+    const inactiveDetail = inactive.stdout + "\n" + inactive.stderr;
+    const notFound = inactive.status === 113 && /could not find service|service not found/i.test(inactiveDetail);
+    // The guarded print is authoritative. bootout can race a service that
+    // already exited, but package restoration is safe once the label is gone.
+    status = notFound ? 0 : 1;
+  } else if (recovery.kind === "schtasks") {
+    status = runServiceCommand("schtasks.exe", ["/End", "/TN", recovery.taskName]);
+  }
+  appendLog("gateway service recovery stop " + (status === 0 ? "succeeded" : "failed status=" + status));
+  return status === 0;
+}
+
+function restoreRetainedPackageBestEffort(rollback) {
+  if (!rollback) return false;
+  const packageRoot = rollback.packageRoot;
+  const retainedRoot = rollback.retainedPackageRoot;
+  const parent = path.dirname(packageRoot);
+  const stagedRoot = path.join(parent, "." + path.basename(packageRoot) + ".handoff-rollback-" + process.pid);
+  const displacedRoot = stagedRoot + ".displaced";
+  let displaced = false;
+  try {
+    fs.rmSync(stagedRoot, { recursive: true, force: true });
+    fs.rmSync(displacedRoot, { recursive: true, force: true });
+    fs.cpSync(retainedRoot, stagedRoot, {
+      recursive: true,
+      dereference: false,
+      verbatimSymlinks: true,
+      force: true,
+      preserveTimestamps: true,
+    });
+    if (fs.existsSync(packageRoot)) {
+      fs.renameSync(packageRoot, displacedRoot);
+      displaced = true;
+    }
+    fs.renameSync(stagedRoot, packageRoot);
+    if (displaced) {
+      try {
+        fs.rmSync(displacedRoot, { recursive: true, force: true });
+      } catch (err) {
+        appendLog("deferred displaced package cleanup: " + (err && err.stack ? err.stack : String(err)));
+      }
+    }
+    appendLog("restored retained package from durable update marker");
+    return true;
+  } catch (err) {
+    if (displaced && !fs.existsSync(packageRoot)) {
+      try {
+        fs.renameSync(displacedRoot, packageRoot);
+      } catch {}
+    }
+    try {
+      fs.rmSync(stagedRoot, { recursive: true, force: true });
+    } catch {}
+    appendLog("failed to restore retained package: " + (err && err.stack ? err.stack : String(err)));
+    return false;
+  }
+}
+
+function resolveSnapshotRelative(root, relativePath) {
+  if (typeof relativePath !== "string" || !relativePath || path.isAbsolute(relativePath)) {
+    throw new Error("invalid relative snapshot path");
+  }
+  const candidate = path.resolve(root, relativePath);
+  if (candidate !== root && !candidate.startsWith(root + path.sep)) {
+    throw new Error("snapshot path escapes its root");
+  }
+  return candidate;
+}
+
+function restoreStateSnapshotBestEffort(rollback) {
+  if (!rollback || !rollback.stateSnapshotRoot) return true;
+  const snapshotRoot = rollback.stateSnapshotRoot;
+  let displaced = false;
+  let stateDir = "";
+  let stagedState = "";
+  let displacedState = "";
+  try {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(snapshotRoot, "update-state-snapshot.json"), "utf8"),
+    );
+    if (
+      manifest.version !== 1 ||
+      typeof manifest.stateDir !== "string" ||
+      typeof manifest.requestedConfigPath !== "string" ||
+      typeof manifest.configPath !== "string" ||
+      (manifest.configSymlinkTarget !== null &&
+        typeof manifest.configSymlinkTarget !== "string") ||
+      !Array.isArray(manifest.excludedStatePaths) ||
+      !["state", "external-present", "external-absent"].includes(manifest.configDisposition)
+    ) {
+      throw new Error("invalid update state snapshot manifest");
+    }
+    stateDir = path.resolve(manifest.stateDir);
+    const snapshotState = path.join(snapshotRoot, "state");
+    const parent = path.dirname(stateDir);
+    stagedState = path.join(parent, "." + path.basename(stateDir) + ".handoff-restore-" + process.pid);
+    displacedState = stagedState + ".displaced";
+    fs.rmSync(stagedState, { recursive: true, force: true });
+    fs.rmSync(displacedState, { recursive: true, force: true });
+    fs.cpSync(snapshotState, stagedState, {
+      recursive: true,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
+    for (const relativePath of manifest.excludedStatePaths) {
+      const livePath = resolveSnapshotRelative(stateDir, relativePath);
+      if (!fs.existsSync(livePath)) continue;
+      const stagedPath = resolveSnapshotRelative(stagedState, relativePath);
+      fs.rmSync(stagedPath, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(stagedPath), { recursive: true, mode: 0o700 });
+      fs.cpSync(livePath, stagedPath, {
+        recursive: true,
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+        filter: (sourcePath) => {
+          const candidate = path.resolve(sourcePath);
+          return !(
+            candidate === snapshotState || candidate.startsWith(snapshotState + path.sep)
+          );
+        },
+      });
+    }
+    const snapshotRelative = path.relative(stateDir, snapshotState);
+    if (
+      snapshotRelative &&
+      snapshotRelative !== ".." &&
+      !snapshotRelative.startsWith(".." + path.sep) &&
+      !path.isAbsolute(snapshotRelative)
+    ) {
+      // Keep a retryable image inside a nested managed prefix. Clone when the
+      // filesystem supports it; COPYFILE_FICLONE safely falls back to a copy.
+      const stagedSnapshotState = resolveSnapshotRelative(stagedState, snapshotRelative);
+      fs.rmSync(stagedSnapshotState, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(stagedSnapshotState), { recursive: true, mode: 0o700 });
+      fs.cpSync(snapshotState, stagedSnapshotState, {
+        recursive: true,
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+        mode: fs.constants.COPYFILE_FICLONE,
+      });
+    }
+    if (fs.existsSync(stateDir)) {
+      fs.renameSync(stateDir, displacedState);
+      displaced = true;
+    }
+    fs.renameSync(stagedState, stateDir);
+
+    const configPath = path.resolve(manifest.configPath);
+    if (manifest.configDisposition === "external-present") {
+      const configSnapshot = resolveSnapshotRelative(snapshotRoot, manifest.configSnapshot);
+      fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
+      const stagedConfig = configPath + ".handoff-restore-" + process.pid;
+      fs.copyFileSync(configSnapshot, stagedConfig);
+      fs.rmSync(configPath, { recursive: true, force: true });
+      fs.renameSync(stagedConfig, configPath);
+    } else if (manifest.configDisposition === "external-absent") {
+      fs.rmSync(configPath, { recursive: true, force: true });
+    }
+    if (manifest.configSymlinkTarget !== null) {
+      const requestedConfigPath = path.resolve(manifest.requestedConfigPath);
+      fs.mkdirSync(path.dirname(requestedConfigPath), { recursive: true, mode: 0o700 });
+      const stagedLink = requestedConfigPath + ".handoff-restore-link-" + process.pid;
+      fs.rmSync(stagedLink, { recursive: true, force: true });
+      fs.symlinkSync(manifest.configSymlinkTarget, stagedLink);
+      fs.rmSync(requestedConfigPath, { recursive: true, force: true });
+      fs.renameSync(stagedLink, requestedConfigPath);
+    }
+    if (displaced) {
+      fs.rmSync(displacedState, { recursive: true, force: true });
+    }
+    appendLog("restored state snapshot from external update recovery journal");
+    return true;
+  } catch (err) {
+    if (displaced && stateDir && displacedState && !fs.existsSync(stateDir)) {
+      try {
+        fs.renameSync(displacedState, stateDir);
+      } catch {}
+    }
+    if (stagedState) {
+      try {
+        fs.rmSync(stagedState, { recursive: true, force: true });
+      } catch {}
+    }
+    appendLog("failed to restore state snapshot: " + (err && err.stack ? err.stack : String(err)));
+    return false;
+  }
+}
+
+function recoverGatewayServiceAfterFailedUpdate(reason) {
+  let rollbackState = readPendingPackageRollback();
+  let serviceStopped = false;
+  if (rollbackState.status === "read-error") {
+    appendLog("gateway service recovery left stopped because rollback state was unreadable");
+    return false;
+  }
+  if (rollbackState.status === "pending") {
+    // This guarded SQLite write is the rollback claim. Confirmation wins by
+    // making it fail; a fresh read then routes to confirmed closeout.
+    let claim = markUpdateSentinelFailureIfPending(reason);
+    if (claim === "unavailable") {
+      // An unreadable database cannot arbitrate. Stop the only confirmation
+      // writer, then re-read both authorities before journal-owned rollback.
+      if (!stopGatewayServiceBestEffort()) return false;
+      serviceStopped = true;
+      rollbackState = readPendingPackageRollback();
+      if (rollbackState.status === "read-error") return false;
+      if (rollbackState.status === "pending") {
+        claim = markUpdateSentinelFailureIfPending(reason);
+      }
+    }
+    if (claim === "rejected") {
+      rollbackState = readPendingPackageRollback();
+      if (rollbackState.status === "read-error" || rollbackState.status === "pending") {
+        appendLog("gateway service recovery left unchanged because rollback could not be claimed");
+        return false;
+      }
+    }
+  }
+  if (rollbackState.status === "pending") {
+    if (!serviceStopped && !stopGatewayServiceBestEffort()) {
+      appendLog("retained package restore skipped because service stop was not proven");
+      return false;
+    }
+    if (!writeExternalRecoveryJournalStatus("rolling-back", "managed-service-handoff-recovery")) {
+      return false;
+    }
+    if (!restoreRetainedPackageBestEffort(rollbackState.rollback)) {
+      return false;
+    }
+    if (!restoreStateSnapshotBestEffort(rollbackState.rollback)) {
+      return false;
+    }
+    if (
+      !writeExternalRecoveryJournalStatus(
+        "rolled-back",
+        "update-rollback-completed: managed-service-handoff-recovery",
+      )
+    ) {
+      appendLog("gateway service recovery left stopped because terminal journal persistence failed");
+      return false;
+    }
+  } else if (rollbackState.status === "confirmed") {
+    if (rollbackState.cleanupReady) {
+      if (!cleanupConfirmedUpdateArtifacts(rollbackState)) return false;
+      return startGatewayServiceBestEffort();
+    } else {
+      // The updater died before probation closeout. A recovery restart makes
+      // startup resume queue release and schedule lease-guarded cleanup.
+      if (!serviceStopped && !stopGatewayServiceBestEffort()) return false;
+    }
+  } else {
+    markUpdateSentinelFailureIfPending(reason);
+  }
+  if (!persistExternalRecoveryJournalToStateDatabase()) {
+    return false;
+  }
+  const started = startGatewayServiceBestEffort();
+  if (!started && rollbackState.status === "pending") {
+    writeExternalRecoveryJournalStatus(
+      "failed",
+      "update-rollback-failed: retained gateway service activation failed",
+    );
+    persistExternalRecoveryJournalToStateDatabase();
+  }
+  return started;
 }
 
 function startGatewayServiceBestEffort() {
   const recovery = params.serviceRecovery;
   if (!recovery || typeof recovery !== "object" || !recovery.kind) {
-    return;
+    return false;
   }
   let target = "";
   let status = 1;
@@ -481,7 +1107,7 @@ function startGatewayServiceBestEffort() {
     target = recovery.taskName;
     status = runServiceCommand("schtasks.exe", ["/Run", "/TN", recovery.taskName]);
   } else {
-    return;
+    return false;
   }
   appendLog(
     "gateway service recovery " +
@@ -489,6 +1115,7 @@ function startGatewayServiceBestEffort() {
       " target=" +
       target,
   );
+  return status === 0;
 }
 
 (async () => {
@@ -534,8 +1161,9 @@ function startGatewayServiceBestEffort() {
     });
     if (exit && exit.error) {
       appendLog("managed update command failed to start: " + (exit.error && exit.error.stack ? exit.error.stack : String(exit.error)));
-      markUpdateSentinelFailureIfPending("managed-service-handoff-spawn-failed");
-      startGatewayServiceBestEffort();
+      if (recoverGatewayServiceAfterFailedUpdate("managed-service-handoff-spawn-failed")) {
+        cleanupRecoveryLocator();
+      }
       process.exitCode = 1;
       return;
     }
@@ -546,13 +1174,17 @@ function startGatewayServiceBestEffort() {
         (exit && exit.signal ? exit.signal : "null"),
     );
     if (exit && typeof exit.code === "number" && exit.code !== 0) {
-      markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
-      startGatewayServiceBestEffort();
+      if (recoverGatewayServiceAfterFailedUpdate("managed-service-handoff-failed")) {
+        cleanupRecoveryLocator();
+      }
       process.exitCode = exit.code;
     } else if (exit && exit.signal) {
-      markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
-      startGatewayServiceBestEffort();
+      if (recoverGatewayServiceAfterFailedUpdate("managed-service-handoff-failed")) {
+        cleanupRecoveryLocator();
+      }
       process.exitCode = 1;
+    } else {
+      cleanupRecoveryLocator();
     }
   } finally {
     if (outputFd !== undefined) {
@@ -566,12 +1198,15 @@ function startGatewayServiceBestEffort() {
   }
 })().catch((err) => {
   appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
-  markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed");
-  startGatewayServiceBestEffort();
+  if (recoverGatewayServiceAfterFailedUpdate("managed-service-handoff-helper-failed")) {
+    cleanupRecoveryLocator();
+  }
   cleanupSensitiveFiles();
   process.exitCode = 1;
 });
 `;
+
+export const managedServiceUpdateHandoffScriptForTest = HANDOFF_SCRIPT;
 
 type ManagedServiceUpdateHandoffParams = {
   root: string;
@@ -872,6 +1507,7 @@ async function spawnManagedServiceUpdateHandoff(
   const scriptPath = path.join(dir, "handoff.cjs");
   const paramsPath = path.join(dir, "handoff.json");
   const metaPath = path.join(dir, "sentinel-meta.json");
+  const recoveryLocatorPath = path.join(dir, "recovery-locator.json");
   const logPath = path.join(dir, "handoff.log");
   const commandArgv = resolveUpdateCliArgv({
     timeoutMs: params.timeoutMs,
@@ -904,6 +1540,7 @@ async function spawnManagedServiceUpdateHandoff(
     logPath,
     metaPath,
     stateDatabasePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
+    recoveryLocatorPath,
     sensitivePaths: [scriptPath, paramsPath, metaPath],
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };
@@ -917,6 +1554,7 @@ async function spawnManagedServiceUpdateHandoff(
     const env = {
       ...stripSupervisorHintEnv(params.env ?? process.env),
       [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+      [UPDATE_RECOVERY_LOCATOR_ENV]: recoveryLocatorPath,
       OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     };
     const spawnTarget = await resolveHandoffSpawn({

@@ -20,6 +20,7 @@ export type UpdateRestartSentinelMeta = {
   handoffId?: string;
   note?: string | null;
   continuationMessage?: string | null;
+  confirmationTier?: "delivery" | "human";
 };
 
 /** Build the restart sentinel payload written after update runs. */

@@ -29,6 +29,7 @@ import {
   formatGatewayRestartHandoffDiagnostic,
   readGatewayRestartHandoffSync,
 } from "../infra/restart-handoff.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
@@ -50,6 +51,7 @@ import {
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+import { formatUpdateTransactionDoctorLines } from "./status-update-restart.js";
 
 type LaunchAgentBootstrapDoctorOutcome =
   | { status: "skipped" }
@@ -193,6 +195,13 @@ export async function maybeRepairGatewayDaemon(params: {
   healthOk: boolean;
   healthSkipped?: boolean;
 }) {
+  if (params.options.deep) {
+    const updateMarker = await readRestartSentinel().catch(() => null);
+    const lines = formatUpdateTransactionDoctorLines(updateMarker?.payload);
+    if (lines.length > 0) {
+      note(lines.join("\n"), "Update rollback");
+    }
+  }
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients({
       cfg: params.cfg,

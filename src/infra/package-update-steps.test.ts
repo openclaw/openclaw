@@ -232,6 +232,85 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("defers staged lifecycle scripts until the transactional pre-swap snapshot", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-transaction-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+      const events: string[] = [];
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        retentionNodePath: process.execPath,
+        runCommand: async (argv) => {
+          if (argv.join(" ") === "npm root -g") {
+            return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+          }
+          return { stdout: "", stderr: "", code: 0 };
+        },
+        runStep: async ({ name, argv, cwd, env }) => {
+          events.push(name);
+          if (name === "global update") {
+            expect(argv).toContain("--ignore-scripts");
+            const prefixIndex = argv.indexOf("--prefix");
+            const stagePrefix = argv[prefixIndex + 1]!;
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            await fs.writeFile(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw", "pnpm-workspace.yaml"),
+              "allowBuilds:\n  openclaw: true\n  native-addon: true\n  denied-addon: false\n",
+            );
+          } else if (name === "staged package lifecycle") {
+            expect(argv).not.toContain("openclaw");
+            expect(argv).toContain("--allow-scripts=native-addon,openclaw");
+            expect(argv).toContain("--strict-allow-scripts");
+            expect(env?.OPENCLAW_STATE_DIR).toBe(path.join(cwd!, ".openclaw-update-state"));
+            expect(env?.HOME).toBe(path.join(cwd!, ".openclaw-update-state"));
+            expect(env?.OPENCLAW_HOME).toBe(path.join(cwd!, ".openclaw-update-state"));
+            expect(env?.OPENCLAW_CONFIG_PATH).toBe(
+              path.join(cwd!, ".openclaw-update-state", "openclaw.json"),
+            );
+            await fs.writeFile(
+              path.join(cwd!, "lib", "node_modules", "openclaw", "lifecycle-complete"),
+              "yes",
+            );
+          }
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
+        },
+        preSwapStep: async ({ candidatePackageRoot }) => {
+          events.push("snapshot");
+          expect(
+            await fs.readFile(path.join(candidatePackageRoot, "package.json"), "utf8"),
+          ).toContain('"version":"2.0.0"');
+          return { steps: [], failedStep: null };
+        },
+        postLifecyclePreSwapStep: async ({ candidatePackageRoot }) => {
+          events.push("verify");
+          await expect(
+            fs.readFile(path.join(candidatePackageRoot, "lifecycle-complete"), "utf8"),
+          ).resolves.toBe("yes");
+          return { steps: [], failedStep: null };
+        },
+        timeoutMs: 1_000,
+      });
+
+      expect(result.failedStep).toBeNull();
+      expect(events).toEqual(["global update", "staged package lifecycle", "verify", "snapshot"]);
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "swaps npm package roots that contain package-manager hardlinks",
     async () => {

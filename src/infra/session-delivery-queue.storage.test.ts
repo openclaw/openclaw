@@ -16,6 +16,7 @@ import {
 import {
   enqueueClaimedSessionDelivery,
   enqueueSessionDelivery,
+  enqueueSessionDeliveryInExistingState,
   releaseSessionDeliveryClaim,
 } from "./session-delivery-queue.js";
 
@@ -64,6 +65,43 @@ describe("session-delivery queue storage", () => {
 
       expect(secondId).toBe(firstId);
       expect(await loadPendingSessionDeliveries(tempDir)).toHaveLength(1);
+    });
+  });
+
+  it("queues rollback replay without migrating the retained snapshot schema", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const database = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      });
+      database.db.exec("PRAGMA user_version = 3;");
+
+      const id = await enqueueSessionDeliveryInExistingState(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:telegram:peer",
+          message: "message held during update",
+          messageId: "probation-message-1",
+          route: {
+            channel: "telegram",
+            to: "chat-1",
+            chatType: "direct",
+          },
+          idempotencyKey: "update-probation:message-1",
+        },
+        tempDir,
+      );
+
+      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+      const row = database.db
+        .prepare(
+          "SELECT status, entry_json FROM delivery_queue_entries WHERE queue_name = 'session' AND id = ?",
+        )
+        .get(id) as { status: string; entry_json: string };
+      expect(row.status).toBe("pending");
+      expect(JSON.parse(row.entry_json)).toMatchObject({
+        kind: "agentTurn",
+        message: "message held during update",
+      });
     });
   });
 

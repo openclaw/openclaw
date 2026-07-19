@@ -1,5 +1,15 @@
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
+import {
+  UPDATE_RECOVERY_JOURNAL_ENV,
+  UPDATE_RECOVERY_LOCATOR_ENV,
+} from "../../infra/update-recovery-journal.js";
+import type { UpdateRestartSentinelMeta } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  advanceUpdateTransactionMarker,
+  startUpdateTransactionOwnerLease,
+  writeUpdateTransactionMarker,
+} from "../../infra/update-transaction-marker.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
@@ -13,7 +23,10 @@ import {
   hasSchemaRefusal,
   runGitUpdate,
 } from "./update-command-git.js";
-import { runPackageInstallUpdate } from "./update-command-package.js";
+import {
+  runPackageInstallUpdate,
+  type PreparedPackageUpdateRollback,
+} from "./update-command-package.js";
 import {
   createAggregateErrorWithCause,
   maybeRestartServiceAfterFailedMutableUpdate,
@@ -25,13 +38,23 @@ import {
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
+import { rollbackPreparedPackageUpdate } from "./update-command-transaction-rollback.js";
 
 const CLI_NAME = resolveCliName();
 
 type MutableUpdateExecutionResult = {
   result: UpdateRunResult;
   preManagedServiceStop: PreManagedServiceStop | undefined;
+  preparedPackageRollback: PreparedPackageUpdateRollback | null;
+  updateTransactionMeta: UpdateRestartSentinelMeta | null;
+  stopUpdateTransactionOwnerLease: (() => Promise<void>) | null;
 };
+
+async function stopTransactionOwnerLeaseIfPresent(
+  stop: (() => Promise<void>) | null,
+): Promise<void> {
+  await stop?.();
+}
 
 export async function executeMutableUpdate(params: {
   root: string;
@@ -61,6 +84,9 @@ export async function executeMutableUpdate(params: {
 }): Promise<MutableUpdateExecutionResult | null> {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let schemaRefusalAfterStop = false;
+  let preparedPackageRollback: PreparedPackageUpdateRollback | null = null;
+  let updateTransactionMeta: UpdateRestartSentinelMeta | null = null;
+  let stopUpdateTransactionOwnerLease: (() => Promise<void>) | null = null;
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -154,6 +180,19 @@ export async function executeMutableUpdate(params: {
 
   let result: UpdateRunResult;
   try {
+    if (params.updateInstallKind === "package") {
+      const { readControlPlaneUpdateSentinelMeta } =
+        await import("../../infra/update-control-plane-sentinel.js");
+      const candidate = await readControlPlaneUpdateSentinelMeta();
+      if (
+        candidate?.handoffId &&
+        candidate.sessionKey &&
+        candidate.deliveryContext?.channel &&
+        candidate.deliveryContext.to
+      ) {
+        updateTransactionMeta = candidate;
+      }
+    }
     result =
       params.updateInstallKind === "package" && hasSchemaRefusal(postStopPackageSchemaPreflight)
         ? {
@@ -187,6 +226,65 @@ export async function executeMutableUpdate(params: {
               nodeRunner: params.packageUpdateNodeRunner,
               installEnv: params.packageInstallEnv,
               installTarget: params.packageInstallTarget,
+              enableTransactionalRollback: updateTransactionMeta !== null,
+              onRollbackPrepared: async (rollback, phase) => {
+                preparedPackageRollback = rollback;
+                if (!updateTransactionMeta?.handoffId) {
+                  return;
+                }
+                const recoveryLocatorPath = process.env[UPDATE_RECOVERY_LOCATOR_ENV];
+                const transactionEnv = {
+                  ...(preManagedServiceStop?.serviceEnv ?? process.env),
+                  [UPDATE_RECOVERY_JOURNAL_ENV]: rollback.recoveryJournalPath,
+                  ...(recoveryLocatorPath
+                    ? { [UPDATE_RECOVERY_LOCATOR_ENV]: recoveryLocatorPath }
+                    : {}),
+                };
+                if (phase === "snapshot") {
+                  await writeUpdateTransactionMarker({
+                    result: {
+                      status: "ok",
+                      mode: params.packageInstallTarget?.manager ?? "unknown",
+                      root: rollback.packageRoot,
+                      reason: "update transaction prepared",
+                      steps: [],
+                      durationMs: Date.now() - params.startedAt,
+                    },
+                    meta: { ...updateTransactionMeta, handoffId: updateTransactionMeta.handoffId },
+                    confirmationTier: updateTransactionMeta.confirmationTier ?? "delivery",
+                    phase: "snapshot",
+                    rollback: {
+                      packageRoot: rollback.packageRoot,
+                      retainedPackageRoot: rollback.retainedPackageRoot,
+                      stateSnapshotRoot: rollback.stateSnapshot.root,
+                      nodePath: rollback.nodePath,
+                      recoveryJournalPath: rollback.recoveryJournalPath,
+                    },
+                    env: transactionEnv,
+                  });
+                  stopUpdateTransactionOwnerLease = await startUpdateTransactionOwnerLease({
+                    handoffId: updateTransactionMeta.handoffId,
+                    env: transactionEnv,
+                    onError: (error) => {
+                      defaultRuntime.error(
+                        `Warning: update owner lease refresh failed: ${String(error)}`,
+                      );
+                    },
+                  });
+                  return;
+                }
+                const advanced = await advanceUpdateTransactionMarker({
+                  handoffId: updateTransactionMeta.handoffId,
+                  phase,
+                  env: transactionEnv,
+                });
+                if (!advanced) {
+                  throw new Error(`update transaction ownership lost before ${phase}`);
+                }
+              },
+            }).then((outcome) => {
+              preparedPackageRollback = outcome.rollback;
+              return outcome.result;
             })
           : await runGitUpdate({
               root: params.root,
@@ -233,6 +331,25 @@ export async function executeMutableUpdate(params: {
       }
       return null;
     }
+    if (preparedPackageRollback && updateTransactionMeta) {
+      await stopTransactionOwnerLeaseIfPresent(stopUpdateTransactionOwnerLease);
+      await rollbackPreparedPackageUpdate({
+        rollback: preparedPackageRollback,
+        meta: updateTransactionMeta,
+        result: {
+          status: "error",
+          mode: params.packageInstallTarget?.manager ?? "unknown",
+          root: params.root,
+          reason: "package-update-exception",
+          steps: [],
+          durationMs: Date.now() - params.startedAt,
+        },
+        reason: String(err),
+        preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      });
+      throw err;
+    }
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop);
     } catch (resumeErr) {
@@ -251,5 +368,11 @@ export async function executeMutableUpdate(params: {
     throw err;
   }
 
-  return { result, preManagedServiceStop };
+  return {
+    result,
+    preManagedServiceStop,
+    preparedPackageRollback,
+    updateTransactionMeta,
+    stopUpdateTransactionOwnerLease,
+  };
 }

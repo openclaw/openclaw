@@ -17,10 +17,12 @@ import type { UpdateRunResult } from "./update-runner.js";
 export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META";
 export const CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 export const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
+export const CONTROL_PLANE_UPDATE_CONFIRMATION_PENDING_REASON = "update-confirmation-pending";
 
 const CONTROL_PLANE_UPDATE_PENDING_REASONS = new Set<string>([
   CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
   CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
+  CONTROL_PLANE_UPDATE_CONFIRMATION_PENDING_REASON,
 ]);
 
 export type ControlPlaneUpdateSentinelMetaFile = {
@@ -68,6 +70,10 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   const sessionKey = normalizeText(value.sessionKey);
   const threadId = normalizeText(value.threadId);
   const handoffId = normalizeText(value.handoffId);
+  const confirmationTier =
+    value.confirmationTier === "human" || value.confirmationTier === "delivery"
+      ? value.confirmationTier
+      : undefined;
   const channel = isRecord(value.deliveryContext)
     ? normalizeText(value.deliveryContext.channel)
     : undefined;
@@ -88,6 +94,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(threadId ? { threadId } : {}),
     ...(handoffId ? { handoffId } : {}),
+    ...(confirmationTier ? { confirmationTier } : {}),
     note: typeof value.note === "string" ? value.note : null,
     continuationMessage:
       typeof value.continuationMessage === "string" ? value.continuationMessage : null,

@@ -86,7 +86,8 @@ export async function retainCurrentPackageForUpdate(params: {
     });
     await fs.cp(params.packageRoot, stagedRoot, {
       recursive: true,
-      dereference: true,
+      dereference: false,
+      verbatimSymlinks: true,
       force: true,
       preserveTimestamps: true,
     });
@@ -152,5 +153,65 @@ export async function retainCurrentPackageForUpdate(params: {
         stderrTail: formatErrorMessage(error),
       },
     };
+  }
+}
+
+/** Replace the live managed package with the launch-verified retained copy. */
+export async function restoreRetainedPackageForUpdate(params: {
+  retainedRoot: string;
+  packageRoot: string;
+  removeDisplacedTree?: (targetPath: string) => Promise<void>;
+}): Promise<void> {
+  const packageRoot = path.resolve(params.packageRoot);
+  const retainedRoot = path.resolve(params.retainedRoot);
+  const parent = path.dirname(packageRoot);
+  const stagedRoot = path.join(
+    parent,
+    `.${path.basename(packageRoot)}.rollback-${process.pid}-${Date.now()}`,
+  );
+  const displacedRoot = `${stagedRoot}.displaced`;
+  await fs.cp(retainedRoot, stagedRoot, {
+    recursive: true,
+    dereference: false,
+    verbatimSymlinks: true,
+    force: true,
+    preserveTimestamps: true,
+  });
+  let displaced = false;
+  try {
+    // The managed handoff parent runs outside this package root. If this
+    // update child exits inside the rename window, that parent restores the
+    // retained tree from the durable marker before restarting the service.
+    const liveExists = await fs
+      .stat(packageRoot)
+      .then(() => true)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") {
+          return false;
+        }
+        throw error;
+      });
+    if (liveExists) {
+      await fs.rename(packageRoot, displacedRoot);
+      displaced = true;
+    }
+    await fs.rename(stagedRoot, packageRoot);
+    if (displaced) {
+      // The retained package is authoritative after the rename. Candidate
+      // cleanup cannot abort the remaining state restore and service start.
+      await (params.removeDisplacedTree ?? removeTree)(displacedRoot).catch(() => undefined);
+    }
+  } catch (error) {
+    if (displaced) {
+      const liveExists = await fs
+        .stat(packageRoot)
+        .then(() => true)
+        .catch(() => false);
+      if (!liveExists) {
+        await fs.rename(displacedRoot, packageRoot).catch(() => undefined);
+      }
+    }
+    await removeTree(stagedRoot).catch(() => undefined);
+    throw error;
   }
 }

@@ -8,6 +8,7 @@ import {
 } from "../agents/embedded-agent-runner/run-state.js";
 import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -49,6 +50,7 @@ import {
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import {
   type GatewayRestartEmitter,
   setGatewaySigusr1RestartPolicy,
@@ -56,6 +58,18 @@ import {
 } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
+import {
+  isUpdateConfirmationProbationActive,
+  registerPendingUpdateConfirmation,
+  startUpdateConfirmationOwnerLeaseWatchdog,
+} from "../infra/update-confirmation-runtime.js";
+import {
+  isActiveUpdateTransactionMarker,
+  isUpdateTransactionConfirmed,
+  isUpdateTransactionProbationReleased,
+  markUpdateTransactionConfirmationFailed,
+  resolveUpdateTransactionStartupDisposition,
+} from "../infra/update-transaction-marker.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -616,6 +630,75 @@ export async function startGatewayServer(
       docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     });
   }
+  const updateMarker = await readRestartSentinel();
+  const updatePayload = updateMarker?.payload;
+  if (
+    updatePayload &&
+    isActiveUpdateTransactionMarker(updatePayload) &&
+    (updatePayload.stats?.updateReplayAdmissionsPending ?? 0) > 0
+  ) {
+    const failed = await markUpdateTransactionConfirmationFailed({
+      handoffId: updatePayload.stats!.handoffId!,
+      reason: "update replay admission interrupted before durable commit",
+    });
+    if (!failed) {
+      throw new Error("interrupted update replay admission could not request rollback");
+    }
+    throw new Error("interrupted update replay admission requires rollback");
+  }
+  const updateStartupDisposition = resolveUpdateTransactionStartupDisposition(updatePayload);
+  if (updateStartupDisposition === "blocked") {
+    throw new Error(
+      `managed update transaction is not eligible for Gateway startup (${updatePayload!.stats!.updatePhase})`,
+    );
+  }
+  const updateProbation =
+    updateStartupDisposition === "probation" &&
+    updatePayload &&
+    updatePayload.sessionKey &&
+    updatePayload.deliveryContext?.channel &&
+    updatePayload.deliveryContext.to
+      ? {
+          handoffId: updatePayload.stats!.handoffId!,
+          sessionKey: updatePayload.sessionKey,
+          channel: updatePayload.deliveryContext.channel,
+          to: updatePayload.deliveryContext.to,
+          accountId: updatePayload.deliveryContext.accountId,
+          threadId: updatePayload.threadId,
+          tier: updatePayload.stats!.confirmationTier!,
+          confirmationChallenge: updatePayload.stats!.humanConfirmationChallenge,
+          stateSnapshotRoot: updatePayload.stats!.stateSnapshotRoot,
+        }
+      : null;
+  if (updateStartupDisposition === "probation" && !updateProbation) {
+    throw new Error("managed update probation marker is missing its confirmation route");
+  }
+  const resumeConfirmedUpdateProbation =
+    updateProbation &&
+    updatePayload &&
+    isUpdateTransactionConfirmed(updatePayload) &&
+    !isUpdateTransactionProbationReleased(updatePayload)
+      ? () => {
+          void import("./server-restart-sentinel-update-retry.js").then(
+            ({ scheduleConfirmedUpdateProbationRelease }) =>
+              scheduleConfirmedUpdateProbationRelease(updateProbation.handoffId),
+          );
+        }
+      : undefined;
+  if (updateProbation) {
+    registerPendingUpdateConfirmation(updateProbation, {
+      replayAdmissionsSealed: Boolean(resumeConfirmedUpdateProbation),
+    });
+    if (!process.env.VITEST) {
+      startUpdateConfirmationOwnerLeaseWatchdog({
+        handoffId: updateProbation.handoffId,
+        onExpired: () => {
+          log.error("update orchestrator lease expired; restarting for rollback recovery");
+          process.kill(process.pid, "SIGTERM");
+        },
+      });
+    }
+  }
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
@@ -1150,8 +1233,13 @@ export async function startGatewayServer(
     getNativeApprovalRuntime: () => gatewayInstanceRuntime?.nativeApprovals,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
-  const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupSidecarsReady && sidecarStartup === "start";
+  const sidecarStartup: GatewaySidecarStartupMode = updateProbation
+    ? "update-probation"
+    : (opts.sidecarStartup ?? "start");
+  const isGatewayStartupPending = () =>
+    isUpdateConfirmationProbationActive() ||
+    (!startupSidecarsReady &&
+      (sidecarStartup === "start" || sidecarStartup === "update-probation"));
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
@@ -1402,6 +1490,16 @@ export async function startGatewayServer(
   };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
+  const startUpdateProbationChannel = async () => {
+    if (!updateProbation) {
+      return;
+    }
+    const channelId = normalizeChannelId(updateProbation.channel);
+    if (!channelId) {
+      throw new Error(`update confirmation channel is unavailable: ${updateProbation.channel}`);
+    }
+    await startChannel(channelId, updateProbation.accountId, { manual: true });
+  };
   const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (
     optsResult,
   ) =>
@@ -2047,6 +2145,7 @@ export async function startGatewayServer(
         nodeReapprovalCoordinator,
         preauthHandshakeTimeoutMs,
         isStartupPending: isGatewayStartupPending,
+        allowProbeDuringStartup: sidecarStartup === "update-probation",
         gatewayMethods: runtimeState.gatewayMethods,
         events: GATEWAY_EVENTS,
         logGateway: log,
@@ -2130,6 +2229,8 @@ export async function startGatewayServer(
             defaultWorkspaceDir,
             deps,
             startChannels,
+            startUpdateProbationChannel,
+            resumeConfirmedUpdateProbation,
             recoveryRuntime: gatewayInstanceRuntimeLocal.recovery,
             logHooks,
             logChannels,

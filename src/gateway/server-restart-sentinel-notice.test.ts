@@ -68,8 +68,8 @@ describe("restart sentinel notice recovery", () => {
     return queued.id;
   }
 
-  async function deliverNotice(queueId: string): Promise<void> {
-    await deliverRestartSentinelNotice({
+  async function deliverNotice(queueId: string) {
+    return await deliverRestartSentinelNotice({
       deps: {} as never,
       cfg: {},
       channel: "whatsapp",
@@ -108,7 +108,7 @@ describe("restart sentinel notice recovery", () => {
       { channel: "whatsapp", messageId: "recovered-1" },
     ]);
 
-    await deliverNotice(queueId);
+    expect(await deliverNotice(queueId)).toBe("acknowledged");
 
     expect(mocks.recoveryDeliver).toHaveBeenCalledOnce();
     expect(await loadPendingDelivery(queueId)).toBeNull();

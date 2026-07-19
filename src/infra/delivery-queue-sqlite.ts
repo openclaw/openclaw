@@ -1,11 +1,14 @@
 // Stores durable delivery queue entries in SQLite.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
+  clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 // Generic durable delivery queue storage shared by session and outbound queues.
@@ -123,7 +126,7 @@ function metadata(entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
 
 function upsertDeliveryQueueEntryInDatabase(
   params: UpsertDeliveryQueueEntryParams,
-  database: ReturnType<typeof openStateDatabase>,
+  database: Pick<ReturnType<typeof openStateDatabase>, "db">,
 ): boolean {
   const now = Date.now();
   const status = params.status ?? "pending";
@@ -195,6 +198,27 @@ function upsertDeliveryQueueEntryInDatabase(
 /** Insert or replace a delivery queue entry under a queue namespace. */
 export function upsertDeliveryQueueEntry(params: UpsertDeliveryQueueEntryParams): boolean {
   return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir));
+}
+
+/**
+ * Insert into an existing shared-state queue without running candidate schema setup.
+ * Update rollback uses this only against the retained pre-mutation snapshot, whose
+ * shipped delivery queue must remain readable by the retained package.
+ */
+export function upsertExistingDeliveryQueueEntry(
+  params: Omit<UpsertDeliveryQueueEntryParams, "stateDir"> & { stateDir: string },
+): boolean {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const pathname = resolveOpenClawStateSqlitePath(env);
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(pathname);
+  try {
+    db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
+    return upsertDeliveryQueueEntryInDatabase(params, { db });
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    db.close();
+  }
 }
 
 type CommitStagedDeliveryQueueEntryParams = {

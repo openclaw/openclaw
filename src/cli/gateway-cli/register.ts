@@ -26,6 +26,7 @@ import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
+import { addGatewayVerifyCommand } from "./register-verify.js";
 import { addGatewayRunCommand } from "./run-command.js";
 
 const configModuleLoader = createLazyImportLoader(
@@ -583,6 +584,7 @@ export function registerGatewayCli(program: Command) {
     statusDescription: "Show gateway service status + probe connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
+  addGatewayVerifyCommand(gateway);
 
   gatewayCallOpts(
     gateway

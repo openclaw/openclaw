@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { retainCurrentPackageForUpdate } from "./update-retention.js";
+import {
+  retainCurrentPackageForUpdate,
+  restoreRetainedPackageForUpdate,
+} from "./update-retention.js";
 
 const temporaryRoots: string[] = [];
 
@@ -13,7 +16,7 @@ afterEach(async () => {
 });
 
 describe("update package retention", () => {
-  it("keeps exactly one launchable dereferenced previous package", async () => {
+  it("keeps exactly one launchable previous package with symlinks intact", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-retain-"));
     temporaryRoots.push(root);
     const globalRoot = path.join(root, "lib", "node_modules");
@@ -27,6 +30,7 @@ describe("update package retention", () => {
       JSON.stringify({ name: "openclaw", version: "1.9.0" }),
     );
     await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), 'console.log("1.9.0");\n');
+    await fs.symlink("entry.js", path.join(packageRoot, "dist", "gateway.js"));
     const managedNodePath = path.join(root, "managed-node");
     const observedNodePaths: string[] = [];
     const runWithManagedNode: typeof runCommandWithTimeout = async (argv, options) => {
@@ -52,6 +56,9 @@ describe("update package retention", () => {
     expect(
       JSON.parse(await fs.readFile(path.join(result.retainedRoot ?? "", "package.json"), "utf8")),
     ).toMatchObject({ version: "1.9.0" });
+    expect(await fs.readlink(path.join(result.retainedRoot ?? "", "dist", "gateway.js"))).toBe(
+      "entry.js",
+    );
     expect(
       (await fs.readdir(path.dirname(result.retainedRoot ?? ""))).filter((entry) =>
         entry.startsWith(".openclaw-previous"),
@@ -88,5 +95,61 @@ describe("update package retention", () => {
       ),
     ).toEqual([".openclaw-previous"]);
     expect(observedNodePaths).toEqual([managedNodePath, managedNodePath]);
+  });
+
+  it("restores the live package without consuming retention", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-restore-"));
+    temporaryRoots.push(root);
+    const packageRoot = path.join(root, "live");
+    const retainedRoot = path.join(root, "retained");
+    await fs.mkdir(packageRoot);
+    await fs.mkdir(retainedRoot);
+    await fs.writeFile(path.join(packageRoot, "version"), "new");
+    await fs.writeFile(path.join(retainedRoot, "version"), "old");
+    await fs.symlink("version", path.join(retainedRoot, "current"));
+
+    await restoreRetainedPackageForUpdate({ retainedRoot, packageRoot });
+
+    expect(await fs.readFile(path.join(packageRoot, "version"), "utf8")).toBe("old");
+    expect(await fs.readFile(path.join(retainedRoot, "version"), "utf8")).toBe("old");
+    expect(await fs.readlink(path.join(packageRoot, "current"))).toBe("version");
+  });
+
+  it("restores retention when the live package root disappeared", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-restore-missing-"));
+    temporaryRoots.push(root);
+    const packageRoot = path.join(root, "live");
+    const retainedRoot = path.join(root, "retained");
+    await fs.mkdir(retainedRoot);
+    await fs.writeFile(path.join(retainedRoot, "version"), "old");
+
+    await restoreRetainedPackageForUpdate({ retainedRoot, packageRoot });
+
+    expect(await fs.readFile(path.join(packageRoot, "version"), "utf8")).toBe("old");
+    expect(await fs.readFile(path.join(retainedRoot, "version"), "utf8")).toBe("old");
+  });
+
+  it("continues after displaced candidate cleanup fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-cleanup-failure-"));
+    temporaryRoots.push(root);
+    const packageRoot = path.join(root, "live");
+    const retainedRoot = path.join(root, "retained");
+    await fs.mkdir(packageRoot);
+    await fs.mkdir(retainedRoot);
+    await fs.writeFile(path.join(packageRoot, "version"), "new");
+    await fs.writeFile(path.join(retainedRoot, "version"), "old");
+    const cleanupError = new Error("candidate cleanup denied");
+    const removeDisplacedTree = async () => {
+      throw cleanupError;
+    };
+
+    await expect(
+      restoreRetainedPackageForUpdate({
+        retainedRoot,
+        packageRoot,
+        removeDisplacedTree,
+      }),
+    ).resolves.toBeUndefined();
+    expect(await fs.readFile(path.join(packageRoot, "version"), "utf8")).toBe("old");
   });
 });

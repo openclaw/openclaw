@@ -3,13 +3,31 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import { generateSecureUuid } from "../../infra/secure-random.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   readControlPlaneUpdateSentinelMeta,
 } from "../../infra/update-control-plane-sentinel.js";
+import { completePreparedUpdateHandover } from "../../infra/update-handover.js";
+import {
+  UPDATE_RECOVERY_JOURNAL_ENV,
+  UPDATE_RECOVERY_LOCATOR_ENV,
+} from "../../infra/update-recovery-journal.js";
+import type { UpdateRestartSentinelMeta } from "../../infra/update-restart-sentinel-payload.js";
+import { restoreRetainedPackageForUpdate } from "../../infra/update-retention.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { removeUpdateStateSnapshot } from "../../infra/update-state-snapshot.js";
+import {
+  advanceUpdateTransactionMarker,
+  claimUpdateTransactionRollback,
+  clearUpdateTransactionMarker,
+  isUpdateTransactionMarker,
+  startUpdateTransactionOwnerLease,
+  waitForUpdateTransactionConfirmation,
+} from "../../infra/update-transaction-marker.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -26,6 +44,7 @@ import {
   persistRequestedUpdateChannel,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
+import type { PreparedPackageUpdateRollback } from "./update-command-package.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
@@ -41,9 +60,14 @@ import {
   resolveUpdatedGatewayRestartPort,
   restoreWindowsTaskAutoStartOrExit,
   shouldPrepareUpdatedInstallRestart,
+  serviceControlStdoutForMode,
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
+import {
+  restoreUpdateStateWithCompletedRollbackMarker,
+  rollbackPreparedPackageUpdate,
+} from "./update-command-transaction-rollback.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -74,6 +98,56 @@ function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
 }
 
+export function buildLateUpdateFailureResult(
+  result: UpdateRunResult,
+  reason: string,
+): UpdateRunResult {
+  return { ...result, status: "error", reason };
+}
+
+function writeLateUpdateFailureJson(params: {
+  result: UpdateRunResult;
+  reason: string;
+  jsonMode: boolean;
+}): void {
+  if (params.jsonMode) {
+    defaultRuntime.writeJson(buildLateUpdateFailureResult(params.result, params.reason));
+  }
+}
+
+async function markUpdateTransactionRollbackFailureBestEffort(params: {
+  meta: UpdateRestartSentinelMeta;
+  reason: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  if (!params.meta.handoffId) {
+    return;
+  }
+  try {
+    const marker = await readRestartSentinel(params.env);
+    if (
+      !marker ||
+      !isUpdateTransactionMarker(marker.payload) ||
+      marker.payload.stats?.handoffId !== params.meta.handoffId ||
+      marker.payload.stats.updatePhase === "failed"
+    ) {
+      return;
+    }
+    await advanceUpdateTransactionMarker({
+      handoffId: params.meta.handoffId,
+      phase: "failed",
+      rollbackOwner: marker.payload.stats.updateRollbackOwner,
+      confirmationStatus: "failed",
+      status: "error",
+      reason: params.reason,
+      env: params.env,
+    });
+  } catch {
+    // Preserve the transaction marker rather than replacing it with a legacy
+    // sentinel when even the best-effort terminal transition cannot persist.
+  }
+}
+
 export async function finishUpdate(params: {
   result: UpdateRunResult;
   root: string;
@@ -92,12 +166,43 @@ export async function finishUpdate(params: {
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
   invocationCwd?: string;
+  preparedPackageRollback: PreparedPackageUpdateRollback | null;
+  updateTransactionMeta: UpdateRestartSentinelMeta | null;
+  stopPreparedTransactionOwnerLease?: () => Promise<void>;
 }): Promise<void> {
+  let preparedTransactionOwnerLeaseStopped = false;
+  const stopPreparedTransactionOwnerLease = async () => {
+    if (preparedTransactionOwnerLeaseStopped) {
+      return;
+    }
+    await params.stopPreparedTransactionOwnerLease?.();
+    preparedTransactionOwnerLeaseStopped = true;
+  };
   if (!params.opts.json || params.result.status !== "ok") {
     printResult(params.result, { ...params.opts, hideSteps: params.showProgress });
   }
 
   if (params.result.status === "error") {
+    const updateTransactionMeta = params.updateTransactionMeta;
+    if (params.preparedPackageRollback && updateTransactionMeta) {
+      await stopPreparedTransactionOwnerLease();
+      await rollbackPreparedPackageUpdate({
+        rollback: params.preparedPackageRollback,
+        meta: updateTransactionMeta,
+        result: params.result,
+        reason: params.result.reason ?? "package update failed",
+        preManagedServiceStop: params.preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      }).catch(async (error: unknown) => {
+        await markUpdateTransactionRollbackFailureBestEffort({
+          meta: updateTransactionMeta,
+          reason: `update-rollback-failed: ${String(error)}`,
+          env: params.preManagedServiceStop?.serviceEnv,
+        });
+      });
+      defaultRuntime.exit(1);
+      return;
+    }
     if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
       return;
     }
@@ -288,6 +393,31 @@ export async function finishUpdate(params: {
     : params.result;
 
   if (postCorePluginUpdate?.status === "error") {
+    const updateTransactionMeta = params.updateTransactionMeta;
+    if (params.preparedPackageRollback && updateTransactionMeta) {
+      await stopPreparedTransactionOwnerLease();
+      await rollbackPreparedPackageUpdate({
+        rollback: params.preparedPackageRollback,
+        meta: updateTransactionMeta,
+        result: resultWithPostUpdate,
+        reason: "post-update plugin sync failed",
+        preManagedServiceStop: params.preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      }).catch(async (error: unknown) => {
+        await markUpdateTransactionRollbackFailureBestEffort({
+          meta: updateTransactionMeta,
+          reason: `update-rollback-failed: ${String(error)}`,
+          env: params.preManagedServiceStop?.serviceEnv,
+        });
+      });
+      writeLateUpdateFailureJson({
+        result: resultWithPostUpdate,
+        reason: "post-update plugin sync failed",
+        jsonMode: Boolean(params.opts.json),
+      });
+      defaultRuntime.exit(1);
+      return;
+    }
     if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
       return;
     }
@@ -379,33 +509,250 @@ export async function finishUpdate(params: {
     skipPrompt: Boolean(params.opts.yes),
   });
 
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
-    jsonMode: Boolean(params.opts.json),
-  });
+  const transactionalRollback = params.preparedPackageRollback;
+  const transactionMeta = params.updateTransactionMeta;
+  const confirmationTier = transactionMeta?.confirmationTier ?? "delivery";
+  const recoveryLocatorPath = process.env[UPDATE_RECOVERY_LOCATOR_ENV];
+  const transactionServiceEnv = {
+    ...(params.preManagedServiceStop?.serviceEnv ?? gatewayServiceEnv ?? process.env),
+    ...(transactionalRollback
+      ? { [UPDATE_RECOVERY_JOURNAL_ENV]: transactionalRollback.recoveryJournalPath }
+      : {}),
+    ...(recoveryLocatorPath ? { [UPDATE_RECOVERY_LOCATOR_ENV]: recoveryLocatorPath } : {}),
+  };
+  if (transactionalRollback && transactionMeta?.handoffId) {
+    try {
+      const advanced = await advanceUpdateTransactionMarker({
+        handoffId: transactionMeta.handoffId,
+        phase: "restart",
+        result: resultWithPostUpdate,
+        env: transactionServiceEnv,
+      });
+      if (!advanced) {
+        throw new Error("update transaction ownership lost before restart");
+      }
+    } catch (error) {
+      const reason = `update marker write failed: ${String(error)}`;
+      await stopPreparedTransactionOwnerLease();
+      await rollbackPreparedPackageUpdate({
+        rollback: transactionalRollback,
+        meta: transactionMeta,
+        result: resultWithPostUpdate,
+        reason,
+        preManagedServiceStop: params.preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      });
+      writeLateUpdateFailureJson({
+        result: resultWithPostUpdate,
+        reason,
+        jsonMode: Boolean(params.opts.json),
+      });
+      defaultRuntime.exit(1);
+      return;
+    }
+  } else {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
 
   if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
     return;
   }
-  const restartOk = await maybeRestartService({
-    shouldRestart: params.shouldRestart,
-    result: resultWithPostUpdate,
-    opts: params.opts,
-    refreshServiceEnv: refreshGatewayServiceEnv,
-    serviceEnv: gatewayServiceEnv,
-    gatewayPort,
-    restartScriptPath,
-    invocationCwd: params.invocationCwd,
-    nodeRunner: params.packageUpdateNodeRunner,
-    skipLegacyServiceRestart,
-    requireRunningServiceAfterRestart:
-      resultWithPostUpdate.mode === "git" && params.preManagedServiceStop?.stopped === true,
-    timeoutMs: params.updateStepTimeoutMs,
-  });
+  let restartOk = false;
+  const restartUpdatedService = async () => {
+    restartOk = await maybeRestartService({
+      shouldRestart: params.shouldRestart,
+      result: resultWithPostUpdate,
+      opts: params.opts,
+      refreshServiceEnv: refreshGatewayServiceEnv,
+      serviceEnv: gatewayServiceEnv,
+      gatewayPort,
+      restartScriptPath,
+      invocationCwd: params.invocationCwd,
+      nodeRunner: params.packageUpdateNodeRunner,
+      skipLegacyServiceRestart,
+      requireRunningServiceAfterRestart:
+        resultWithPostUpdate.mode === "git" && params.preManagedServiceStop?.stopped === true,
+      timeoutMs: params.updateStepTimeoutMs,
+    });
+  };
+
+  if (transactionalRollback && transactionMeta?.handoffId) {
+    const service = resolveGatewayService();
+    const serviceEnv = transactionServiceEnv;
+    let rollbackFailureReason = "update transaction failed";
+    let completedSnapshotCleanup = false;
+    const rollbackOwner = generateSecureUuid();
+    const stopOwnerLease = await startUpdateTransactionOwnerLease({
+      handoffId: transactionMeta.handoffId,
+      rollbackOwner,
+      env: serviceEnv,
+      onError: (error) => {
+        defaultRuntime.error(`Warning: update owner lease refresh failed: ${String(error)}`);
+      },
+    });
+    // Transfer ownership before either rollback path can replace state files.
+    // Draining the prepared lease also joins any in-flight SQLite refresh.
+    await stopPreparedTransactionOwnerLease();
+    const state = await completePreparedUpdateHandover({
+      confirmationTier,
+      restartService: restartUpdatedService,
+      waitForHealthy: async () => restartOk,
+      waitForConfirmation: async () =>
+        await waitForUpdateTransactionConfirmation({
+          handoffId: transactionMeta.handoffId!,
+          rollbackOwner,
+          timeoutMs: Math.min(
+            params.updateStepTimeoutMs,
+            confirmationTier === "human" ? 10 * 60_000 : 2 * 60_000,
+          ),
+          env: serviceEnv,
+        }),
+      cleanupCompleted: async () => {
+        await removeUpdateStateSnapshot(transactionalRollback.stateSnapshot);
+        completedSnapshotCleanup = true;
+      },
+      onCleanupError: (error) => {
+        defaultRuntime.error(
+          `Warning: update completed, but retained state snapshot cleanup failed: ${String(error)}`,
+        );
+      },
+      stopService: async () => {
+        // The outer managed-handoff helper remains alive while this detached
+        // update child stops the service. A child exit makes it restore the
+        // retained package from the marker before service activation.
+        await service.stop({
+          env: serviceEnv,
+          stdout: serviceControlStdoutForMode(Boolean(params.opts.json)),
+        });
+      },
+      restorePackage: async () => {
+        await restoreRetainedPackageForUpdate({
+          retainedRoot: transactionalRollback.retainedPackageRoot,
+          packageRoot: transactionalRollback.packageRoot,
+        });
+      },
+      restoreState: async () => {
+        // No SQLite-backed lease writer may survive canonical state replacement.
+        // Awaiting stop also drains an in-flight refresh before files move.
+        await stopPreparedTransactionOwnerLease();
+        await stopOwnerLease();
+        await restoreUpdateStateWithCompletedRollbackMarker({
+          snapshot: transactionalRollback.stateSnapshot,
+          handoffId: transactionMeta.handoffId!,
+          reason: rollbackFailureReason,
+          rollbackOwner,
+          env: serviceEnv,
+        });
+      },
+      startService: async () => {
+        await service.start({
+          env: serviceEnv,
+          stdout: serviceControlStdoutForMode(Boolean(params.opts.json)),
+        });
+      },
+      claimRollback: async (reason) =>
+        (await claimUpdateTransactionRollback({
+          handoffId: transactionMeta.handoffId!,
+          rollbackOwner,
+          reason,
+          env: serviceEnv,
+        })) !== null,
+      onPhase: async ({ phase, failureReason }) => {
+        rollbackFailureReason = failureReason ?? rollbackFailureReason;
+        const markerReason =
+          phase === "rolled-back"
+            ? `update-rollback-completed: ${rollbackFailureReason}`
+            : failureReason;
+        const advanced = await advanceUpdateTransactionMarker({
+          handoffId: transactionMeta.handoffId!,
+          phase,
+          rollbackOwner,
+          env: serviceEnv,
+          ...(phase === "failed" || phase === "rolled-back"
+            ? { confirmationStatus: "failed" as const, status: "error" as const }
+            : {}),
+          ...(markerReason ? { reason: markerReason } : {}),
+        });
+        if (
+          !advanced &&
+          phase !== "rolling-back" &&
+          phase !== "rolled-back" &&
+          phase !== "failed"
+        ) {
+          throw new Error(`update transaction ownership lost before ${phase}`);
+        }
+      },
+      markFailed: async (reason) => {
+        rollbackFailureReason = reason;
+        await advanceUpdateTransactionMarker({
+          handoffId: transactionMeta.handoffId!,
+          phase: "rolling-back",
+          rollbackOwner,
+          env: serviceEnv,
+          confirmationStatus: "failed",
+          status: "error",
+          reason,
+        });
+      },
+    })
+      .catch(async (error: unknown) => {
+        const reason = `update-rollback-failed: ${String(error)}`;
+        await advanceUpdateTransactionMarker({
+          handoffId: transactionMeta.handoffId!,
+          phase: "failed",
+          rollbackOwner,
+          env: serviceEnv,
+          confirmationStatus: "failed",
+          status: "error",
+          reason,
+        }).catch(() => undefined);
+        return {
+          phase: "failed" as const,
+          confirmationTier,
+          failureReason: String(error),
+        };
+      })
+      .finally(stopOwnerLease);
+    if (state.phase !== "complete") {
+      const reason = state.failureReason ?? rollbackFailureReason;
+      if (!params.opts.json) {
+        defaultRuntime.error(`Update rolled back: ${reason}`);
+      }
+      writeLateUpdateFailureJson({
+        result: resultWithPostUpdate,
+        reason,
+        jsonMode: Boolean(params.opts.json),
+      });
+      defaultRuntime.exit(1);
+      return;
+    }
+    if (completedSnapshotCleanup) {
+      try {
+        await clearUpdateTransactionMarker({
+          handoffId: transactionMeta.handoffId,
+          env: serviceEnv,
+        });
+      } catch (error) {
+        defaultRuntime.error(
+          `Warning: confirmed update marker cleanup failed; startup will retry: ${String(error)}`,
+        );
+      }
+    }
+  } else {
+    await restartUpdatedService();
+  }
   if (!restartOk) {
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
+      reason: "restart-unhealthy",
+      jsonMode: Boolean(params.opts.json),
+    });
+    writeLateUpdateFailureJson({
+      result: resultWithPostUpdate,
       reason: "restart-unhealthy",
       jsonMode: Boolean(params.opts.json),
     });
@@ -413,11 +760,13 @@ export async function finishUpdate(params: {
     return;
   }
 
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result: resultWithPostUpdate,
-    jsonMode: Boolean(params.opts.json),
-  });
+  if (!transactionalRollback || !transactionMeta?.handoffId) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result: resultWithPostUpdate,
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
 
   if (!params.opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));

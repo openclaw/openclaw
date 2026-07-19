@@ -1,4 +1,5 @@
 // Persists restart sentinel state that coordinates deferred restarts.
+import { existsSync } from "node:fs";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -7,10 +8,13 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   deleteRestartSentinelRowSync,
+  parseRestartSentinelEnvelope,
   readRestartSentinelRowSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
@@ -18,6 +22,7 @@ import {
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 export type {
   RestartSentinelContinuation,
@@ -46,11 +51,36 @@ export async function writeRestartSentinel(
   );
 }
 
+/** Inject a marker into an already-snapshotted state DB without running migrations. */
+export function writeRestartSentinelToStateSnapshot(
+  payload: RestartSentinelPayload,
+  stateDir: string,
+): RestartSentinel {
+  const databasePath = resolveOpenClawStateSqlitePath({
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+  });
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(databasePath);
+  try {
+    return runSqliteImmediateTransactionSync(
+      database,
+      () => writeRestartSentinelRowSync(database, payload),
+      {
+        databaseLabel: databasePath,
+        operationLabel: "restart-sentinel.snapshot-write",
+      },
+    );
+  } finally {
+    database.close();
+  }
+}
+
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
   return structuredClone(payload);
 }
 
-async function rewriteRestartSentinel(
+export async function rewriteRestartSentinel(
   rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
@@ -156,6 +186,59 @@ export async function readRestartSentinel(
   } catch (err) {
     sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
     return null;
+  }
+}
+
+/** Inspect an existing marker without creating tables or running state migrations. */
+export function readRestartSentinelReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): RestartSentinel | null {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  if (!existsSync(databasePath)) {
+    return null;
+  }
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const table = database
+      .prepare(
+        "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'gateway_restart_sentinel'",
+      )
+      .get();
+    if (!table) {
+      return null;
+    }
+    const columns = new Set(
+      (
+        database.prepare("PRAGMA table_info(gateway_restart_sentinel)").all() as Array<{
+          name?: unknown;
+        }>
+      ).flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
+    );
+    if (!["sentinel_key", "payload_json", "updated_at_ms"].every((name) => columns.has(name))) {
+      return null;
+    }
+    const row = database
+      .prepare(
+        "SELECT payload_json, updated_at_ms FROM gateway_restart_sentinel WHERE sentinel_key = ? LIMIT 1",
+      )
+      .get("current") as { payload_json?: unknown; updated_at_ms?: unknown } | undefined;
+    if (!row) {
+      return null;
+    }
+    if (typeof row.payload_json !== "string" || typeof row.updated_at_ms !== "number") {
+      throw new Error(`invalid read-only restart sentinel row: ${databasePath}`);
+    }
+    const envelope = parseRestartSentinelEnvelope({
+      version: 1,
+      payload: JSON.parse(row.payload_json) as unknown,
+    });
+    if (!envelope) {
+      throw new Error(`invalid read-only restart sentinel payload: ${databasePath}`);
+    }
+    return { ...envelope, revision: row.updated_at_ms };
+  } finally {
+    database.close();
   }
 }
 

@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 
 type AgentModelDiscoveryModule = typeof import("./agent-model-discovery.js");
@@ -13,6 +14,7 @@ let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadManifestModelCatalog: typeof import("./model-catalog.js").loadManifestModelCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let loadModelCatalogSnapshot: typeof import("./model-catalog.js").loadModelCatalogSnapshot;
+let verifyModelProviderRuntimeReadOnly: typeof import("./model-catalog.js").verifyModelProviderRuntimeReadOnly;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCache: typeof import("./model-catalog.js").resetModelCatalogCache;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
@@ -114,14 +116,23 @@ function mockSingleOpenAiCatalogModel() {
   mockAgentDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
 }
 
-function emptyPluginMetadataSnapshot() {
+function emptyPluginMetadataSnapshot(): PluginMetadataSnapshot {
   return {
     policyHash: "test-policy",
     configFingerprint: "test-config",
     index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
       policyHash: "test-policy",
+      generatedAtMs: 0,
+      installRecords: {},
       plugins: [],
+      diagnostics: [],
     },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [], diagnostics: [] },
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -133,6 +144,17 @@ function emptyPluginMetadataSnapshot() {
       contracts: new Map(),
     },
     plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
   };
 }
 
@@ -349,6 +371,7 @@ describe("loadModelCatalog", () => {
       loadManifestModelCatalog,
       loadModelCatalog,
       loadModelCatalogSnapshot,
+      verifyModelProviderRuntimeReadOnly,
       modelSupportsInput,
       resetModelCatalogCache,
       resetModelCatalogCacheForTest,
@@ -425,6 +448,19 @@ describe("loadModelCatalog", () => {
       setLoggerOverride(null);
       resetLogger();
     }
+  });
+
+  it("surfaces candidate provider dependency failures in startup verify mode", async () => {
+    setModelCatalogImportForTest(async () => {
+      throw new Error("candidate provider dependency missing");
+    });
+
+    await expect(
+      verifyModelProviderRuntimeReadOnly({
+        config: {} as OpenClawConfig,
+        metadataSnapshot: emptyPluginMetadataSnapshot(),
+      }),
+    ).rejects.toThrow("candidate provider dependency missing");
   });
 
   it("uses the resolved default agent workspace for registry discovery", async () => {

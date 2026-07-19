@@ -30,6 +30,12 @@ export async function cleanupStaleManagedServiceUpdateHandoffs(params?: {
       continue;
     }
     const dir = path.join(tmpDir, entry.name);
+    // A surviving journal means automatic recovery failed closed. Keep the
+    // descriptor available for doctor/manual recovery instead of aging it out.
+    try {
+      await fs.access(path.join(dir, "recovery-locator.json"));
+      continue;
+    } catch {}
     let stats: { mtimeMs: number };
     try {
       stats = await fs.stat(dir);

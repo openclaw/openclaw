@@ -44,7 +44,7 @@ describe("update swap coverage", () => {
           }),
         ).toMatchObject({
           kind: "managed-prefix",
-          protection: "retention-only",
+          protection: "transactional-rollback",
           prefix,
         });
       }
@@ -68,8 +68,6 @@ describe("update swap coverage", () => {
       platform: "darwin",
     });
     expect(coverage.protection).toBe("detect-warn");
-    expect(formatUpdateSwapCoverageWarning(coverage)).toContain(
-      "restore compatible state before running an older version",
-    );
+    expect(formatUpdateSwapCoverageWarning(coverage)).toContain("https://openclaw.ai/install.sh");
   });
 });

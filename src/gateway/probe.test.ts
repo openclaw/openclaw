@@ -492,6 +492,20 @@ describe("probeGateway", () => {
     expect(result.configSnapshot).toBeNull();
   });
 
+  it("fetches only health for restart-readiness probes", async () => {
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+      detailLevel: "health",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(gatewayClientState.requests).toEqual(["health"]);
+    expect(result.status).toBeNull();
+    expect(result.presence).toBeNull();
+    expect(result.configSnapshot).toBeNull();
+  });
+
   it("fetches only config for config-only probes", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",

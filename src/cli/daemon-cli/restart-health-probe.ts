@@ -147,7 +147,7 @@ export async function confirmGatewayReachable(params: {
     url: `ws://127.0.0.1:${params.port}`,
     auth: token || password ? { token, password } : undefined,
     timeoutMs: 3_000,
-    includeDetails: params.includeHealthDetails === true,
+    detailLevel: params.includeHealthDetails === true ? "health" : "none",
     env: params.env,
   });
   const reachedGateway =

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
+import { waitForUpdateConfirmationProbation } from "../infra/update-confirmation-runtime.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
@@ -74,6 +75,12 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 );
 
 export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
+
+type GatewaySidecarStartResult = {
+  pluginServices: PluginServicesHandle | null;
+  postReadySidecars: GatewayPostReadySidecarHandle[];
+  completeUpdateProbation?: () => Promise<boolean>;
+};
 
 /** Stop sidecars immediately when shutdown has already started before they are reported. */
 export function stopPostReadySidecarsAfterCloseStarted(params: {
@@ -688,6 +695,9 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  startUpdateProbationChannel?: () => Promise<void>;
+  resumeConfirmedUpdateProbation?: () => void;
+  updateProbation?: boolean;
   onChannelsStarted?: () => Awaitable<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -702,8 +712,14 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
   startupOutcomes?: GatewayStartupOutcomeRecorder;
-}) {
+}): Promise<GatewaySidecarStartResult> {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
+
+  if (params.updateProbation) {
+    await measureStartup(params.startupTrace, "sidecars.update-probation-channel", async () => {
+      await params.startUpdateProbationChannel?.();
+    });
+  }
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
@@ -895,20 +911,22 @@ export async function startGatewaySidecars(params: {
     },
   });
 
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.restart-sentinel",
-    log: params.log,
-    run: async () => {
-      if (!shouldCheckRestartSentinel()) {
-        return;
-      }
-      if (!(await hasRestartSentinelFast())) {
-        return;
-      }
-      scheduleRestartSentinelWakeAfterReady({ deps: params.deps, log: params.log });
-    },
-  });
+  if (!params.updateProbation) {
+    schedulePostReadySidecarTask({
+      startupTrace: params.startupTrace,
+      name: "sidecars.restart-sentinel",
+      log: params.log,
+      run: async () => {
+        if (!shouldCheckRestartSentinel()) {
+          return;
+        }
+        if (!(await hasRestartSentinelFast())) {
+          return;
+        }
+        scheduleRestartSentinelWakeAfterReady({ deps: params.deps, log: params.log });
+      },
+    });
+  }
 
   if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
     postReadySidecars.push(
@@ -986,7 +1004,23 @@ export async function startGatewaySidecars(params: {
     );
   }
 
-  return { pluginServices, postReadySidecars };
+  return {
+    pluginServices,
+    postReadySidecars,
+    ...(params.updateProbation
+      ? {
+          completeUpdateProbation: async () => {
+            // Confirmation is not offered until every normal sidecar and the
+            // outer worker runtime have started successfully.
+            params.resumeConfirmedUpdateProbation?.();
+            if (shouldCheckRestartSentinel() && (await hasRestartSentinelFast())) {
+              scheduleRestartSentinelWakeAfterReady({ deps: params.deps, log: params.log });
+            }
+            return (await waitForUpdateConfirmationProbation()) === "confirmed";
+          },
+        }
+      : {}),
+  };
 }
 
 type GatewayPostAttachRuntimeDeps = {
@@ -1116,6 +1150,8 @@ export async function startGatewayPostAttachRuntime(
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    startUpdateProbationChannel?: () => Promise<void>;
+    resumeConfirmedUpdateProbation?: () => void;
     recoveryRuntime: GatewayRecoveryRuntime;
     logHooks: {
       info: (msg: string) => void;
@@ -1250,7 +1286,7 @@ export async function startGatewayPostAttachRuntime(
   };
   const waitForSidecarStartTurn = () =>
     new Promise<void>((resolve) => {
-      if (params.sidecarStartup === "defer") {
+      if (params.sidecarStartup !== "start") {
         // Give startup logging and bind observers a deterministic head start
         // when tests or callers request deferred sidecar startup.
         const timer = setTimeout(resolve, DEFERRED_SIDECAR_START_DELAY_MS);
@@ -1264,9 +1300,10 @@ export async function startGatewayPostAttachRuntime(
     ? Promise.resolve({ pluginServices: null, pluginRegistry, postReadySidecars: [] })
     : waitForSidecarStartTurn().then(async () => {
         await loadStartupPluginsIfNeeded();
-        const workerEnvironmentSidecar = params.isClosing?.()
-          ? null
-          : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
+        let workerEnvironmentSidecar =
+          params.isClosing?.() || params.sidecarStartup === "update-probation"
+            ? null
+            : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
         params.log.info("starting channels and sidecars...");
         const loaderStatsBefore = getPluginModuleLoaderStats();
         const result = await (async () => {
@@ -1278,6 +1315,9 @@ export async function startGatewayPostAttachRuntime(
                 defaultWorkspaceDir: params.defaultWorkspaceDir,
                 deps: params.deps,
                 startChannels: params.startChannels,
+                startUpdateProbationChannel: params.startUpdateProbationChannel,
+                resumeConfirmedUpdateProbation: params.resumeConfirmedUpdateProbation,
+                updateProbation: params.sidecarStartup === "update-probation",
                 log: params.log,
                 logHooks: params.logHooks,
                 logChannels: params.logChannels,
@@ -1294,6 +1334,13 @@ export async function startGatewayPostAttachRuntime(
             throw error;
           }
         })();
+        if (
+          params.sidecarStartup === "update-probation" &&
+          !params.isClosing?.() &&
+          params.startWorkerEnvironmentRuntime
+        ) {
+          workerEnvironmentSidecar = await params.startWorkerEnvironmentRuntime();
+        }
         const loaderStatsAfter = getPluginModuleLoaderStats();
         params.startupTrace?.detail("sidecars.plugin-loader", [
           ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
@@ -1373,7 +1420,19 @@ export async function startGatewayPostAttachRuntime(
         params.onPostReadySidecars?.(postReadySidecars);
         params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
         params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
-        params.onSidecarsReady?.();
+        if (params.sidecarStartup === "update-probation" && !result.completeUpdateProbation) {
+          throw new Error("update probation runtime did not provide a confirmation boundary");
+        }
+        // All runtime owners now exist, but scheduled-service activation remains
+        // behind onSidecarsReady until the initiating channel confirms.
+        const updateProbationConfirmed = result.completeUpdateProbation
+          ? await result.completeUpdateProbation()
+          : undefined;
+        if (updateProbationConfirmed === false) {
+          await workerEnvironmentSidecar?.stop();
+        } else {
+          params.onSidecarsReady?.();
+        }
         params.startupTrace?.detail("sidecars.ready", [
           [
             "loadedPluginCount",
@@ -1385,7 +1444,13 @@ export async function startGatewayPostAttachRuntime(
         if (params.sidecarStartup !== "defer") {
           params.log.info("gateway ready");
         }
-        return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
+        return {
+          ...result,
+          postReadySidecars,
+          gatewayLifetimeSidecars,
+          pluginRegistry,
+          ...(updateProbationConfirmed === undefined ? {} : { updateProbationConfirmed }),
+        };
       });
 
   void sidecarsPromise

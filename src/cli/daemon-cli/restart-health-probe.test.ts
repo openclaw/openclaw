@@ -119,7 +119,7 @@ describe("restart health", () => {
       },
     ]);
     expect(snapshot.versionMismatch).toBeUndefined();
-    expect((firstCallArg(probeGateway) as { includeDetails?: boolean }).includeDetails).toBe(true);
+    expect((firstCallArg(probeGateway) as { detailLevel?: string }).detailLevel).toBe("health");
 
     const { renderRestartDiagnostics } = await import("./restart-health.js");
     expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(

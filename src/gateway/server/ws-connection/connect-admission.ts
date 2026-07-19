@@ -32,6 +32,18 @@ import { truncateCloseReason } from "../close-reason.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
 
+export function isTrustedUpdateStartupProbe(params: {
+  allowProbeDuringStartup?: boolean;
+  isLocalClient: boolean;
+  clientMode: string;
+}): boolean {
+  return (
+    params.allowProbeDuringStartup === true &&
+    params.isLocalClient &&
+    params.clientMode === GATEWAY_CLIENT_MODES.PROBE
+  );
+}
+
 export function resolveTrustedProxyControlUiScopes(params: {
   requestedScopes: string[];
   upgradeReq: IncomingMessage;
@@ -61,6 +73,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     requestOrigin,
     close,
     isStartupPending,
+    allowProbeDuringStartup,
     logGateway,
     logWsControl,
     originCheckMetrics,
@@ -79,7 +92,14 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     sendFrame,
   } = context;
 
-  if (isStartupPending?.()) {
+  // Probe clients provide the detached updater's health signal while a
+  // replacement gateway keeps every mutable operator surface quiesced.
+  const trustedUpdateStartupProbe = isTrustedUpdateStartupProbe({
+    allowProbeDuringStartup,
+    isLocalClient,
+    clientMode: connectParams.client.mode,
+  });
+  if (isStartupPending?.() && !trustedUpdateStartupProbe) {
     markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
     await sendFrame({
       type: "res",

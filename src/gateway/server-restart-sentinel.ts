@@ -4,7 +4,6 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
 import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
@@ -38,7 +37,15 @@ import {
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import {
+  enqueueUpdateConfirmationContinuation,
+  registerUpdateConfirmationContinuation,
+} from "../infra/update-confirmation-runtime.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
+import {
+  isActiveUpdateTransactionMarker,
+  isUpdateTransactionMarker,
+} from "../infra/update-transaction-marker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
@@ -50,10 +57,15 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
+import { resolveRestartContinuationRoute } from "./server-restart-sentinel-continuation-route.js";
 import {
   deliverRestartSentinelNotice,
   enqueueRestartSentinelNotice,
 } from "./server-restart-sentinel-notice.js";
+import {
+  handleUpdateTransactionNoticeDelivery,
+  scheduleUpdateTransactionRetry,
+} from "./server-restart-sentinel-update-retry.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
@@ -118,27 +130,6 @@ function buildRestartContinuationMessageId(params: {
   revision: number;
 }) {
   return `restart-sentinel:${params.sessionKey}:${params.kind}:${params.revision}`;
-}
-
-function resolveRestartContinuationRoute(params: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  replyToId?: string;
-  threadId?: string;
-  chatType: ChatType;
-}): SessionDeliveryRoute | undefined {
-  if (!params.channel || !params.to) {
-    return undefined;
-  }
-  return {
-    channel: params.channel,
-    to: params.to,
-    ...(params.accountId ? { accountId: params.accountId } : {}),
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.threadId ? { threadId: params.threadId } : {}),
-    chatType: params.chatType,
-  };
 }
 
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
@@ -443,9 +434,19 @@ async function loadRestartSentinelStartupTask(params: {
   if (payload.kind === "update") {
     recordLatestUpdateRestartSentinel(payload);
   }
+  const transactionMarker = isUpdateTransactionMarker(payload);
+  if (transactionMarker && !isActiveUpdateTransactionMarker(payload)) {
+    return null;
+  }
   const sessionKey = payload.sessionKey?.trim();
-  const message = formatRestartSentinelMessage(payload);
-  const summary = summarizeRestartSentinel(payload);
+  const transactionVersion = payload.stats?.after?.version;
+  const humanConfirmationChallenge = payload.stats?.humanConfirmationChallenge;
+  const message = transactionMarker
+    ? `OpenClaw${typeof transactionVersion === "string" ? ` ${transactionVersion}` : ""} is healthy after update.${payload.stats?.confirmationTier === "human" ? ` Reply with "confirm ${humanConfirmationChallenge ?? "unavailable"}" to confirm this update.` : ""}`
+    : formatRestartSentinelMessage(payload);
+  const summary = transactionMarker
+    ? "Gateway update confirmation"
+    : summarizeRestartSentinel(payload);
   const wakeDeliveryContext = mergeDeliveryContext(
     payload.threadId != null
       ? { ...payload.deliveryContext, threadId: payload.threadId }
@@ -454,7 +455,21 @@ async function loadRestartSentinelStartupTask(params: {
   );
 
   const run = async () => {
-    if (isPendingControlPlaneUpdateRestartSentinel(payload)) {
+    const scheduleTransactionRetry = () => {
+      scheduleUpdateTransactionRetry({
+        attempt: params.attempt ?? 0,
+        retry: async (attempt) =>
+          await runWithGatewayIndependentRootWorkAdmission(async () => {
+            await scheduleRestartSentinelWakeAttempt({ deps: params.deps, attempt });
+          }),
+        onError: (err) => log.warn(`update confirmation retry failed: ${formatErrorMessage(err)}`),
+      });
+    };
+    if (transactionMarker && payload.stats?.updatePhase === "restart") {
+      scheduleTransactionRetry();
+      return { status: "skipped" as const, reason: "update-health-verification-pending" };
+    }
+    if (!transactionMarker && isPendingControlPlaneUpdateRestartSentinel(payload)) {
       const attempt = params.attempt ?? 0;
       if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
         const timer = setTimeout(() => {
@@ -477,6 +492,10 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (!sessionKey) {
+      if (transactionMarker) {
+        log.warn(`${summary}: initiating session unavailable; updater will roll back`);
+        return { status: "skipped" as const, reason: "update-transaction-route-missing" };
+      }
       const mainSessionKey = resolveMainSessionKeyFromConfig();
       const wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
@@ -577,7 +596,7 @@ async function loadRestartSentinelStartupTask(params: {
 
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
-    if (!routedAgentTurnContinuation) {
+    if (!transactionMarker && !routedAgentTurnContinuation) {
       wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
           sessionKey: canonicalKey,
@@ -590,24 +609,44 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (payload.continuation) {
-      continuationQueueId = await enqueueSessionDelivery(
-        buildQueuedRestartContinuation({
-          sessionKey: canonicalKey,
-          continuation: payload.continuation,
-          revision: sentinelRevision,
-          route: continuationRoute,
-          expectedSessionId: entry?.sessionId,
-          deliveryContext:
-            resolvedTo && channel
-              ? {
-                  channel,
-                  to: resolvedTo,
-                  ...(origin?.accountId ? { accountId: origin.accountId } : {}),
-                  ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
-                }
-              : wakeDeliveryContext,
-        }),
-      );
+      const queuedContinuation = buildQueuedRestartContinuation({
+        sessionKey: canonicalKey,
+        continuation: payload.continuation,
+        revision: sentinelRevision,
+        route: continuationRoute,
+        expectedSessionId: entry?.sessionId,
+        ...(transactionMarker
+          ? {
+              idempotencyKey: `update-transaction-continuation:${payload.stats!.handoffId!}:${payload.continuation.kind}`,
+            }
+          : {}),
+        deliveryContext:
+          resolvedTo && channel
+            ? {
+                channel,
+                to: resolvedTo,
+                ...(origin?.accountId ? { accountId: origin.accountId } : {}),
+                ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
+              }
+            : wakeDeliveryContext,
+      });
+      continuationQueueId = transactionMarker
+        ? await enqueueUpdateConfirmationContinuation(queuedContinuation)
+        : await enqueueSessionDelivery(queuedContinuation);
+    }
+
+    if (transactionMarker && continuationQueueId) {
+      const handoffId = payload.stats!.handoffId!;
+      const entryId = continuationQueueId;
+      registerUpdateConfirmationContinuation({
+        handoffId,
+        run: async () => {
+          await drainRestartContinuationQueue({ deps: params.deps, entryId, log });
+        },
+        onError: (error) => {
+          log.warn(`${summary}: confirmed update continuation drain failed: ${String(error)}`);
+        },
+      });
     }
 
     if (resolvedTo && channel) {
@@ -620,6 +659,9 @@ async function loadRestartSentinelStartupTask(params: {
         message,
         sessionKey: canonicalKey,
         revision: sentinelRevision,
+        ...(transactionMarker
+          ? { idempotencyKey: `update-transaction-notice:${payload.stats!.handoffId!}` }
+          : {}),
       });
       noticeQueueId = queuedNotice.id;
       noticeQueueCreated = queuedNotice.created;
@@ -627,19 +669,26 @@ async function loadRestartSentinelStartupTask(params: {
 
     // Every downstream intent is durable before consuming the singleton. A
     // failed or stale compare-delete cannot lose work or remove a newer row.
-    const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
-    if (!consumed) {
-      log.info(`${summary}: newer restart sentinel preserved while draining durable work`, {
-        sessionKey: canonicalKey,
-      });
+    if (!transactionMarker) {
+      const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
+      if (!consumed) {
+        log.info(`${summary}: newer restart sentinel preserved while draining durable work`, {
+          sessionKey: canonicalKey,
+        });
+      }
     }
 
     if (wakeQueueId) {
       await drainRestartContinuationQueue({ deps: params.deps, entryId: wakeQueueId, log });
     }
 
-    if (resolvedTo && channel && noticeQueueId && noticeQueueCreated) {
-      await deliverRestartSentinelNotice({
+    if (resolvedTo && channel && noticeQueueId) {
+      if (!noticeQueueCreated) {
+        log.info(`${summary}: reconciling existing durable restart notice`, {
+          sessionKey: canonicalKey,
+        });
+      }
+      const delivery = await deliverRestartSentinelNotice({
         deps: params.deps,
         cfg,
         sessionKey: canonicalKey,
@@ -652,13 +701,16 @@ async function loadRestartSentinelStartupTask(params: {
         threadId: resolvedThreadId,
         queueId: noticeQueueId,
       });
-    } else if (noticeQueueId && !noticeQueueCreated) {
-      log.info(`${summary}: durable restart notice already owned`, {
-        sessionKey: canonicalKey,
-      });
+      if (transactionMarker) {
+        await handleUpdateTransactionNoticeDelivery({
+          payload,
+          delivery,
+          scheduleRetry: scheduleTransactionRetry,
+        });
+      }
     }
 
-    if (continuationQueueId) {
+    if (continuationQueueId && !transactionMarker) {
       await drainRestartContinuationQueue({
         deps: params.deps,
         entryId: continuationQueueId,

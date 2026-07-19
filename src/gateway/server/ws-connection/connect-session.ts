@@ -34,6 +34,7 @@ import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { isTrustedUpdateStartupProbe } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import type {
@@ -219,6 +220,13 @@ export async function attachAuthenticatedGatewayConnect(
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
       : undefined,
+    startupProbeOnly:
+      context.handler.isStartupPending?.() === true &&
+      isTrustedUpdateStartupProbe({
+        allowProbeDuringStartup: context.handler.allowProbeDuringStartup,
+        isLocalClient,
+        clientMode: connectParams.client.mode,
+      }),
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,

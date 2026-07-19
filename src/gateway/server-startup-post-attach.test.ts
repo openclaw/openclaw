@@ -18,6 +18,20 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
+const markProbationReleased = vi.hoisted(() =>
+  vi.fn(async () => ({ payload: { stats: { updateProbationReleasedAtMs: 1 } } })),
+);
+
+vi.mock("../infra/update-transaction-marker.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/update-transaction-marker.js")>(
+    "../infra/update-transaction-marker.js",
+  );
+  return {
+    ...actual,
+    markUpdateTransactionProbationReleased: markProbationReleased,
+  };
+});
+
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn<() => Promise<PluginServicesHandle | null>>(async () => null);
   const startGmailWatcherWithLogs = vi.fn(async () => {});
@@ -251,6 +265,11 @@ const { scheduleContextCachePrewarm } = await import("./server-startup-context-c
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
 const { createGatewayCloseHandler } = await import("./server-close.js");
 const { createChatRunState } = await import("./server-chat-state.js");
+const {
+  registerPendingUpdateConfirmation,
+  resetPendingHumanUpdateConfirmationForTest,
+  resolveUpdateConfirmationProbation,
+} = await import("../infra/update-confirmation-runtime.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
@@ -312,8 +331,10 @@ function firstGatewayStartCall(
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+    resetPendingHumanUpdateConfirmationForTest();
     resetGatewayWorkAdmission();
     closeOpenClawStateDatabaseForTest();
+    markProbationReleased.mockClear();
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
@@ -1808,6 +1829,72 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
   });
 
+  it("starts full sidecars before exposing update confirmation", async () => {
+    const startChannels = vi.fn(async () => {});
+    const startUpdateProbationChannel = vi.fn(async () => {});
+    const resumeConfirmedUpdateProbation = vi.fn();
+    registerPendingUpdateConfirmation({
+      handoffId: "handoff-1",
+      sessionKey: "session-1",
+      channel: "telegram",
+      to: "chat-1",
+      tier: "human",
+    });
+
+    const sidecars = await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels,
+      startUpdateProbationChannel,
+      resumeConfirmedUpdateProbation,
+      updateProbation: true,
+      log: { warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+    });
+
+    expect(startUpdateProbationChannel).toHaveBeenCalledOnce();
+    expect(startChannels).toHaveBeenCalledOnce();
+    expect(resumeConfirmedUpdateProbation).not.toHaveBeenCalled();
+    const confirmation = sidecars.completeUpdateProbation?.();
+    if (!confirmation) {
+      throw new Error("expected update probation confirmation boundary");
+    }
+    expect(resumeConfirmedUpdateProbation).toHaveBeenCalledOnce();
+    await resolveUpdateConfirmationProbation("handoff-1", "confirmed");
+    await expect(confirmation).resolves.toBe(true);
+  });
+
+  it("reports cancelled update probation after starting full sidecars", async () => {
+    const startChannels = vi.fn(async () => {});
+    registerPendingUpdateConfirmation({
+      handoffId: "handoff-cancelled",
+      sessionKey: "session-1",
+      channel: "telegram",
+      to: "chat-1",
+      tier: "human",
+    });
+
+    const sidecars = await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels,
+      startUpdateProbationChannel: vi.fn(async () => {}),
+      updateProbation: true,
+      log: { warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+    });
+
+    await resolveUpdateConfirmationProbation("handoff-cancelled", "cancelled");
+    await expect(sidecars.completeUpdateProbation?.()).resolves.toBe(false);
+    expect(startChannels).toHaveBeenCalledOnce();
+  });
+
   it("logs startup main-session marker failures and still starts channels", async () => {
     const log = { warn: vi.fn() };
     const startChannels = vi.fn(async () => {});
@@ -2259,6 +2346,77 @@ describe("startGatewayPostAttachRuntime", () => {
 
     await waitForGatewayTestState(() => expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1));
     expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
+  });
+
+  it("opens confirmation only after sidecars and worker runtime are ready", async () => {
+    const startupOrder: string[] = [];
+    const startWorkerEnvironmentRuntime = vi.fn(() => {
+      startupOrder.push("worker-ready");
+      return { stop: vi.fn() };
+    });
+    const startGatewaySidecarsValue = vi.fn(async () => {
+      startupOrder.push("sidecars-ready");
+      return {
+        pluginServices: null,
+        postReadySidecars: [],
+        completeUpdateProbation: vi.fn(async () => {
+          startupOrder.push("confirmation-open");
+          return true;
+        }),
+      };
+    });
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        sidecarStartup: "update-probation",
+        startWorkerEnvironmentRuntime,
+        onSidecarsReady: () => startupOrder.push("runtime-admitted"),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+    );
+
+    expect(startupOrder).toEqual([
+      "sidecars-ready",
+      "worker-ready",
+      "confirmation-open",
+      "runtime-admitted",
+    ]);
+  });
+
+  it("starts the worker environment before confirmation and stops it after cancellation", async () => {
+    const startupOrder: string[] = [];
+    const stopWorker = vi.fn(async () => {});
+    const startWorkerEnvironmentRuntime = vi.fn(() => {
+      startupOrder.push("worker-ready");
+      return { stop: stopWorker };
+    });
+    const startGatewaySidecarsValue = vi.fn(async () => {
+      startupOrder.push("sidecars-ready");
+      return {
+        pluginServices: null,
+        postReadySidecars: [],
+        completeUpdateProbation: vi.fn(async () => {
+          startupOrder.push("confirmation-open");
+          return false;
+        }),
+      };
+    });
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        sidecarStartup: "update-probation",
+        startWorkerEnvironmentRuntime,
+        onSidecarsReady: () => startupOrder.push("runtime-ready"),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+    );
+
+    await waitForGatewayTestState(() => expect(startGatewaySidecarsValue).toHaveBeenCalledOnce());
+    expect(startWorkerEnvironmentRuntime).toHaveBeenCalledOnce();
+    expect(stopWorker).toHaveBeenCalledOnce();
+    expect(startupOrder).toEqual(["sidecars-ready", "worker-ready", "confirmation-open"]);
   });
 
   it("loads lazy startup plugins before returning with deferred sidecars", async () => {

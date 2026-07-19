@@ -5,6 +5,7 @@ export {
   deferSessionDelivery,
   enqueueClaimedSessionDelivery,
   enqueueSessionDelivery,
+  enqueueSessionDeliveryInExistingState,
   failSessionDelivery,
   loadPendingSessionDeliveries,
   loadPendingSessionDelivery,

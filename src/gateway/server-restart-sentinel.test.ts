@@ -114,15 +114,40 @@ const mocks = vi.hoisted(() => {
     failDeliveryBeforePlatformSend: vi.fn(async () => {}),
     failPendingDelivery: vi.fn(async () => ({ status: "failed" as const })),
     loadPendingDelivery: vi.fn(async () => null),
+    readDeliveryStatus: vi.fn<() => "pending" | "completed" | "failed" | undefined>(
+      () => "pending",
+    ),
+    markUpdateTransactionDeliveryAck: vi.fn<
+      typeof import("../infra/update-transaction-marker.js").markUpdateTransactionDeliveryAck
+    >(async () => null),
+    enqueueUpdateConfirmationContinuation: vi.fn(async (payload: Record<string, unknown>) => {
+      const existing = [...state.queuedSessionDeliveries.entries()].find(
+        ([, entry]) => entry.idempotencyKey === payload.idempotencyKey,
+      );
+      if (existing) {
+        return existing[0];
+      }
+      const id = `session-delivery-${state.nextSessionDeliveryId++}`;
+      state.queuedSessionDeliveries.set(id, payload);
+      return id;
+    }),
+    registerUpdateConfirmationContinuation: vi.fn(),
+    sealUpdateConfirmationReplayAdmissions: vi.fn(async () => true),
+    resolveUpdateConfirmationProbation: vi.fn(async () => {}),
     drainPendingDeliveries: vi.fn(async () => {}),
     reserveDeliveryAttempt: vi.fn(async () => ({
       status: "reserved" as const,
       attemptCount: 1,
     })),
-    withActiveDeliveryClaim: vi.fn(async (_id: string, fn: () => Promise<unknown>) => ({
-      status: "claimed" as const,
-      value: await fn(),
-    })),
+    withActiveDeliveryClaim: vi.fn(
+      async (
+        _id: string,
+        fn: () => Promise<unknown>,
+      ): Promise<{ status: "claimed"; value: unknown } | { status: "claimed-by-other-owner" }> => ({
+        status: "claimed" as const,
+        value: await fn(),
+      }),
+    ),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(async (payload: Record<string, unknown>) => {
@@ -252,6 +277,21 @@ vi.mock("../infra/restart-sentinel.js", () => ({
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
 
+vi.mock("../infra/update-transaction-marker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-transaction-marker.js")>();
+  return {
+    ...actual,
+    markUpdateTransactionDeliveryAck: mocks.markUpdateTransactionDeliveryAck,
+  };
+});
+
+vi.mock("../infra/update-confirmation-runtime.js", () => ({
+  enqueueUpdateConfirmationContinuation: mocks.enqueueUpdateConfirmationContinuation,
+  registerUpdateConfirmationContinuation: mocks.registerUpdateConfirmationContinuation,
+  sealUpdateConfirmationReplayAdmissions: mocks.sealUpdateConfirmationReplayAdmissions,
+  resolveUpdateConfirmationProbation: mocks.resolveUpdateConfirmationProbation,
+}));
+
 vi.mock("../infra/session-delivery-queue.js", () => ({
   ackSessionDelivery: mocks.ackSessionDelivery,
   advanceSessionDeliveryAgentRun: mocks.advanceSessionDeliveryAgentRun,
@@ -365,6 +405,7 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
 vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   failPendingDelivery: mocks.failPendingDelivery,
   loadPendingDelivery: mocks.loadPendingDelivery,
+  readDeliveryStatus: mocks.readDeliveryStatus,
   reserveDeliveryAttempt: mocks.reserveDeliveryAttempt,
 }));
 
@@ -540,6 +581,14 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.failPendingDelivery.mockClear();
     mocks.loadPendingDelivery.mockReset();
     mocks.loadPendingDelivery.mockResolvedValue(null);
+    mocks.readDeliveryStatus.mockReset();
+    mocks.readDeliveryStatus.mockReturnValue("pending");
+    mocks.markUpdateTransactionDeliveryAck.mockReset();
+    mocks.markUpdateTransactionDeliveryAck.mockResolvedValue(null);
+    mocks.enqueueUpdateConfirmationContinuation.mockClear();
+    mocks.registerUpdateConfirmationContinuation.mockReset();
+    mocks.sealUpdateConfirmationReplayAdmissions.mockClear();
+    mocks.resolveUpdateConfirmationProbation.mockClear();
     mocks.drainPendingDeliveries.mockClear();
     mocks.reserveDeliveryAttempt.mockClear();
     mocks.withActiveDeliveryClaim.mockClear();
@@ -617,6 +666,126 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.logWarn).not.toHaveBeenCalled();
   });
 
+  it("waits for detached-updater health proof before sending update confirmation", async () => {
+    vi.useFakeTimers();
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      revision: 123,
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: 123,
+        sessionKey: "agent:main:main",
+        deliveryContext: { channel: "whatsapp", to: "+15550002" },
+        stats: {
+          handoffId: "handoff-1",
+          updatePhase: "restart",
+          confirmationTier: "delivery",
+          confirmationStatus: "pending",
+        },
+      },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.markUpdateTransactionDeliveryAck).not.toHaveBeenCalled();
+  });
+
+  it("sends update confirmation after detached-updater health proof", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      revision: 124,
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: 123,
+        sessionKey: "agent:main:main",
+        deliveryContext: { channel: "whatsapp", to: "+15550002" },
+        continuation: { kind: "systemEvent", text: "update continuation" },
+        stats: {
+          handoffId: "handoff-1",
+          updatePhase: "healthy",
+          confirmationTier: "delivery",
+          confirmationStatus: "pending",
+          after: { version: "2.0.0" },
+        },
+      },
+    });
+    mocks.markUpdateTransactionDeliveryAck.mockResolvedValue({
+      version: 1,
+      revision: 125,
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: 123,
+        stats: {
+          handoffId: "handoff-1",
+          updatePhase: "confirm",
+          confirmationTier: "delivery",
+          confirmationStatus: "delivery-acked",
+        },
+      },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expect(mocks.markUpdateTransactionDeliveryAck).toHaveBeenCalledWith({
+      handoffId: "handoff-1",
+    });
+    expect(mocks.enqueueDeliveryOnce).toHaveBeenCalledWith(
+      expect.anything(),
+      "update-transaction-notice:handoff-1",
+    );
+    expect(mocks.enqueueUpdateConfirmationContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "systemEvent",
+        text: "update continuation",
+        idempotencyKey: "update-transaction-continuation:handoff-1:systemEvent",
+      }),
+    );
+    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "update-transaction-continuation:handoff-1:systemEvent",
+      }),
+    );
+    expect(mocks.registerUpdateConfirmationContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({ handoffId: "handoff-1", run: expect.any(Function) }),
+    );
+  });
+
+  it("retries a healthy update confirmation notice that remains pending", async () => {
+    vi.useFakeTimers();
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      revision: 124,
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: 123,
+        sessionKey: "agent:main:main",
+        deliveryContext: { channel: "whatsapp", to: "+15550002" },
+        stats: {
+          handoffId: "handoff-1",
+          updatePhase: "healthy",
+          confirmationTier: "delivery",
+          confirmationStatus: "pending",
+        },
+      },
+    });
+    mocks.withActiveDeliveryClaim.mockResolvedValueOnce({
+      status: "claimed-by-other-owner",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+    expect(mocks.markUpdateTransactionDeliveryAck).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(mocks.markUpdateTransactionDeliveryAck).toHaveBeenCalledOnce());
+  });
+
   it("persists every downstream intent before consuming the loaded revision", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -663,6 +832,7 @@ describe("scheduleRestartSentinelWake", () => {
       id,
       created: false,
     }));
+    mocks.readDeliveryStatus.mockReturnValueOnce("completed");
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -674,7 +844,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.ackDelivery).not.toHaveBeenCalled();
     expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.logInfo).toHaveBeenCalledWith(
-      "restart summary: durable restart notice already owned",
+      "restart summary: reconciling existing durable restart notice",
       { sessionKey: "agent:main:main" },
     );
   });
@@ -3158,6 +3328,30 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.finalizeUpdateRestartSentinelRunningVersion).not.toHaveBeenCalled();
     expect(getLatestUpdateRestartSentinel()).toEqual(payload);
+  });
+
+  it("does not replay a terminal rolled-back transaction as a healthy update", async () => {
+    const payload: RestartSentinelPayload = {
+      kind: "update",
+      status: "error",
+      ts: 123,
+      sessionKey: "agent:main:main",
+      deliveryContext: { channel: "whatsapp", to: "+15550002" },
+      stats: {
+        handoffId: "handoff-1",
+        updatePhase: "rolled-back",
+        confirmationTier: "delivery",
+        confirmationStatus: "failed",
+        reason: "update-rollback-completed: confirmation timed out",
+      },
+    };
+    mocks.readRestartSentinel.mockResolvedValue({ version: 1, revision: 123, payload });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
   });
 
   it("durably wakes the main session when the sentinel has no sessionKey", async () => {

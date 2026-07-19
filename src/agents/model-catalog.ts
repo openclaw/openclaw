@@ -678,6 +678,46 @@ function loadReadOnlyStaticModelCatalog(params?: {
   return createModelCatalogSnapshot(models, routeVariants, false);
 }
 
+/**
+ * Import and initialize the provider/model registry without caches, credentials,
+ * discovery writes, or network calls. Startup verification uses the uncaught
+ * path so a broken candidate dependency cannot degrade into an empty catalog.
+ */
+export async function verifyModelProviderRuntimeReadOnly(params: {
+  config: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<{ entries: readonly unknown[] }> {
+  const workspaceDir = resolveModelWorkspaceDir(params.config, undefined);
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: params.config,
+      env: process.env,
+      workspaceDir,
+    });
+  const agentDir = resolveDefaultAgentDir(params.config);
+  const agentDiscovery = await importAgentDiscovery();
+  const authStorage = agentDiscovery.discoverAuthStorage(agentDir, { readOnly: true });
+  const discovered = agentDiscovery
+    .discoverModels(authStorage, agentDir, {
+      config: params.config,
+      pluginMetadataSnapshot: metadataSnapshot,
+      workspaceDir,
+    })
+    .getAll();
+  const manifest = loadManifestModelCatalog({
+    config: params.config,
+    env: process.env,
+    metadataSnapshot,
+    workspaceDir,
+  });
+  const configured = buildConfiguredModelCatalog({
+    cfg: params.config,
+    manifestPlugins: metadataSnapshot.plugins,
+  });
+  return { entries: [...discovered, ...manifest, ...configured] };
+}
+
 /** Loads logical entries together with browse-only physical route provenance. */
 export async function loadModelCatalogSnapshot(
   params?: LoadModelCatalogParams,

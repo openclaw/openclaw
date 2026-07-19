@@ -20,8 +20,85 @@ import {
   createGatewayWsTestRequestContext,
   createGatewayWsTestSocket,
 } from "./ws-connection.test-helpers.js";
+import { isStartupProbeMethodAllowed } from "./ws-connection/authenticated-request-dispatch.js";
+import { isTrustedUpdateStartupProbe } from "./ws-connection/connect-admission.js";
 
 describe("attachGatewayWsConnectionHandler startup readiness", () => {
+  it("trusts only local update probes and limits them to health", () => {
+    expect(
+      isTrustedUpdateStartupProbe({
+        allowProbeDuringStartup: true,
+        isLocalClient: false,
+        clientMode: GATEWAY_CLIENT_MODES.PROBE,
+      }),
+    ).toBe(false);
+    const client = { startupProbeOnly: true } as never;
+    expect(isStartupProbeMethodAllowed(client, "health")).toBe(true);
+    expect(isStartupProbeMethodAllowed(client, "config.get")).toBe(false);
+  });
+
+  it.each([
+    ["update probation", true, "NOT_PAIRED"],
+    ["ordinary startup", false, "UNAVAILABLE"],
+  ])("scopes probe admission during %s", async (_name, allowProbeDuringStartup, expectedCode) => {
+    const sent: unknown[] = [];
+    const socket = createGatewayWsTestSocket({
+      onSend: (data) => {
+        sent.push(JSON.parse(data));
+      },
+    });
+    attachGatewayWsForTest({
+      attach: attachGatewayWsConnectionHandler,
+      socket,
+      remoteAddress: "127.0.0.1",
+      options: {
+        resolvedAuth: { mode: "none", allowTailscale: false },
+        isStartupPending: () => true,
+        allowProbeDuringStartup,
+        buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+      },
+    });
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "req",
+        id: "connect-probe",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.PROBE,
+            version: "dev",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.PROBE,
+          },
+          role: "operator",
+          scopes: ["operator.read"],
+          caps: [],
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(
+        sent.some(
+          (frame) =>
+            typeof frame === "object" &&
+            frame !== null &&
+            (frame as { id?: unknown }).id === "connect-probe",
+        ),
+      ).toBe(true);
+    });
+    const response = sent.find(
+      (frame) =>
+        typeof frame === "object" &&
+        frame !== null &&
+        (frame as { id?: unknown }).id === "connect-probe",
+    ) as { ok?: unknown; error?: { code?: unknown } } | undefined;
+    expect(response?.error?.code).toBe(expectedCode);
+  });
+
   it.each([GATEWAY_STARTUP_CLOSE_CODE, 1006])(
     "keeps startup-unavailable close code %i at debug level",
     async (observedCloseCode) => {

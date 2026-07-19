@@ -11,6 +11,7 @@ import {
   moveDeliveryQueueEntryToFailed,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
+  upsertExistingDeliveryQueueEntry,
   type DeliveryQueueCompletionRetention,
   type DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite.js";
@@ -124,19 +125,21 @@ function queuedSessionDeliveryMetadata(entry: QueuedSessionDelivery): DeliveryQu
   };
 }
 
+function buildQueuedSessionDelivery(params: QueuedSessionDeliveryPayload): QueuedSessionDelivery {
+  return {
+    ...params,
+    id: buildEntryId(params.idempotencyKey),
+    enqueuedAt: Date.now(),
+    retryCount: 0,
+  };
+}
+
 /** Enqueue a session delivery and return its durable id. */
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
-  const id = buildEntryId(params.idempotencyKey);
-
-  const entry: QueuedSessionDelivery = {
-    ...params,
-    id,
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-  };
+  const entry = buildQueuedSessionDelivery(params);
   upsertDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     entry,
@@ -146,7 +149,25 @@ export async function enqueueSessionDelivery(
       ? { insertOnly: true }
       : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
   });
-  return id;
+  return entry.id;
+}
+
+/** Queue rollback replay in a retained snapshot without candidate schema mutation. */
+export async function enqueueSessionDeliveryInExistingState(
+  params: QueuedSessionDeliveryPayload,
+  stateDir: string,
+): Promise<string> {
+  const entry = buildQueuedSessionDelivery(params);
+  upsertExistingDeliveryQueueEntry({
+    queueName: QUEUE_NAME,
+    entry,
+    metadata: queuedSessionDeliveryMetadata(entry),
+    stateDir,
+    ...(params.completionRetention === "permanent"
+      ? { insertOnly: true }
+      : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
+  });
+  return entry.id;
 }
 
 /** Enqueue and lease the first attempt to one caller before recovery can see it as eligible. */

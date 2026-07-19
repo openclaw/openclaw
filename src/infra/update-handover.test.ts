@@ -1,165 +1,159 @@
-import { describe, expect, it, vi } from "vitest";
-import { runUpdateHandover, type UpdateConfirmationTier } from "./update-handover.js";
+import { describe, expect, it } from "vitest";
+import {
+  runUpdateHandover,
+  type UpdateConfirmationTier,
+  type UpdateHandoverOperations,
+} from "./update-handover.js";
 
-function harness(params: {
-  healthy?: boolean;
-  tier?: UpdateConfirmationTier;
-  confirmed?: boolean;
-}) {
+function harness(
+  options: {
+    verify?: boolean;
+    healthy?: boolean;
+    confirmed?: boolean;
+    tier?: UpdateConfirmationTier;
+    failStop?: boolean;
+    failCleanup?: boolean;
+    failRollbackPhase?: boolean;
+    failCompletePhase?: boolean;
+  } = {},
+) {
   const calls: string[] = [];
-  const record = (name: string) => async () => {
-    calls.push(name);
+  const operation =
+    (name: string, fail = false) =>
+    async () => {
+      calls.push(name);
+      if (fail) {
+        throw new Error(`${name} failed`);
+      }
+    };
+  const operations: UpdateHandoverOperations = {
+    verifyNewPackage: async () => {
+      calls.push("verify-package");
+      return options.verify ?? true;
+    },
+    snapshotState: operation("snapshot-state"),
+    swapPackage: operation("swap-package"),
+    restartService: operation("restart-service"),
+    waitForHealthy: async () => {
+      calls.push("wait-healthy");
+      return options.healthy ?? true;
+    },
+    waitForConfirmation: async (tier) => {
+      calls.push(`wait-${tier}-confirmation`);
+      return options.confirmed ?? true;
+    },
+    cleanupCompleted: operation("cleanup", options.failCleanup),
+    onCleanupError: async () => {
+      calls.push("cleanup-warning");
+    },
+    stopService: operation("stop-service", options.failStop),
+    restorePackage: operation("restore-package"),
+    restoreState: operation("restore-state"),
+    startService: operation("start-service"),
+    markFailed: async (reason) => {
+      calls.push(`failed:${reason}`);
+    },
+    onPhase: async ({ phase }) => {
+      calls.push(`phase:${phase}`);
+      if (phase === "rolling-back" && options.failRollbackPhase) {
+        throw new Error("phase persistence failed");
+      }
+      if (phase === "complete" && options.failCompletePhase) {
+        throw new Error("complete persistence failed");
+      }
+    },
   };
   return {
     calls,
     run: () =>
       runUpdateHandover({
-        confirmationTier: params.tier ?? "delivery",
-        waitForInternalHealth: vi.fn(async () => params.healthy ?? true),
-        pauseOldChannels: record("pause-old"),
-        startNewChannels: record("start-new"),
-        confirmDelivery: vi.fn(async () => params.confirmed ?? true),
-        confirmHumanReply: vi.fn(async () => params.confirmed ?? true),
-        stopNewChannels: record("stop-new"),
-        restorePrevious: record("restore"),
-        resumeOldChannels: record("resume-old"),
-        onPhase: async (phase) => {
-          calls.push(phase);
-        },
+        ...operations,
+        confirmationTier: options.tier ?? "delivery",
       }),
   };
 }
 
 describe("update handover", () => {
-  it("keeps channels exclusive through delivery-confirmed completion", async () => {
-    const subject = harness({});
-    expect((await subject.run()).phase).toBe("completed");
+  it("runs the refined transaction sequence", async () => {
+    const subject = harness();
+    expect((await subject.run()).phase).toBe("complete");
     expect(subject.calls).toEqual([
-      "internal-healthy",
-      "pause-old",
-      "old-paused",
-      "start-new",
-      "new-active",
-      "confirmed",
-      "completed",
+      "phase:verify",
+      "verify-package",
+      "phase:snapshot",
+      "snapshot-state",
+      "phase:swap",
+      "swap-package",
+      "phase:restart",
+      "restart-service",
+      "wait-healthy",
+      "phase:healthy",
+      "phase:confirm",
+      "wait-delivery-confirmation",
+      "phase:complete",
+      "cleanup",
     ]);
   });
 
-  it("rolls back and resumes old channels after a human-tier timeout", async () => {
+  it("restores the retained package without snapshot or restart after verify failure", async () => {
+    const subject = harness({ verify: false });
+    expect((await subject.run()).phase).toBe("rolled-back");
+    expect(subject.calls).toEqual([
+      "phase:verify",
+      "verify-package",
+      "phase:rolling-back",
+      "failed:new package startup verification failed",
+      "restore-package",
+      "phase:rolled-back",
+    ]);
+  });
+
+  it("rolls back timeout in stop-package-state-start order", async () => {
     const subject = harness({ tier: "human", confirmed: false });
     expect((await subject.run()).phase).toBe("rolled-back");
-    expect(subject.calls).toEqual([
-      "internal-healthy",
-      "pause-old",
-      "old-paused",
-      "start-new",
-      "new-active",
-      "rolling-back",
-      "stop-new",
-      "restore",
-      "resume-old",
-      "rolled-back",
+    const stop = subject.calls.indexOf("stop-service");
+    expect(subject.calls.slice(stop, stop + 4)).toEqual([
+      "stop-service",
+      "restore-package",
+      "restore-state",
+      "start-service",
     ]);
   });
 
-  it("never pauses old channels when internal health fails", async () => {
+  it("uses full rollback after health failure", async () => {
     const subject = harness({ healthy: false });
+    expect((await subject.run()).failureReason).toBe("new gateway failed its health check");
+    expect(subject.calls).not.toContain("wait-delivery-confirmation");
+    expect(subject.calls).toContain("restore-state");
+  });
+
+  it("fails closed without restoring live files when stop fails", async () => {
+    const subject = harness({ confirmed: false, failStop: true });
+    await expect(subject.run()).rejects.toThrow("rollback failed: stop-service failed");
+    expect(subject.calls).not.toContain("restore-package");
+    expect(subject.calls).not.toContain("restore-state");
+    expect(subject.calls).not.toContain("start-service");
+    expect(subject.calls.at(-1)).toBe("phase:failed");
+  });
+
+  it("does not roll back a confirmed update when snapshot cleanup fails", async () => {
+    const subject = harness({ failCleanup: true });
+    expect((await subject.run()).phase).toBe("complete");
+    expect(subject.calls).toContain("cleanup-warning");
+    expect(subject.calls).not.toContain("stop-service");
+  });
+
+  it("does not roll back after confirmation when complete persistence fails", async () => {
+    const subject = harness({ failCompletePhase: true });
+    expect((await subject.run()).phase).toBe("complete");
+    expect(subject.calls).toContain("cleanup");
+    expect(subject.calls).not.toContain("stop-service");
+  });
+
+  it("rolls back even when phase persistence fails", async () => {
+    const subject = harness({ confirmed: false, failRollbackPhase: true });
     expect((await subject.run()).phase).toBe("rolled-back");
-    expect(subject.calls).toEqual(["rolling-back", "restore", "rolled-back"]);
-  });
-
-  it("rolls back when delivery acknowledgement fails", async () => {
-    const subject = harness({ confirmed: false });
-    expect((await subject.run()).phase).toBe("rolled-back");
-    expect(subject.calls.slice(-4)).toEqual(["stop-new", "restore", "resume-old", "rolled-back"]);
-  });
-
-  it("restores old channels before propagating a new-channel startup failure", async () => {
-    const subject = harness({});
-    subject.run = () =>
-      runUpdateHandover({
-        confirmationTier: "delivery",
-        waitForInternalHealth: async () => true,
-        pauseOldChannels: async () => {
-          subject.calls.push("pause-old");
-        },
-        startNewChannels: async () => {
-          subject.calls.push("start-new");
-          throw new Error("new channel startup failed");
-        },
-        confirmDelivery: async () => true,
-        confirmHumanReply: async () => true,
-        stopNewChannels: async () => {
-          subject.calls.push("stop-new");
-        },
-        restorePrevious: async () => {
-          subject.calls.push("restore");
-        },
-        resumeOldChannels: async () => {
-          subject.calls.push("resume-old");
-        },
-      });
-
-    await expect(subject.run()).rejects.toThrow("Update handover failed after rollback");
-    expect(subject.calls).toEqual(["pause-old", "start-new", "stop-new", "restore", "resume-old"]);
-  });
-
-  it("continues restoration when stopping new channels fails", async () => {
-    const calls: string[] = [];
-    await expect(
-      runUpdateHandover({
-        confirmationTier: "human",
-        waitForInternalHealth: async () => true,
-        pauseOldChannels: async () => {
-          calls.push("pause-old");
-        },
-        startNewChannels: async () => {
-          calls.push("start-new");
-        },
-        confirmDelivery: async () => true,
-        confirmHumanReply: async () => false,
-        stopNewChannels: async () => {
-          calls.push("stop-new");
-          throw new Error("stop failed");
-        },
-        restorePrevious: async () => {
-          calls.push("restore");
-        },
-        resumeOldChannels: async () => {
-          calls.push("resume-old");
-        },
-        onPhase: (phase) => {
-          calls.push(phase);
-        },
-      }),
-    ).rejects.toThrow("Update handover failed after rollback");
-    expect(calls).not.toContain("rolled-back");
-    expect(calls.slice(-3)).toEqual(["stop-new", "restore", "resume-old"]);
-  });
-
-  it("propagates an undefined rejection reason after compensation", async () => {
-    const calls: string[] = [];
-    await expect(
-      runUpdateHandover({
-        confirmationTier: "delivery",
-        waitForInternalHealth: async () => true,
-        pauseOldChannels: async () => {
-          calls.push("pause-old");
-        },
-        startNewChannels: async () => await Promise.reject(),
-        confirmDelivery: async () => true,
-        confirmHumanReply: async () => true,
-        stopNewChannels: async () => {
-          calls.push("stop-new");
-        },
-        restorePrevious: async () => {
-          calls.push("restore");
-        },
-        resumeOldChannels: async () => {
-          calls.push("resume-old");
-        },
-      }),
-    ).rejects.toThrow("Update handover failed after rollback");
-    expect(calls).toEqual(["pause-old", "stop-new", "restore", "resume-old"]);
+    expect(subject.calls).toContain("stop-service");
+    expect(subject.calls).toContain("restore-state");
   });
 });

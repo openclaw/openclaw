@@ -69,6 +69,7 @@ export const UpdateRunParamsSchema = closedObject({
   deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
   note: Type.Optional(Type.String()),
   continuationMessage: Type.Optional(Type.String()),
+  confirmationTier: Type.Optional(Type.Union([Type.Literal("delivery"), Type.Literal("human")])),
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
 });

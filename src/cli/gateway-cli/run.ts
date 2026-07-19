@@ -656,6 +656,18 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   normalizeStateDirEnv(process.env);
   const { clearGatewayRunConfigEnvironment } = await import("./pre-bootstrap.js");
   clearGatewayRunConfigEnvironment();
+  const { recoverInterruptedUpdateBeforeGatewayStart } =
+    await import("../../infra/update-interrupted-recovery.js");
+  const updateRecovery = await recoverInterruptedUpdateBeforeGatewayStart();
+  if (updateRecovery !== "continue") {
+    defaultRuntime.error(
+      updateRecovery === "rolled-back"
+        ? "Interrupted managed update rolled back before Gateway startup; service supervisor will restart the retained package."
+        : "Managed update still owns the package transaction; Gateway startup deferred until the package swap completes.",
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
   installQaParentWatchdog();
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;

@@ -60,7 +60,7 @@ export type GatewayProbeResult = {
   configSnapshot: unknown;
 };
 
-type GatewayProbeDetailLevel = "none" | "presence" | "config" | "full";
+type GatewayProbeDetailLevel = "none" | "health" | "presence" | "config" | "full";
 
 const MIN_PROBE_TIMEOUT_MS = 250;
 export const MAX_TIMER_DELAY_MS = MAX_SAFE_TIMEOUT_DELAY_MS;
@@ -437,6 +437,19 @@ export async function probeGateway(opts: {
             });
           });
           try {
+            if (detailLevel === "health") {
+              const health = await client.request("health");
+              settleProbe({
+                ok: true,
+                error: null,
+                verifiedRead: true,
+                health,
+                status: null,
+                presence: null,
+                configSnapshot: null,
+              });
+              return;
+            }
             if (detailLevel === "presence") {
               const presence = await client.request("system-presence");
               settleProbe({

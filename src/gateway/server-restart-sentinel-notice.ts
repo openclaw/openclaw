@@ -11,6 +11,7 @@ import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
 import {
   failPendingDelivery,
   loadPendingDelivery,
+  readDeliveryStatus,
   reserveDeliveryAttempt,
 } from "../infra/outbound/delivery-queue-storage.js";
 import {
@@ -43,6 +44,7 @@ export async function enqueueRestartSentinelNotice(
     message: string;
     sessionKey: string;
     revision: number;
+    idempotencyKey?: string;
   },
 ): Promise<{ id: string; created: boolean }> {
   return await enqueueDeliveryOnce(
@@ -57,7 +59,7 @@ export async function enqueueRestartSentinelNotice(
       completionRetention: "permanent",
       maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
     },
-    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+    params.idempotencyKey ?? `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
   );
 }
 
@@ -142,12 +144,19 @@ export async function deliverRestartSentinelNotice(
     message: string;
     queueId: string;
   },
-): Promise<void> {
+): Promise<"acknowledged" | "pending" | "rejected"> {
+  const existingStatus = readDeliveryStatus(params.queueId);
+  if (existingStatus === "completed") {
+    return "acknowledged";
+  }
+  if (existingStatus === "failed") {
+    return "rejected";
+  }
   const claim = await withActiveDeliveryClaim(params.queueId, async () => {
     try {
       const reservation = await reserveDeliveryAttempt(params.queueId, RESTART_NOTICE_MAX_ATTEMPTS);
       if (reservation.status === "exhausted") {
-        return false;
+        return "pending" as const;
       }
     } catch (err) {
       log.warn(
@@ -158,7 +167,7 @@ export async function deliverRestartSentinelNotice(
           sessionKey: params.sessionKey,
         },
       );
-      return false;
+      return "pending" as const;
     }
     try {
       const send = await sendDurableMessageBatch({
@@ -184,7 +193,7 @@ export async function deliverRestartSentinelNotice(
       }
       try {
         await ackDelivery(params.queueId);
-        return true;
+        return "acknowledged" as const;
       } catch (err) {
         const error = formatErrorMessage(err);
         await failDeliveryAfterPlatformSend(params.queueId, error).catch(() => undefined);
@@ -193,7 +202,7 @@ export async function deliverRestartSentinelNotice(
           to: params.to,
           sessionKey: params.sessionKey,
         });
-        return false;
+        return "pending" as const;
       }
     } catch (err) {
       // The send path records platform-attempt evidence on this queue row.
@@ -221,14 +230,14 @@ export async function deliverRestartSentinelNotice(
               sessionKey: params.sessionKey,
             },
           );
-          return false;
+          return "pending" as const;
         }
         log.warn(`${params.summary}: outbound delivery permanently rejected: ${error}`, {
           channel: params.channel,
           to: params.to,
           sessionKey: params.sessionKey,
         });
-        return true;
+        return "rejected" as const;
       }
       const recordFailure = isProvenDeliveryNotSentError(err)
         ? failDeliveryBeforePlatformSend
@@ -239,7 +248,7 @@ export async function deliverRestartSentinelNotice(
         to: params.to,
         sessionKey: params.sessionKey,
       });
-      return false;
+      return "pending" as const;
     }
   });
   if (claim.status === "claimed-by-other-owner") {
@@ -248,7 +257,8 @@ export async function deliverRestartSentinelNotice(
     });
   }
   const needsRecovery =
-    claim.status === "claimed-by-other-owner" || (claim.status === "claimed" && !claim.value);
+    claim.status === "claimed-by-other-owner" ||
+    (claim.status === "claimed" && claim.value === "pending");
   if (needsRecovery) {
     await drainFailedRestartSentinelNotice({
       cfg: params.cfg,
@@ -257,4 +267,12 @@ export async function deliverRestartSentinelNotice(
       summary: params.summary,
     });
   }
+  const durableStatus = readDeliveryStatus(params.queueId);
+  if (durableStatus === "completed") {
+    return "acknowledged";
+  }
+  if (durableStatus === "failed") {
+    return "rejected";
+  }
+  return claim.status === "claimed" ? claim.value : "pending";
 }

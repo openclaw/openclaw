@@ -4,6 +4,7 @@ import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import {
   formatUpdateRestartActionLines,
   formatUpdateRestartStatusValue,
+  formatUpdateTransactionDoctorLines,
 } from "./status-update-restart.ts";
 
 const basePayload = {
@@ -55,6 +56,43 @@ describe("status update restart formatting", () => {
         { ok: (text) => `ok(${text})` },
       ),
     ).toBe("ok(verified · gateway 2026.5.15)");
+  });
+
+  it("narrates confirmation and rollback transaction states", () => {
+    const pending = {
+      ...basePayload,
+      stats: {
+        ...basePayload.stats,
+        reason: "update-confirmation-pending",
+        updatePhase: "confirm",
+        confirmationTier: "human",
+        confirmationStatus: "delivery-acked",
+      },
+    } satisfies RestartSentinelPayload;
+    expect(formatUpdateRestartStatusValue(pending)).toBe(
+      "update confirm · awaiting human confirmation",
+    );
+    expect(formatUpdateTransactionDoctorLines(pending)).toEqual([
+      "Update transaction: phase=confirm; confirmation=human/delivery-acked.",
+      "Update transaction reason: update-confirmation-pending",
+    ]);
+    const confirmed = {
+      ...pending,
+      stats: {
+        ...pending.stats,
+        confirmationTier: "delivery" as const,
+        confirmationStatus: "delivery-acked" as const,
+      },
+    };
+    expect(formatUpdateRestartStatusValue(confirmed)).toBe("confirmed · cleanup pending");
+    expect(formatUpdateRestartActionLines(confirmed)).toEqual([]);
+    expect(
+      formatUpdateRestartStatusValue({
+        ...pending,
+        status: "error",
+        stats: { ...pending.stats, reason: "update-rollback-completed: confirmation timed out" },
+      }),
+    ).toBe("rolled back · previous package and state restored");
   });
 
   it("adds action lines for failed and pending update restarts only", () => {

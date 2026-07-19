@@ -174,32 +174,87 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
-For a restart-enabled update of an owned macOS launchd or Linux systemd Gateway,
-OpenClaw retains one launch-verified previous package only for the npm layout
-created by the local-prefix `install-cli.sh` installer
-(`<prefix>/tools/node/...`). It verifies the generated installer wrapper, real
-package paths, process ownership, and write permissions before retention. A
-later update replaces the one retained copy.
+For a restart-enabled, channel-initiated update of an owned macOS launchd or
+Linux systemd Gateway, OpenClaw provides transactional rollback only for the
+npm layout created by the local-prefix `install-cli.sh` installer
+(`<prefix>/tools/node/...`). It verifies the installer wrapper, real package
+paths, process ownership, managed Node, and write permissions before enabling
+the transaction.
 
-Automatic package rollback is not enabled. The current update pipeline runs
-package lifecycle scripts and post-install Doctor before the replacement
-Gateway is confirmed. Restoring only the old package after a committed data
-migration could run old code against new state. State snapshot/restore and
-deferred migration commit are therefore required before automatic rollback can
-be enabled.
+The detached updater follows one sequence:
 
-Resident old/new Gateway handover, exclusive channel pause/resume, delivery
-acknowledgement, and human reply confirmation are also not enabled. The updater
-must first keep the old Gateway resident without mutating its live package tree
-and commit migrations only after confirmation. Startup remains fail-closed.
+1. retain the current package and install the candidate into an isolated staged
+   prefix. Candidate lifecycle runs with isolated state and config paths;
+2. run the candidate package's `openclaw gateway verify --json` with the
+   managed Node, loading config, inspecting every registered SQLite database
+   read-only, and initializing the provider/model catalog without listeners,
+   migrations, or state writes. A failed probe restores the retained package
+   without snapshotting or restarting the service;
+3. capture a safety baseline of state and persist the recovery marker. The
+   baseline uses APFS clone copy on macOS, reflink copy where supported, or a
+   complete file-tree copy with verified `VACUUM INTO` snapshots for each
+   SQLite database;
+4. swap the package, run existing Doctor/package
+   migrations in their normal order, and restart the service;
+5. wait for Gateway health and a durable post-update notice acknowledgement.
+
+The new Gateway reads the update marker and sends the notice to the channel and
+target that initiated the update. Delivery acknowledgement confirms the default
+tier. A control-plane caller can request the `human` confirmation tier; then a
+fresh random challenge is included in the acknowledged notice and the exact
+`confirm <challenge>` reply must arrive in the initiating session. A queued
+pre-update event cannot know that challenge, so provider clock skew and
+timestamp precision do not affect confirmation.
+The updater refreshes a short owner lease in the same marker. If the detached
+updater disappears during restart or confirmation, the Gateway atomically
+claims the expired lease, exits, and lets the service supervisor enter the same
+package-and-state recovery path.
+During this probation window, probe health remains available, but operator RPC,
+scheduled work, and normal channel turns stay behind the startup gate. The
+Gateway initializes channels, plugin services, sidecars, and its worker runtime
+before offering confirmation. The confirming reply is recorded before session
+or agent work. Other dispatch callbacks are durably deferred as compatible
+agent-turn entries in both the candidate queue and the retained snapshot's
+existing SQLite delivery queue, without opening or migrating the retained
+schema. Observe-only callbacks cannot be represented by that older queue shape;
+they fail the transaction and remain unacknowledged while rollback restores the
+old Gateway. A marker admission count blocks confirmation until both dispatch
+writes finish and forces rollback if startup finds an interrupted admission. Confirmation
+releases the candidate replay and deletes the snapshot; rollback terminates the
+candidate and the retained Gateway replays the queued text, route, and compact
+media note.
+Confirmation removes the state snapshot, preserves one retained package, and
+clears the marker. Health failure or bounded confirmation timeout runs rollback
+in fixed order: stop service, restore package, restore state, start service.
+Status and deep Doctor output report pending, completed rollback, and failed
+rollback states.
+
+No resident second Gateway is started. The detached updater survives the old
+Gateway exit and owns the transaction. Doctor and package migrations still
+commit during the normal replacement-Gateway restart; the pre-mutation snapshot
+makes those writes reversible.
+
+The recovery marker also records the retained package and snapshot roots before
+candidate lifecycle or package swap. A handoff parent outside the mutable
+package root waits for the update child. If that child exits during snapshot,
+swap, or rollback, the parent proves the service stopped, restores the retained
+package, and reactivates the supervisor. Gateway bootstrap then stays
+non-serving, restores state from the same marker, records the interrupted
+rollback, and exits so the supervisor starts the retained package. State restore
+keeps the canonical state directory present and atomically replaces its files;
+the rollback marker remains discoverable throughout. A terminal rollback marker
+is written only after external configuration restoration also succeeds.
+
+The transaction does not attempt to survive destruction of the outer detached
+handoff process itself while the managed service is unloaded. That host-level
+failure remains a manual recovery case using the retained package and snapshot.
 
 Ordinary npm-global installs, pnpm globals, Git checkouts, Windows services,
 unowned services, and lookalike prefixes without verifiable installer
-provenance do not get retention or package swapping. The updater preserves
-their existing update behavior and warns that an older version must not run
-against migrated state without restoring a compatible snapshot. Shared or
-root-owned global package parents cannot be replaced safely by the service
-account.
+provenance do not get transactional rollback. They keep the existing update
+flow and print the managed website-installer pointer
+`https://openclaw.ai/install.sh`. Shared or root-owned global package parents
+cannot be replaced safely by the service account.
 
 Set `OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to
 bypass previous-package retention. There is no config option.
@@ -247,15 +302,14 @@ separately from the CLI update that continues after the Gateway exits:
 - `ok: false`, `result.reason: "managed-service-handoff-failed"`: the Gateway
   tried to create the handoff but could not spawn the detached helper.
 
-The `sentinel` payload is written before the Gateway exits, and the CLI
-handoff updates that same restart sentinel after the managed-service restart
-health checks complete. During the handoff, the sentinel can carry
-`stats.reason: "restart-health-pending"` with no success continuation; the
-restarted Gateway polls it and fires the continuation only after the CLI has
-verified service health and rewritten the sentinel with the final `ok` result.
-`openclaw status` and `openclaw status --all` show an `Update restart` row
-while that sentinel is pending or failed, and `update.status` refreshes and
-returns the latest sentinel.
+The `sentinel` payload is written before the Gateway exits. A protected package
+update rewrites it as an update-transaction marker with the initiating session,
+channel, target, phase, confirmation tier, and confirmation status. The new
+Gateway records health, sends the durable notice, and records delivery or human
+confirmation in the same marker. The detached updater polls that marker and
+either completes cleanup or performs rollback. `openclaw status`, `openclaw
+status --all`, `openclaw doctor --deep`, and `update.status` surface pending or
+failed transaction state.
 
 ## Git checkout flow
 

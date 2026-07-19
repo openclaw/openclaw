@@ -6,6 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { UpdateHandoverPhase } from "./update-handover.js";
 
 type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -21,16 +22,28 @@ type RestartSentinelStep = {
   log?: RestartSentinelLog | null;
 };
 
-type RestartSentinelStats = {
+export type RestartSentinelStats = {
   mode?: string;
   root?: string;
   requiresRestart?: boolean;
   handoffId?: string;
+  packageRoot?: string;
+  retainedPackageRoot?: string;
+  stateSnapshotRoot?: string;
+  updateNodePath?: string;
+  updateOwnerLeaseExpiresAtMs?: number;
+  updateProbationReleasedAtMs?: number;
+  updateReplayAdmissionsPending?: number;
+  updateRollbackOwner?: string;
+  humanConfirmationChallenge?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   steps?: RestartSentinelStep[];
   reason?: string | null;
   durationMs?: number | null;
+  updatePhase?: UpdateHandoverPhase;
+  confirmationTier?: "delivery" | "human";
+  confirmationStatus?: "pending" | "delivery-acked" | "human-confirmed" | "timed-out" | "failed";
 };
 
 export type RestartSentinelContinuation =
@@ -176,11 +189,46 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   const mode = parseOptionalNullableString(value, "mode");
   const root = parseOptionalNullableString(value, "root");
   const handoffId = parseOptionalNullableString(value, "handoffId");
+  const packageRoot = parseOptionalNullableString(value, "packageRoot");
+  const retainedPackageRoot = parseOptionalNullableString(value, "retainedPackageRoot");
+  const stateSnapshotRoot = parseOptionalNullableString(value, "stateSnapshotRoot");
+  const updateNodePath = parseOptionalNullableString(value, "updateNodePath");
+  const updateOwnerLeaseExpiresAtMs = value.updateOwnerLeaseExpiresAtMs;
+  const updateProbationReleasedAtMs = value.updateProbationReleasedAtMs;
+  const updateReplayAdmissionsPending = value.updateReplayAdmissionsPending;
+  const updateRollbackOwner = parseOptionalNullableString(value, "updateRollbackOwner");
+  const humanConfirmationChallenge = parseOptionalNullableString(
+    value,
+    "humanConfirmationChallenge",
+  );
   const reason = parseOptionalNullableString(value, "reason");
   const before = value.before;
   const after = value.after;
   const steps = value.steps;
   const durationMs = value.durationMs;
+  const updatePhase = value.updatePhase;
+  const confirmationTier = value.confirmationTier;
+  const confirmationStatus = value.confirmationStatus;
+  const updatePhases = new Set([
+    "verify",
+    "snapshot",
+    "swap",
+    "restart",
+    "healthy",
+    "confirm",
+    "complete",
+    "rolling-back",
+    "rolled-back",
+    "failed",
+  ]);
+  const confirmationTiers = new Set(["delivery", "human"]);
+  const confirmationStatuses = new Set([
+    "pending",
+    "delivery-acked",
+    "human-confirmed",
+    "timed-out",
+    "failed",
+  ]);
   if (
     mode === false ||
     mode === null ||
@@ -188,13 +236,32 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     root === null ||
     handoffId === false ||
     handoffId === null ||
+    packageRoot === false ||
+    packageRoot === null ||
+    retainedPackageRoot === false ||
+    retainedPackageRoot === null ||
+    stateSnapshotRoot === false ||
+    stateSnapshotRoot === null ||
+    updateNodePath === false ||
+    updateNodePath === null ||
+    (updateOwnerLeaseExpiresAtMs !== undefined && !isSafeInteger(updateOwnerLeaseExpiresAtMs)) ||
+    (updateProbationReleasedAtMs !== undefined && !isSafeInteger(updateProbationReleasedAtMs)) ||
+    (updateReplayAdmissionsPending !== undefined &&
+      (!isSafeInteger(updateReplayAdmissionsPending) || updateReplayAdmissionsPending < 0)) ||
+    updateRollbackOwner === false ||
+    updateRollbackOwner === null ||
+    humanConfirmationChallenge === false ||
+    humanConfirmationChallenge === null ||
     reason === false ||
     (value.requiresRestart !== undefined && typeof value.requiresRestart !== "boolean") ||
     (before !== undefined && before !== null && !isPlainRecord(before)) ||
     (after !== undefined && after !== null && !isPlainRecord(after)) ||
     (steps !== undefined &&
       (!Array.isArray(steps) || steps.some((step) => !parseRestartSentinelStep(step)))) ||
-    (durationMs !== undefined && durationMs !== null && !isFiniteNumber(durationMs))
+    (durationMs !== undefined && durationMs !== null && !isFiniteNumber(durationMs)) ||
+    (updatePhase !== undefined && !updatePhases.has(updatePhase as string)) ||
+    (confirmationTier !== undefined && !confirmationTiers.has(confirmationTier as string)) ||
+    (confirmationStatus !== undefined && !confirmationStatuses.has(confirmationStatus as string))
   ) {
     return null;
   }
@@ -211,6 +278,33 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   if (handoffId !== undefined) {
     result.handoffId = handoffId;
   }
+  if (packageRoot !== undefined) {
+    result.packageRoot = packageRoot;
+  }
+  if (retainedPackageRoot !== undefined) {
+    result.retainedPackageRoot = retainedPackageRoot;
+  }
+  if (stateSnapshotRoot !== undefined) {
+    result.stateSnapshotRoot = stateSnapshotRoot;
+  }
+  if (updateNodePath !== undefined) {
+    result.updateNodePath = updateNodePath;
+  }
+  if (updateOwnerLeaseExpiresAtMs !== undefined) {
+    result.updateOwnerLeaseExpiresAtMs = updateOwnerLeaseExpiresAtMs as number;
+  }
+  if (updateProbationReleasedAtMs !== undefined) {
+    result.updateProbationReleasedAtMs = updateProbationReleasedAtMs as number;
+  }
+  if (updateReplayAdmissionsPending !== undefined) {
+    result.updateReplayAdmissionsPending = updateReplayAdmissionsPending as number;
+  }
+  if (updateRollbackOwner !== undefined) {
+    result.updateRollbackOwner = updateRollbackOwner;
+  }
+  if (humanConfirmationChallenge !== undefined) {
+    result.humanConfirmationChallenge = humanConfirmationChallenge;
+  }
   if (before !== undefined) {
     result.before = before as Record<string, unknown> | null;
   }
@@ -225,6 +319,15 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   if (durationMs !== undefined) {
     result.durationMs = durationMs as number | null;
+  }
+  if (updatePhase !== undefined) {
+    result.updatePhase = updatePhase as RestartSentinelStats["updatePhase"];
+  }
+  if (confirmationTier !== undefined) {
+    result.confirmationTier = confirmationTier as RestartSentinelStats["confirmationTier"];
+  }
+  if (confirmationStatus !== undefined) {
+    result.confirmationStatus = confirmationStatus as RestartSentinelStats["confirmationStatus"];
   }
   return result;
 }

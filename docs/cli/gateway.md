@@ -2,6 +2,7 @@
 summary: "OpenClaw Gateway CLI (`openclaw gateway`) — run, query, and discover gateways"
 read_when:
   - Running the Gateway from the CLI (dev or servers)
+  - Verifying an installed Gateway package before restart
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (local + wide-area DNS-SD)
   - Integrating an external Gateway process supervisor
@@ -103,6 +104,14 @@ openclaw gateway run   # equivalent, explicit form
 `--claude-cli-logs` is a deprecated alias for `--cli-backend-logs`.
 
 For `--bind custom`, set `gateway.customBindHost` to an IPv4 address. Any address other than `127.0.0.1` or `0.0.0.0` also requires `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Wildcard `0.0.0.0` does not add a separate required alias. IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
+
+## Verify Gateway startup
+
+```bash
+openclaw gateway verify
+```
+
+`gateway verify` performs a non-serving startup probe for managed updates. It loads configuration, checks the existing SQLite stores read-only without running migrations, and initializes provider discovery far enough to catch a broken package or dependency graph. The command prints one machine-readable JSON result and exits without binding a port or changing state.
 
 ## Restart the Gateway
 

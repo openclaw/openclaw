@@ -29,6 +29,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   isDeviceTokenAuth?: boolean;
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
+  /** Server-derived local update probe; limited to health RPC during probation. */
+  startupProbeOnly?: boolean;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;

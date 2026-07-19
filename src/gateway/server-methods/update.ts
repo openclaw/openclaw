@@ -155,6 +155,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       note,
       continuationMessage,
       restartDelayMs,
+      confirmationTier,
     } = parseRestartRequestParams(params);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
       extractDeliveryInfo(sessionKey);
@@ -180,6 +181,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       ...(threadId ? { threadId } : {}),
       ...(note !== undefined ? { note } : {}),
       ...(continuationMessage !== undefined ? { continuationMessage } : {}),
+      ...(confirmationTier ? { confirmationTier } : {}),
     };
     try {
       const config = context.getRuntimeConfig();

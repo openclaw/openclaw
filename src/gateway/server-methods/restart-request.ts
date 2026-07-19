@@ -46,6 +46,7 @@ export function parseRestartRequestParams(params: unknown): {
   note: string | undefined;
   continuationMessage: string | undefined;
   restartDelayMs: number | undefined;
+  confirmationTier: "delivery" | "human" | undefined;
 } {
   const sessionKey = normalizeOptionalString((params as { sessionKey?: unknown }).sessionKey);
   const { deliveryContext, threadId } = parseRestartDeliveryContext(params);
@@ -58,5 +59,18 @@ export function parseRestartRequestParams(params: unknown): {
     typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
       ? Math.max(0, Math.floor(restartDelayMsRaw))
       : undefined;
-  return { sessionKey, deliveryContext, threadId, note, continuationMessage, restartDelayMs };
+  const confirmationTierRaw = (params as { confirmationTier?: unknown }).confirmationTier;
+  const confirmationTier =
+    confirmationTierRaw === "delivery" || confirmationTierRaw === "human"
+      ? confirmationTierRaw
+      : undefined;
+  return {
+    sessionKey,
+    deliveryContext,
+    threadId,
+    note,
+    continuationMessage,
+    restartDelayMs,
+    confirmationTier,
+  };
 }

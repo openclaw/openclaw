@@ -566,25 +566,38 @@ async function updateCommandInternal(
   if (!execution) {
     return;
   }
-  const { result, preManagedServiceStop } = execution;
-  stop();
-  await finishUpdate({
+  const {
     result,
-    root,
-    configSnapshot,
-    requestedChannel,
-    storedChannel,
-    channel,
-    downgradeRisk,
-    shouldRestart,
-    opts,
-    showProgress,
     preManagedServiceStop,
-    controlPlaneUpdateSentinelMeta,
-    preUpdatePluginInstallRecords,
-    startedAt,
-    packageUpdateNodeRunner,
-    updateStepTimeoutMs,
-    invocationCwd,
-  });
+    preparedPackageRollback,
+    updateTransactionMeta,
+    stopUpdateTransactionOwnerLease,
+  } = execution;
+  stop();
+  try {
+    await finishUpdate({
+      result,
+      root,
+      configSnapshot,
+      requestedChannel,
+      storedChannel,
+      channel,
+      downgradeRisk,
+      shouldRestart,
+      opts,
+      showProgress,
+      preManagedServiceStop,
+      controlPlaneUpdateSentinelMeta,
+      preUpdatePluginInstallRecords,
+      startedAt,
+      packageUpdateNodeRunner,
+      updateStepTimeoutMs,
+      invocationCwd,
+      preparedPackageRollback,
+      updateTransactionMeta,
+      stopPreparedTransactionOwnerLease: stopUpdateTransactionOwnerLease ?? undefined,
+    });
+  } finally {
+    await stopUpdateTransactionOwnerLease?.();
+  }
 }

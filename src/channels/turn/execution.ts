@@ -4,6 +4,7 @@ import {
   createDiagnosticTraceContextFromActiveScope,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { handleUpdateProbationInbound } from "../../infra/update-confirmation-runtime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -148,10 +149,50 @@ async function runPreparedChannelTurnCoreInTrace<
   options: { suppressObserveOnlyDispatch: boolean },
 ): Promise<ChannelTurnResult<TDispatchResult>> {
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
+  const updateConfirmationThreadId =
+    params.ctxPayload.MessageThreadId == null
+      ? undefined
+      : String(params.ctxPayload.MessageThreadId);
   const botLoopDrop = resolveBotLoopProtectionDrop(params);
   if (botLoopDrop) {
     clearPendingHistoryAfterTurn(params.history);
     return botLoopDrop;
+  }
+  const probation =
+    admission.kind === "dispatch" || admission.kind === "observeOnly"
+      ? await handleUpdateProbationInbound({
+          sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+          channel: params.channel,
+          to: params.ctxPayload.OriginatingTo ?? params.ctxPayload.To,
+          accountId: params.accountId ?? params.ctxPayload.AccountId,
+          ...(updateConfirmationThreadId ? { threadId: updateConfirmationThreadId } : {}),
+          internal: params.ctxPayload.InputProvenance?.kind === "internal_system",
+          confirmationEligible: admission.kind === "dispatch",
+          confirmationText:
+            params.ctxPayload.BodyForCommands ??
+            params.ctxPayload.CommandBody ??
+            params.ctxPayload.RawBody ??
+            params.ctxPayload.Body,
+          rollbackReplay: {
+            admission: admission.kind,
+            ctxPayload: params.ctxPayload,
+            ...(params.messageId ? { messageId: params.messageId } : {}),
+          },
+        }).catch((error: unknown) => {
+          log.warn(`failed to record post-update human confirmation: ${String(error)}`);
+          return "cancelled" as const;
+        })
+      : "continue";
+  if (probation !== "continue") {
+    return {
+      admission: {
+        kind: probation === "handled" || probation === "deferred" ? "handled" : "drop",
+        reason: `update-confirmation-${probation}`,
+      },
+      dispatched: false,
+      ctxPayload: params.ctxPayload,
+      routeSessionKey: params.routeSessionKey,
+    };
   }
   emit({
     ...params,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
@@ -40,7 +41,7 @@ const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
  * Captures one package-manager or filesystem step from the global update flow.
  * Callers surface these records directly in update diagnostics.
  */
-type PackageUpdateStepResult = {
+export type PackageUpdateStepResult = {
   name: string;
   command: string;
   cwd: string;
@@ -77,6 +78,35 @@ type NpmBinShimBackup = {
     hadExisting: boolean;
   }>;
 };
+
+function suppressStagedNpmLifecycle(argv: string[], staged: StagedNpmInstall | null): string[] {
+  if (!staged) {
+    return argv;
+  }
+  return argv.map((arg) => (arg.startsWith("--allow-scripts=") ? "--ignore-scripts" : arg));
+}
+
+async function resolveStagedNpmLifecycleAllowFlag(params: {
+  packageRoot: string;
+  packageName: string;
+}): Promise<string> {
+  const packageNames = new Set([params.packageName]);
+  try {
+    const workspace = parseYaml(
+      await fs.readFile(path.join(params.packageRoot, "pnpm-workspace.yaml"), "utf8"),
+    ) as { allowBuilds?: Record<string, unknown> } | null;
+    for (const [packageName, allowed] of Object.entries(workspace?.allowBuilds ?? {})) {
+      if (allowed === true) {
+        packageNames.add(packageName);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  return `--allow-scripts=${[...packageNames].sort().join(",")}`;
+}
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 const PACKAGE_INSTALL_GUARD_PATH = path.join("dist", "openclaw-install-guard");
@@ -833,15 +863,31 @@ export async function runGlobalPackageUpdateSteps(params: {
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
   retentionNodePath?: string;
+  preSwapStep?: (params: {
+    candidatePackageRoot: string;
+    currentPackageRoot: string;
+    retainedPackageRoot: string;
+  }) => Promise<{ steps: PackageUpdateStepResult[]; failedStep: PackageUpdateStepResult | null }>;
+  postLifecyclePreSwapStep?: (params: {
+    candidatePackageRoot: string;
+    currentPackageRoot: string;
+    retainedPackageRoot: string;
+  }) => Promise<{ steps: PackageUpdateStepResult[]; failedStep: PackageUpdateStepResult | null }>;
+  afterSwap?: (params: {
+    packageRoot: string;
+    retainedPackageRoot: string;
+  }) => Promise<void> | void;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
+  retainedPackageRoot: string | null;
 }> {
   let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
+  let retainedPackageRoot: string | null = null;
 
   try {
     const steps: PackageUpdateStepResult[] = [];
@@ -858,30 +904,10 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
         afterVersion: null,
         failedStep: pnpmPreflight.failedStep,
+        retainedPackageRoot,
       };
     }
     const currentPackageRoot = params.packageRoot ?? params.installTarget.packageRoot;
-    if (currentPackageRoot && params.retentionNodePath) {
-      const previousVersion = await readPackageVersionIfPresent(currentPackageRoot);
-      const retained = await retainCurrentPackageForUpdate({
-        packageRoot: currentPackageRoot,
-        globalRoot: params.installTarget.globalRoot,
-        expectedVersion: previousVersion,
-        runCommand: params.runCommand,
-        nodePath: params.retentionNodePath,
-        timeoutMs: params.timeoutMs,
-        env: params.env,
-      });
-      steps.push(retained.step);
-      if (!retained.retainedRoot) {
-        return {
-          steps,
-          verifiedPackageRoot: currentPackageRoot,
-          afterVersion: null,
-          failedStep: retained.step,
-        };
-      }
-    }
     // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
     // already verifies its reported bin is on PATH, so no PATH rewrite is needed.
     const effectiveInstallEnv = params.env;
@@ -909,6 +935,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: preparedInstall.failedStep,
+        retainedPackageRoot,
       };
     }
 
@@ -930,6 +957,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: preparedSpec.failedStep,
+        retainedPackageRoot,
       };
     }
 
@@ -950,15 +978,16 @@ export async function runGlobalPackageUpdateSteps(params: {
           preparedSpec.installCwd ?? process.cwd(),
         )
       : preparedSpec.installSpec;
+    const updateArgv = globalInstallArgs(
+      installCommandTarget,
+      updateInstallSpec,
+      undefined,
+      installLocation,
+      preparedSpec.installCwd,
+    );
     const updateStep = await params.runStep({
       name: "global update",
-      argv: globalInstallArgs(
-        installCommandTarget,
-        updateInstallSpec,
-        undefined,
-        installLocation,
-        preparedSpec.installCwd,
-      ),
+      argv: suppressStagedNpmLifecycle(updateArgv, params.preSwapStep ? stagedInstall : null),
       ...(updateCwd ? { cwd: updateCwd } : {}),
       ...installEnv,
       timeoutMs: params.timeoutMs,
@@ -981,6 +1010,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           verifiedPackageRoot: params.packageRoot ?? null,
           afterVersion: null,
           failedStep: preparedFallbackInstall.failedStep,
+          retainedPackageRoot,
         };
       }
 
@@ -994,7 +1024,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (fallbackArgv) {
         const fallbackStep = await params.runStep({
           name: "global update (omit optional)",
-          argv: fallbackArgv,
+          argv: suppressStagedNpmLifecycle(fallbackArgv, params.preSwapStep ? stagedInstall : null),
           ...(preparedSpec.installCwd ? { cwd: preparedSpec.installCwd } : {}),
           ...installEnv,
           timeoutMs: params.timeoutMs,
@@ -1057,6 +1087,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: replacementStep,
+        retainedPackageRoot,
       };
     }
     const livePackageRoot =
@@ -1110,6 +1141,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               verifiedPackageRoot,
               afterVersion: null,
               failedStep: markerStep,
+              retainedPackageRoot,
             };
           }
         }
@@ -1135,6 +1167,7 @@ export async function runGlobalPackageUpdateSteps(params: {
               verifiedPackageRoot,
               afterVersion: null,
               failedStep: lifecycleStep,
+              retainedPackageRoot,
             };
           }
         }
@@ -1156,6 +1189,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             verifiedPackageRoot,
             afterVersion: null,
             failedStep: finalizeStep,
+            retainedPackageRoot,
           };
         }
       }
@@ -1188,6 +1222,110 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
 
       if (stagedInstall && verificationErrors.length === 0) {
+        const liveBeforeSwap = currentPackageRoot ?? livePackageRoot;
+        if (liveBeforeSwap && params.retentionNodePath) {
+          const previousVersion = await readPackageVersionIfPresent(liveBeforeSwap);
+          const retained = await retainCurrentPackageForUpdate({
+            packageRoot: liveBeforeSwap,
+            globalRoot: params.installTarget.globalRoot,
+            expectedVersion: previousVersion,
+            runCommand: params.runCommand,
+            nodePath: params.retentionNodePath,
+            timeoutMs: params.timeoutMs,
+            env: params.env,
+          });
+          steps.push(retained.step);
+          retainedPackageRoot = retained.retainedRoot;
+          if (!retainedPackageRoot) {
+            return {
+              steps,
+              verifiedPackageRoot: liveBeforeSwap,
+              afterVersion: null,
+              failedStep: retained.step,
+              retainedPackageRoot,
+            };
+          }
+
+          if (params.preSwapStep || params.postLifecyclePreSwapStep) {
+            // The staged install itself used --ignore-scripts. Lifecycle gets an
+            // isolated OpenClaw state/config root, so candidate setup cannot
+            // mutate live state before read-only verification and snapshot.
+            const lifecycleStateDir = path.join(stagedInstall.prefix, ".openclaw-update-state");
+            const lifecycleAllowFlag = await resolveStagedNpmLifecycleAllowFlag({
+              packageRoot: verificationPackageRoot,
+              packageName: params.packageName,
+            });
+            const lifecycleStep = await params.runStep({
+              name: "staged package lifecycle",
+              argv: [
+                stagedInstall.installTarget.command,
+                "rebuild",
+                "-g",
+                "--prefix",
+                stagedInstall.prefix,
+                "--foreground-scripts",
+                lifecycleAllowFlag,
+                "--strict-allow-scripts",
+              ],
+              cwd: stagedInstall.prefix,
+              env: {
+                ...effectiveInstallEnv,
+                HOME: lifecycleStateDir,
+                OPENCLAW_HOME: lifecycleStateDir,
+                OPENCLAW_STATE_DIR: lifecycleStateDir,
+                OPENCLAW_CONFIG_PATH: path.join(lifecycleStateDir, "openclaw.json"),
+              },
+              timeoutMs: params.timeoutMs,
+            });
+            steps.push(lifecycleStep);
+            if (lifecycleStep.exitCode !== 0) {
+              return {
+                steps,
+                verifiedPackageRoot: liveBeforeSwap,
+                afterVersion: null,
+                failedStep: lifecycleStep,
+                retainedPackageRoot,
+              };
+            }
+          }
+
+          const postLifecyclePreSwap = await params.postLifecyclePreSwapStep?.({
+            candidatePackageRoot: verificationPackageRoot,
+            currentPackageRoot: liveBeforeSwap,
+            retainedPackageRoot,
+          });
+          if (postLifecyclePreSwap) {
+            steps.push(...postLifecyclePreSwap.steps);
+            if (postLifecyclePreSwap.failedStep) {
+              return {
+                steps,
+                verifiedPackageRoot: liveBeforeSwap,
+                afterVersion: null,
+                failedStep: postLifecyclePreSwap.failedStep,
+                retainedPackageRoot,
+              };
+            }
+          }
+
+          const preSwap = await params.preSwapStep?.({
+            candidatePackageRoot: verificationPackageRoot,
+            currentPackageRoot: liveBeforeSwap,
+            retainedPackageRoot,
+          });
+          if (preSwap) {
+            steps.push(...preSwap.steps);
+            if (preSwap.failedStep) {
+              return {
+                steps,
+                verifiedPackageRoot: liveBeforeSwap,
+                afterVersion: null,
+                failedStep: preSwap.failedStep,
+                retainedPackageRoot,
+              };
+            }
+          }
+        }
+
         const swapStep = await swapStagedNpmInstall({
           stage: stagedInstall,
           installTarget: params.installTarget,
@@ -1197,6 +1335,12 @@ export async function runGlobalPackageUpdateSteps(params: {
         if (swapStep.exitCode === 0) {
           verifiedPackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
           afterVersion = candidateVersion;
+          if (retainedPackageRoot && verifiedPackageRoot) {
+            await params.afterSwap?.({
+              packageRoot: verifiedPackageRoot,
+              retainedPackageRoot,
+            });
+          }
         }
       }
 
@@ -1227,6 +1371,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       verifiedPackageRoot,
       afterVersion,
       failedStep,
+      retainedPackageRoot,
     };
   } finally {
     await cleanupStagedNpmInstall(stagedInstall ?? null);

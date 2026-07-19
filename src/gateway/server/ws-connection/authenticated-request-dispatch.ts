@@ -17,6 +17,10 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "node.pair.remove",
 ]);
 
+export function isStartupProbeMethodAllowed(client: GatewayWsClient, method: string): boolean {
+  return client.startupProbeOnly !== true || method === "health";
+}
+
 export function createGatewayAuthenticatedRequestDispatcher(params: {
   handler: GatewayWsMessageHandlerParams;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
@@ -136,6 +140,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         ...logMeta,
       });
     };
+
+    if (!isStartupProbeMethodAllowed(client, req.method)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "update startup probe is limited to health checks"),
+      );
+      return;
+    }
 
     const requestDispatch = (async () => {
       const { handleGatewayRequest } = await import("../../server-methods.js");

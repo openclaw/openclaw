@@ -361,7 +361,7 @@ async function writeFakeSystemctl(): Promise<{ binDir: string; recordPath: strin
   const recordPath = path.join(binDir, "systemctl-calls.log");
   await fs.writeFile(
     path.join(binDir, "systemctl"),
-    `#!/bin/sh\necho "$@" >> '${recordPath}'\nexit 0\n`,
+    `#!/bin/sh\necho "$@" >> '${recordPath}'\n[ "$2" = "is-active" ] && exit 3\nexit 0\n`,
     { mode: 0o755 },
   );
   return { binDir, recordPath };
@@ -961,13 +961,17 @@ describe("managed service update handoff", () => {
     tempDirs.add(tmpDir);
     const staleDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}stale`);
     const freshDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}fresh`);
+    const recoveryDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}recovery`);
     const unrelatedDir = path.join(tmpDir, "openclaw-other-temp");
     await fs.mkdir(staleDir, { recursive: true });
     await fs.mkdir(freshDir, { recursive: true });
+    await fs.mkdir(recoveryDir, { recursive: true });
+    await fs.writeFile(path.join(recoveryDir, "recovery-locator.json"), "{}\n");
     await fs.mkdir(unrelatedDir, { recursive: true });
     const now = Date.now();
     const staleTime = new Date(now - 25 * 60 * 60_000);
     await fs.utimes(staleDir, staleTime, staleTime);
+    await fs.utimes(recoveryDir, staleTime, staleTime);
 
     await expect(
       cleanupStaleManagedServiceUpdateHandoffs({
@@ -979,6 +983,7 @@ describe("managed service update handoff", () => {
 
     await expect(pathExists(staleDir)).resolves.toBe(false);
     await expect(pathExists(freshDir)).resolves.toBe(true);
+    await expect(pathExists(recoveryDir)).resolves.toBe(true);
     await expect(pathExists(unrelatedDir)).resolves.toBe(true);
   });
 
