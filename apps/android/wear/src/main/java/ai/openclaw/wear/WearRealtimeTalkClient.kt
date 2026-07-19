@@ -21,14 +21,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.Locale
@@ -220,10 +223,20 @@ internal class WearRealtimeTalkClient(
       scope.launch {
         val buffer = ByteArray(frameBytes)
         try {
-          while (audioRecord === recorder && activeNodeId == nodeId) {
+          while (
+            currentCoroutineContext().isActive &&
+            _isCapturing.value &&
+            audioRecord === recorder &&
+            activeNodeId == nodeId
+          ) {
             val read = recorder.read(buffer, 0, buffer.size)
             val evenBytes = read - (read and 1)
-            if (evenBytes <= 0 || !_isCapturing.value || audioRecord !== recorder) continue
+            if (!_isCapturing.value || audioRecord !== recorder) break
+            check(read >= 0) { "Watch microphone read failed: $read" }
+            if (evenBytes == 0) {
+              yield()
+              continue
+            }
             sendInputFrame(buffer.copyOf(evenBytes))
           }
         } catch (err: CancellationException) {

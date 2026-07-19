@@ -660,6 +660,49 @@ class WearRealtimeTalkControllerTest {
     }
 
   @Test
+  fun `fails when queued provider output exceeds the byte budget`() =
+    runTest {
+      val outputStarted = CompletableDeferred<Unit>()
+      val releaseOutput = CompletableDeferred<Unit>()
+      val forcedChannelCloses = mutableListOf<String>()
+      val controller =
+        WearRealtimeTalkController(
+          scope = this,
+          isConnected = { true },
+          requestGateway = { method, _, _ ->
+            if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else """{"ok":true}"""
+          },
+          sendGatewayFrame = { _, _, _, _ -> },
+          sendWatchFrame = { _, type, _ ->
+            if (type == WearRealtimeAudioFrameType.OUTPUT_PCM) {
+              outputStarted.complete(Unit)
+              releaseOutput.await()
+            }
+          },
+          onForceCloseWatchChannel = { forcedChannelCloses += it },
+        )
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      val audio = ByteArray(WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES * 65)
+      val event =
+        """
+        {
+          "relaySessionId":"relay-1",
+          "type":"audio",
+          "audioBase64":"${Base64.encodeToString(audio, Base64.NO_WRAP)}"
+        }
+        """.trimIndent()
+
+      controller.handleGatewayEvent("talk.event", event)
+      outputStarted.await()
+      controller.handleGatewayEvent("talk.event", event)
+
+      assertEquals(WearRealtimeTalkStatus.ERROR, controller.snapshot.value.status)
+      assertEquals(listOf("watch-a"), forcedChannelCloses)
+      releaseOutput.complete(Unit)
+      runCurrent()
+    }
+
+  @Test
   fun `fails instead of dropping Watch audio when the input queue is full`() =
     runTest {
       val forcedChannelCloses = mutableListOf<String>()

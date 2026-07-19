@@ -41,6 +41,11 @@ private data class WearRealtimeOutputMessage(
   val payload: ByteArray,
 )
 
+private class WearRealtimeOutputQueue(
+  val messages: Channel<WearRealtimeOutputMessage>,
+  var retainedAudioBytes: Int = 0,
+)
+
 private data class WearRealtimeAttemptKey(
   val nodeId: String,
   val attemptId: String,
@@ -96,7 +101,8 @@ internal class WearRealtimeTalkController(
 
   private var audioFrames: Channel<ByteArray>? = null
   private var appendJob: Job? = null
-  private var outputMessages: Channel<WearRealtimeOutputMessage>? = null
+  private val outputQueueLock = Any()
+  private var outputQueue: WearRealtimeOutputQueue? = null
   private var outputJob: Job? = null
   private var playbackIdleJob: Job? = null
   private var playbackEndsAtMillis = 0L
@@ -361,6 +367,10 @@ internal class WearRealtimeTalkController(
         )
       "audio" -> {
         val encoded = obj["audioBase64"].asStringOrNull() ?: return
+        if (encoded.length > OUTPUT_QUEUE_BASE64_CHAR_CAPACITY) {
+          fail("Watch audio output exceeds the relay buffer")
+          return
+        }
         val bytes =
           runCatching { Base64.decode(encoded, Base64.DEFAULT) }
             .getOrNull()
@@ -445,16 +455,18 @@ internal class WearRealtimeTalkController(
   }
 
   private fun startOutputLoop(activeSessionId: String) {
-    outputMessages?.close()
-    outputJob?.cancel()
     val messages = Channel<WearRealtimeOutputMessage>(capacity = OUTPUT_QUEUE_CAPACITY)
-    outputMessages = messages
+    val queue = WearRealtimeOutputQueue(messages)
+    synchronized(outputQueueLock) { outputQueue.also { outputQueue = queue } }
+      ?.messages
+      ?.close()
+    outputJob?.cancel()
     outputJob =
       scope.launch {
         for (message in messages) {
-          if (sessionId != activeSessionId) continue
-          val nodeId = ownerNodeId ?: continue
           try {
+            if (sessionId != activeSessionId) continue
+            val nodeId = ownerNodeId ?: continue
             when (message.type) {
               WearRealtimeAudioFrameType.OUTPUT_PCM ->
                 chunkWearRealtimeOutput(message.payload).forEach { chunk ->
@@ -470,6 +482,13 @@ internal class WearRealtimeTalkController(
               expectedSessionId = activeSessionId,
             )
             break
+          } finally {
+            if (message.type == WearRealtimeAudioFrameType.OUTPUT_PCM) {
+              synchronized(outputQueueLock) {
+                queue.retainedAudioBytes =
+                  (queue.retainedAudioBytes - message.payload.size).coerceAtLeast(0)
+              }
+            }
           }
           when (message.type) {
             WearRealtimeAudioFrameType.OUTPUT_PCM -> {
@@ -505,11 +524,19 @@ internal class WearRealtimeTalkController(
     type: WearRealtimeAudioFrameType,
     payload: ByteArray,
   ): Boolean {
-    val messages = outputMessages
-    if (
-      messages == null ||
-      !messages.trySend(WearRealtimeOutputMessage(type, payload)).isSuccess
-    ) {
+    val accepted =
+      synchronized(outputQueueLock) {
+        val queue = outputQueue ?: return@synchronized false
+        val audioBytes = payload.size.takeIf { type == WearRealtimeAudioFrameType.OUTPUT_PCM } ?: 0
+        if (audioBytes > OUTPUT_QUEUE_BYTE_CAPACITY - queue.retainedAudioBytes) {
+          return@synchronized false
+        }
+        queue.retainedAudioBytes += audioBytes
+        queue.messages.trySend(WearRealtimeOutputMessage(type, payload)).isSuccess.also { sent ->
+          if (!sent) queue.retainedAudioBytes -= audioBytes
+        }
+      }
+    if (!accepted) {
       fail("Watch audio link is unavailable")
       return false
     }
@@ -655,8 +682,9 @@ internal class WearRealtimeTalkController(
         audioFrames = null
         appendJob?.cancel()
         appendJob = null
-        outputMessages?.close()
-        outputMessages = null
+        synchronized(outputQueueLock) { outputQueue.also { outputQueue = null } }
+          ?.messages
+          ?.close()
         outputJob?.cancel()
         outputJob = null
         playbackIdleJob?.cancel()
@@ -686,8 +714,9 @@ internal class WearRealtimeTalkController(
     audioFrames = null
     appendJob?.cancel()
     appendJob = null
-    outputMessages?.close()
-    outputMessages = null
+    synchronized(outputQueueLock) { outputQueue.also { outputQueue = null } }
+      ?.messages
+      ?.close()
     outputJob?.cancel()
     outputJob = null
     playbackIdleJob?.cancel()
@@ -711,6 +740,8 @@ internal class WearRealtimeTalkController(
     const val MAX_STATUS_LENGTH = 160
     const val INPUT_QUEUE_CAPACITY = 64
     const val OUTPUT_QUEUE_CAPACITY = 64
+    const val OUTPUT_QUEUE_BYTE_CAPACITY = WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES * 128
+    const val OUTPUT_QUEUE_BASE64_CHAR_CAPACITY = (OUTPUT_QUEUE_BYTE_CAPACITY + 2) / 3 * 4
     const val SESSION_CREATE_TIMEOUT_MILLIS = 15_000L
   }
 }
