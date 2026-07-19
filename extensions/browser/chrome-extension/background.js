@@ -524,19 +524,16 @@ async function capturePageShare(tab) {
 }
 
 async function captureDomSelection(tabId) {
+  // Main frame only, deliberately: all-frame probes reject wholesale on one
+  // inaccessible frame and return child frames in nondeterministic order.
+  // Child-frame selections are served by the context menu's selectionText;
+  // toolbar/shortcut on a child-frame selection sends the full page instead.
   try {
-    // allFrames: a highlighted passage can live in a same-origin child frame
-    // the main-frame probe cannot see; missing it would export the whole doc.
-    const injections = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
       func: () => window.getSelection()?.toString().trim() ?? "",
     });
-    for (const injection of injections ?? []) {
-      if (typeof injection?.result === "string" && injection.result) {
-        return injection.result;
-      }
-    }
-    return "";
+    return typeof injection?.result === "string" ? injection.result : "";
   } catch {
     return "";
   }
