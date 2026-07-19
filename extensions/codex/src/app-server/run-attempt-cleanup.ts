@@ -14,6 +14,20 @@ import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 
+function resolveCodexSessionEndedStatus(params: {
+  trajectoryTerminalStatus?: "success" | "error" | "interrupted";
+  aborted: boolean;
+  timedOut: boolean;
+}): "success" | "error" | "interrupted" | "cleanup" {
+  if (params.trajectoryTerminalStatus) {
+    return params.trajectoryTerminalStatus;
+  }
+  if (params.aborted || params.timedOut) {
+    return "interrupted";
+  }
+  return "cleanup";
+}
+
 export async function cleanupCodexAttempt(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
@@ -53,18 +67,9 @@ export async function cleanupCodexAttempt(
       timedOut: state.timedOut,
     }),
   });
-  if (trajectoryRecorder && !resourceState.trajectoryEndRecorded) {
-    trajectoryRecorder.recordEvent("session.ended", {
-      status:
-        state.timedOut || (runAbortController.signal.aborted && !state.clientClosedAbort)
-          ? "interrupted"
-          : "cleanup",
-      threadId: resourceState.thread.threadId,
-      turnId: activeTurnId,
-      timedOut: state.timedOut,
-      aborted: runAbortController.signal.aborted && !state.clientClosedAbort,
-    });
-  }
+
+  // Persist model.completed / completion events before teardown so a hung cleanup
+  // cannot strand the earlier trajectory events in memory (#102014).
   await runAgentCleanupStep({
     runId: params.runId,
     sessionId: params.sessionId,
@@ -111,4 +116,33 @@ export async function cleanupCodexAttempt(
   freezeRunTerminalOutcome();
   params.replyOperation?.detachBackend(handle);
   clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+
+  // Record session.ended after cleanup so its timestamp reflects actual session
+  // end rather than model.completed (#102014).
+  const aborted = runAbortController.signal.aborted && !state.clientClosedAbort;
+  const timedOut = resourceState.trajectoryTerminalTimedOut ?? state.timedOut;
+  if (trajectoryRecorder && !resourceState.trajectoryEndRecorded) {
+    trajectoryRecorder.recordEvent("session.ended", {
+      status: resolveCodexSessionEndedStatus({
+        trajectoryTerminalStatus: resourceState.trajectoryTerminalStatus,
+        aborted,
+        timedOut,
+      }),
+      threadId: resourceState.thread.threadId,
+      turnId: activeTurnId,
+      timedOut,
+      aborted,
+      yieldDetected:
+        resourceState.trajectoryTerminalYieldDetected ??
+        prompt.context.attemptTools.toolState.yieldDetected,
+      promptError: resourceState.trajectoryTerminalPromptError,
+    });
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush-session-ended",
+      log: embeddedAgentLog,
+      cleanup: async () => trajectoryRecorder.flush(),
+    });
+  }
 }
