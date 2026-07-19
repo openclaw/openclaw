@@ -140,7 +140,7 @@ const EXTENSION_RELAY_PORT_OFFSET = 8;
 /** Username half of the relay's Basic credential; the password is the derived token. */
 const EXTENSION_RELAY_CDP_USER = "openclaw";
 /** Environment variable that overrides managed Chrome headless mode. */
-const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
+const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 /** Source that determined managed Chrome headless mode. */
 export type ManagedBrowserHeadlessSource =
@@ -603,7 +603,7 @@ export function resolveManagedBrowserHeadlessMode(
 
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
-  const envHeadless = parseBooleanValue(env[OPENCLAW_BROWSER_HEADLESS_ENV]);
+  const envHeadless = parseBooleanValue(env[BROWSER_HEADLESS_ENV_KEY]);
   if (envHeadless !== undefined) {
     return { headless: envHeadless, source: "env" };
   }
@@ -648,7 +648,7 @@ export function getManagedBrowserMissingDisplayError(
     mode.source === "request"
       ? "request override"
       : mode.source === "env"
-        ? `${OPENCLAW_BROWSER_HEADLESS_ENV}=0`
+        ? `${BROWSER_HEADLESS_ENV_KEY}=0`
         : mode.source === "profile"
           ? `browser.profiles.${profile.name}.headless=false`
           : "browser.headless=false";
@@ -656,7 +656,7 @@ export function getManagedBrowserMissingDisplayError(
     message:
       `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
       "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +
-      `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`,
+      `Set ${BROWSER_HEADLESS_ENV_KEY}=1, remove the headed override, or launch under Xvfb.`,
     headlessSource: mode.source,
   };
 }
