@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
-import { resolveCodexUpstreamForkBoundaryFromTurns } from "./upstream-fork-boundary.js";
+import {
+  resolveCodexUpstreamForkBoundary,
+  resolveCodexUpstreamForkBoundaryFromTurns,
+} from "./upstream-fork-boundary.js";
 
 function item(type: string, overrides: Record<string, unknown> = {}): CodexThreadItem {
   return { id: `${type}-item`, type, ...overrides } as CodexThreadItem;
@@ -24,7 +27,11 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
 
     expect(result).toEqual({
       ok: true,
-      boundary: { beforeTurnId: "turn-2", targetTurnId: "turn-2" },
+      boundary: {
+        beforeTurnId: "turn-2",
+        targetTurnId: "turn-2",
+        retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+      },
     });
   });
 
@@ -66,7 +73,11 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
 
     expect(result).toEqual({
       ok: true,
-      boundary: { beforeTurnId: "turn-2", targetTurnId: "turn-2" },
+      boundary: {
+        beforeTurnId: "turn-2",
+        targetTurnId: "turn-2",
+        retainedMarker: { turnId: "turn-review", userMessageCount: 1 },
+      },
     });
   });
 
@@ -88,5 +99,25 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
 
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
+  });
+});
+
+describe("resolveCodexUpstreamForkBoundary", () => {
+  it("rejects paginated-history threads before reading turns", async () => {
+    const readThread = vi.fn(async () => ({ id: "thread-1", historyMode: "paginated" }));
+    const result = await resolveCodexUpstreamForkBoundary({
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:upstream",
+      storePath: "/tmp/does-not-matter",
+      entryId: "entry-1",
+      threadId: "thread-1",
+      control: { readThread } as unknown as Parameters<
+        typeof resolveCodexUpstreamForkBoundary
+      >[0]["control"],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "upstream-unavailable" });
+    expect(readThread).toHaveBeenCalledWith("thread-1", false);
   });
 });

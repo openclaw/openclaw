@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 
-const boundary = { beforeTurnId: "turn-2", targetTurnId: "turn-2" } as const;
+const boundary = {
+  beforeTurnId: "turn-2",
+  targetTurnId: "turn-2",
+  retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+} as const;
 
 vi.mock("./upstream-fork-boundary.js", () => ({
   resolveCodexUpstreamForkBoundary: vi.fn(async () => ({ ok: true, boundary })),
@@ -74,7 +78,7 @@ describe("forkCodexUpstreamSession", () => {
     expect(result).toMatchObject({
       status: "forked",
       upstream: {
-        marker: { turnId: null, userMessageCount: 0 },
+        marker: { turnId: "turn-1", userMessageCount: 1 },
         threadId: "thread-forked",
       },
     });

@@ -9,7 +9,13 @@ export type CodexUpstreamForkBoundaryFailureCode =
   | "drift-mismatch"
   | "upstream-unavailable";
 
-export type CodexUpstreamForkBoundary = { beforeTurnId: string; targetTurnId: string };
+export type CodexUpstreamForkBoundary = {
+  beforeTurnId: string;
+  targetTurnId: string;
+  /** Baseline for the forked thread: the last retained turn, so the upstream
+   * monitor does not replay retained history as fresh external activity. */
+  retainedMarker: { turnId: string; userMessageCount: number };
+};
 
 export type CodexUpstreamForkBoundaryResult =
   | { ok: true; boundary: CodexUpstreamForkBoundary }
@@ -156,7 +162,24 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "Forking before the first message of a Codex session is not supported. Start a new session instead.",
         );
       }
-      return { ok: true, boundary: { beforeTurnId: turn.id, targetTurnId: turn.id } };
+      const retained = params.turns[turnIndex - 1];
+      if (!retained) {
+        return failure(
+          "drift-mismatch",
+          "The message could not be matched to the Codex thread. Refresh the session and try again.",
+        );
+      }
+      return {
+        ok: true,
+        boundary: {
+          beforeTurnId: turn.id,
+          targetTurnId: turn.id,
+          retainedMarker: {
+            turnId: retained.id,
+            userMessageCount: retained.items.filter((item) => item.type === "userMessage").length,
+          },
+        },
+      };
     }
   }
   return failure(
@@ -203,6 +226,15 @@ export async function resolveCodexUpstreamForkBoundary(params: {
   control: CodexSessionCatalogControl;
 }): Promise<CodexUpstreamForkBoundaryResult> {
   try {
+    // Paginated-history threads reject itemsView "full" turn reads (thread/items/list
+    // is required); fork support for them is future work — fail closed with intent.
+    const thread = await params.control.readThread(params.threadId, false);
+    if (thread.historyMode === "paginated") {
+      return failure(
+        "upstream-unavailable",
+        "This Codex thread uses paginated history, which cannot be forked from OpenClaw yet.",
+      );
+    }
     const entries = await readVisibleSessionTranscriptMessageEntries({
       agentId: params.agentId,
       sessionId: params.sessionId,

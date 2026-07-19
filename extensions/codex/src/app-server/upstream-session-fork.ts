@@ -97,7 +97,9 @@ export async function forkCodexUpstreamSession(
         upstream: {
           threadId,
           ref: { connectionFingerprint, threadId },
-          marker: { turnId: null, userMessageCount: 0 },
+          // Baseline at the last retained turn: a null marker would replay the fork's
+          // retained history as fresh external activity on the first monitor tick.
+          marker: resolved.boundary.retainedMarker,
         },
         attach: async (target) => {
           attachedIdentity = sessionBindingIdentity({
