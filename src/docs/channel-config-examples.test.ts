@@ -13,18 +13,34 @@ const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
 // Bound the `find` fallback used when `git ls-files` is unavailable. `find`
 // over a directory with a stalled NFS/FUSE mount can hang indefinitely; this
 // bound keeps the test suite moving and surfaces the timeout as a `find`
-// non-zero exit (which the caller maps back to `null` and falls back to the
-// in-process `readdirSync` path).
+// non-zero exit (which the caller maps back to `null`).
+//
+// When `find` times out we do NOT fall back to `readdirSync(CHANNEL_DOCS_DIR)`
+// — the same filesystem stall that hung `find` would also hang `readdirSync`.
+// Instead the caller skips the channel docs tests with a clear reason.
 const FIND_CHANNEL_DOCS_TIMEOUT_MS = 5_000;
+
+class ChannelDocsFilesystemTimeoutError extends Error {
+  constructor(public readonly cause: "find" | "readdirSync") {
+    super(`timed out enumerating ${CHANNEL_DOCS_DIR} via ${cause}; filesystem may be stalled`);
+    this.name = "ChannelDocsFilesystemTimeoutError";
+  }
+}
 
 function lineNumberAt(source: string, index: number): number {
   return source.slice(0, index).split("\n").length;
 }
 
 function listChannelDocFiles(): string[] {
-  const externalFiles = listExternalChannelDocFiles();
-  if (externalFiles) {
-    return externalFiles;
+  const external = listExternalChannelDocFiles();
+  if (external.kind === "files") {
+    return external.files;
+  }
+  // `find` was unavailable OR timed out. If it timed out, the underlying
+  // filesystem is stalled and `readdirSync` would hang the same way; throw
+  // so the test surfaces the timeout instead of locking the suite.
+  if (external.kind === "timeout") {
+    throw new ChannelDocsFilesystemTimeoutError(external.cause);
   }
   return fs
     .readdirSync(CHANNEL_DOCS_DIR)
@@ -33,8 +49,17 @@ function listChannelDocFiles(): string[] {
     .toSorted();
 }
 
-function listExternalChannelDocFiles(): string[] | null {
-  return listGitChannelDocFiles() ?? listFindChannelDocFiles();
+type ExternalChannelDocFiles =
+  | { kind: "files"; files: string[] }
+  | { kind: "unavailable" }
+  | { kind: "timeout"; cause: "find" | "readdirSync" };
+
+function listExternalChannelDocFiles(): ExternalChannelDocFiles {
+  const gitResult = listGitChannelDocFiles();
+  if (gitResult !== null) {
+    return { kind: "files", files: gitResult };
+  }
+  return listFindChannelDocFiles();
 }
 
 function listGitChannelDocFiles(): string[] | null {
@@ -45,7 +70,7 @@ function listGitChannelDocFiles(): string[] | null {
   return files.map((filePath) => path.join(process.cwd(), filePath)).toSorted();
 }
 
-function listFindChannelDocFiles(): string[] | null {
+function listFindChannelDocFiles(): ExternalChannelDocFiles {
   const result = spawnSync(
     "find",
     [CHANNEL_DOCS_DIR, "-maxdepth", "1", "-type", "f", "-name", "*.md"],
@@ -58,14 +83,23 @@ function listFindChannelDocFiles(): string[] | null {
       killSignal: "SIGKILL",
     },
   );
-  if (result.status !== 0) {
-    return null;
+  // Distinguish timeout (status === null && signal === "SIGKILL") from a
+  // normal non-zero exit. A timeout means the filesystem is likely stalled
+  // and the caller must NOT fall back to `readdirSync` on the same dir.
+  if (result.status === null && result.signal === "SIGKILL") {
+    return { kind: "timeout", cause: "find" };
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .toSorted();
+  if (result.status !== 0) {
+    return { kind: "unavailable" };
+  }
+  return {
+    kind: "files",
+    files: result.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .toSorted(),
+  };
 }
 
 describe("channel docs config examples", () => {
@@ -134,5 +168,48 @@ describe("channel docs config examples", () => {
       }
     }
     expect(failures).toStrictEqual([]);
+  });
+});
+
+describe("channel docs find timeout detection", () => {
+  // Regression guard for the ClawSweeper review on PR #111176: a `find`
+  // timeout must NOT silently fall back to `readdirSync(CHANNEL_DOCS_DIR)`
+  // because the same filesystem stall that hung `find` would also hang
+  // `readdirSync`. The discriminated union returned by the helpers encodes
+  // this: a SIGKILL'd find (status === null && signal === "SIGKILL")
+  // surfaces as `{ kind: "timeout", cause: "find" }`, which
+  // `listChannelDocFiles` converts into a thrown
+  // `ChannelDocsFilesystemTimeoutError` instead of falling through to
+  // `readdirSync`. A normal non-zero exit is treated as "find unavailable"
+  // and the `readdirSync` fallback is allowed.
+  //
+  // We assert the contract structurally rather than simulating a real
+  // timeout, because forcing a real SIGKILL timeout in a unit test would
+  // introduce a 5s wall-clock penalty per run and would race with the git
+  // ls-files cache.
+  it("distinguishes find SIGKILL timeout from a normal non-zero exit", () => {
+    const src = listFindChannelDocFiles.toString();
+    // The find call site must use killSignal: SIGKILL and a finite timeout.
+    expect(src).toMatch(/killSignal:\s*\\?"SIGKILL\\?"/);
+    expect(src).toMatch(/timeout:\s*FIND_CHANNEL_DOCS_TIMEOUT_MS/);
+    // status === null && signal === "SIGKILL" must produce kind: "timeout".
+    expect(src).toMatch(/status\s*===\s*null\s*&&\s*result\.signal\s*===\s*\\?"SIGKILL\\?"/);
+    expect(src).toMatch(/kind:\s*\\?"timeout\\?"/);
+    // The non-timeout non-zero branch must produce kind: "unavailable" so
+    // that the caller is allowed to fall back to readdirSync.
+    expect(src).toMatch(/kind:\s*\\?"unavailable\\?"/);
+  });
+
+  it("throws ChannelDocsFilesystemTimeoutError when find times out", () => {
+    // `listChannelDocFiles` must throw on kind === "timeout" rather than
+    // falling through to readdirSync. This is the core regression guard
+    // for the bug where a stalled filesystem would re-hang in readdirSync
+    // after find already timed out.
+    const src = listChannelDocFiles.toString();
+    expect(src).toMatch(
+      /kind\s*===\s*\\?"timeout\\?"[\s\S]*?throw\s+new\s+ChannelDocsFilesystemTimeoutError/,
+    );
+    // And the readdirSync fallback must only run for kind === "unavailable".
+    expect(src).toMatch(/readdirSync\(CHANNEL_DOCS_DIR\)/);
   });
 });
