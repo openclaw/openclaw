@@ -319,6 +319,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: JSON5 reference
   - H3: Account config keys
   - H2: Multiple bots
+  - H2: Session discussions
   - H2: Reply modes
   - H2: Command menu
   - H2: Durable media delivery

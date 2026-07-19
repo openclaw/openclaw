@@ -622,6 +622,7 @@ describe("handleClickClackInbound", () => {
     const discussionCallIndex = buildSessionKeyMock.mock.calls.findIndex(
       ([call]) =>
         call.agentId === "research" &&
+        call.peer != null &&
         call.peer.kind === "channel" &&
         call.peer.id.startsWith("disc-"),
     );
