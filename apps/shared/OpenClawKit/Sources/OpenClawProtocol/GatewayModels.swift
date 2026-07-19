@@ -7544,6 +7544,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let sensitive: Bool?
     public let action: AnyCodable
     public let agentdraft: String?
+    public let agentid: String?
     public let needsapproval: Bool?
     public let proposalid: String?
     public let question: [String: AnyCodable]?
@@ -7554,6 +7555,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         sensitive: Bool? = nil,
         action: AnyCodable,
         agentdraft: String? = nil,
+        agentid: String? = nil,
         needsapproval: Bool? = nil,
         proposalid: String? = nil,
         question: [String: AnyCodable]? = nil)
@@ -7563,6 +7565,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.sensitive = sensitive
         self.action = action
         self.agentdraft = agentdraft
+        self.agentid = agentid
         self.needsapproval = needsapproval
         self.proposalid = proposalid
         self.question = question
@@ -7574,6 +7577,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case sensitive
         case action
         case agentdraft = "agentDraft"
+        case agentid = "agentId"
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
         case question
@@ -9142,14 +9146,14 @@ public struct AgentSummary: Codable, Sendable {
 
 public struct AgentsCreateParams: Codable, Sendable {
     public let name: String
-    public let workspace: String
+    public let workspace: String?
     public let model: String?
     public let emoji: String?
     public let avatar: String?
 
     public init(
         name: String,
-        workspace: String,
+        workspace: String? = nil,
         model: String? = nil,
         emoji: String? = nil,
         avatar: String? = nil)
