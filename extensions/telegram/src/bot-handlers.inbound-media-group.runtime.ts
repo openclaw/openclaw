@@ -59,7 +59,8 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
   };
 
 /** A caption paired with its 1-based album position. */
-type MediaGroupCaption = {
+/** @internal */
+export type MediaGroupCaption = {
   albumIndex: number;
   caption: string;
 };
@@ -69,7 +70,8 @@ type MediaGroupCaption = {
  * 1-based album position so labels match the order in the user's album
  * even when some images lack captions (sparse).
  */
-function collectMediaGroupCaptions(
+/** @internal */
+export function collectMediaGroupCaptions(
   messages: Array<{ caption?: string }>,
 ): MediaGroupCaption[] {
   const captions: MediaGroupCaption[] = [];
