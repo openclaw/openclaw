@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -15,6 +15,10 @@ import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
+import {
+  markRetainedManagedNpmInstall,
+  resolveRetainedManagedNpmInstallPackageInfo,
+} from "./managed-npm-retention.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const PACKAGE_NAME = "@openclaw/discord";
@@ -69,7 +73,27 @@ function writeManagedFlat(stateDir: string, version: string): string {
   return path.join(flatProjectRoot, "node_modules", ...PACKAGE_NAME.split("/"));
 }
 
+function writeManagedLegacy(stateDir: string, version: string): string {
+  return writeManagedNpmPlugin({
+    stateDir,
+    packageName: PACKAGE_NAME,
+    pluginId: PLUGIN_ID,
+    version,
+    layout: "legacy",
+  });
+}
+
+function setInstallTimestamp(packageDir: string, timestampMs: number): void {
+  if (!resolveRetainedManagedNpmInstallPackageInfo(packageDir)) {
+    throw new Error(`Expected managed npm package dir: ${packageDir}`);
+  }
+  const timestamp = new Date(timestampMs);
+  fs.utimesSync(path.join(packageDir, "package.json"), timestamp, timestamp);
+  fs.utimesSync(packageDir, timestamp, timestamp);
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
   for (const dir of tempDirs.splice(0)) {
@@ -78,7 +102,7 @@ afterEach(() => {
 });
 
 describe("managed npm generation-dir loader precedence", () => {
-  it("repoints to a newer managed generation when the persisted install still exists", async () => {
+  it("loads the authoritative generation after an upgrade leaves the old flat install", async () => {
     const stateDir = makeStateDir();
     const staleVersion = "2026.6.11";
     const activeVersion = "2026.7.1";
@@ -97,19 +121,19 @@ describe("managed npm generation-dir loader precedence", () => {
         discord: {
           source: "npm",
           spec: `${PACKAGE_NAME}@latest`,
-          installPath: stalePackageDir,
-          version: staleVersion,
+          installPath: activePackageDir,
+          version: activeVersion,
           resolvedName: PACKAGE_NAME,
-          resolvedVersion: staleVersion,
-          resolvedSpec: `${PACKAGE_NAME}@${staleVersion}`,
-          integrity: "sha512-stale",
+          resolvedVersion: activeVersion,
+          resolvedSpec: `${PACKAGE_NAME}@${activeVersion}`,
+          integrity: "sha512-active",
         },
       },
       { stateDir, candidates: [] },
     );
 
     const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    const record = expectRecordFields(loaded.discord, {
+    expectRecordFields(loaded.discord, {
       source: "npm",
       spec: `${PACKAGE_NAME}@latest`,
       installPath: activePackageDir,
@@ -117,8 +141,9 @@ describe("managed npm generation-dir loader precedence", () => {
       resolvedName: PACKAGE_NAME,
       resolvedVersion: activeVersion,
       resolvedSpec: `${PACKAGE_NAME}@${activeVersion}`,
+      integrity: "sha512-active",
     });
-    expect(record.integrity).toBeUndefined();
+    expect(fs.existsSync(stalePackageDir)).toBe(true);
 
     clearLoadInstalledPluginIndexInstallRecordsCache();
     expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).discord, {
@@ -127,24 +152,21 @@ describe("managed npm generation-dir loader precedence", () => {
     });
   });
 
-  it("adopts the highest version when several generations are present", async () => {
+  it("preserves an intentional downgrade when a newer generation lingers", async () => {
     const stateDir = makeStateDir();
-    // On-disk order of generation dirs is hash-based, so this pins that recovery
-    // selects by version rather than by whichever project root sorts last.
-    writeManagedGeneration({ stateDir, version: "2.0.0", generationKey: "discord-two" });
-    const newestPackageDir = writeManagedGeneration({
+    const newerPackageDir = writeManagedGeneration({
       stateDir,
       version: "3.0.0",
       generationKey: "discord-three",
     });
-    const stalePackageDir = writeManagedFlat(stateDir, "1.0.0");
+    const downgradedPackageDir = writeManagedFlat(stateDir, "1.0.0");
 
     await writePersistedInstalledPluginIndexInstallRecords(
       {
         discord: {
           source: "npm",
           spec: `${PACKAGE_NAME}@1.0.0`,
-          installPath: stalePackageDir,
+          installPath: downgradedPackageDir,
           version: "1.0.0",
           resolvedName: PACKAGE_NAME,
           resolvedVersion: "1.0.0",
@@ -156,35 +178,127 @@ describe("managed npm generation-dir loader precedence", () => {
 
     const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
     expectRecordFields(loaded.discord, {
-      installPath: newestPackageDir,
-      resolvedVersion: "3.0.0",
+      installPath: downgradedPackageDir,
+      resolvedVersion: "1.0.0",
     });
+    expect(fs.existsSync(newerPackageDir)).toBe(true);
   });
 
-  it("keeps a current managed install when only an older generation lingers", async () => {
+  it("uses install recency with a structured warning when no authority exists", async () => {
     const stateDir = makeStateDir();
-    writeManagedGeneration({ stateDir, version: "2026.6.11", generationKey: "discord-stale" });
-    const activePackageDir = writeManagedFlat(stateDir, "2026.7.1");
+    const recentPackageDir = writeManagedGeneration({
+      stateDir,
+      version: "1.0.0",
+      generationKey: "discord-recent",
+    });
+    const olderPackageDir = writeManagedFlat(stateDir, "9.0.0");
+    setInstallTimestamp(olderPackageDir, Date.UTC(2026, 0, 1));
+    setInstallTimestamp(recentPackageDir, Date.UTC(2026, 0, 2));
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.discord, {
+      installPath: recentPackageDir,
+      resolvedVersion: "1.0.0",
+    });
+    expect(emitWarning).toHaveBeenCalledWith(
+      expect.stringContaining("without an authoritative active path"),
+      expect.objectContaining({
+        code: "OPENCLAW_PLUGIN_INSTALL_RECOVERY_FALLBACK",
+        type: "OpenClawPluginRecoveryWarning",
+      }),
+    );
+  });
+
+  it("warns when install recency replaces a dangling managed authority", async () => {
+    const stateDir = makeStateDir();
+    const npmDir = path.join(stateDir, "npm");
+    const recentPackageDir = writeManagedGeneration({
+      stateDir,
+      version: "1.0.0",
+      generationKey: "discord-recent-after-dangling",
+    });
+    const olderPackageDir = writeManagedFlat(stateDir, "9.0.0");
+    setInstallTimestamp(olderPackageDir, Date.UTC(2026, 0, 1));
+    setInstallTimestamp(recentPackageDir, Date.UTC(2026, 0, 2));
+    const missingPackageDir = path.join(
+      resolvePluginNpmGenerationProjectDir({
+        npmDir,
+        packageName: PACKAGE_NAME,
+        generationKey: "discord-missing",
+      }),
+      "node_modules",
+      ...PACKAGE_NAME.split("/"),
+    );
     await writePersistedInstalledPluginIndexInstallRecords(
       {
         discord: {
           source: "npm",
-          spec: `${PACKAGE_NAME}@2026.7.1`,
-          installPath: activePackageDir,
-          version: "2026.7.1",
+          spec: `${PACKAGE_NAME}@latest`,
+          installPath: missingPackageDir,
           resolvedName: PACKAGE_NAME,
-          resolvedVersion: "2026.7.1",
-          resolvedSpec: `${PACKAGE_NAME}@2026.7.1`,
+          resolvedVersion: "2.0.0",
         },
       },
       { stateDir, candidates: [] },
     );
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
     const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
     expectRecordFields(loaded.discord, {
-      installPath: activePackageDir,
-      resolvedVersion: "2026.7.1",
+      installPath: recentPackageDir,
+      resolvedVersion: "1.0.0",
+    });
+    expect(emitWarning).toHaveBeenCalledWith(
+      expect.stringContaining("without an authoritative active path"),
+      expect.objectContaining({ code: "OPENCLAW_PLUGIN_INSTALL_RECOVERY_FALLBACK" }),
+    );
+  });
+
+  it("does not treat unrelated legacy-root metadata changes as plugin recency", async () => {
+    const stateDir = makeStateDir();
+    const recentPackageDir = writeManagedGeneration({
+      stateDir,
+      version: "1.0.0",
+      generationKey: "discord-recent-from-legacy",
+    });
+    const olderPackageDir = writeManagedLegacy(stateDir, "9.0.0");
+    setInstallTimestamp(olderPackageDir, Date.UTC(2026, 0, 1));
+    setInstallTimestamp(recentPackageDir, Date.UTC(2026, 0, 2));
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/unrelated",
+      pluginId: "unrelated",
+      version: "1.0.0",
+      layout: "legacy",
+    });
+    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.discord, {
+      installPath: recentPackageDir,
+      resolvedVersion: "1.0.0",
+    });
+  });
+
+  it("excludes doctor-retired generations when recovering without authority", async () => {
+    const stateDir = makeStateDir();
+    const retiredPackageDir = writeManagedGeneration({
+      stateDir,
+      version: "3.0.0",
+      generationKey: "discord-retired",
+    });
+    const recoveredPackageDir = writeManagedFlat(stateDir, "1.0.0");
+    await markRetainedManagedNpmInstall({
+      packageDir: retiredPackageDir,
+      pluginId: PLUGIN_ID,
+      reason: "test-retired-generation",
+    });
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.discord, {
+      installPath: recoveredPackageDir,
+      resolvedVersion: "1.0.0",
     });
   });
 

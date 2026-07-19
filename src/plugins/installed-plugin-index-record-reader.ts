@@ -121,12 +121,30 @@ function resolveRecoveredManagedNpmPluginId(params: {
   return validatePluginId(pluginId) ? undefined : pluginId;
 }
 
-function buildRecoveredManagedNpmInstallRecordsForRoot(
+export type RecoveredManagedNpmInstallCandidate = {
+  installRecord: PluginInstallRecord;
+  installTimestampMs: number;
+  pluginId: string;
+};
+
+function readManagedNpmInstallTimestampMs(packageDir: string): number {
+  for (const filePath of [path.join(packageDir, "package.json"), packageDir]) {
+    try {
+      return fs.statSync(filePath).mtimeMs;
+    } catch {
+      // Recovery already verified the package directory. Missing package metadata
+      // simply leaves the package directory mtime as the final recency signal.
+    }
+  }
+  return 0;
+}
+
+function buildRecoveredManagedNpmInstallCandidatesForRoot(
   npmRoot: string,
-): Record<string, PluginInstallRecord> {
+): RecoveredManagedNpmInstallCandidate[] {
   const rootManifest = readJsonObjectFileSync(path.join(npmRoot, "package.json"));
   const dependencies = readStringRecord(rootManifest?.dependencies);
-  const records: Record<string, PluginInstallRecord> = {};
+  const candidates: RecoveredManagedNpmInstallCandidate[] = [];
   for (const [packageName, dependencySpec] of Object.entries(dependencies)) {
     const packageDir = path.join(npmRoot, "node_modules", ...packageName.split("/"));
     let stat: fs.Stats;
@@ -150,52 +168,29 @@ function buildRecoveredManagedNpmInstallRecordsForRoot(
       typeof packageManifest?.version === "string" && packageManifest.version.trim()
         ? packageManifest.version.trim()
         : undefined;
-    records[pluginId] = {
-      source: "npm",
-      spec: `${packageName}@${dependencySpec}`,
-      installPath: packageDir,
-      ...(version ? { version, resolvedName: packageName, resolvedVersion: version } : {}),
-      ...(version ? { resolvedSpec: `${packageName}@${version}` } : {}),
-    };
+    candidates.push({
+      pluginId,
+      installTimestampMs: readManagedNpmInstallTimestampMs(packageDir),
+      installRecord: {
+        source: "npm",
+        spec: `${packageName}@${dependencySpec}`,
+        installPath: packageDir,
+        ...(version ? { version, resolvedName: packageName, resolvedVersion: version } : {}),
+        ...(version ? { resolvedSpec: `${packageName}@${version}` } : {}),
+      },
+    });
   }
-  return records;
+  return candidates;
 }
 
-function pickNewerRecoveredManagedNpmRecord(
-  existing: PluginInstallRecord | undefined,
-  candidate: PluginInstallRecord,
-): PluginInstallRecord {
-  if (!existing) {
-    return candidate;
-  }
-  const existingVersion = readInstallRecordVersion(existing);
-  const candidateVersion = readInstallRecordVersion(candidate);
-  // A legacy flat dir and one or more `__openclaw-generation__` dirs can hold
-  // the same plugin at once, and their on-disk order is unrelated to version.
-  // Keep the highest version so recovery reflects the newest install rather than
-  // whichever directory sorts last. On ties prefer the later candidate so a
-  // generation dir still supersedes the legacy flat dir.
-  if (existingVersion !== undefined && candidateVersion !== undefined) {
-    return compareValidSemver(existingVersion, candidateVersion) === 1 ? existing : candidate;
-  }
-  return candidate;
-}
-
-function buildRecoveredManagedNpmInstallRecords(
+/** Lists recoverable managed npm installs without assigning active precedence. */
+export function listRecoveredManagedNpmInstallCandidates(
   options: InstalledPluginIndexStoreOptions = {},
-): Record<string, PluginInstallRecord> {
+): RecoveredManagedNpmInstallCandidate[] {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
-  const records: Record<string, PluginInstallRecord> = {};
-  const absorb = (source: Record<string, PluginInstallRecord>): void => {
-    for (const [pluginId, record] of Object.entries(source)) {
-      records[pluginId] = pickNewerRecoveredManagedNpmRecord(records[pluginId], record);
-    }
-  };
-  absorb(buildRecoveredManagedNpmInstallRecordsForRoot(npmRoot));
-  for (const projectRoot of listManagedPluginNpmProjectRootsSync(npmRoot)) {
-    absorb(buildRecoveredManagedNpmInstallRecordsForRoot(projectRoot));
-  }
-  return records;
+  return [npmRoot, ...listManagedPluginNpmProjectRootsSync(npmRoot)].flatMap((projectRoot) =>
+    buildRecoveredManagedNpmInstallCandidatesForRoot(projectRoot),
+  );
 }
 
 function recordsShareInstallPath(
@@ -206,6 +201,79 @@ function recordsShareInstallPath(
     return false;
   }
   return path.resolve(left.installPath) === path.resolve(right.installPath);
+}
+
+function pickMostRecentRecoveredManagedNpmCandidate(
+  candidates: readonly RecoveredManagedNpmInstallCandidate[],
+): RecoveredManagedNpmInstallCandidate {
+  return candidates.toSorted((left, right) => {
+    const byTimestamp = right.installTimestampMs - left.installTimestampMs;
+    if (byTimestamp !== 0) {
+      return byTimestamp;
+    }
+    return (right.installRecord.installPath ?? "").localeCompare(
+      left.installRecord.installPath ?? "",
+    );
+  })[0]!;
+}
+
+function emitManagedNpmRecoveryFallbackWarning(params: {
+  pluginId: string;
+  selected: RecoveredManagedNpmInstallCandidate;
+  candidates: readonly RecoveredManagedNpmInstallCandidate[];
+}): void {
+  process.emitWarning(
+    `Managed npm recovery found ${params.candidates.length} installs for plugin "${params.pluginId}" without an authoritative active path; selected the most recently installed candidate. Run \`openclaw doctor --fix\` to persist and retire stale generations.`,
+    {
+      code: "OPENCLAW_PLUGIN_INSTALL_RECOVERY_FALLBACK",
+      type: "OpenClawPluginRecoveryWarning",
+      detail: JSON.stringify({
+        pluginId: params.pluginId,
+        selectedInstallPath: params.selected.installRecord.installPath,
+        candidates: params.candidates.map((candidate) => ({
+          installPath: candidate.installRecord.installPath,
+          installTimestampMs: candidate.installTimestampMs,
+        })),
+      }),
+    },
+  );
+}
+
+function buildRecoveredManagedNpmInstallRecords(
+  persisted: Record<string, PluginInstallRecord> | null,
+  options: InstalledPluginIndexStoreOptions = {},
+): Record<string, PluginInstallRecord> {
+  const npmRoot = resolveRecoveredManagedNpmRoot(options);
+  const records: Record<string, PluginInstallRecord> = {};
+  const candidatesByPluginId = new Map<string, RecoveredManagedNpmInstallCandidate[]>();
+  for (const candidate of listRecoveredManagedNpmInstallCandidates(options)) {
+    const candidates = candidatesByPluginId.get(candidate.pluginId) ?? [];
+    candidates.push(candidate);
+    candidatesByPluginId.set(candidate.pluginId, candidates);
+  }
+  for (const [pluginId, candidates] of candidatesByPluginId) {
+    // The install ledger is the active-generation authority. Directory order,
+    // version, and recency may only break ties when that authority is absent.
+    const persistedRecord = persisted?.[pluginId];
+    const authoritative = candidates.find((candidate) =>
+      recordsShareInstallPath(persistedRecord, candidate.installRecord),
+    );
+    const selected = authoritative ?? pickMostRecentRecoveredManagedNpmCandidate(candidates);
+    records[pluginId] = selected.installRecord;
+    const recoversUnavailableManagedPath = isUnavailableManagedNpmInstallRecord({
+      npmRoot,
+      persisted: persistedRecord,
+      recovered: selected.installRecord,
+    });
+    if (
+      !authoritative &&
+      candidates.length > 1 &&
+      (!persistedRecord || recoversUnavailableManagedPath)
+    ) {
+      emitManagedNpmRecoveryFallbackWarning({ pluginId, selected, candidates });
+    }
+  }
+  return records;
 }
 
 function readInstallRecordVersion(record: PluginInstallRecord | undefined): string | undefined {
@@ -282,26 +350,6 @@ function mergeRecoveredManagedNpmMetadata(
   return next;
 }
 
-function isManagedNpmInstallPath(installPath: string | undefined, npmRoot: string): boolean {
-  if (!installPath) {
-    return false;
-  }
-  const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(installPath);
-  if (!packageInfo) {
-    return false;
-  }
-  const normalize = (value: string): string => {
-    const resolved = path.resolve(value);
-    return process.platform === "win32" ? normalizeWindowsPathForComparison(resolved) : resolved;
-  };
-  const projectRoot = normalize(packageInfo.projectRoot);
-  return (
-    projectRoot === normalize(npmRoot) ||
-    normalize(path.dirname(packageInfo.projectRoot)) ===
-      normalize(resolvePluginNpmProjectsDir(npmRoot))
-  );
-}
-
 function mergeRecoveredManagedNpmRecord(params: {
   npmRoot: string;
   persisted: PluginInstallRecord | undefined;
@@ -322,26 +370,8 @@ function mergeRecoveredManagedNpmRecord(params: {
   ) {
     return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered);
   }
-  // A managed install/update writes the new version into a distinct managed
-  // project directory (for example an `__openclaw-generation__` dir) without
-  // removing the prior one, so the persisted record can keep pointing at an
-  // older, still-present install and the runtime loads the stale version. When
-  // the freshly-discovered managed install is a strictly newer version at a
-  // different path, repoint to it. The strict-newer comparison keeps a lingering
-  // older generation directory from superseding a current install, and the
-  // managed-path guard leaves intentional custom/outside npm installs untouched.
-  if (
-    params.persisted?.source === "npm" &&
-    isManagedNpmInstallPath(params.persisted.installPath, params.npmRoot) &&
-    !recordsShareInstallPath(params.persisted, params.recovered) &&
-    persistedVersion !== undefined &&
-    recoveredVersion !== undefined &&
-    compareValidSemver(persistedVersion, recoveredVersion) === -1
-  ) {
-    return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered, {
-      preservePersistedSpec: true,
-    });
-  }
+  // Missing managed paths were recovered above. Any remaining persisted path is
+  // the active ledger choice, including an intentional downgrade or custom install.
   return params.persisted ?? params.recovered;
 }
 
@@ -350,7 +380,7 @@ function mergeRecoveredManagedNpmInstallRecords(
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
-  const recovered = buildRecoveredManagedNpmInstallRecords(options);
+  const recovered = buildRecoveredManagedNpmInstallRecords(persisted, options);
   const merged: Record<string, PluginInstallRecord> = { ...persisted };
   for (const [pluginId, record] of Object.entries(recovered)) {
     merged[pluginId] = mergeRecoveredManagedNpmRecord({

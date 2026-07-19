@@ -28,14 +28,20 @@ import {
   type StaleLocalBundledPluginInstallRecord,
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  listStaleManagedNpmInstallGenerations,
+  maybeRepairStaleManagedNpmInstallGenerations,
+  PLUGIN_REGISTRY_CHECK_ID,
+  staleManagedNpmInstallGenerationToHealthFinding,
+  staleManagedNpmInstallGenerationToRepairEffect,
+  type StaleManagedNpmInstallGenerationIssue,
+} from "./doctor-plugin-generations.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
   type PluginRegistryInstallMigrationParams,
 } from "./doctor/shared/plugin-registry-migration.js";
-
-const PLUGIN_REGISTRY_CHECK_ID = "core/doctor/plugin-registry";
 
 type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParams, "config"> &
   InstalledPluginIndexRecordStoreOptions & {
@@ -84,16 +90,16 @@ type PluginRegistryHealthIssue =
       kind: "managed-npm-package-unreadable";
       packageDir: string;
       reason: string;
-    };
+    }
+  | StaleManagedNpmInstallGenerationIssue;
 
 type ManagedNpmPackageReadFailure = {
   packageDir: string;
   reason: string;
 };
 
-function formatPackageReadFailure(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+const formatPackageReadFailure = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
   const parsed = tryReadJsonSync(filePath);
@@ -513,6 +519,7 @@ export async function detectPluginRegistryHealthIssues(
       stalePath: record.stalePath,
     });
   }
+  issues.push(...(await listStaleManagedNpmInstallGenerations(params)));
   const managedNpmAudit = await listManagedNpmOpenClawPeerLinkIssues(params);
   for (const issue of managedNpmAudit.peerLinkIssues) {
     issues.push({
@@ -583,6 +590,8 @@ export function pluginRegistryIssueToHealthFinding(
         path: issue.packageDir,
         fixHint: "Restore access to the package files, then run `openclaw doctor` again.",
       };
+    case "stale-managed-npm-install-generation":
+      return staleManagedNpmInstallGenerationToHealthFinding(issue);
   }
   return assertNeverPluginRegistryIssue(issue);
 }
@@ -626,6 +635,8 @@ export function pluginRegistryIssueToRepairEffect(
         target: issue.packageDir,
         dryRunSafe: false,
       };
+    case "stale-managed-npm-install-generation":
+      return staleManagedNpmInstallGenerationToRepairEffect(issue);
   }
   return assertNeverPluginRegistryIssue(issue);
 }
@@ -657,6 +668,8 @@ export async function maybeRepairPluginRegistryState(
   const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
+  const retiredStaleManagedNpmInstallGenerations =
+    await maybeRepairStaleManagedNpmInstallGenerations(params);
   const repairedManagedNpmOpenClawPeerLinks = await maybeRepairManagedNpmOpenClawPeerLinks(params);
   const stalePluginIdsToRemove = [
     ...new Set([
@@ -664,6 +677,8 @@ export async function maybeRepairPluginRegistryState(
       ...removedStaleLocalBundledPluginIds,
     ]),
   ];
+  const shouldPersistRepairedInstallRecords =
+    stalePluginIdsToRemove.length > 0 || retiredStaleManagedNpmInstallGenerations;
   if (!params.prompter.shouldRepair) {
     if (preflight.action === "migrate") {
       note(
@@ -680,7 +695,7 @@ export async function maybeRepairPluginRegistryState(
   if (preflight.action === "migrate") {
     const result = await migratePluginRegistryForInstall({
       ...migrationParams,
-      ...(stalePluginIdsToRemove.length > 0
+      ...(shouldPersistRepairedInstallRecords
         ? {
             installRecords: await loadInstallRecordsWithoutPluginIds(
               params,
@@ -704,12 +719,13 @@ export async function maybeRepairPluginRegistryState(
     preflight.action === "skip-existing" ||
     removedStaleManagedNpmBundledPlugins ||
     removedStaleLocalBundledPluginIds.length > 0 ||
+    retiredStaleManagedNpmInstallGenerations ||
     repairedManagedNpmOpenClawPeerLinks
   ) {
     const index = await refreshPluginRegistry({
       ...migrationParams,
       reason: "migration",
-      ...(stalePluginIdsToRemove.length > 0
+      ...(shouldPersistRepairedInstallRecords
         ? {
             installRecords: await loadInstallRecordsWithoutPluginIds(
               params,
