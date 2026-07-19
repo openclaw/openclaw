@@ -24,6 +24,10 @@ import {
 } from "./inference-runtime.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 
+vi.mock("../../agents/sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (owner: unknown) => owner,
+}));
+
 type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
   loadCatalog: typeof loadModelCatalog;

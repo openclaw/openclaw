@@ -13,7 +13,6 @@ import { bindModelLlmRuntime, getModelLlmRuntime } from "../llm/model-runtime-bi
 import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
-  Context,
   Model,
   ModelThinkingLevel,
   ThinkingLevel as SimpleCompletionThinkingLevel,
@@ -52,6 +51,7 @@ import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js";
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
+import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
@@ -450,6 +450,7 @@ export async function prepareSimpleCompletionModel(params: {
         })
       : fingerprintResolvedProviderAuth(auth)
     : undefined;
+  const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
 
   return {
     model: bindModelLlmRuntime(
@@ -457,7 +458,7 @@ export async function prepareSimpleCompletionModel(params: {
         applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
         params.cfg,
       ),
-      resolved.modelRegistry.llmRuntime,
+      modelRuntime.llmRuntime,
     ),
     auth: resolvedAuth,
     modelRegistry: resolved.modelRegistry,
@@ -526,7 +527,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
 export async function completeWithPreparedSimpleCompletionModel(params: {
   model: Model;
   auth: ResolvedProviderAuth;
-  context: Context;
+  context: Parameters<typeof completeSimple>[1];
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
 }): Promise<AssistantMessage> {

@@ -158,6 +158,7 @@ import {
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import type { ModelRegistry } from "../sessions/model-registry.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
@@ -265,7 +266,7 @@ function resolveCompactionProviderStream(params: {
     cfg: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.effectiveWorkspace,
-    apiRegistry: params.modelRegistry.apiRegistry,
+    apiRegistry: getModelRegistryRuntime(params.modelRegistry).apiRegistry,
   });
 }
 
@@ -1531,7 +1532,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           // through the same transport/payload shaping stack as normal turns.
           await prepareCompactionSessionAgent({
             session,
-            llmRuntime: modelRegistry.llmRuntime,
+            llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
             providerStreamFn,
             sessionId: params.sessionId,
             signal: runAbortController.signal,

@@ -11,6 +11,7 @@ import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
 import { protectPreparedProviderRuntimeAuth } from "../agents/provider-secret-egress.js";
 import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-plan/credential-scoped-model.js";
+import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runtime.js";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
@@ -61,6 +62,7 @@ async function prepareResolvedImageRuntime(
   modelRegistry: Awaited<ReturnType<typeof resolveModelAsync>>["modelRegistry"],
 ): Promise<{ apiKey: string; model: Model }> {
   let model = resolvedModel;
+  const modelRuntime = getModelRegistryRuntime(modelRegistry);
   const apiKeyInfo = await getApiKeyForModel({
     model,
     cfg: params.cfg,
@@ -118,7 +120,7 @@ async function prepareResolvedImageRuntime(
       apiKey: "",
       model: bindModelLlmRuntime(
         applySecretRefHeaderSentinels(model, params.cfg),
-        modelRegistry.llmRuntime,
+        modelRuntime.llmRuntime,
       ),
     };
   }
@@ -153,7 +155,7 @@ async function prepareResolvedImageRuntime(
     apiKey,
     model: bindModelLlmRuntime(
       applySecretRefHeaderSentinels(model, params.cfg),
-      modelRegistry.llmRuntime,
+      modelRuntime.llmRuntime,
     ),
   };
 }

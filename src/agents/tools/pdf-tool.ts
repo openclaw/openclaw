@@ -22,6 +22,7 @@ import { applySecretRefHeaderSentinels } from "../model-auth.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -244,11 +245,12 @@ async function runPdfPrompt(params: {
 
       // PDF-only model selections may not have loaded their provider plugin yet.
       // Register before complete() so plugin-owned APIs resolve on first use.
+      const modelRuntime = getModelRegistryRuntime(modelRegistry);
       registerProviderStreamForModel({
         model,
         cfg: effectiveCfg,
         agentDir: params.agentDir,
-        apiRegistry: modelRegistry.apiRegistry,
+        apiRegistry: modelRuntime.apiRegistry,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       });
 
@@ -266,7 +268,7 @@ async function runPdfPrompt(params: {
           images: [],
         }));
         const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
-        const message = await modelRegistry.llmRuntime.complete(model, context, {
+        const message = await modelRuntime.llmRuntime.complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
         });
@@ -275,7 +277,7 @@ async function runPdfPrompt(params: {
       }
 
       const context = buildPdfExtractionContext(params.prompt, extractions, model);
-      const message = await modelRegistry.llmRuntime.complete(model, context, {
+      const message = await modelRuntime.llmRuntime.complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
       });

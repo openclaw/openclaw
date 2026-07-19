@@ -13,6 +13,7 @@ import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
@@ -108,7 +109,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     | undefined
   > {
-    if (this.agent.streamFn !== this.sessionModelRegistry.llmRuntime.streamSimple) {
+    if (
+      this.agent.streamFn !==
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+    ) {
       return this.getCompactionRequestAuth(model);
     }
 

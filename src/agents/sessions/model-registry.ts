@@ -4,19 +4,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  createApiRegistry,
-  createLlmRuntime,
-  type ApiRegistry,
-  type LlmRuntime,
-} from "@openclaw/ai";
-import { getPublishedApiProviders } from "@openclaw/ai/internal/runtime";
-import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
-import "../../llm/ai-transport-host.js";
-import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -39,6 +29,11 @@ import {
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
+import {
+  getModelRegistryRuntime,
+  initializeModelRegistryRuntime,
+  resetModelRegistryRuntime,
+} from "./model-registry-runtime.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   clearConfigValueCache,
@@ -321,8 +316,6 @@ export class ModelRegistry {
   private registeredProviders: Map<string, ProviderConfigInput> = new Map();
   private loadError: string | undefined = undefined;
   readonly authStorage: AuthStorage;
-  readonly apiRegistry: ApiRegistry;
-  readonly llmRuntime: LlmRuntime;
   private modelsJsonPath: string | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
 
@@ -332,10 +325,7 @@ export class ModelRegistry {
     options: ModelRegistryOptions = {},
   ) {
     this.authStorage = authStorage;
-    this.apiRegistry = createApiRegistry();
-    this.llmRuntime = createLlmRuntime(this.apiRegistry);
-    bindStreamLlmRuntime(this.llmRuntime.streamSimple, this.llmRuntime);
-    this.resetApiRuntime();
+    initializeModelRegistryRuntime(this);
     this.modelsJsonPath = modelsJsonPath;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
       ...(options.pluginMetadataSnapshot
@@ -369,23 +359,13 @@ export class ModelRegistry {
     this.loadError = undefined;
 
     // Rebuild this lifecycle's API/OAuth registrations from current provider state.
-    this.resetApiRuntime();
+    resetModelRegistryRuntime(this);
     getAuthStorageOAuthProviderRegistry(this.authStorage).reset();
 
     this.loadModels();
 
     for (const [providerName, config] of this.registeredProviders.entries()) {
       this.applyProviderConfig(providerName, config);
-    }
-  }
-
-  private resetApiRuntime(): void {
-    this.apiRegistry.clearApiProviders();
-    registerBuiltInApiProviders(this.apiRegistry);
-    // The Plugin SDK registry is a shipped compatibility facade. Snapshot it at
-    // lifecycle publication so request-time routing never depends on mutable global state.
-    for (const provider of getPublishedApiProviders()) {
-      this.apiRegistry.registerApiProvider(provider);
     }
   }
 
@@ -883,7 +863,7 @@ export class ModelRegistry {
 
     if (config.streamSimple) {
       const streamSimple = config.streamSimple;
-      this.apiRegistry.registerApiProvider(
+      getModelRegistryRuntime(this).apiRegistry.registerApiProvider(
         {
           api: config.api!,
           stream: (model, context, options) =>

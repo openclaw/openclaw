@@ -12,6 +12,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
@@ -617,16 +618,18 @@ describe("ModelRegistry API provider ownership", () => {
       api: "test-session-api",
       streamSimple: streamB,
     });
+    const runtimeA = getModelRegistryRuntime(sessionA);
+    const runtimeB = getModelRegistryRuntime(sessionB);
 
-    expect(sessionA.apiRegistry.getApiProvider("test-session-api")?.streamSimple).not.toBe(
-      sessionB.apiRegistry.getApiProvider("test-session-api")?.streamSimple,
+    expect(runtimeA.apiRegistry.getApiProvider("test-session-api")?.streamSimple).not.toBe(
+      runtimeB.apiRegistry.getApiProvider("test-session-api")?.streamSimple,
     );
     expect(getApiProvider("test-session-api")).toBeUndefined();
 
     sessionB.unregisterProvider("session-b");
 
-    expect(sessionA.apiRegistry.getApiProvider("test-session-api")).toBeDefined();
-    expect(sessionB.apiRegistry.getApiProvider("test-session-api")).toBeUndefined();
+    expect(runtimeA.apiRegistry.getApiProvider("test-session-api")).toBeDefined();
+    expect(runtimeB.apiRegistry.getApiProvider("test-session-api")).toBeUndefined();
   });
 
   it("imports published SDK providers without copying request-generated aliases", () => {
@@ -644,9 +647,10 @@ describe("ModelRegistry API provider ownership", () => {
 
     try {
       const session = ModelRegistry.inMemory(AuthStorage.inMemory());
+      const runtime = getModelRegistryRuntime(session);
 
-      expect(session.apiRegistry.getApiProvider("test-published-api")).toBeDefined();
-      expect(session.apiRegistry.getApiProvider("test-request-api")).toBeUndefined();
+      expect(runtime.apiRegistry.getApiProvider("test-published-api")).toBeDefined();
+      expect(runtime.apiRegistry.getApiProvider("test-request-api")).toBeUndefined();
     } finally {
       unregisterApiProviders(publishedSource);
       defaultApiRegistry.unregisterApiProviders(requestSource);

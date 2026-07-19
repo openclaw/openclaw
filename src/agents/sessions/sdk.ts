@@ -29,6 +29,7 @@ import type {
   ToolDefinition,
 } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
@@ -438,6 +439,7 @@ export async function createAgentSession(
   const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
     options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
 
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: "",
@@ -453,7 +455,7 @@ export async function createAgentSession(
       }
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return modelRegistry.llmRuntime.streamSimple(modelResult, context, {
+      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,

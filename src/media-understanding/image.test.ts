@@ -166,6 +166,12 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   },
 }));
 
+vi.mock("../agents/sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (owner: { llmRuntime?: unknown }) => ({
+    llmRuntime: owner.llmRuntime ?? { complete: completeMock },
+  }),
+}));
+
 vi.mock("../plugin-sdk/provider-auth.js", () => ({
   buildCopilotIdeHeaders: () => ({
     "Editor-Version": "vscode/1.107.0",

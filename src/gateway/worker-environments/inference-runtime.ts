@@ -38,6 +38,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { resolveProviderModelRouteAuthRequirement } from "../../agents/provider-model-route-auth.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
+import { getModelRegistryRuntime } from "../../agents/sessions/model-registry-runtime.js";
 import {
   prepareSimpleCompletionModel,
   type PreparedSimpleCompletionModel,
@@ -646,10 +647,11 @@ export function createWorkerInferenceExecutor(
       workspaceDir: approved.workspaceDir,
     });
     const authValue = approved.prepared.auth.apiKey;
+    const modelRegistryRuntime = getModelRegistryRuntime(approved.prepared.modelRegistry);
     const streamAgent = {
       streamFn: dependencies.resolveStream({
-        llmRuntime: approved.prepared.modelRegistry.llmRuntime,
-        currentStreamFn: approved.prepared.modelRegistry.llmRuntime.streamSimple,
+        llmRuntime: modelRegistryRuntime.llmRuntime,
+        currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
         ...(providerStream ? { providerStreamFn: providerStream } : {}),
         sessionId: request.sessionId,
         signal,

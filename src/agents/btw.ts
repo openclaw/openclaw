@@ -80,6 +80,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
+import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 
@@ -1144,6 +1145,7 @@ export async function runBtwSideQuestion(
     }
   }
   runtimeModel = applySecretRefHeaderSentinels(runtimeModel, params.cfg);
+  const modelRegistryRuntime = getModelRegistryRuntime(runtime.modelRegistry);
 
   // Use the provider's own stream fn so providers like Ollama (which build
   // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct
@@ -1155,11 +1157,11 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
-    apiRegistry: runtime.modelRegistry.apiRegistry,
+    apiRegistry: modelRegistryRuntime.apiRegistry,
   });
   const streamFn = resolveEmbeddedAgentStreamFn({
-    llmRuntime: runtime.modelRegistry.llmRuntime,
-    currentStreamFn: runtime.modelRegistry.llmRuntime.streamSimple,
+    llmRuntime: modelRegistryRuntime.llmRuntime,
+    currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
     providerStreamFn,
     sessionId,
     signal: params.opts?.abortSignal,
