@@ -187,6 +187,14 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
+  "agents.defaults.typingMode":
+    'Controls when typing starts for agents: "never", "instant", "thinking", or "message". Per-agent typingMode overrides this default.',
+  "agents.defaults.typingIntervalSeconds":
+    "Controls typing-indicator keepalive cadence in seconds. Per-agent typingIntervalSeconds overrides this default.",
+  "agents.list.*.typingMode":
+    "Overrides the default typing start policy for one agent without changing other agents.",
+  "agents.list.*.typingIntervalSeconds":
+    "Overrides the default typing-indicator keepalive cadence for one agent.",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
   "commands.native":

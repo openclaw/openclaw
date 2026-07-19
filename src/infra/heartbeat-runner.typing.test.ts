@@ -142,7 +142,7 @@ describe("runHeartbeatOnce heartbeat typing", () => {
       const cfg = createHeartbeatConfig({
         tmpDir,
         storePath,
-        session: { typingMode: "never" },
+        agents: { defaults: { typingMode: "never" } },
       });
       await seedTelegramSession(storePath, cfg);
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });

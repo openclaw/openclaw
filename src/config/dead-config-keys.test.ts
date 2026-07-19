@@ -87,6 +87,7 @@ describe("dead config keys", () => {
     "gateway.http.endpoints.chatCompletions.maxTotalImageBytes",
     "gateway.http.endpoints.responses.maxBodyBytes",
     "session.typingIntervalSeconds",
+    "session.typingMode",
     "session.writeLock",
     "session.agentToAgent",
     "cron.maxConcurrentRuns",

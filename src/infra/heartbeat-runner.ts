@@ -556,18 +556,24 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
   );
 }
 
-function isHeartbeatTypingEnabled(params: { cfg: OpenClawConfig; hasChatDelivery: boolean }) {
+function isHeartbeatTypingEnabled(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  hasChatDelivery: boolean;
+}) {
   if (!params.hasChatDelivery) {
     return false;
   }
-  const agentCfg = params.cfg.agents?.defaults;
-  const typingMode = params.cfg.session?.typingMode ?? agentCfg?.typingMode;
+  const typingMode =
+    resolveAgentConfig(params.cfg, params.agentId)?.typingMode ??
+    params.cfg.agents?.defaults?.typingMode;
   return typingMode !== "never";
 }
 
-function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
-  const agentCfg = cfg.agents?.defaults;
-  const configured = agentCfg?.typingIntervalSeconds;
+function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig, agentId: string) {
+  const configured =
+    resolveAgentConfig(cfg, agentId)?.typingIntervalSeconds ??
+    cfg.agents?.defaults?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
@@ -1852,13 +1858,14 @@ export async function runHeartbeatOnce(opts: {
   const hasChatDelivery = Boolean(
     delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
   );
-  const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg);
+  const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg, agentId);
   const heartbeatChannelPlugin =
     delivery.channel !== "none" ? resolveHeartbeatChannelPlugin(delivery.channel) : undefined;
   const heartbeatTyping =
     delivery.channel !== "none" &&
     isHeartbeatTypingEnabled({
       cfg,
+      agentId,
       hasChatDelivery,
     })
       ? createHeartbeatTypingCallbacks({

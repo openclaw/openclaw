@@ -7,6 +7,7 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
+  resolveAgentConfig,
   type AutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -618,7 +619,7 @@ export async function runPreparedReply(
     originatingChannel: ctx.OriginatingChannel,
   });
   const typingMode = resolveTypingMode({
-    configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
+    configured: resolveAgentConfig(cfg, agentId)?.typingMode ?? agentCfg?.typingMode,
     isGroupChat,
     wasMentioned,
     isHeartbeat,

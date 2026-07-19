@@ -38,6 +38,29 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   expect(unmatchedFragments).toStrictEqual([]);
 }
 
+describe("legacy session typing config migrate", () => {
+  it("moves session typingMode to agent defaults", () => {
+    const res = migrateLegacyConfigForTest({ session: { typingMode: "thinking" } });
+
+    expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain("Moved session.typingMode → agents.defaults.typingMode.");
+  });
+
+  it("preserves session typing precedence over an existing agent default", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: { defaults: { typingMode: "message" } },
+      session: { typingMode: "thinking" },
+    });
+
+    expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Moved session.typingMode → agents.defaults.typingMode (replaced the previously shadowed agent default).",
+    );
+  });
+});
+
 describe("compatibility binding repair migrate", () => {
   it("prunes bindings for missing agents when agents.list is valid", () => {
     const res = repairBindingsForTest({

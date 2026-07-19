@@ -164,7 +164,7 @@ describe("processDiscordMessage ack reactions", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
     const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: { session: { typingMode: "never" } },
+      cfg: { agents: { defaults: { typingMode: "never" } } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -199,7 +199,7 @@ describe("processDiscordMessage ack reactions", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
     const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: { session: { typingMode: "message" } },
+      cfg: { agents: { defaults: { typingMode: "message" } } },
     });
 
     await runProcessDiscordMessage(ctx);

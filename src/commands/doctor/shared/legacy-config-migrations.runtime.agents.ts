@@ -1564,6 +1564,32 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
+    id: "session.typingMode->agents.defaults.typingMode",
+    describe: "Move session typing mode to agent defaults",
+    legacyRules: [
+      {
+        path: ["session", "typingMode"],
+        message:
+          'session.typingMode moved to agents.defaults.typingMode. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      if (!session || !Object.hasOwn(session, "typingMode")) {
+        return;
+      }
+      const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+      const replacedDefault = defaults.typingMode !== undefined;
+      defaults.typingMode = session.typingMode;
+      changes.push(
+        replacedDefault
+          ? "Moved session.typingMode → agents.defaults.typingMode (replaced the previously shadowed agent default)."
+          : "Moved session.typingMode → agents.defaults.typingMode.",
+      );
+      delete session.typingMode;
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "heartbeat->agents.defaults.heartbeat",
     describe: "Move top-level heartbeat to agents.defaults.heartbeat/channels.defaults.heartbeat",
     legacyRules: [HEARTBEAT_RULE],

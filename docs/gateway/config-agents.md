@@ -737,7 +737,7 @@ See [Streaming](/concepts/streaming) for behavior + chunking details.
 
 - Defaults: `instant` for direct chats/mentions, `message` for unmentioned group chats.
 - `typingIntervalSeconds` default: `6`.
-- Per-session overrides: `session.typingMode`.
+- Per-agent overrides: `agents.list[].typingMode` and `agents.list[].typingIntervalSeconds`.
 
 See [Typing Indicators](/concepts/typing-indicators).
 

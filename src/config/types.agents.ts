@@ -127,6 +127,10 @@ export type AgentConfig = {
   };
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
+  /** Optional per-agent typing start policy. */
+  typingMode?: AgentDefaultsConfig["typingMode"];
+  /** Optional per-agent typing keepalive cadence. */
+  typingIntervalSeconds?: AgentDefaultsConfig["typingIntervalSeconds"];
   /** Optional per-agent TTS overrides, deep-merged over top-level tts. */
   tts?: TtsConfig;
   /** Optional per-agent skills subsystem overrides. */
