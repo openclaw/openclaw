@@ -30,6 +30,7 @@ import {
   type ClawUpdateCapabilityChange,
 } from "./update-capability-changes.js";
 import { makeEmptyClawUpdatePlan } from "./update-plan-empty.js";
+import { summarizeClawUpdatePlan } from "./update-plan-summary.js";
 import {
   CLAW_UPDATE_PLAN_SCHEMA_VERSION,
   type ClawUpdateAction,
@@ -48,25 +49,6 @@ function digest(value: unknown): string {
 
 function diagnostic(code: string, path: string, message: string): ClawDiagnostic {
   return { level: "error", code, phase: "plan", path, message };
-}
-
-function summarize(
-  actions: ClawUpdateAction[],
-  capabilityChanges: ClawUpdateCapabilityChange[],
-): ClawUpdatePlan["summary"] {
-  return {
-    totalActions: actions.length,
-    added: actions.filter((action) => action.action === "add").length,
-    changed: actions.filter((action) => action.action === "change").length,
-    removed: actions.filter((action) => action.action === "remove").length,
-    released: actions.filter((action) => action.action === "release").length,
-    unchanged: actions.filter((action) => action.action === "unchanged").length,
-    manual: actions.filter((action) => action.action === "manual").length,
-    blocked: actions.filter((action) => action.blocked).length,
-    capabilityChanges: capabilityChanges.length,
-    capabilityEscalations: capabilityChanges.filter((change) => change.requiresDistinctConsent)
-      .length,
-  };
 }
 
 function manualState(state: string): boolean {
@@ -704,7 +686,7 @@ export async function buildClawUpdatePlan(params: {
         version: params.targetSource.version,
         integrity: params.targetSource.integrity,
       },
-      summary: summarize(actions, capabilityChanges),
+      summary: summarizeClawUpdatePlan(actions, capabilityChanges),
       actions,
       capabilityChanges,
       blockers,
