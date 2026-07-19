@@ -390,9 +390,16 @@ runs:
         fi
         if [ "$sticky_snapshot_matches" = "true" ]; then
           bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"
+        fi
+        if [ "$sticky_snapshot_matches" = "true" ] && [ "$STICKY_WRITER" != "true" ]; then
           echo "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install"
         else
-          if [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ]; then
+          if [ "$sticky_snapshot_matches" = "true" ]; then
+            # The canonical writer reconciles even a matching snapshot. Readers
+            # cannot distinguish a complete tree from a poisoned partial one;
+            # one bounded install here repairs it before the next fanout.
+            echo "Sticky dependency writer is reconciling the matching snapshot"
+          elif [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ]; then
             echo "Sticky dependency snapshot is stale (disk: $sticky_fingerprint, want: $OPENCLAW_STICKY_DEPS_FINGERPRINT); reinstalling"
           fi
           # A stale marker must not survive a mid-install failure: the commit
