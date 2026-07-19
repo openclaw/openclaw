@@ -7,7 +7,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
@@ -168,6 +169,43 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.readUInt32LE(24)).toBe(24_000);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Gemini PCM base64", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "audio/L16;codec=pcm;rate=24000",
+                      data: "not-base64!",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Reject this response.",
+        cfg: {},
+        providerConfig: { apiKey: "fixture-api-key" },
+        target: "audio-file",
+        timeoutMs: 12_345,
+      }),
+    ).rejects.toThrow("Google TTS returned malformed base64 audio data");
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(2);
   });
 
   it("bounds oversized Gemini TTS success JSON responses and cancels the stream", async () => {
