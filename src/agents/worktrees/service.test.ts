@@ -456,7 +456,9 @@ describe("ManagedWorktreeService", () => {
     });
 
     expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
-    expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
+    }
     expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
   });
 
@@ -511,8 +513,7 @@ describe("ManagedWorktreeService", () => {
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "provisioned.env\n");
     await git(repo, "add", ".gitignore", ".worktreeinclude");
     await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, "provisioned.env"), "source value\n");
-    const mode = (await fs.stat(path.join(repo, "provisioned.env"))).mode & 0o7777;
+    await fs.writeFile(path.join(repo, "provisioned.env"), "source value\n", { mode: 0o644 });
     const created = await service.create({ repoRoot: repo, name: "roundtrip" });
     const originalHead = await git(created.path, "rev-parse", "HEAD");
     await fs.writeFile(path.join(created.path, "README.md"), "changed\n");
