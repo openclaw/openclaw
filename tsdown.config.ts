@@ -303,7 +303,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
-    extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
@@ -502,8 +501,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
-    // Internal compat artifact for the root-alias.cjs lazy loader.
-    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
