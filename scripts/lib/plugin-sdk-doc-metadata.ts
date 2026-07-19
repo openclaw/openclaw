@@ -12,9 +12,6 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
-  index: {
-    category: "legacy",
-  },
   core: {
     category: "core",
   },
@@ -63,9 +60,6 @@ export const pluginSdkDocMetadata = {
   "channel-config-schema": {
     category: "channel",
   },
-  "channel-config-schema-legacy": {
-    category: "channel",
-  },
   "chat-channel-ids": {
     category: "channel",
   },
@@ -85,9 +79,6 @@ export const pluginSdkDocMetadata = {
     category: "channel",
   },
   "command-auth": {
-    category: "channel",
-  },
-  zalouser: {
     category: "channel",
   },
   "command-status": {

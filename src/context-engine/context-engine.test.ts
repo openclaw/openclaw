@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
@@ -699,7 +699,7 @@ describe("Engine contract tests", () => {
   });
 
   it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
-    registerMemoryPromptSection(({ citationsMode }) => [
+    registerTestMemoryPromptBuilder(({ citationsMode }) => [
       "## Memory Recall",
       `citations=${citationsMode ?? "auto"}`,
       "",
@@ -714,7 +714,7 @@ describe("Engine contract tests", () => {
   });
 
   it("passes agent context through delegated memory prompt assembly", () => {
-    registerMemoryPromptSection(({ agentId, agentSessionKey, sandboxed }) => [
+    registerTestMemoryPromptBuilder(({ agentId, agentSessionKey, sandboxed }) => [
       "## Agent Memory",
       `agent=${agentId} session=${agentSessionKey} sandboxed=${sandboxed}`,
       "",

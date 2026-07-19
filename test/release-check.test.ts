@@ -58,7 +58,7 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
   return withEnv(env, callback);
 }
 
-const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
+const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
 const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
@@ -529,6 +529,7 @@ describe("collectForbiddenPackPaths", () => {
         "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
       ]),
     ).toEqual([
+      "dist/plugin-sdk/index.d.ts",
       "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
       "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
     ]);
@@ -687,10 +688,6 @@ describe("collectMissingPackPaths", () => {
     const missing = collectMissingPackPaths([
       "dist/index.js",
       "dist/entry.js",
-      "dist/plugin-sdk/compat.js",
-      "dist/plugin-sdk/index.js",
-      "dist/plugin-sdk/index.d.ts",
-      "dist/plugin-sdk/root-alias.cjs",
       "dist/build-info.json",
     ]);
 
@@ -745,7 +742,6 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/recommended-tool-installs.json",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
-        "dist/plugin-sdk/root-alias.cjs",
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
         "dist/audit/audit-event-writer.worker.js",
@@ -795,34 +791,6 @@ describe("collectMissingPackPaths", () => {
         "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
         "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
       ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects packed plugin SDK root aliases that depend on minified export letters", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-check-packed-root-alias-"));
-    try {
-      const packageRoot = join(root, "openclaw");
-      const pluginSdkDir = join(packageRoot, "dist", "plugin-sdk");
-      mkdirSync(pluginSdkDir, { recursive: true });
-      writeFileSync(
-        join(packageRoot, "package.json"),
-        `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
-      );
-      writeFileSync(
-        join(pluginSdkDir, "root-alias.cjs"),
-        "module.exports = { onDiagnosticEvent: mod.r };\n",
-      );
-
-      expect(
-        collectPackedInstalledPackageVerificationErrors({
-          expectedVersion: "2026.5.14-beta.3",
-          packageRoot,
-        }),
-      ).toContain(
-        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
-      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -892,8 +860,8 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
       expect(source).toBe(fixtureSource);
-      expect(source).toContain('"openclaw/plugin-sdk"');
-      expect(source).toContain('"openclaw/plugin-sdk/provider-entry"');
+      expect(source).toContain('"openclaw/plugin-sdk/core"');
+      expect(source).toContain('"openclaw/plugin-sdk/plugin-entry"');
       expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
       expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
       expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');

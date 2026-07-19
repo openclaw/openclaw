@@ -427,7 +427,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-  "src/plugins/contracts/plugin-sdk-index.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
   "src/plugins/contracts/extension-package-project-boundaries.test.ts",

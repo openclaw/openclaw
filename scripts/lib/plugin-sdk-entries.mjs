@@ -5,16 +5,16 @@ import pluginSdkEntryList from "./plugin-sdk-entrypoints.json" with { type: "jso
 import privateLocalOnlyPluginSdkSubpathList from "./plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 
 /**
- * All plugin SDK entrypoints, including the package root index.
+ * All plugin SDK subpath entrypoints. The package root barrel has been removed.
  * @internal Shared repository-script contract.
  */
 export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 
 /**
- * Plugin SDK subpath entrypoints, excluding the package root index.
+ * Plugin SDK subpath entrypoints.
  * @internal Shared test-configuration contract.
  */
-export const pluginSdkSubpaths = pluginSdkEntrypoints.filter((entry) => entry !== "index");
+export const pluginSdkSubpaths = pluginSdkEntrypoints;
 
 const privateLocalOnlyPluginSdkSubpathSet = new Set(
   privateLocalOnlyPluginSdkSubpathList.filter(
@@ -32,16 +32,14 @@ export const privateLocalOnlyPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
 
 /** Public plugin SDK entrypoints that appear in package exports. */
 export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
-  (entry) => entry === "index" || !privateLocalOnlyPluginSdkSubpathSet.has(entry),
+  (entry) => !privateLocalOnlyPluginSdkSubpathSet.has(entry),
 );
 
 /**
- * Public plugin SDK subpaths, excluding the package root index.
+ * Public plugin SDK subpaths.
  * @internal Shared repository-script contract.
  */
-export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints.filter(
-  (entry) => entry !== "index",
-);
+export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints;
 
 /**
  * Deprecated public plugin SDK subpaths kept for compatibility.
@@ -74,7 +72,7 @@ export function buildPluginSdkEntrySources(entries = pluginSdkEntrypoints) {
 export function buildPluginSdkPackageExports() {
   return Object.fromEntries(
     publicPluginSdkEntrypoints.map((entry) => [
-      entry === "index" ? "./plugin-sdk" : `./plugin-sdk/${entry}`,
+      `./plugin-sdk/${entry}`,
       {
         types: `./dist/plugin-sdk/${entry}.d.ts`,
         default: `./dist/plugin-sdk/${entry}.js`,

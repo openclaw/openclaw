@@ -353,20 +353,10 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
-  /**
-   * Cheap provider-auth env lookup without booting plugin runtime.
-   *
-   * @deprecated Prefer setup.providers[].envVars for generic setup/status env
-   * metadata. This field remains supported through the provider env-var
-   * compatibility adapter during the deprecation window.
-   */
-  providerAuthEnvVars?: Record<string, string[]>;
   /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
   providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
-  /** Cheap channel env lookup without booting plugin runtime. */
-  channelEnvVars?: Record<string, string[]>;
   /**
    * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
    * and non-runtime auth-choice routing before provider runtime loads.
@@ -1872,10 +1862,8 @@ export function loadPluginManifest(
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
-  const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerUsageAuthEnvVars = normalizeStringListRecord(raw.providerUsageAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
-  const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const activation = normalizeManifestActivation(raw.activation);
   const setup = normalizeManifestSetup(raw.setup);
@@ -1930,10 +1918,8 @@ export function loadPluginManifest(
       syntheticAuthRefs,
       nonSecretAuthMarkers,
       commandAliases,
-      providerAuthEnvVars,
       providerUsageAuthEnvVars,
       providerAuthAliases,
-      channelEnvVars,
       providerAuthChoices,
       activation,
       setup,
@@ -1984,8 +1970,6 @@ export type PluginPackageChannel = {
     setup?: boolean;
     docs?: boolean;
   };
-  showConfigured?: boolean;
-  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;

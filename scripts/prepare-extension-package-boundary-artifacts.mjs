@@ -311,8 +311,6 @@ const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
 ];
-const ENTRY_SHIM_RUNTIME_OUTPUTS = ["dist/plugin-sdk/webhook-path.js"];
-
 /**
  * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
  */
@@ -324,7 +322,6 @@ export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
       `dist/plugin-sdk/${entry}.d.ts`,
       `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
     ]),
-    ...ENTRY_SHIM_RUNTIME_OUTPUTS,
   ].toSorted((a, b) => a.localeCompare(b));
 }
 

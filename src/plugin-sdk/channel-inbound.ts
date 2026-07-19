@@ -65,10 +65,6 @@ export type {
   InboundMentionPolicy,
   InboundImplicitMentionKind,
   InboundMentionDecision,
-  MentionGateParams,
-  MentionGateResult,
-  MentionGateWithBypassParams,
-  MentionGateWithBypassResult,
   ResolveInboundMentionDecisionFlatParams,
   ResolveInboundMentionDecisionNestedParams,
   ResolveInboundMentionDecisionParams,
@@ -76,10 +72,6 @@ export type {
 export {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
-  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
-  resolveMentionGating,
-  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
-  resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
 export type { LocationSource, NormalizedLocation, OutboundLocation } from "../channels/location.js";
 export {

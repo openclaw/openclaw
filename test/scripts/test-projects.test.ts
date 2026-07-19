@@ -1831,7 +1831,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1856,7 +1855,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-entrypoints.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1872,7 +1870,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-entries.mjs",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -1888,7 +1885,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
         [
           "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-          "src/plugins/contracts/plugin-sdk-index.test.ts",
           "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
           "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
           "src/plugins/contracts/extension-package-project-boundaries.test.ts",

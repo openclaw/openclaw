@@ -16,7 +16,7 @@ import type {
 import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
-  registerMemoryPromptSection,
+  registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -80,7 +80,7 @@ describe("harness context engine lifecycle", () => {
       `sandboxed=${sandboxed}`,
       "",
     ]);
-    registerMemoryPromptSection(() => ["## Memory Recall", ""]);
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", ""]);
     registerMemoryPromptPreparation("memory-wiki", prepare);
     const availableTools = new Set(["wiki_search"]);
     const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({

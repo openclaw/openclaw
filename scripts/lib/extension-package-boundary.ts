@@ -54,8 +54,6 @@ function buildPackageBoundaryDtsPaths(params: {
 }
 
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
-  "openclaw/extension-api": ["../src/extensionAPI.ts"],
-  "openclaw/plugin-sdk": ["../dist/plugin-sdk/index.d.ts"],
   "openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"],
   ...privateLocalOnlyPluginSdkPackageDtsPaths,
   "openclaw/plugin-sdk/account-id": ["../dist/plugin-sdk/account-id.d.ts"],

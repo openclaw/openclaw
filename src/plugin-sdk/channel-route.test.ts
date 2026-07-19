@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
-  channelRouteIdentityKey,
-  channelRouteKey,
   channelRouteTargetsMatchExact,
   channelRouteTargetsShareConversation,
   channelRoutesMatchExact,
@@ -48,7 +46,6 @@ describe("plugin-sdk channel-route", () => {
 
     expect(stringifyRouteThreadId(route?.thread?.id)).toBe("42");
     expect(channelRouteCompactKey(route)).toBe("telegram|-100123||42");
-    expect(channelRouteKey(route)).toBe(channelRouteCompactKey(route));
   });
 
   it("builds compact route keys from raw route-like input", () => {
@@ -87,7 +84,6 @@ describe("plugin-sdk channel-route", () => {
       accountId: "work",
       threadId: "42",
     };
-    expect(channelRouteIdentityKey(input)).toBe(channelRouteDedupeKey(input));
   });
 
   it("matches exact routes when numeric and string thread ids are equivalent", () => {

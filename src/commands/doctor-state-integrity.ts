@@ -7,7 +7,11 @@ import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   clearWedgedSubagentRecoveryAbort,
   formatSubagentRecoveryWedgedReason,
@@ -32,7 +36,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
-import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -179,7 +182,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
   }
 
   const agentsRoot = path.join(stateDir, "agents");
-  const liveCompatibilityAgentDir = resolveOpenClawAgentDir();
+  const liveDefaultAgentDir = resolveDefaultAgentDir(cfg);
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
@@ -194,7 +197,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         if (!hasNestedAgentDir) {
           return false;
         }
-        if (areComparablePathsEqual(nestedAgentDir, liveCompatibilityAgentDir)) {
+        if (areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) {
           return false;
         }
         if (!configuredIds.has(agentId)) {

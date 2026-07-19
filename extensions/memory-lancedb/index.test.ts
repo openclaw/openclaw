@@ -409,7 +409,6 @@ describe("memory plugin e2e", () => {
     registerTestPlugin(memoryPlugin, mockApi);
 
     expectHookRegistered(on, "before_prompt_build");
-    expectHookNotRegistered(on, "before_agent_start");
   });
 
   test("registers memory public artifact provider for memory-wiki bridge parity", async () => {
