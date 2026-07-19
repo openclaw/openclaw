@@ -13,8 +13,6 @@ import {
   getProfileAvatar,
   linkEmail,
   listProfiles,
-  MAX_USER_PROFILE_AVATAR_BYTES,
-  resolveProfileByEmail,
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
@@ -44,7 +42,7 @@ describe("user profiles", () => {
 
     expect(tableExists(openOpenClawStateDatabase(options).db, "user_profiles")).toBe(true);
     expect(second).toEqual(first);
-    expect(resolveProfileByEmail("ADA@example.com", options)).toEqual(first);
+    expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: first.id, emails: ["ada@example.com"] }),
     ]);
@@ -57,7 +55,7 @@ describe("user profiles", () => {
 
     const linked = linkEmail("source@example.com", target.id, options);
 
-    expect(resolveProfileByEmail("source@example.com", options)?.id).toBe(target.id);
+    expect(ensureProfileForEmail("source@example.com", options).id).toBe(target.id);
     expect(linked).toMatchObject({
       id: target.id,
       emails: ["source@example.com", "target@example.com"],
@@ -96,7 +94,7 @@ describe("user profiles", () => {
     linkEmail("a@example.com", b.id, options);
     linkEmail("a@example.com", a.id, options);
 
-    expect(resolveProfileByEmail("a@example.com", options)?.id).toBe(b.id);
+    expect(ensureProfileForEmail("a@example.com", options).id).toBe(b.id);
     expect(listProfiles(options)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: b.id }),
@@ -155,16 +153,9 @@ describe("user profiles", () => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("ada@example.com", options);
 
-    expect(
-      setAvatar(
-        profile.id,
-        new Uint8Array(MAX_USER_PROFILE_AVATAR_BYTES + 1),
-        "image/png",
-        options,
-      ),
-    ).toEqual({
+    expect(setAvatar(profile.id, new Uint8Array(512 * 1024 + 1), "image/png", options)).toEqual({
       ok: false,
-      error: { code: "avatar_too_large", maxBytes: MAX_USER_PROFILE_AVATAR_BYTES },
+      error: { code: "avatar_too_large", maxBytes: 512 * 1024 },
     });
     expect(setAvatar(profile.id, new Uint8Array([1]), "image/gif", options)).toEqual({
       ok: false,

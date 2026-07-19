@@ -17,7 +17,7 @@ import {
 } from "./openclaw-state-db.js";
 import { USER_PROFILES_SCHEMA_SQL } from "./user-profiles-schema.js";
 
-export const MAX_USER_PROFILE_AVATAR_BYTES = 512 * 1024;
+const MAX_USER_PROFILE_AVATAR_BYTES = 512 * 1024;
 const USER_PROFILE_AVATAR_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 
 type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
@@ -230,28 +230,6 @@ export function getUserProfileListItem(
   ensureUserProfilesSchema(options);
   const { db } = openOpenClawStateDatabase(options);
   return selectUserProfileListItemById(db, requireResolvedProfileById(db, profileId).id);
-}
-
-/** Resolves a profile from a normalized email alias, following one merge tombstone at most. */
-export function resolveProfileByEmail(
-  email: string,
-  options: OpenClawStateDatabaseOptions = {},
-): UserProfile | undefined {
-  const normalizedEmail = normalizeEmail(email);
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
-  const alias = executeSqliteQueryTakeFirstSync(
-    db,
-    profileDb(db)
-      .selectFrom("user_profile_emails")
-      .select("profile_id")
-      .where("email", "=", normalizedEmail),
-  );
-  if (!alias) {
-    return undefined;
-  }
-  const profile = selectResolvedProfileById(db, alias.profile_id);
-  return profile ? toUserProfile(profile) : undefined;
 }
 
 /** Resolves an email alias or atomically creates its first durable profile. */
