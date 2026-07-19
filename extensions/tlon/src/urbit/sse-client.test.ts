@@ -184,10 +184,14 @@ describe("UrbitSSEClient", () => {
           },
         };
       });
+      const [unsubscribeResponse, deleteResponse] = shutdownResponses;
+      if (!unsubscribeResponse || !deleteResponse) {
+        throw new Error("Expected both shutdown response fixtures");
+      }
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch
-        .mockResolvedValueOnce(shutdownResponses[0].result)
-        .mockResolvedValueOnce(shutdownResponses[1].result);
+        .mockResolvedValueOnce(unsubscribeResponse.result)
+        .mockResolvedValueOnce(deleteResponse.result);
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
         autoReconnect: false,
       });
