@@ -1723,14 +1723,17 @@ describe("loadOpenClawPlugins", () => {
     };
 
     const activeRegistry = loadOpenClawPlugins(loadOptions);
-    expect(getRegisteredAgentHarness("codex")).toBeDefined();
-    expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
-    expect(activeRegistry.providers.map((entry) => entry.provider.id)).toEqual([
-      "rollback-provider",
-    ]);
-    expect(activeRegistry.agentToolResultMiddlewares).toHaveLength(1);
-    expect(activeRegistry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
-    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    const expectRegistrationsIntact = () => {
+      expect(getActivePluginRegistry()).toBe(activeRegistry);
+      expect(getRegisteredAgentHarness("codex")).toBeDefined();
+      expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
+      expect(activeRegistry.providers.map((entry) => entry.provider.id)).toEqual([
+        "rollback-provider",
+      ]);
+      expect(activeRegistry.agentToolResultMiddlewares).toHaveLength(1);
+      expect(activeRegistry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+    };
+    expectRegistrationsIntact();
 
     const manifestRegistry = await import("./manifest-registry.js");
     const manifestSpy = vi
@@ -1741,17 +1744,33 @@ describe("loadOpenClawPlugins", () => {
 
     try {
       expect(() => loadOpenClawPlugins(loadOptions)).toThrow("corrupt plugin manifest");
-      expect(getRegisteredAgentHarness("codex")).toBeDefined();
-      expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
-      expect(getActivePluginRegistry()).toBe(activeRegistry);
-      expect(activeRegistry.providers.map((entry) => entry.provider.id)).toEqual([
-        "rollback-provider",
-      ]);
-      expect(activeRegistry.agentToolResultMiddlewares).toHaveLength(1);
-      expect(activeRegistry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+      expectRegistrationsIntact();
     } finally {
       manifestSpy.mockRestore();
     }
+
+    const failingPlugin = writePlugin({
+      id: "reload-rollback-failure",
+      filename: "reload-rollback-failure.cjs",
+      body: `module.exports = {
+        id: "reload-rollback-failure",
+        register() { throw new Error("register failed"); },
+      };`,
+    });
+    expect(() =>
+      loadOpenClawPlugins({
+        ...loadOptions,
+        throwOnLoadError: true,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file, failingPlugin.file] },
+            allow: ["reload-rollback", "reload-rollback-failure"],
+          },
+        },
+        onlyPluginIds: ["reload-rollback", "reload-rollback-failure"],
+      }),
+    ).toThrow("plugin load failed: reload-rollback-failure: Error: register failed");
+    expectRegistrationsIntact();
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
