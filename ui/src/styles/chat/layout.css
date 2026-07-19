@@ -4183,6 +4183,11 @@ openclaw-chat-page {
     gap: 6px;
   }
 
+  .chat-run-error {
+    width: calc(100% - 8px);
+    margin: 6px 4px 0;
+  }
+
   .agent-chat__composer-shell:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
     margin-bottom: 0;
   }

@@ -2141,11 +2141,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps streamed text visible when a chat error terminates the turn", async () => {
+  it.each([
+    { label: "desktop", viewport: { height: 900, width: 1280 } },
+    { label: "mobile", viewport: { height: 844, width: 390 } },
+  ])("keeps streamed text visible when a chat error terminates the turn on $label", async ({
+    viewport,
+  }) => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      viewport,
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
