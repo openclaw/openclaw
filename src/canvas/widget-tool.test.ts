@@ -113,6 +113,20 @@ describe("show_widget", () => {
     ).rejects.toThrow(`widget_code exceeds maximum size (${WIDGET_CODE_MAX_CHARS} characters)`);
   });
 
+  it("rejects pinning without a session before creating a Canvas document", async () => {
+    const stateDir = await createStateDir();
+    const tool = createShowWidgetTool({ stateDir, sessionId: "missing-agent-session" });
+
+    await expect(
+      tool.execute("pin", {
+        title: "Pinned",
+        widget_code: "<p>never materialized</p>",
+        pin: true,
+      }),
+    ).rejects.toThrow("pin requires an agent session");
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
   it("wraps SVG widgets with the stable result and sandbox contracts", async () => {
     const stateDir = await createStateDir();
     const { viewId, url, sandbox, text } = await executeWidget({

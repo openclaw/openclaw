@@ -438,8 +438,15 @@ export class GatewayBoardProvider implements BoardProvider {
         const snapshot = await client.request<BoardSnapshot>("board.get", {
           sessionKey: this.sessionKey,
         });
-        if (client !== this.client || stateGeneration !== this.stateGeneration) {
+        if (client !== this.client) {
           this.refreshRequested = true;
+          continue;
+        }
+        if (stateGeneration !== this.stateGeneration) {
+          this.refreshRequested = true;
+          for (const name of changedWidgets) {
+            this.changedWidgets.add(name);
+          }
           continue;
         }
         this.setSnapshot(snapshot, changedWidgets);

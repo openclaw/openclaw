@@ -536,6 +536,70 @@ describe("board providers", () => {
     expect(getCount).toBe(3);
   });
 
+  it("preserves a widget ticket refresh across a superseding mutation", async () => {
+    let resolveRefresh: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const initial = {
+      sessionKey: "agent:main:ticket-race",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [
+        {
+          name: "alpha",
+          tabId: "main",
+          contentKind: "html" as const,
+          sizeW: 6,
+          sizeH: 4,
+          position: 0,
+          grantState: "none" as const,
+          revision: 1,
+          frameUrl: "/old-ticket",
+        },
+      ],
+    };
+    const mutation = {
+      ...initial,
+      revision: 2,
+      widgets: [{ ...initial.widgets[0]!, frameUrl: "/mutation-ticket" }],
+    };
+    const reminted = {
+      ...mutation,
+      widgets: [{ ...initial.widgets[0]!, frameUrl: "/reminted-ticket" }],
+    };
+    let getCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method !== "board.get") {
+        return Promise.resolve(mutation);
+      }
+      getCount += 1;
+      if (getCount === 1) {
+        return Promise.resolve(initial);
+      }
+      if (getCount === 2) {
+        return new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+          resolveRefresh = resolve;
+        });
+      }
+      return Promise.resolve(reminted);
+    });
+    const provider = new GatewayBoardProvider("agent:main:ticket-race", {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+
+    const refresh = provider.refreshWidgetFrame("alpha");
+    await vi.waitFor(() => expect(getCount).toBe(2));
+    await provider.applyOps([{ kind: "tab_update", tabId: "main", chatDock: "left" }]);
+    resolveRefresh?.({
+      ...mutation,
+      widgets: [{ ...initial.widgets[0]!, frameUrl: "/superseded-ticket" }],
+    });
+    await refresh;
+
+    expect(getCount).toBe(3);
+    expect(provider.widgetFrameUrl("alpha", 1)).toBe("/reminted-ticket");
+  });
+
   it("discards mutation responses from a replaced gateway client", async () => {
     let resolveMutation: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
     const oldClient = {

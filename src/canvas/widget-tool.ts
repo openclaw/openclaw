@@ -109,6 +109,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         inputName: "widget_code",
         unit: "characters",
       });
+      const shouldPin = params.pin === true;
+      const pinSessionKey = shouldPin ? options.agentSessionKey?.trim() : undefined;
+      if (shouldPin && !pinSessionKey) {
+        throw new WidgetHtmlInputError("pin requires an agent session");
+      }
       const widgetCode = rawWidgetCode.trim();
       const wrappedDocument = buildWidgetDocument(title, widgetCode);
       const document = await createCanvasDocument(
@@ -128,11 +133,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       );
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
-      if (params.pin === true) {
-        const sessionKey = options.agentSessionKey?.trim();
-        if (!sessionKey) {
-          throw new WidgetHtmlInputError("pin requires an agent session");
-        }
+      if (pinSessionKey) {
+        const sessionKey = pinSessionKey;
         const name = readStringParam(params, "name") ?? slugWidgetName(title);
         pinnedWidgetName = name;
         const tab = readStringParam(params, "tab");
