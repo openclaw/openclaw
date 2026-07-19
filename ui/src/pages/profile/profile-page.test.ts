@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
@@ -302,12 +303,12 @@ it("keeps identity UI and profile RPCs absent for unidentified connections", asy
   await page.updateComplete;
   await Promise.resolve();
 
-  expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
+  expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
   expect(page.querySelector("#settings-profile-identity")).toBeNull();
 });
 
-it("loads and edits only the connected user's resolved profile", async () => {
-  const profile = {
+it("bootstraps and refreshes the connected user's profile through users.self", async () => {
+  let profile: UserProfile = {
     id: "profile-1",
     displayName: "Ada",
     avatarMime: null,
@@ -324,25 +325,23 @@ it("loads and edits only the connected user's resolved profile", async () => {
     if (method === "sessions.usage") {
       return createSessionsResult();
     }
-    if (method === "users.list") {
-      return {
-        profiles: [{ ...profile, id: "other", emails: ["other@example.test"] }, profile],
-      };
+    if (method === "users.self") {
+      return { profile };
     }
     if (method === "users.setDisplayName") {
       expect(params).toEqual({ profileId: "profile-1", displayName: "Augusta Ada" });
-      return { profile: { ...profile, displayName: "Augusta Ada", updatedAt: 3 } };
+      profile = { ...profile, displayName: "Augusta Ada", updatedAt: 3 };
+      return { profile };
     }
     if (method === "users.setAvatar") {
-      return {
-        profile: {
-          ...profile,
-          displayName: "Augusta Ada",
-          avatarMime: "image/png",
-          hasAvatar: true,
-          updatedAt: 4,
-        },
+      profile = {
+        ...profile,
+        displayName: "Augusta Ada",
+        avatarMime: "image/png",
+        hasAvatar: true,
+        updatedAt: 4,
       };
+      return { profile };
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -358,6 +357,7 @@ it("loads and edits only the connected user's resolved profile", async () => {
 
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
   expect(page.textContent).toContain("ada@example.test, ada@work.test");
+  expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
 
   const input = page.querySelector<HTMLInputElement>('.identity-name-control input[type="text"]');
   input!.value = "Augusta Ada";
@@ -367,6 +367,9 @@ it("loads and edits only the connected user's resolved profile", async () => {
 
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
+  );
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
   );
   await page.updateComplete;
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
@@ -405,6 +408,9 @@ it("loads and edits only the connected user's resolved profile", async () => {
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(true),
   );
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(3),
+  );
   await page.updateComplete;
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
@@ -413,7 +419,7 @@ it("loads and edits only the connected user's resolved profile", async () => {
   request.mockClear();
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   await waitForFast(() =>
-    expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(true),
+    expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(true),
   );
   await waitForFast(() =>
     expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
@@ -431,5 +437,5 @@ it("loads and edits only the connected user's resolved profile", async () => {
   request.mockClear();
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   await Promise.resolve();
-  expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
+  expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
 });

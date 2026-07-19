@@ -3,7 +3,7 @@ import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   UserProfile,
-  UsersListResult,
+  UsersSelfResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
@@ -210,7 +210,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       return;
     }
     if (nextSelfUser && (clientChanged || selfProfileChanged)) {
-      void this.loadIdentity(nextSelfUser.id);
+      void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
       if (list) {
@@ -332,15 +332,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.requestProfileRefresh("focus");
   }
 
-  private resolveOwnProfile(profiles: readonly UserProfile[], profileId: string) {
-    const direct = profiles.find((profile) => profile.id === profileId) ?? null;
-    if (!direct?.mergedInto) {
-      return direct;
-    }
-    return profiles.find((profile) => profile.id === direct.mergedInto) ?? direct;
-  }
-
-  private async loadIdentity(profileId: string) {
+  private async loadIdentity() {
     const client = this.client;
     if (!client || !this.connected) {
       return;
@@ -353,16 +345,14 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.identityLoading = true;
     this.identityError = null;
     try {
-      const result = await client.request<UsersListResult>("users.list", {});
+      const result = await client.request<UsersSelfResult>("users.self", {});
       if (requestId !== this.identityRequestId) {
         return;
       }
-      const profile = this.resolveOwnProfile(result.profiles, profileId);
-      if (!profile) {
-        throw new Error(t("profilePage.identity.profileUnavailable"));
-      }
-      this.ownProfile = profile;
-      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
+      this.ownProfile = result.profile;
+      this.displayName = hasUnsavedDisplayName
+        ? displayNameDraft
+        : (result.profile.displayName ?? "");
     } catch (error) {
       if (requestId === this.identityRequestId) {
         this.identityError = toIdentityErrorMessage(error);
@@ -388,6 +378,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.identityBusy = "display-name";
     this.identityError = null;
     const identityRequestId = this.identityRequestId;
+    let shouldRefresh = false;
     try {
       const displayName = this.displayName.trim() || null;
       const result = await client.request<UsersSetDisplayNameResult>("users.setDisplayName", {
@@ -399,6 +390,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
       this.applyOwnProfile(result.profile);
       this.context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
+      shouldRefresh = true;
     } catch (error) {
       if (client === this.client && identityRequestId === this.identityRequestId) {
         this.identityError = toIdentityErrorMessage(error);
@@ -407,6 +399,9 @@ export class ProfilePage extends OpenClawLightDomElement {
       if (identityRequestId === this.identityRequestId && this.identityBusy === "display-name") {
         this.identityBusy = null;
       }
+    }
+    if (shouldRefresh && client === this.client && identityRequestId === this.identityRequestId) {
+      void this.loadIdentity();
     }
   }
 
@@ -421,6 +416,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     const identityRequestId = this.identityRequestId;
     const displayNameDraft = this.displayName;
     const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
+    let shouldRefresh = false;
     try {
       const avatar = await processProfileAvatar(file);
       if (client !== this.client || identityRequestId !== this.identityRequestId) {
@@ -446,6 +442,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       if (avatarUrl) {
         this.context.gateway.updateSelfUser?.({ avatarUrl });
       }
+      shouldRefresh = true;
     } catch (error) {
       if (client === this.client && identityRequestId === this.identityRequestId) {
         this.identityError =
@@ -463,6 +460,9 @@ export class ProfilePage extends OpenClawLightDomElement {
       if (identityRequestId === this.identityRequestId && this.identityBusy === "avatar") {
         this.identityBusy = null;
       }
+    }
+    if (shouldRefresh && client === this.client && identityRequestId === this.identityRequestId) {
+      void this.loadIdentity();
     }
   }
 
@@ -506,7 +506,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private refreshManually() {
     this.requestProfileRefresh("manual");
     if (this.selfUser && !this.identityBusy) {
-      void this.loadIdentity(this.selfUser.id);
+      void this.loadIdentity();
     }
   }
 
