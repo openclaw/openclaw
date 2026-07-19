@@ -9,7 +9,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
-import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
+import { markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
 import { claimClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -27,7 +27,29 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 function cronReadView(agentId: string, ref: ReturnType<typeof readClawCronRefs>[number]) {
-  const normalized = normalizeCronJobCreate(clawCronGatewayInput(agentId, ref));
+  const job = ref.job;
+  const normalized = normalizeCronJobCreate({
+    name: job.name ?? job.id,
+    declarationKey: ref.declarationKey,
+    ...(job.name ? { displayName: job.name } : {}),
+    owner: { agentId },
+    enabled: true,
+    agentId,
+    schedule: {
+      kind: "cron",
+      expr: job.schedule.cron,
+      ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
+    },
+    sessionTarget: job.session === "main" ? `session:agent:${agentId}:main` : job.session,
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: job.message },
+    delivery: job.delivery
+      ? {
+          mode: job.delivery.mode,
+          ...(job.delivery.channel ? { channel: job.delivery.channel } : {}),
+        }
+      : { mode: "none" },
+  });
   if (!normalized || !ref.schedulerJobId) {
     throw new Error("expected complete cron provenance");
   }
