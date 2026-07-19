@@ -1,0 +1,10 @@
+[test-extension] Running 32 test files for google
+
+ RUN  v4.1.10 /home/lizeyu/workspace/openclaw/.worktree/wt-google-video-body-cancel
+
+
+ Test Files  31 passed (31)
+      Tests  439 passed (439)
+   Start at  11:27:21
+   Duration  18.79s (transform 9.79s, setup 5.90s, import 43.61s, tests 16.93s, environment 4ms)
+
