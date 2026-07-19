@@ -40,14 +40,19 @@ export function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
 
-// Native text/URL drop insertion is only meaningful on editable controls;
-// anywhere else an uncancelled URL drop navigates the app away and discards
-// unsent drafts.
+// Native text/URL drop insertion is only meaningful on controls that can
+// actually accept it; anywhere else (including disabled/readonly inputs) an
+// uncancelled URL drop navigates the app away and discards unsent drafts.
 export function isEditableDropTarget(event: DragEvent): boolean {
-  return (
-    event.target instanceof Element &&
-    event.target.closest("textarea, input, [contenteditable]") !== null
-  );
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  const editable = target.closest("textarea, input, [contenteditable]");
+  if (editable instanceof HTMLTextAreaElement || editable instanceof HTMLInputElement) {
+    return !editable.disabled && !editable.readOnly;
+  }
+  return editable instanceof HTMLElement && editable.isContentEditable;
 }
 
 function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {

@@ -129,5 +129,14 @@ describe("new-session composer attachment drops", () => {
     expect(readAsDataUrl).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
     expect(attachmentDraft.attachments).toEqual([]);
+
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    expect(textarea.disabled).toBe(true);
+    const disabledTextareaDrop = createDragEvent("drop", [], ["text/uri-list"]);
+    textarea.dispatchEvent(disabledTextareaDrop);
+    expect(disabledTextareaDrop.defaultPrevented).toBe(true);
   });
 });
