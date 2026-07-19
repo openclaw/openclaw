@@ -187,7 +187,8 @@ export async function importProfileFromRelays(
     // Convert to our profile format
     const profile = contentToProfile(content);
 
-    // Sanitize URLs from imported profile to prevent SSRF when auto-merging
+    // Drop unsafe URLs before schema validation so an otherwise valid profile remains importable.
+    // Other invalid known fields reject the event atomically instead of silently changing its data.
     const sanitizedProfile = sanitizeProfileUrls(profile);
     const validatedProfile = NostrProfileSchema.safeParse(sanitizedProfile);
     if (!validatedProfile.success) {
