@@ -105,6 +105,11 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
   pollIntervalMs: number;
   retention: ChannelIngressMonitorRetention;
   appendRetryDelaysMs?: readonly number[];
+  onDurableAdmission?: (
+    raw: TRaw,
+    context: { facts: ChannelIngressMonitorFacts; receivedAt: number },
+  ) => void | Promise<void>;
+  onAdmissionFailure?: (raw: TRaw, error: unknown) => void | Promise<void>;
   drain?: ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata>;
   abortSignal?: AbortSignal;
   now?: () => number;
@@ -409,22 +414,20 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       ) {
         throw createStoppedError();
       }
-      const facts = admitOptions?.facts ?? options.inspect(raw, { phase: "admission" });
-      if (!facts) {
-        return { kind: "ignored" } as const;
-      }
       const receivedAt = admitOptions?.receivedAt ?? now();
-      const body = options.payload.serialize(raw, { facts, receivedAt });
-      const payload =
-        options.payload.storage === "raw-event"
-          ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
-          : options.payload.encode({ version: options.payload.version, body });
-      // Append retries and transport-owned post-append work stay serialized so
-      // backoff or cursor/ack handling cannot invert arrival order.
       const admission = admissionTail.then(() =>
         withAdmissionClaimLock(async () => {
           let durablyAdmitted = false;
           try {
+            const facts = admitOptions?.facts ?? options.inspect(raw, { phase: "admission" });
+            if (!facts) {
+              return { kind: "ignored" } as const;
+            }
+            const body = options.payload.serialize(raw, { facts, receivedAt });
+            const payload =
+              options.payload.storage === "raw-event"
+                ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
+                : options.payload.encode({ version: options.payload.version, body });
             await admitOnce({ facts, payload, receivedAt });
             durablyAdmitted = true;
             await options.onDurableAdmission?.(raw, { facts, receivedAt });
@@ -440,9 +443,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
         }),
       );
-      admissionTail = admission.catch(() => undefined);
-      await admission;
-      return { kind: "durable" } as const;
+      admissionTail = admission.then(
+        () => undefined,
+        () => undefined,
+      );
+      return await admission;
     },
     start: () => {
       if (running || stopped || isAborted()) {

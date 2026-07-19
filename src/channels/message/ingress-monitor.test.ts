@@ -64,7 +64,9 @@ describe("channel ingress monitor", () => {
     await withQueue(async (queue) => {
       const monitor = createMonitor(queue, vi.fn());
       monitor.start();
-      await monitor.admit({ id: "event-terminal", lane: "a", text: "ignored" });
+      await expect(
+        monitor.admit({ id: "event-terminal", lane: "a", text: "ignored" }),
+      ).resolves.toEqual({ kind: "durable" });
       await monitor.waitForIdle();
 
       await expect(
