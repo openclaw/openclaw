@@ -2,12 +2,12 @@ import type { TemplateResult } from "lit";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { renderSwarmWidget } from "./swarm.ts";
 
-export type BuiltinBoardWidgetRenderer = (context: {
+type BuiltinBoardWidgetRenderer = (context: {
   sessions: readonly GatewaySessionRow[];
   sessionKey: string;
 }) => TemplateResult;
 
-export const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinBoardWidgetRenderer> = {
+const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinBoardWidgetRenderer> = {
   swarm: renderSwarmWidget,
 };
 

@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { collectActiveSwarmGroups, renderSwarmWidget } from "./swarm.ts";
+import { renderSwarmWidget } from "./swarm.ts";
 
 const parentSessionKey = "agent:main:parent";
 
@@ -24,32 +24,37 @@ afterEach(() => {
 
 describe("swarm board widget", () => {
   it("groups live collector children and maps their dot states", () => {
-    const groups = collectActiveSwarmGroups(
-      [
-        session({ key: "queued", label: "Queued child", subagentRunState: "active" }),
-        session({ key: "running", label: "Running child", status: "running" }),
-        session({ key: "done", label: "Done child", status: "done" }),
-        session({ key: "failed", label: "Timed out child", status: "timeout" }),
-        session({
-          key: "finished-group",
-          swarmGroupId: "swarm:agent:main:parent:finished",
-          status: "done",
-        }),
-      ],
-      parentSessionKey,
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderSwarmWidget({
+        sessionKey: parentSessionKey,
+        sessions: [
+          session({ key: "queued", label: "Queued child", subagentRunState: "active" }),
+          session({ key: "running", label: "Running child", status: "running" }),
+          session({ key: "done", label: "Done child", status: "done" }),
+          session({ key: "failed", label: "Timed out child", status: "timeout" }),
+          session({
+            key: "finished-group",
+            swarmGroupId: "swarm:agent:main:parent:finished",
+            status: "done",
+          }),
+        ],
+      }),
+      container,
     );
 
-    expect(groups).toHaveLength(1);
-    expect(groups[0]).toMatchObject({ label: "turn-42", running: 1, done: 1, failed: 1 });
-    expect(groups[0]?.phases).toEqual([
-      {
-        dots: [
-          { key: "queued", label: "Queued child", status: "queued" },
-          { key: "running", label: "Running child", status: "running" },
-          { key: "done", label: "Done child", status: "done" },
-          { key: "failed", label: "Timed out child", status: "failed" },
-        ],
-      },
+    const group = container.querySelector("[data-swarm-group]");
+    expect(group?.getAttribute("data-swarm-group")).toBe("swarm:agent:main:parent:turn-42");
+    expect(group?.textContent).toContain("turn-42");
+    expect(group?.textContent?.replace(/\s+/g, " ")).toContain("1 Running · 1 Done · 1 Failed");
+    expect(
+      [...container.querySelectorAll(".swarm-widget__dot")].map((dot) => dot.className),
+    ).toEqual([
+      "swarm-widget__dot swarm-widget__dot--queued",
+      "swarm-widget__dot swarm-widget__dot--running",
+      "swarm-widget__dot swarm-widget__dot--done",
+      "swarm-widget__dot swarm-widget__dot--failed",
     ]);
   });
 

@@ -5,18 +5,18 @@ import { areUiSessionKeysEquivalent } from "../../sessions/session-key.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
-export type SwarmDot = {
+type SwarmDot = {
   key: string;
   label: string;
   status: SwarmDotStatus;
 };
 
-export type SwarmPhase = {
+type SwarmPhase = {
   title?: string;
   dots: SwarmDot[];
 };
 
-export type SwarmGroup = {
+type SwarmGroup = {
   groupId: string;
   label: string;
   running: number;
@@ -56,7 +56,7 @@ function swarmDotStatus(row: GatewaySessionRow): SwarmDotStatus | null {
 }
 
 function groupTail(groupId: string): string {
-  return groupId.split(":").filter(Boolean).at(-1) ?? groupId;
+  return groupId.split(":").findLast(Boolean) ?? groupId;
 }
 
 function swarmPhase(row: GatewaySessionRow): string | undefined {
@@ -78,7 +78,7 @@ function isSwarmChildForSession(row: GatewaySessionRow, sessionKey: string): boo
 }
 
 /** Groups the live session roster into the active collector swarms for one dashboard. */
-export function collectActiveSwarmGroups(
+function collectActiveSwarmGroups(
   sessions: readonly GatewaySessionRow[],
   sessionKey: string,
 ): SwarmGroup[] {
