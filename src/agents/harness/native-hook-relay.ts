@@ -438,9 +438,12 @@ export function registerNativeHookRelay(
   }
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   const preToolUseLoopDetection = params.preToolUseLoopDetection !== false;
-  const loopDetection = preToolUseLoopDetection
-    ? resolveToolLoopDetectionConfig({ cfg: params.config, agentId: params.agentId })
-    : undefined;
+  // The Codex opt-out has always controlled only PreToolUse. PostToolUse must
+  // still observe native outcomes when loop detection is enabled elsewhere.
+  const loopDetection = resolveToolLoopDetectionConfig({
+    cfg: params.config,
+    agentId: params.agentId,
+  });
   const stateDbPath = resolveOpenClawStateSqlitePath();
   unregisterNativeHookRelay(relayId, undefined, {
     deferBridgeRecordRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
