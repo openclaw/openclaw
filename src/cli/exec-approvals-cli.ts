@@ -26,7 +26,7 @@ import {
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
-import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
