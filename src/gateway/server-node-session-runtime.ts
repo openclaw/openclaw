@@ -83,10 +83,14 @@ export function createGatewayNodeSessionRuntime(params: {
   const sendVoiceWakeEventToCurrentNodes = (event: string, payload: unknown) => {
     const payloadJSON = serializeEventPayload(payload);
     for (const node of nodeRegistry.listConnected()) {
+      const pairingGeneration = node.pairingGeneration;
+      if (!pairingGeneration) {
+        continue;
+      }
       // Voice-wake broadcasts are fire-and-forget, but each node send still
       // resolves persistent generation before crossing its transport.
       void nodeRegistry
-        .sendEventRawForPairingGeneration(node.nodeId, node.pairingGeneration, event, payloadJSON)
+        .sendEventRawForPairingGeneration(node.nodeId, pairingGeneration, event, payloadJSON)
         .catch(() => undefined);
     }
   };

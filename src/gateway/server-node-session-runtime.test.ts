@@ -111,6 +111,25 @@ describe("gateway node session runtime", () => {
     expect(broadcast).toHaveBeenCalledTimes(4);
   });
 
+  test("does not fan out voice-wake updates to a session without pairing generation", () => {
+    const broadcast = vi.fn();
+    const runtime = createRuntime(async () => "generation-a", broadcast);
+    const frames: string[] = [];
+    const socket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn((payload: string) => frames.push(payload)),
+      close: vi.fn(),
+    };
+    runtime.nodeRegistry.register(makeGatewayWsClient("conn-node-a", socket), {});
+    const send = vi.spyOn(runtime.nodeRegistry, "sendEventRawForPairingGeneration");
+
+    runtime.broadcastVoiceWakeChanged(["openclaw"]);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(frames).toEqual([]);
+    expect(broadcast).toHaveBeenCalledOnce();
+  });
+
   test("does not inherit subscriptions across a replacement pairing generation", async () => {
     let currentPairingGeneration = "generation-a";
     const runtime = createRuntime(async () => currentPairingGeneration);
