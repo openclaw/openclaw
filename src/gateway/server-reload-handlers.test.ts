@@ -578,6 +578,7 @@ function createManagedRestartSequenceHarness(
         typeof secretInput === "object" &&
         secretInput !== null &&
         "id" in secretInput &&
+        typeof secretInput.id === "string" &&
         unavailableSecretIds.has(secretInput.id)
       ) {
         throw new Error(`required SecretRef ${secretInput.id} is unavailable`);
