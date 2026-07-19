@@ -52,6 +52,8 @@ describe("ensureOpenClawCliOnPath", () => {
     "OPENCLAW_PATH_BOOTSTRAPPED",
     "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
     "MISE_DATA_DIR",
+    "XDG_DATA_HOME",
+    "LOCALAPPDATA",
     "PNPM_HOME",
     "NPM_CONFIG_PREFIX",
     "HOMEBREW_PREFIX",
@@ -111,6 +113,9 @@ describe("ensureOpenClawCliOnPath", () => {
     delete process.env.XDG_BIN_HOME;
     delete process.env.PNPM_HOME;
     delete process.env.NPM_CONFIG_PREFIX;
+    delete process.env.MISE_DATA_DIR;
+    delete process.env.XDG_DATA_HOME;
+    delete process.env.LOCALAPPDATA;
   }
 
   function expectPathsAfter(parts: string[], anchor: string, expectedPaths: string[]) {
@@ -176,8 +181,95 @@ describe("ensureOpenClawCliOnPath", () => {
     setDir(miseDataDir);
     setDir(shimsDir);
 
-    process.env.MISE_DATA_DIR = miseDataDir;
     resetBootstrapEnv();
+    process.env.MISE_DATA_DIR = miseDataDir;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+    expectPathsAfter(updated, "/usr/bin", [shimsDir]);
+  });
+
+  it.each([
+    { name: "empty", value: "" },
+    { name: "whitespace-only", value: "   " },
+  ])("honors a present $name MISE_DATA_DIR", ({ name, value }) => {
+    const { tmp, appCli } = setupAppCliRoot(`case-${name}-mise`);
+    const shimsDir = path.join(value, "shims");
+    setDir(shimsDir);
+    resetBootstrapEnv();
+    process.env.MISE_DATA_DIR = value;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+    expectPathsAfter(updated, "/usr/bin", [shimsDir.trim()]);
+    expect(updated).not.toContain(path.join(tmp, ".local", "share", "mise", "shims"));
+  });
+
+  it("uses the Unix mise data directory when MISE_DATA_DIR is absent", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-default-mise");
+    const shimsDir = path.join(tmp, ".local", "share", "mise", "shims");
+    setDir(shimsDir);
+    resetBootstrapEnv();
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+    expectPathsAfter(updated, "/usr/bin", [shimsDir]);
+  });
+
+  it("uses the Windows mise data directory when MISE_DATA_DIR is absent", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-default-windows-mise");
+    const localAppData = path.join(tmp, "AppData", "Local");
+    const shimsDir = path.join(localAppData, "mise", "shims");
+    setDir(shimsDir);
+    resetBootstrapEnv();
+    process.env.LOCALAPPDATA = localAppData;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "win32",
+    });
+    expectPathsAfter(updated, "/usr/bin", [shimsDir]);
+  });
+
+  it("uses XDG_DATA_HOME for mise on Windows", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-xdg-windows-mise");
+    const xdgDataHome = path.join(tmp, "xdg-data");
+    const shimsDir = path.join(xdgDataHome, "mise", "shims");
+    setDir(shimsDir);
+    resetBootstrapEnv();
+    process.env.XDG_DATA_HOME = xdgDataHome;
+    process.env.LOCALAPPDATA = path.join(tmp, "ignored-local-app-data");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "win32",
+    });
+    expectPathsAfter(updated, "/usr/bin", [shimsDir]);
+  });
+
+  it("preserves a nonblank MISE_DATA_DIR verbatim", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-literal-mise");
+    const miseDataDir = path.join(tmp, "mise ");
+    const shimsDir = path.join(miseDataDir, "shims");
+    setDir(shimsDir);
+    resetBootstrapEnv();
+    process.env.MISE_DATA_DIR = miseDataDir;
 
     const updated = bootstrapPath({
       execPath: appCli,
