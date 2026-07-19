@@ -169,6 +169,7 @@ private const val CRON_JOBS_MAX_PAGES = 100
 private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
 private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val OperatorAdminScope = "operator.admin"
+private const val OperatorPairingScope = "operator.pairing"
 
 private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
 
@@ -186,6 +187,151 @@ internal typealias GatewayDataRequestOverride =
 private class ExecApprovalWriteOutcomeUnknown : IllegalStateException("approval resolve response was not authoritative")
 
 private class GatewayApprovalRpcUnavailable : IllegalStateException("Gateway approval RPC catalog is inconsistent")
+
+data class GatewayDevicePairingCapabilities(
+  val canList: Boolean = false,
+  val canApprove: Boolean = false,
+  val canReject: Boolean = false,
+  val canRemove: Boolean = false,
+) {
+  val canManage: Boolean
+    get() = canList && (canApprove || canReject || canRemove)
+
+  internal fun supports(action: GatewayDevicePairingAction): Boolean =
+    canList &&
+      when (action) {
+        GatewayDevicePairingAction.Approve -> canApprove
+        GatewayDevicePairingAction.Reject -> canReject
+        GatewayDevicePairingAction.Remove -> canRemove
+      }
+}
+
+internal fun selectGatewayDevicePairingCapabilities(
+  methods: Set<String>,
+  scopes: List<String>,
+): GatewayDevicePairingCapabilities {
+  // Extending the limited mobile bootstrap profile with pairing is a gateway-side
+  // product decision; this UI only reflects hello-granted scopes and methods.
+  val hasPairingScope = scopes.any { it == OperatorPairingScope || it == OperatorAdminScope }
+  if (!hasPairingScope) return GatewayDevicePairingCapabilities()
+  val hasAdminScope = OperatorAdminScope in scopes
+  return GatewayDevicePairingCapabilities(
+    canList = "device.pair.list" in methods,
+    canApprove = "device.pair.approve" in methods,
+    canReject = "device.pair.reject" in methods,
+    canRemove = hasAdminScope && "device.pair.remove" in methods,
+  )
+}
+
+/**
+ * Mirrors the gateway's non-admin approval checks for the requested access set.
+ * See src/gateway/server-methods/devices.ts:268-331 and src/infra/device-pairing.ts:854-873.
+ */
+internal fun canApproveGatewayDevicePairing(
+  capabilities: GatewayDevicePairingCapabilities,
+  callerScopes: List<String>,
+  pending: GatewayPendingDeviceSummary,
+): Boolean {
+  if (!capabilities.supports(GatewayDevicePairingAction.Approve)) return false
+  val roles =
+    pending.roles
+      .map(String::trim)
+      .filter(String::isNotEmpty)
+      .toSet()
+  val scopes =
+    pending.scopes
+      .map(String::trim)
+      .filter(String::isNotEmpty)
+      .toSet()
+  if (scopes.any { scope -> roles.none { role -> roleAllowsScope(role, scope) } }) return false
+
+  val grantedScopes = callerScopes.map(String::trim).filter(String::isNotEmpty).toSet()
+  if (OperatorAdminScope in grantedScopes) return true
+  if (roles.any { it != "operator" }) return false
+  return scopes.all { scope -> operatorScopeAllowed(scope, grantedScopes) }
+}
+
+private fun roleAllowsScope(
+  role: String,
+  scope: String,
+): Boolean =
+  if (role == "operator") {
+    scope.startsWith("operator.")
+  } else {
+    scope.startsWith("$role.")
+  }
+
+private fun operatorScopeAllowed(
+  requestedScope: String,
+  grantedScopes: Set<String>,
+): Boolean =
+  when (requestedScope) {
+    "operator.read" -> "operator.read" in grantedScopes || "operator.write" in grantedScopes
+    "operator.write" -> "operator.write" in grantedScopes
+    else -> requestedScope in grantedScopes
+  }
+
+enum class GatewayDevicePairingAction(
+  internal val method: String,
+  internal val idKey: String,
+  internal val successNotice: NativeText,
+) {
+  Approve("device.pair.approve", "requestId", nativeText("Device approved.")),
+  Reject("device.pair.reject", "requestId", nativeText("Pairing request rejected.")),
+  Remove("device.pair.remove", "deviceId", nativeText("Paired device removed.")),
+}
+
+data class GatewayDevicePairingMutation(
+  val action: GatewayDevicePairingAction,
+  val targetId: String,
+)
+
+internal sealed interface GatewayDevicePairingMutationOutcome {
+  data object Approved : GatewayDevicePairingMutationOutcome
+
+  data object Rejected : GatewayDevicePairingMutationOutcome
+
+  data object Removed : GatewayDevicePairingMutationOutcome
+
+  data object NotVerified : GatewayDevicePairingMutationOutcome
+}
+
+internal fun verifyGatewayDevicePairingMutation(
+  mutation: GatewayDevicePairingMutation,
+  expectedDeviceId: String,
+  mutationAccepted: Boolean,
+  pending: List<GatewayPendingDeviceSummary>,
+  paired: List<GatewayPairedDeviceSummary>,
+): GatewayDevicePairingMutationOutcome =
+  if (!mutationAccepted) {
+    GatewayDevicePairingMutationOutcome.NotVerified
+  } else {
+    when (mutation.action) {
+      GatewayDevicePairingAction.Approve ->
+        if (
+          pending.none { it.requestId == mutation.targetId } &&
+          paired.any { it.deviceId == expectedDeviceId }
+        ) {
+          GatewayDevicePairingMutationOutcome.Approved
+        } else {
+          GatewayDevicePairingMutationOutcome.NotVerified
+        }
+      GatewayDevicePairingAction.Reject ->
+        if (pending.none { it.requestId == mutation.targetId }) {
+          GatewayDevicePairingMutationOutcome.Rejected
+        } else {
+          GatewayDevicePairingMutationOutcome.NotVerified
+        }
+      GatewayDevicePairingAction.Remove ->
+        if (paired.none { it.deviceId == mutation.targetId }) {
+          GatewayDevicePairingMutationOutcome.Removed
+        } else {
+          GatewayDevicePairingMutationOutcome.NotVerified
+        }
+    }
+  }
+
+internal fun buildGatewayDevicePairingMutationParams(mutation: GatewayDevicePairingMutation): JsonObject = buildJsonObject { put(mutation.action.idKey, JsonPrimitive(mutation.targetId)) }
 
 internal enum class SkillWorkshopGatewayAction(
   val methodSuffix: String,
@@ -993,6 +1139,14 @@ class NodeRuntime private constructor(
   val nodesDevicesRefreshing: StateFlow<Boolean> = _nodesDevicesRefreshing.asStateFlow()
   private val _nodesDevicesErrorText = MutableStateFlow<NativeText?>(null)
   val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.resolveOptionalNativeText()
+  private val _nodesDevicesNoticeText = MutableStateFlow<NativeText?>(null)
+  val nodesDevicesNoticeText: StateFlow<String?> = _nodesDevicesNoticeText.resolveOptionalNativeText()
+  private val _devicePairingCapabilities = MutableStateFlow(GatewayDevicePairingCapabilities())
+  val devicePairingCapabilities: StateFlow<GatewayDevicePairingCapabilities> =
+    _devicePairingCapabilities.asStateFlow()
+  private val _devicePairingMutation = MutableStateFlow<GatewayDevicePairingMutation?>(null)
+  val devicePairingMutation: StateFlow<GatewayDevicePairingMutation?> = _devicePairingMutation.asStateFlow()
+  private val devicePairingMutationLock = Any()
   private val nodeApprovalRefreshGuard = LatestGatewayRefreshGuard()
   private val _execApprovals = MutableStateFlow<List<GatewayExecApprovalSummary>>(emptyList())
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = _execApprovals.asStateFlow()
@@ -1089,7 +1243,10 @@ class NodeRuntime private constructor(
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
         replaceGatewayMethods(hello.methods)
-        _operatorScopes.value = normalizeOperatorScopes(hello.authScopes)
+        val operatorScopes = normalizeOperatorScopes(hello.authScopes)
+        _operatorScopes.value = operatorScopes
+        _devicePairingCapabilities.value =
+          selectGatewayDevicePairingCapabilities(hello.methods, operatorScopes)
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         val mainSessionKey =
           prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
@@ -1239,6 +1396,7 @@ class NodeRuntime private constructor(
     _gatewayUpdateAvailable.value = null
     replaceGatewayMethods(emptySet())
     _operatorScopes.value = emptyList()
+    _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
@@ -1290,6 +1448,12 @@ class NodeRuntime private constructor(
         pendingDevices = emptyList(),
         pairedDevices = emptyList(),
       )
+    _nodesDevicesRefreshing.value = false
+    _nodesDevicesErrorText.value = null
+    _nodesDevicesNoticeText.value = null
+    synchronized(devicePairingMutationLock) {
+      _devicePairingMutation.value = null
+    }
     invalidateExecApprovalRefreshes()
     resolvedExecApprovalIds.clear()
     if (retirePendingCronRuns) {
@@ -2244,6 +2408,51 @@ class NodeRuntime private constructor(
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
     scope.launch {
       refreshNodesDevicesFromGateway()
+    }
+  }
+
+  fun approveDevicePairing(
+    requestId: String,
+    deviceId: String,
+  ) {
+    startDevicePairingMutation(
+      mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Approve, requestId),
+      expectedDeviceId = deviceId,
+    )
+  }
+
+  fun rejectDevicePairing(requestId: String) {
+    startDevicePairingMutation(
+      mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Reject, requestId),
+      expectedDeviceId = "",
+    )
+  }
+
+  fun removePairedDevice(deviceId: String) {
+    startDevicePairingMutation(
+      mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Remove, deviceId),
+      expectedDeviceId = deviceId,
+    )
+  }
+
+  private fun startDevicePairingMutation(
+    mutation: GatewayDevicePairingMutation,
+    expectedDeviceId: String,
+  ) {
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return
+    if (mutation.targetId.isBlank()) return
+    if (mutation.action == GatewayDevicePairingAction.Approve && expectedDeviceId.isBlank()) return
+    // Capture the gateway scope at claim time: the ids were validated against the gateway the
+    // user is looking at, and a reconnect/switch before the coroutine runs must not let the
+    // request (especially Remove, where deviceIds recur across gateways) reach a replacement.
+    val gatewayScope = captureGatewayDataScope() ?: return
+    synchronized(devicePairingMutationLock) {
+      if (_devicePairingMutation.value != null) return
+      if (!_devicePairingCapabilities.value.supports(mutation.action)) return
+      _devicePairingMutation.value = mutation
+    }
+    scope.launch {
+      mutateDevicePairingOnGateway(gatewayScope, mutation, expectedDeviceId)
     }
   }
 
@@ -6107,6 +6316,118 @@ class NodeRuntime private constructor(
       if (normalizedProposalId != null) put("proposalId", JsonPrimitive(normalizedProposalId))
     }
 
+  private suspend fun mutateDevicePairingOnGateway(
+    gatewayScope: GatewayDataScope,
+    mutation: GatewayDevicePairingMutation,
+    expectedDeviceId: String,
+  ) {
+    publishGatewayData(gatewayScope) {
+      _nodesDevicesErrorText.value = null
+      _nodesDevicesNoticeText.value = null
+    }
+    try {
+      // A missing item alone is ambiguous: another operator may have resolved it.
+      // Require the exact write acknowledgement plus the canonical list terminal state.
+      var definitiveFailure: NativeText? = null
+      val mutationAccepted =
+        try {
+          val response =
+            requestGatewayData(
+              gatewayScope = gatewayScope,
+              method = mutation.action.method,
+              paramsJson = buildGatewayDevicePairingMutationParams(mutation).toString(),
+            )
+          val result = json.parseToJsonElement(response).asObjectOrNull()
+          when (mutation.action) {
+            GatewayDevicePairingAction.Approve ->
+              result?.get("requestId").asStringOrNull()?.trim() == mutation.targetId &&
+                result
+                  ?.get("device")
+                  .asObjectOrNull()
+                  ?.get("deviceId")
+                  .asStringOrNull()
+                  ?.trim() ==
+                expectedDeviceId
+            GatewayDevicePairingAction.Reject ->
+              result?.get("requestId").asStringOrNull()?.trim() == mutation.targetId
+            GatewayDevicePairingAction.Remove ->
+              result?.get("deviceId").asStringOrNull()?.trim() == mutation.targetId
+          }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: GatewayRequestRejected) {
+          definitiveFailure = verbatimText(err.gatewayError.message)
+          false
+        } catch (err: GatewayRequestDefinitiveFailure) {
+          definitiveFailure = verbatimText(err.message ?: "Gateway request failed.")
+          false
+        } catch (_: GatewayRequestOutcomeUnknown) {
+          false
+        } catch (_: Throwable) {
+          false
+        }
+
+      val devicesRoot =
+        try {
+          val response = requestGatewayData(gatewayScope, "device.pair.list", "{}")
+          json.parseToJsonElement(response).asObjectOrNull()
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Throwable) {
+          null
+        }
+      val pending = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray)
+      val paired = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray)
+      val hasCanonicalList =
+        devicesRoot?.get("pending") is JsonArray && devicesRoot["paired"] is JsonArray
+      val outcome =
+        if (hasCanonicalList) {
+          verifyGatewayDevicePairingMutation(
+            mutation = mutation,
+            expectedDeviceId = expectedDeviceId,
+            mutationAccepted = mutationAccepted,
+            pending = pending,
+            paired = paired,
+          )
+        } else {
+          GatewayDevicePairingMutationOutcome.NotVerified
+        }
+      publishGatewayData(gatewayScope) {
+        if (hasCanonicalList) {
+          // Claim the generation only with the canonical post-mutation list in hand and only
+          // while this gateway scope is still current: older refreshes that read pre-mutation
+          // state are invalidated, a stale mutation from a previous gateway cannot touch the
+          // new gateway's refresh, and the mutation takes over the refreshing flag it displaced.
+          val refreshGeneration = nodeApprovalRefreshGuard.begin()
+          nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+            _nodesDevicesSummary.value =
+              _nodesDevicesSummary.value.copy(
+                pendingDevices = pending,
+                pairedDevices = paired,
+                devicePairingAvailable = true,
+              )
+            _nodesDevicesRefreshing.value = false
+          }
+        }
+        if (definitiveFailure != null) {
+          _nodesDevicesErrorText.value = definitiveFailure
+        } else if (outcome == GatewayDevicePairingMutationOutcome.NotVerified) {
+          _nodesDevicesErrorText.value = nativeText("Could not verify the device pairing change. Refresh and try again.")
+        } else {
+          _nodesDevicesNoticeText.value = mutation.action.successNotice
+        }
+      }
+    } finally {
+      publishGatewayData(gatewayScope) {
+        synchronized(devicePairingMutationLock) {
+          if (_devicePairingMutation.value == mutation) {
+            _devicePairingMutation.value = null
+          }
+        }
+      }
+    }
+  }
+
   private suspend fun refreshNodesDevicesFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
@@ -6117,6 +6438,7 @@ class NodeRuntime private constructor(
           nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
             _nodesDevicesRefreshing.value = true
             _nodesDevicesErrorText.value = null
+            _nodesDevicesNoticeText.value = null
             _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
             val pendingFallback = _nodeCapabilityApproval.value.withoutExactRequestId()
             if (pendingFallback != null) {
@@ -6178,10 +6500,14 @@ class NodeRuntime private constructor(
       }
       scheduleNodeApprovalCommandRefresh(gatewayScope, refreshGeneration, approval)
       val devicesRoot =
-        try {
-          val devicesRes = requestGatewayData(gatewayScope, "device.pair.list", "{}")
-          json.parseToJsonElement(devicesRes).asObjectOrNull()
-        } catch (_: Throwable) {
+        if (_devicePairingCapabilities.value.canList) {
+          try {
+            val devicesRes = requestGatewayData(gatewayScope, "device.pair.list", "{}")
+            json.parseToJsonElement(devicesRes).asObjectOrNull()
+          } catch (_: Throwable) {
+            null
+          }
+        } else {
           null
         }
       publishGatewayData(gatewayScope) {
@@ -7213,9 +7539,15 @@ class NodeRuntime private constructor(
         GatewayPendingDeviceSummary(
           requestId = requestId,
           deviceId = deviceId,
+          publicKey = obj["publicKey"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          platform = obj["platform"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          clientId = obj["clientId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          clientMode = obj["clientMode"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          browserOrigin = obj["browserOrigin"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          roles = parseStringArray(obj["roles"] as? JsonArray),
+          roles = parseDeviceRoles(obj),
           scopes = parseStringArray(obj["scopes"] as? JsonArray),
           requestedAtMs = obj.long("ts"),
           repair = obj.boolean("isRepair"),
@@ -7232,12 +7564,18 @@ class NodeRuntime private constructor(
           deviceId = deviceId,
           displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          roles = parseStringArray(obj["roles"] as? JsonArray),
+          roles = parseDeviceRoles(obj),
           scopes = parseStringArray(obj["scopes"] as? JsonArray),
           tokens = parseDeviceTokens(obj["tokens"] as? JsonArray),
           approvedAtMs = obj.long("approvedAtMs"),
         )
       }.orEmpty()
+
+  private fun parseDeviceRoles(device: JsonObject): List<String> {
+    val roles = parseStringArray(device["roles"] as? JsonArray)
+    if (roles.isNotEmpty()) return roles
+    return listOfNotNull(device["role"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() })
+  }
 
   private fun parseDeviceTokens(tokens: JsonArray?): List<GatewayDeviceTokenSummary> =
     tokens
@@ -7997,7 +8335,13 @@ data class GatewayNodeSummary(
 data class GatewayPendingDeviceSummary(
   val requestId: String,
   val deviceId: String,
+  val publicKey: String? = null,
   val displayName: String?,
+  val platform: String? = null,
+  val deviceFamily: String? = null,
+  val clientId: String? = null,
+  val clientMode: String? = null,
+  val browserOrigin: String? = null,
   val remoteIp: String?,
   val roles: List<String>,
   val scopes: List<String>,
