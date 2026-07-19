@@ -228,6 +228,33 @@ describe("mime detection", () => {
     });
   });
 
+  it("preserves audio/x-m4a header for isom-brand ISO-BMFF bytes (Android/ffmpeg m4a)", async () => {
+    // Non-Apple m4a files use "isom" as the ftyp major brand;
+    // file-type sniffs those as video/mp4 regardless of audio content.
+    const isomBrand = Buffer.from(
+      // 28-byte ftyp box: size=28, "ftyp", major="isom", minor=0, compat=["isom"]
+      "0000001c6674797069736f6d0000000069736f6d0000000000000000",
+      "hex",
+    );
+
+    await expectDetectedMime({
+      input: { buffer: isomBrand, filePath: "voice.m4a", headerMime: "audio/x-m4a" },
+      expected: "audio/x-m4a",
+    });
+  });
+
+  it("uses the file extension to rescue isom-brand bytes when no header exists", async () => {
+    const isomBrand = Buffer.from(
+      "0000001c6674797069736f6d0000000069736f6d0000000000000000",
+      "hex",
+    );
+
+    await expectDetectedMime({
+      input: { buffer: isomBrand, filePath: "voice.m4a" },
+      expected: "audio/x-m4a",
+    });
+  });
+
   it("does not let conflicting audio metadata override MPEG video bytes", async () => {
     const mpegProgramStream = Buffer.from([0x00, 0x00, 0x01, 0xba, 0x00, 0x00, 0x00, 0x00]);
 
