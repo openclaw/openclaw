@@ -116,6 +116,7 @@ function createInput(options?: { activationError?: Error }) {
     replaySafeToolNames: new Set(["read"]),
     replaySafeTools: new Set(allCustomTools),
   };
+  const onYield = vi.fn();
   let onDeliveredSourceReply: (() => void) | undefined;
 
   hoisted.createPreparedEmbeddedAgentSettingsManager.mockReturnValue(settingsManager);
@@ -162,6 +163,7 @@ function createInput(options?: { activationError?: Error }) {
         expect(session).toBe(activeSession);
         events.push("publish-session");
       },
+      onYield,
       onSystemPromptChanged: (systemPrompt: string) => {
         expect(systemPrompt).toBe("system prompt");
         events.push("publish-system-prompt");
@@ -172,6 +174,7 @@ function createInput(options?: { activationError?: Error }) {
       sessionManager: sessionManager as never,
     },
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
+    onYield,
     resourceLoader,
     setActiveToolsByName,
     sessionToolAllowlist,
@@ -218,6 +221,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
+    await fixture.activeSession.agent.onToolResultControl?.({
+      type: "yield",
+      message: " Waiting for answer ",
+    });
+    expect(fixture.onYield).toHaveBeenCalledWith("Waiting for answer");
   });
 
   it("publishes session ownership before activation can fail", async () => {

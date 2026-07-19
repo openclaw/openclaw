@@ -1067,12 +1067,39 @@ async function finalizeExecutedToolCall(
           content: afterResult.content ?? result.content,
           details: afterResult.details ?? result.details,
           terminate: afterResult.terminate ?? result.terminate,
+          control: afterResult.control ?? result.control,
         };
         isError = afterResult.isError ?? isError;
       }
     } catch (error) {
       result = createErrorToolResult(error instanceof Error ? error.message : String(error));
       isError = true;
+    }
+  }
+
+  if (result.control) {
+    if (!config.onToolResultControl) {
+      result = createErrorToolResult(
+        `Tool requested ${result.control.type}, but ${result.control.type} is not supported in this runtime`,
+      );
+      isError = true;
+    } else if (prepared.tool.canYield !== true) {
+      result = createErrorToolResult(
+        `Tool ${prepared.tool.name} requested ${result.control.type}, but yielding tools must declare canYield: true`,
+      );
+      isError = true;
+    } else if (prepared.tool.executionMode !== "sequential") {
+      result = createErrorToolResult(
+        `Tool ${prepared.tool.name} requested ${result.control.type}, but yielding tools must declare executionMode: "sequential"`,
+      );
+      isError = true;
+    } else {
+      try {
+        await config.onToolResultControl(result.control);
+      } catch (error) {
+        result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+        isError = true;
+      }
     }
   }
 
