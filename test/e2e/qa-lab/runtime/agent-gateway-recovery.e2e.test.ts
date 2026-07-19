@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 
 const RECOVERED_MARKER = "GATEWAY-RECOVERY-OK";
-const RECOVERY_PROMPT =
-  "final-only marker streaming qa check; reply exactly `GATEWAY-RECOVERY-OK`";
+const RECOVERY_PROMPT = "final-only marker streaming qa check; reply exactly `GATEWAY-RECOVERY-OK`";
 
 type RecoveryStep = {
   method: "agent" | "agent.wait";
@@ -155,72 +154,68 @@ async function readMockRequestCount(baseUrl: string): Promise<number> {
 }
 
 describe("agent Gateway recovery", () => {
-  it(
-    "recovers a terminal result after accepted disconnect without starting duplicate work",
-    async () => {
-      const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 2_000 });
-      cleanups.push(() => mock.stop());
-      const gateway = await startQaGatewayChild({
-        repoRoot: process.cwd(),
-        useRepoCli: true,
-        providerBaseUrl: `${mock.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiEnabled: false,
-        runtimeEnvPatch: { OPENCLAW_TEST_RUNTIME_LOG: "1" },
-      });
-      cleanups.push(() => gateway.stop());
-      const proxy = await startRecoveryProxy(gateway.wsUrl);
-      cleanups.push(() => proxy.stop());
-      gateway.runtimeEnv.OPENCLAW_GATEWAY_URL = proxy.url;
+  it("recovers a terminal result after accepted disconnect without starting duplicate work", async () => {
+    const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 2_000 });
+    cleanups.push(() => mock.stop());
+    const gateway = await startQaGatewayChild({
+      repoRoot: process.cwd(),
+      useRepoCli: true,
+      providerBaseUrl: `${mock.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      runtimeEnvPatch: { OPENCLAW_TEST_RUNTIME_LOG: "1" },
+    });
+    cleanups.push(() => gateway.stop());
+    const proxy = await startRecoveryProxy(gateway.wsUrl);
+    cleanups.push(() => proxy.stop());
+    gateway.runtimeEnv.OPENCLAW_GATEWAY_URL = proxy.url;
 
-      const output = await gateway.runCli([
+    const output = await gateway.runCli([
+      "agent",
+      "--agent",
+      "qa",
+      "--message",
+      RECOVERY_PROMPT,
+      "--json",
+      "--timeout",
+      "30",
+    ]);
+    expect(output).toContain(RECOVERED_MARKER);
+    expect(proxy.capture.droppedAcceptedConnection).toBe(true);
+    expect(proxy.capture.steps).toEqual([
+      { method: "agent", replayOnly: false },
+      { method: "agent.wait" },
+      { method: "agent", replayOnly: true },
+    ]);
+    const providerRequestsAfterRecovery = await readMockRequestCount(mock.baseUrl);
+    expect(providerRequestsAfterRecovery).toBe(1);
+
+    const cacheMissRunId = `qa-cache-miss-${randomUUID()}`;
+    await expect(
+      gateway.call(
         "agent",
-        "--agent",
-        "qa",
-        "--message",
-        RECOVERY_PROMPT,
-        "--json",
-        "--timeout",
-        "30",
-      ]);
-      expect(output).toContain(RECOVERED_MARKER);
-      expect(proxy.capture.droppedAcceptedConnection).toBe(true);
-      expect(proxy.capture.steps).toEqual([
-        { method: "agent", replayOnly: false },
-        { method: "agent.wait" },
-        { method: "agent", replayOnly: true },
-      ]);
-      const providerRequestsAfterRecovery = await readMockRequestCount(mock.baseUrl);
-      expect(providerRequestsAfterRecovery).toBe(1);
+        {
+          message: "cache-only recovery must not start this turn",
+          agentId: "qa",
+          idempotencyKey: cacheMissRunId,
+          replayOnly: true,
+        },
+        { expectFinal: true, timeoutMs: 10_000 },
+      ),
+    ).rejects.toThrow(/No cached agent result.+did not start a new run/s);
+    expect(await readMockRequestCount(mock.baseUrl)).toBe(providerRequestsAfterRecovery);
 
-      const cacheMissRunId = `qa-cache-miss-${randomUUID()}`;
-      await expect(
-        gateway.call(
-          "agent",
-          {
-            message: "cache-only recovery must not start this turn",
-            agentId: "qa",
-            idempotencyKey: cacheMissRunId,
-            replayOnly: true,
-          },
-          { expectFinal: true, timeoutMs: 10_000 },
-        ),
-      ).rejects.toThrow(/No cached agent result.+did not start a new run/s);
-      expect(await readMockRequestCount(mock.baseUrl)).toBe(providerRequestsAfterRecovery);
-
-      console.info(
-        [
-          "PROOF setup=real-cli+real-gateway+websocket-fault-proxy+mock-model-provider",
-          "PROOF disconnect=after-agent-accepted",
-          "PROOF rpc-sequence=agent -> agent.wait -> agent(replayOnly=true)",
-          `PROOF recovered-output=${RECOVERED_MARKER}`,
-          `PROOF provider-requests=${providerRequestsAfterRecovery}`,
-          "PROOF cache-miss=AGENT_RESULT_NOT_FOUND",
-          "PROOF cache-miss-provider-delta=0",
-        ].join("\n"),
-      );
-    },
-    180_000,
-  );
+    console.info(
+      [
+        "PROOF setup=real-cli+real-gateway+websocket-fault-proxy+mock-model-provider",
+        "PROOF disconnect=after-agent-accepted",
+        "PROOF rpc-sequence=agent -> agent.wait -> agent(replayOnly=true)",
+        `PROOF recovered-output=${RECOVERED_MARKER}`,
+        `PROOF provider-requests=${providerRequestsAfterRecovery}`,
+        "PROOF cache-miss=AGENT_RESULT_NOT_FOUND",
+        "PROOF cache-miss-provider-delta=0",
+      ].join("\n"),
+    );
+  }, 180_000);
 });

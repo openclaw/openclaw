@@ -25,6 +25,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case notLinked = "NOT_LINKED"
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
+    case agentResultNotFound = "AGENT_RESULT_NOT_FOUND"
     case invalidRequest = "INVALID_REQUEST"
     case forbidden = "FORBIDDEN"
     case approvalNotFound = "APPROVAL_NOT_FOUND"
@@ -2350,6 +2351,7 @@ public struct AgentParams: Codable, Sendable {
     public let swarmoutputschema: [String: AnyCodable]?
     public let forcerestartsafetools: Bool?
     public let voicewaketrigger: String?
+    public let replayonly: Bool?
     public let idempotencykey: String
     public let label: String?
 
@@ -2397,6 +2399,7 @@ public struct AgentParams: Codable, Sendable {
         swarmoutputschema: [String: AnyCodable]? = nil,
         forcerestartsafetools: Bool? = nil,
         voicewaketrigger: String? = nil,
+        replayonly: Bool? = nil,
         idempotencykey: String,
         label: String? = nil)
     {
@@ -2443,6 +2446,7 @@ public struct AgentParams: Codable, Sendable {
         self.swarmoutputschema = swarmoutputschema
         self.forcerestartsafetools = forcerestartsafetools
         self.voicewaketrigger = voicewaketrigger
+        self.replayonly = replayonly
         self.idempotencykey = idempotencykey
         self.label = label
     }
@@ -2491,6 +2495,7 @@ public struct AgentParams: Codable, Sendable {
         case swarmoutputschema = "swarmOutputSchema"
         case forcerestartsafetools = "forceRestartSafeTools"
         case voicewaketrigger = "voiceWakeTrigger"
+        case replayonly = "replayOnly"
         case idempotencykey = "idempotencyKey"
         case label
     }
