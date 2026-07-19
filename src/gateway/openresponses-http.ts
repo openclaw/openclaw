@@ -14,7 +14,7 @@ import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { admitAgentCommandFromIngress, agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -412,7 +412,7 @@ function createResponseResource(params: {
   };
 }
 
-async function runResponsesAgentCommand(params: {
+type ResponsesAgentCommandParams = {
   message: string;
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
@@ -424,23 +424,29 @@ async function runResponsesAgentCommand(params: {
   messageChannel: string;
   deps: CliDeps;
   abortSignal?: AbortSignal;
-}) {
+};
+
+function buildResponsesAgentCommandInput(params: ResponsesAgentCommandParams) {
+  return {
+    message: params.message,
+    images: params.images.length > 0 ? params.images : undefined,
+    clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
+    extraSystemPrompt: params.extraSystemPrompt || undefined,
+    model: params.modelOverride,
+    streamParams: params.streamParams ?? undefined,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    deliver: false as const,
+    messageChannel: params.messageChannel,
+    bestEffortDeliver: false as const,
+    allowModelOverride: params.modelOverride !== undefined,
+    abortSignal: params.abortSignal,
+  };
+}
+
+function runResponsesAgentCommand(params: ResponsesAgentCommandParams) {
   return agentCommandFromIngress(
-    {
-      message: params.message,
-      images: params.images.length > 0 ? params.images : undefined,
-      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
-      extraSystemPrompt: params.extraSystemPrompt || undefined,
-      model: params.modelOverride,
-      streamParams: params.streamParams ?? undefined,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      deliver: false,
-      messageChannel: params.messageChannel,
-      bestEffortDeliver: false,
-      allowModelOverride: params.modelOverride !== undefined,
-      abortSignal: params.abortSignal,
-    },
+    buildResponsesAgentCommandInput(params),
     defaultRuntime,
     params.deps,
   );
@@ -645,7 +651,7 @@ export async function handleOpenResponsesHttpRequest(
   const clientTools = extractClientTools(payload);
   let toolChoicePrompt: string | undefined;
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
-  let resolvedClientTools = clientTools;
+  let resolvedClientTools: typeof clientTools;
   try {
     const toolChoiceResult = applyToolChoice({
       tools: clientTools,
@@ -993,37 +999,16 @@ export async function handleOpenResponsesHttpRequest(
     maybeFinalize();
   };
 
-  // Send initial events
   const initialResponse = createResponseResource({
     id: responseId,
     model,
     status: "in_progress",
     output: [],
   });
-
-  writeSseEvent(res, { type: "response.created", response: initialResponse });
-  writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
-
-  // Add output item
   const outputItem = createAssistantOutputItem({
     id: outputItemId,
     text: "",
     status: "in_progress",
-  });
-
-  writeSseEvent(res, {
-    type: "response.output_item.added",
-    output_index: 0,
-    item: outputItem,
-  });
-
-  // Add content part
-  writeSseEvent(res, {
-    type: "response.content_part.added",
-    item_id: outputItemId,
-    output_index: 0,
-    content_index: 0,
-    part: { type: "output_text", text: "" },
   });
 
   unsubscribe = onAgentEvent((evt) => {
@@ -1110,21 +1095,70 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
+  const commandParams: ResponsesAgentCommandParams = {
+    message: prompt.message,
+    images,
+    clientTools: resolvedClientTools,
+    extraSystemPrompt,
+    modelOverride,
+    streamParams,
+    sessionKey,
+    runId: responseId,
+    messageChannel,
+    deps,
+    abortSignal: abortController.signal,
+  };
+  let admission: Awaited<ReturnType<typeof admitAgentCommandFromIngress>> | undefined;
+  let agentRunPromise: ReturnType<typeof agentCommandFromIngress>;
+  try {
+    admission = await admitAgentCommandFromIngress(buildResponsesAgentCommandInput(commandParams));
+    agentRunPromise = agentCommandFromIngress(
+      admission.opts,
+      defaultRuntime,
+      deps,
+      admission.durableLifecycle,
+    );
+  } catch (err) {
+    admission?.durableLifecycle.close();
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    logWarn(`openresponses: durable streaming intake failed: ${String(err)}`);
+    const mapped = resolveOpenAiCompatError(err);
+    const errorResponse = createResponseResource({
+      id: responseId,
+      model,
+      status: "failed",
+      output: [],
+      error: mapped
+        ? { code: mapped.error.type, message: mapped.error.message }
+        : { code: "api_error", message: "internal error" },
+      usage: createEmptyUsage(),
+    });
+    writeSseEvent(res, { type: "response.failed", response: errorResponse });
+    writeDone(res);
+    res.end();
+    return true;
+  }
+
+  writeSseEvent(res, { type: "response.created", response: initialResponse });
+  writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
+  writeSseEvent(res, {
+    type: "response.output_item.added",
+    output_index: 0,
+    item: outputItem,
+  });
+  writeSseEvent(res, {
+    type: "response.content_part.added",
+    item_id: outputItemId,
+    output_index: 0,
+    content_index: 0,
+    part: { type: "output_text", text: "" },
+  });
+
   void (async () => {
     try {
-      const result = await runResponsesAgentCommand({
-        message: prompt.message,
-        images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        modelOverride,
-        streamParams,
-        sessionKey,
-        runId: responseId,
-        messageChannel,
-        deps,
-        abortSignal: abortController.signal,
-      });
+      const result = await agentRunPromise;
 
       finalUsage = extractUsageFromResult(result);
 
@@ -1364,6 +1398,7 @@ export async function handleOpenResponsesHttpRequest(
           data: { phase: "end" },
         });
       }
+      admission.durableLifecycle.close();
     }
   })();
 

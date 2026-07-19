@@ -24,6 +24,7 @@ describe("command-startup-policy", () => {
     expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["durable", "health"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
@@ -65,6 +66,11 @@ describe("command-startup-policy", () => {
     expect(
       resolvePolicy({
         commandPath: ["health"],
+      }).loadPlugins,
+    ).toBe(false);
+    expect(
+      resolvePolicy({
+        commandPath: ["durable", "runs"],
       }).loadPlugins,
     ).toBe(false);
     expect(

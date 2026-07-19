@@ -8,6 +8,7 @@ const ROOT_SECTIONS = [
   "meta",
   "env",
   "wizard",
+  "durable",
   "diagnostics",
   "logging",
   "cli",

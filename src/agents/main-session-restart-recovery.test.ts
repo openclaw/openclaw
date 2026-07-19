@@ -8,6 +8,7 @@ import {
   readSessionStoreForTest,
   writeSessionStoreForTestAsync,
 } from "../config/sessions/test-helpers.js";
+import { openDurableRuntimeStore } from "../durable/store-factory.js";
 import { callGateway } from "../gateway/call.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -778,6 +779,59 @@ describe("main-session-restart-recovery", () => {
     expect(resumeParams.lane).toBe("main");
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+  });
+
+  it("blocks automatic transcript resume while durable side-effect uncertainty is open", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:main";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run a non-idempotent tool" },
+      { role: "toolResult", content: "process state was lost during restart" },
+    ]);
+
+    const durableStore = openDurableRuntimeStore({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
+    });
+    try {
+      const run = durableStore.createRun({
+        operationKind: "openclaw.agent.turn",
+        operationVersion: "1",
+        status: "lost",
+        recoveryState: "lost",
+        sourceOwner: "session_store",
+        sourceRef: sessionKey,
+        completedAt: Date.now(),
+      });
+      durableStore.recordUncertaintyFact({
+        sourceOwner: "session_store",
+        sourceRef: sessionKey,
+        sourceRunId: run.runtimeRunId,
+        kind: "lost_after_dispatch",
+        dedupeKey: "lost-main-session-side-effect",
+        facts: { replaySafe: false },
+      });
+    } finally {
+      durableStore.close();
+    }
+
+    const result = await recoverRestartAbortedMainSessions({
+      cfg: { durable: { mode: "authority" } },
+      stateDir: tmpDir,
+    });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store[sessionKey]?.status).toBe("failed");
+    expect(store[sessionKey]?.abortedLastRun).toBe(true);
   });
 
   it("delivers resumed marked sessions through the current run recovery context", async () => {

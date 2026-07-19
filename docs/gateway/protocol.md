@@ -586,6 +586,41 @@ terminal summary, and sanitized error text. `agentId` identifies the agent
 executing the task; `sessionKey` and `ownerKey` preserve requester and control
 context.
 
+### Durable runtime inspection
+
+Operator clients may inspect durable runtime coordination state through bounded
+projections instead of reading the shared OpenClaw state database directly.
+Every method requires `operator.read`; none is a control-plane write.
+
+- `durable.coordination.get` requires `operator.read`.
+  - Params: `{ "runtimeRunId": string }`.
+  - Result: `{ "projection": DurableCoordinationProjection }`.
+  - The projection includes runtime identity, status, recovery state, current
+    step, waiting reason, external task/session/run bindings, child counts, ref
+    summaries, and bounded recovery diagnostics.
+- `durable.obligations.list` returns a bounded unified view of unresolved owner
+  rows, wake obligations, uncertainty, child correlations, and expired durable
+  leases.
+- `durable.wakes.list` returns source-backed wake obligations;
+  `durable.wakes.inspect` adds target resolution, delivery evidence, and open
+  uncertainty for one wake.
+- `durable.uncertainty.list` returns unresolved uncertainty facts.
+- `durable.delivery-attempts.list` returns bounded delivery evidence for one
+  `wakeId`.
+- `durable.health.get` returns enablement, authority mode, schema readiness,
+  process health, bounded store counters, or a bounded store error.
+
+Except for `durable.health.get`, durable inspection methods reject requests when
+`durable.mode` is `off`. Health remains available in disabled mode so an
+operator can distinguish disabled from degraded without opening state. Enabled
+reads require an already-installed durable schema and never initialize or
+migrate the shared database.
+
+Results omit raw metadata, event payloads, arbitrary facts/evidence objects,
+idempotency and dedupe keys, claim tokens, storage URIs, and the SQLite path.
+Arrays, refs, and diagnostic text are bounded. The initial protocol advertises
+no durable acknowledge, retry, resume, replay, resolve, or abandon method.
+
 ## Operator helper methods
 
 - `commands.list` (`operator.read`) fetches the runtime command inventory for

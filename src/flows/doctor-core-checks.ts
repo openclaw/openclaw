@@ -30,6 +30,11 @@ import {
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import {
+  resolveDurableRuntimeMode,
+  resolveDurableWorkerClaimTtlMs,
+  resolveDurableWorkerPollIntervalMs,
+} from "../durable/config.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -193,6 +198,47 @@ const gatewayConfigCheck: HealthCheck = {
       });
     }
     return findings;
+  },
+};
+
+const durableConfigCheck: HealthCheck = {
+  id: "core/doctor/durable-config",
+  kind: "core",
+  description: "Durable runtime mode and worker leases are operationally coherent.",
+  source: "doctor",
+  async detect(ctx) {
+    const mode = resolveDurableRuntimeMode(ctx.cfg.durable);
+    if (mode === "off") {
+      return [];
+    }
+    if (mode === "observe") {
+      return [
+        {
+          checkId: "core/doctor/durable-config",
+          severity: "info",
+          message:
+            "Durable runtime is observation-only; accepted work is not under durable authority and recovery workers are disabled.",
+          path: "durable.mode",
+          fixHint:
+            "Use durable.mode=authority only after validating durable intake, recovery, and owner-attention behavior for this deployment.",
+        },
+      ];
+    }
+
+    const pollIntervalMs = resolveDurableWorkerPollIntervalMs(ctx.cfg.durable);
+    const claimTtlMs = resolveDurableWorkerClaimTtlMs(ctx.cfg.durable);
+    if (claimTtlMs > pollIntervalMs) {
+      return [];
+    }
+    return [
+      {
+        checkId: "core/doctor/durable-config",
+        severity: "warning",
+        message: `Durable claim TTL (${claimTtlMs}ms) must outlive the worker poll interval (${pollIntervalMs}ms).`,
+        path: "durable.worker.claimTtlMs",
+        fixHint: "Set durable.worker.claimTtlMs higher than durable.worker.pollIntervalMs.",
+      },
+    ];
   },
 };
 
@@ -1161,6 +1207,7 @@ export function createCoreHealthChecks(
 ): readonly SplitHealthCheckInput[] {
   return [
     gatewayConfigCheck,
+    durableConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
     createSkillsReadinessCheck(deps),

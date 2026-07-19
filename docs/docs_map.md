@@ -1489,6 +1489,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS: launchctl env overrides
   - H2: Related
 
+## cli/durable.md
+
+- Route: /cli/durable
+- Headings:
+  - H2: Usage
+  - H2: Commands
+  - H2: Enablement
+  - H2: Output Boundary
+  - H2: Related
+
 ## cli/flows.md
 
 - Route: /cli/flows
@@ -3612,6 +3622,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Node helper methods
   - H2: Audit ledger RPC
   - H2: Task ledger RPCs
+  - H3: Durable runtime inspection
   - H2: Operator helper methods
   - H3: models.list views
   - H2: Exec approvals
@@ -8766,6 +8777,45 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Implementation Plan
   - H2: Acceptance Tests
   - H2: Open Questions
+
+## specs/durable-core-proposal-architecture.md
+
+- Route: /specs/durable-core-proposal-architecture
+- Headings:
+  - H1: Durable Core Residual-Gap Architecture Proposal
+  - H2: Candidate General Durable Runtime RFC
+  - H2: What Problem This Solves
+  - H2: Why The Residual Gap Matters
+  - H2: Ownership And Source-Of-Truth Position
+  - H3: Candidate Residual Schema
+  - H2: Durable Core Boundary
+  - H2: Candidate Integration Boundary
+  - H2: Intended User Value
+  - H2: Core Invariants
+  - H2: Durable Wake And Attention Obligations
+  - H2: Non Goals
+  - H2: Related
+
+## specs/durable-core-proposal-test-plan.md
+
+- Route: /specs/durable-core-proposal-test-plan
+- Headings:
+  - H1: Durable Core Residual-Gap Compatibility Check Plan
+  - H2: Scope
+  - H2: Root-Cause Coverage
+  - H2: Compatibility Check Hygiene
+  - H2: Docs-Only Validation Gate
+  - H2: Candidate Compatibility Matrix
+  - H3: Exact Schema Gate
+  - H3: Acceptance Front-Door Gate
+  - H2: Candidate Scenarios
+  - H3: Disabled Paths Never Mutate
+  - H3: Runtime Opt-In Without Worker Mutation
+  - H3: Wake And Owner Attention
+  - H3: Restart And Side-Effect Uncertainty
+  - H3: Privacy, Retention, And Compaction
+  - H2: Live Proof Policy
+  - H2: Related
 
 ## start/bootstrapping.md
 

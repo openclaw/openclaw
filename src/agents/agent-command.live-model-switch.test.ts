@@ -255,6 +255,7 @@ vi.mock("./agent-runtime-config.js", () => {
 });
 
 vi.mock("../config/runtime-snapshot.js", () => ({
+  getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   setRuntimeConfigSnapshot: vi.fn(),
 }));
 

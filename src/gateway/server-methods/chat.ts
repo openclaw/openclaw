@@ -78,6 +78,10 @@ import {
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  recordDurableChatSendIntake,
+  recordDurableChatSendTerminal,
+} from "../../durable/chat-send.js";
+import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -3511,6 +3515,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
         return;
       }
+      for (const abortedRunId of res.runIds) {
+        recordDurableChatSendTerminal({
+          runId: abortedRunId,
+          sessionKey: canonicalAbortSessionKey,
+          agentId: abortAgentId,
+          status: "cancelled",
+          summary: "rpc abort",
+          config: abortCfg.durable,
+          log: context.logGateway,
+        });
+      }
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
@@ -3568,6 +3583,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId,
           stopReason: "rpc",
           attemptId: normalizeUnknownText(pendingChatMatch.payload.attemptId),
+        });
+        recordDurableChatSendTerminal({
+          runId,
+          sessionKey: pendingChatMatch.sessionKey ?? canonicalAbortSessionKey,
+          agentId: abortAgentId,
+          status: "cancelled",
+          summary: "rpc abort before dispatch",
+          config: abortCfg.durable,
+          log: context.logGateway,
         });
         respond(true, { ok: true, aborted: true, runIds: [runId] });
         return;
@@ -3630,6 +3654,17 @@ export const chatHandlers: GatewayRequestHandlers = {
           stopReason: "rpc",
           allowSessionMismatch: true,
         });
+        if (queuedRes.aborted) {
+          recordDurableChatSendTerminal({
+            runId,
+            sessionKey: queued.sessionKey,
+            agentId: queued.agentId,
+            status: "cancelled",
+            summary: "rpc abort while queued",
+            config: abortCfg.durable,
+            log: context.logGateway,
+          });
+        }
         respond(true, {
           ok: true,
           aborted: queuedRes.aborted,
@@ -3675,6 +3710,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: active.sessionKey,
       stopReason: "rpc",
     });
+    if (res.aborted) {
+      recordDurableChatSendTerminal({
+        runId,
+        sessionKey: active.sessionKey,
+        agentId: active.agentId,
+        status: "cancelled",
+        summary: "rpc abort",
+        config: abortCfg.durable,
+        log: context.logGateway,
+      });
+    }
     if (res.aborted && active.controlUiVisible !== false && partialText && partialText.trim()) {
       await persistAbortedPartials({
         context,
@@ -4386,6 +4432,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "started" as const,
         ...(serverTiming ? { serverTiming } : {}),
       };
+      recordDurableChatSendIntake({
+        runId: clientRunId,
+        sessionKey,
+        agentId: selectedAgent.agentId ?? agentId,
+        message: rawMessage,
+        attachmentCount: normalizedAttachments.length,
+        config: cfg.durable,
+        log: context.logGateway,
+        now,
+      });
       emitDiagnosticsTimelineEvent(
         {
           type: "mark",
@@ -5727,6 +5783,17 @@ export const chatHandlers: GatewayRequestHandlers = {
                     ...(returnedAgentError ? { error: returnedAgentError } : {}),
                   },
                 });
+                recordDurableChatSendTerminal({
+                  runId: clientRunId,
+                  sessionKey,
+                  agentId,
+                  status: shouldBroadcastAgentError ? "failed" : "succeeded",
+                  summary: shouldBroadcastAgentError
+                    ? (returnedAgentErrorMessage ?? "agent returned an error payload")
+                    : "completed",
+                  config: cfg.durable,
+                  log: context.logGateway,
+                });
               }
             },
             {
@@ -5751,6 +5818,15 @@ export const chatHandlers: GatewayRequestHandlers = {
               sessionKey,
               agentId,
             });
+            recordDurableChatSendTerminal({
+              runId: clientRunId,
+              sessionKey,
+              agentId,
+              status: "succeeded",
+              summary: "queued follow-up accepted",
+              config: cfg.durable,
+              log: context.logGateway,
+            });
           }
         })
         .catch(async (err: unknown) => {
@@ -5774,6 +5850,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                 runId: clientRunId,
                 sessionKey,
                 agentId,
+              });
+              recordDurableChatSendTerminal({
+                runId: clientRunId,
+                sessionKey,
+                agentId,
+                status: "succeeded",
+                summary: "queued follow-up accepted",
+                config: cfg.durable,
+                log: context.logGateway,
               });
             }
             return;
@@ -5813,6 +5898,15 @@ export const chatHandlers: GatewayRequestHandlers = {
               },
               error,
             },
+          });
+          recordDurableChatSendTerminal({
+            runId: clientRunId,
+            sessionKey,
+            agentId,
+            status: activeRunAbort.controller.signal.aborted ? "cancelled" : "failed",
+            summary: errorMessage,
+            config: cfg.durable,
+            log: context.logGateway,
           });
           broadcastChatError({
             context,
@@ -5893,6 +5987,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           payload,
           error,
         },
+      });
+      recordDurableChatSendTerminal({
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        status: "failed",
+        summary: String(err),
+        config: cfg.durable,
+        log: context.logGateway,
       });
       respond(false, payload, error, {
         runId: clientRunId,

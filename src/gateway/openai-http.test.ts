@@ -18,6 +18,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
+  agentCommandAdmission,
   getFreePort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
@@ -2232,6 +2233,29 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("fails a streaming request before success framing when durable admission rejects", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommandAdmission.mockRejectedValueOnce(new Error("fault-injected authority intake"));
+
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const data = parseSseDataLines(text);
+    expect(data[data.length - 1]).toBe("[DONE]");
+    expect(data.slice(0, -1)).toEqual([
+      JSON.stringify({ error: { message: "internal error", type: "api_error" } }),
+    ]);
+    expect(text).not.toContain('"role":"assistant"');
+    expect(text).not.toContain('"object":"chat.completion.chunk"');
+    expect(agentCommand).not.toHaveBeenCalled();
   });
 
   it(
