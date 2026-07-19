@@ -36,7 +36,12 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
+import {
+  admitAgentCommandFromIngress,
+  agentCommand,
+  agentCommandFromIngress,
+  testing as agentCommandTesting,
+} from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -468,7 +473,7 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
-  it("persists a direct ingress turn with one terminal durable outcome", async () => {
+  it("reuses an awaitable ingress admission for one terminal durable outcome", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const stateDir = path.join(home, "durable-state");
@@ -480,17 +485,38 @@ describe("agentCommand", () => {
 
       const runId = "direct-ingress-durable-proof";
       try {
-        await agentCommandFromIngress(
-          {
-            message: "persist this direct ingress turn",
+        const admission = await admitAgentCommandFromIngress({
+          message: "persist this direct ingress turn",
+          runId,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          allowModelOverride: false,
+          deliver: false,
+        });
+        const admittedStore = openDurableRuntimeStore();
+        try {
+          const admittedRun = admittedStore.getRunByIdempotencyKey(
+            DURABLE_AGENT_TURN_OPERATION_KIND,
             runId,
-            sessionKey: "agent:main:main",
-            agentId: "main",
-            allowModelOverride: false,
-            deliver: false,
-          },
-          runtime,
-        );
+          );
+          expect(admittedRun).toMatchObject({ status: "running", recoveryState: "running" });
+          expect(
+            admittedStore.getTimeline(admittedRun!.runtimeRunId).map((event) => event.eventType),
+          ).toEqual(["agent.turn.received", "agent.turn.running"]);
+        } finally {
+          admittedStore.close();
+        }
+
+        try {
+          await agentCommandFromIngress(
+            admission.opts,
+            runtime,
+            undefined,
+            admission.durableLifecycle,
+          );
+        } finally {
+          admission.durableLifecycle.close();
+        }
 
         const durableStore = openDurableRuntimeStore();
         try {
@@ -520,6 +546,7 @@ describe("agentCommand", () => {
               ].includes(event.eventType),
             ),
           ).toHaveLength(1);
+          expect(durableStore.listRuns()).toHaveLength(1);
         } finally {
           durableStore.close();
         }
@@ -560,6 +587,16 @@ describe("agentCommand", () => {
             runtime,
           ),
         ).toThrow();
+        await expect(
+          admitAgentCommandFromIngress({
+            message: "must not be acknowledged",
+            runId: "awaitable-ingress-authority-failure",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            allowModelOverride: false,
+            deliver: false,
+          }),
+        ).rejects.toThrow();
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
       } finally {
         if (previousStateDir === undefined) {

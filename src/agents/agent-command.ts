@@ -2876,6 +2876,64 @@ function emitIngressModelUsageDiagnostic(
   });
 }
 
+export type AgentCommandIngressAdmission = {
+  opts: AgentCommandIngressOpts & { runId: string; lifecycleGeneration: string };
+  durableLifecycle: DurableAgentTurnLifecycle;
+};
+
+function prepareAgentCommandIngressOpts(
+  opts: AgentCommandIngressOpts,
+): AgentCommandIngressAdmission["opts"] {
+  const runId = opts.runId?.trim() || opts.sessionId?.trim() || randomUUID();
+  const lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
+  return { ...opts, runId, lifecycleGeneration };
+}
+
+function startAgentCommandIngressAdmission(
+  opts: AgentCommandIngressOpts,
+): AgentCommandIngressAdmission {
+  const effectiveOpts = prepareAgentCommandIngressOpts(opts);
+  const durableLifecycle = startDurableAgentTurnLifecycle({
+    runId: effectiveOpts.runId,
+    message: effectiveOpts.transcriptMessage ?? effectiveOpts.message,
+    agentId: effectiveOpts.agentId,
+    sessionKey: effectiveOpts.sessionKey,
+    channel:
+      effectiveOpts.runContext?.messageChannel ??
+      effectiveOpts.messageChannel ??
+      effectiveOpts.channel,
+    transport: "gateway",
+    deliver: effectiveOpts.deliver,
+    config: getRuntimeConfig().durable,
+  });
+  try {
+    durableLifecycle.markRunning({
+      sessionId: effectiveOpts.sessionId,
+      source: "ingress",
+    });
+  } catch (error) {
+    durableLifecycle.close();
+    throw error;
+  }
+  return { opts: effectiveOpts, durableLifecycle };
+}
+
+/** Persists ingress acceptance before a caller exposes a success boundary. */
+export function admitAgentCommandFromIngress(
+  opts: AgentCommandIngressOpts,
+): Promise<AgentCommandIngressAdmission> {
+  if (typeof opts.allowModelOverride !== "boolean") {
+    return Promise.reject(
+      new Error("allowModelOverride must be explicitly set for ingress agent runs."),
+    );
+  }
+  try {
+    return Promise.resolve(startAgentCommandIngressAdmission(opts));
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+  }
+}
+
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
 export function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
@@ -2888,37 +2946,13 @@ export function agentCommandFromIngress(
       new Error("allowModelOverride must be explicitly set for ingress agent runs."),
     );
   }
-  const runId = opts.runId?.trim() || opts.sessionId?.trim() || randomUUID();
-  const effectiveOpts = opts.runId ? opts : { ...opts, runId };
-  const lifecycleGeneration =
-    effectiveOpts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   const ownsDurableLifecycle = durableLifecycle === undefined;
-  const activeDurableLifecycle =
-    durableLifecycle ??
-    startDurableAgentTurnLifecycle({
-      runId,
-      message: effectiveOpts.transcriptMessage ?? effectiveOpts.message,
-      agentId: effectiveOpts.agentId,
-      sessionKey: effectiveOpts.sessionKey,
-      channel:
-        effectiveOpts.runContext?.messageChannel ??
-        effectiveOpts.messageChannel ??
-        effectiveOpts.channel,
-      transport: "gateway",
-      deliver: effectiveOpts.deliver,
-      config: getRuntimeConfig().durable,
-    });
-  if (ownsDurableLifecycle) {
-    try {
-      activeDurableLifecycle.markRunning({
-        sessionId: effectiveOpts.sessionId,
-        source: "ingress",
-      });
-    } catch (error) {
-      activeDurableLifecycle.close();
-      throw error;
-    }
-  }
+  const admission = ownsDurableLifecycle
+    ? startAgentCommandIngressAdmission(opts)
+    : { opts: prepareAgentCommandIngressOpts(opts), durableLifecycle };
+  const effectiveOpts = admission.opts;
+  const activeDurableLifecycle = admission.durableLifecycle;
+  const lifecycleGeneration = effectiveOpts.lifecycleGeneration;
   const execute = async () => {
     let result: Awaited<ReturnType<typeof agentCommandInternal>>;
     try {

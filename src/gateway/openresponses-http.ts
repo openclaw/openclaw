@@ -14,7 +14,7 @@ import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { admitAgentCommandFromIngress, agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -412,7 +412,7 @@ function createResponseResource(params: {
   };
 }
 
-function runResponsesAgentCommand(params: {
+type ResponsesAgentCommandParams = {
   message: string;
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
@@ -424,23 +424,29 @@ function runResponsesAgentCommand(params: {
   messageChannel: string;
   deps: CliDeps;
   abortSignal?: AbortSignal;
-}) {
+};
+
+function buildResponsesAgentCommandInput(params: ResponsesAgentCommandParams) {
+  return {
+    message: params.message,
+    images: params.images.length > 0 ? params.images : undefined,
+    clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
+    extraSystemPrompt: params.extraSystemPrompt || undefined,
+    model: params.modelOverride,
+    streamParams: params.streamParams ?? undefined,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    deliver: false as const,
+    messageChannel: params.messageChannel,
+    bestEffortDeliver: false as const,
+    allowModelOverride: params.modelOverride !== undefined,
+    abortSignal: params.abortSignal,
+  };
+}
+
+function runResponsesAgentCommand(params: ResponsesAgentCommandParams) {
   return agentCommandFromIngress(
-    {
-      message: params.message,
-      images: params.images.length > 0 ? params.images : undefined,
-      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
-      extraSystemPrompt: params.extraSystemPrompt || undefined,
-      model: params.modelOverride,
-      streamParams: params.streamParams ?? undefined,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      deliver: false,
-      messageChannel: params.messageChannel,
-      bestEffortDeliver: false,
-      allowModelOverride: params.modelOverride !== undefined,
-      abortSignal: params.abortSignal,
-    },
+    buildResponsesAgentCommandInput(params),
     defaultRuntime,
     params.deps,
   );
@@ -1089,22 +1095,31 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
-  let agentRunPromise: ReturnType<typeof runResponsesAgentCommand>;
+  const commandParams: ResponsesAgentCommandParams = {
+    message: prompt.message,
+    images,
+    clientTools: resolvedClientTools,
+    extraSystemPrompt,
+    modelOverride,
+    streamParams,
+    sessionKey,
+    runId: responseId,
+    messageChannel,
+    deps,
+    abortSignal: abortController.signal,
+  };
+  let admission: Awaited<ReturnType<typeof admitAgentCommandFromIngress>> | undefined;
+  let agentRunPromise: ReturnType<typeof agentCommandFromIngress>;
   try {
-    agentRunPromise = runResponsesAgentCommand({
-      message: prompt.message,
-      images,
-      clientTools: resolvedClientTools,
-      extraSystemPrompt,
-      modelOverride,
-      streamParams,
-      sessionKey,
-      runId: responseId,
-      messageChannel,
+    admission = await admitAgentCommandFromIngress(buildResponsesAgentCommandInput(commandParams));
+    agentRunPromise = agentCommandFromIngress(
+      admission.opts,
+      defaultRuntime,
       deps,
-      abortSignal: abortController.signal,
-    });
+      admission.durableLifecycle,
+    );
   } catch (err) {
+    admission?.durableLifecycle.close();
     closed = true;
     stopWatchingDisconnect();
     unsubscribe();
@@ -1383,6 +1398,7 @@ export async function handleOpenResponsesHttpRequest(
           data: { phase: "end" },
         });
       }
+      admission.durableLifecycle.close();
     }
   })();
 

@@ -20,7 +20,7 @@ import {
   type OpenAiChatCompletionsUsage,
 } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { admitAgentCommandFromIngress, agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -1286,10 +1286,18 @@ export async function handleOpenAiHttpRequest(
     unsubscribe();
   });
 
+  let admission: Awaited<ReturnType<typeof admitAgentCommandFromIngress>> | undefined;
   let agentRunPromise: ReturnType<typeof agentCommandFromIngress>;
   try {
-    agentRunPromise = agentCommandFromIngress(commandInput, defaultRuntime, deps);
+    admission = await admitAgentCommandFromIngress(commandInput);
+    agentRunPromise = agentCommandFromIngress(
+      admission.opts,
+      defaultRuntime,
+      deps,
+      admission.durableLifecycle,
+    );
   } catch (err) {
+    admission?.durableLifecycle.close();
     closed = true;
     stopWatchingDisconnect();
     unsubscribe();
@@ -1447,6 +1455,7 @@ export async function handleOpenAiHttpRequest(
           data: { phase: "end" },
         });
       }
+      admission.durableLifecycle.close();
     }
   })();
 
