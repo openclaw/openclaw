@@ -1,5 +1,6 @@
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import {
   appendChatMessageToCache,
   readChatMessagesFromCache,
@@ -42,12 +43,16 @@ function durableDeliveredAttachments(
   attachments: readonly ChatAttachment[] | undefined,
 ): ChatAttachment[] | undefined {
   return attachments?.flatMap((attachment) => {
-    if (!attachment.dataUrl) {
+    // Composer uploads keep their bytes in the payload store; queue rows carry
+    // metadata only. Resolve through the store or attachment-only turns
+    // materialize empty and vanish at chip retirement.
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    if (!dataUrl) {
       return [];
     }
     // Terminal retirement releases the queue-owned live blob. Pin synthetic
     // transcript content to durable bytes before that ownership ends.
-    return [{ ...attachment, previewUrl: attachment.dataUrl }];
+    return [{ ...attachment, dataUrl, previewUrl: dataUrl }];
   });
 }
 

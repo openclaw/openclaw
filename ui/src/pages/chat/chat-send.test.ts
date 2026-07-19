@@ -7440,6 +7440,66 @@ describe("handleSendChat", () => {
     expect(JSON.stringify(host.chatMessages[0])).toContain("keep this visible");
   });
 
+  it("materializes an attachment-only steered chip from store-backed payload bytes", () => {
+    const file = new File(["fake-png"], "shot.png", { type: "image/png" });
+    const dataUrl = "data:image/png;base64,ZmFrZS1wbmc=";
+    registerChatAttachmentPayload({
+      attachment: {
+        id: "steer-att",
+        mimeType: "image/png",
+        fileName: "shot.png",
+        sizeBytes: file.size,
+      },
+      dataUrl,
+      file,
+    });
+    const host = makeHost({
+      chatRunId: "active-run",
+      chatQueue: [
+        {
+          id: "attachment-only-steer",
+          text: "",
+          createdAt: 1,
+          kind: "steered",
+          pendingRunId: "active-run",
+          sendRunId: "steer-att-run",
+          sessionKey: "agent:main:main",
+          // Queue rows carry attachment metadata only; bytes live in the store.
+          attachments: [
+            { id: "steer-att", mimeType: "image/png", fileName: "shot.png", sizeBytes: file.size },
+          ],
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+
+    handlePageGatewayEvent(
+      host as unknown as ChatPageHost,
+      {
+        event: "chat",
+        payload: {
+          state: "final",
+          runId: "active-run",
+          sessionKey: "agent:main:main",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 2,
+          },
+        },
+      } as Parameters<typeof handlePageGatewayEvent>[1],
+    );
+
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      __openclaw: { idempotencyKey: "steer-att-run:user" },
+    });
+    // Inline data-URL images render as a labeled placeholder block; the point
+    // is the turn materializes with content instead of vanishing.
+    expect(JSON.stringify(host.chatMessages[0])).toContain("Attached image: shot.png");
+  });
+
   it("materializes both the run's queued turn and its steered follow-up at the terminal event", () => {
     const original = {
       id: "original-turn",
