@@ -895,9 +895,10 @@ async function inspectManualRunPreflight(
     // Normalize job tick state (clears stale runningAtMs markers) before
     // checking if already running, so a stale marker from a crashed Phase-1
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
-    recomputeNextRunsForMaintenance(state, {
-      ...(mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : {}),
-    });
+    recomputeNextRunsForMaintenance(
+      state,
+      mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
+    );
     const job = findJobOrThrow(state, id);
     try {
       assertSupportedJobSpec(job);
@@ -969,9 +970,10 @@ async function prepareManualRun(
     // The initial preflight is advisory. A command-lane wait or another cron
     // run can change this job before its reservation is persisted.
     await ensureLoaded(state, { skipRecompute: true });
-    recomputeNextRunsForMaintenance(state, {
-      ...(mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : {}),
-    });
+    recomputeNextRunsForMaintenance(
+      state,
+      mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
+    );
     const job = findJobOrThrow(state, id);
     try {
       assertSupportedJobSpec(job);
