@@ -47,10 +47,10 @@ function createMockBus() {
   };
 }
 
-function createRuntimeHarness(deliveredText = "|a|b|") {
+function createRuntimeHarness() {
   const recordInboundSession = vi.fn(async () => {});
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
-    await dispatcherOptions.deliver({ text: deliveredText });
+    await dispatcherOptions.deliver({ text: "|a|b|" });
   });
   const convertMarkdownTables = vi.fn((text: string) => `converted:${text}`);
   const runtime = {
@@ -99,9 +99,8 @@ function createRuntimeHarness(deliveredText = "|a|b|") {
 async function startGatewayHarness(params: {
   account: ReturnType<typeof buildResolvedNostrAccount>;
   cfg?: Parameters<typeof createStartAccountContext>[0]["cfg"];
-  deliveredText?: string;
 }) {
-  const harness = createRuntimeHarness(params.deliveredText);
+  const harness = createRuntimeHarness();
   const bus = createMockBus();
   setNostrRuntime(harness.runtime);
   mocks.startNostrBus.mockResolvedValueOnce(bus as never);
@@ -243,12 +242,16 @@ describe("nostr inbound gateway path", () => {
       expectedText: null,
     },
   ])("$name", async ({ deliveredText, expectedText }) => {
+    mocks.dispatchInboundDirectDm.mockImplementationOnce(
+      async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
+        await params.deliver({ text: deliveredText });
+      },
+    );
     const { harness, cleanup } = await startGatewayHarness({
       account: buildResolvedNostrAccount({
         publicKey: "bot-pubkey",
         config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
       }),
-      deliveredText,
     });
     const options = mockCallArg(mocks.startNostrBus) as {
       onMessage: (
@@ -256,14 +259,28 @@ describe("nostr inbound gateway path", () => {
         text: string,
         reply: (text: string) => Promise<void>,
         meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
       ) => Promise<void>;
     };
     const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
 
-    await options.onMessage("sender-pubkey", "hello from nostr", sendReply, {
-      eventId: "event-123",
-      createdAt: 1_710_000_000,
-    });
+    await options.onMessage(
+      "sender-pubkey",
+      "hello from nostr",
+      sendReply,
+      {
+        eventId: "event-123",
+        createdAt: 1_710_000_000,
+      },
+      lifecycle,
+    );
 
     if (expectedText === null) {
       expect(harness.convertMarkdownTables).not.toHaveBeenCalled();
