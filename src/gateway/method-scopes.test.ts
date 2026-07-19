@@ -82,6 +82,8 @@ describe("method scope resolution", () => {
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
+    ["talk.client.transcript", ["operator.write"]],
+    ["talk.client.close", ["operator.write"]],
     ["talk.client.toolCall", ["operator.write"]],
     ["talk.client.steer", ["operator.write"]],
     ["talk.session.create", ["operator.write"]],
@@ -513,6 +515,8 @@ describe("operator scope authorization", () => {
   it("allows operator.write clients to use unified Talk sessions", () => {
     for (const method of [
       "talk.client.create",
+      "talk.client.transcript",
+      "talk.client.close",
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.session.create",

@@ -203,6 +203,8 @@ enum class GatewayMethod(
   TalkCatalog("talk.catalog"),
   TalkConfig("talk.config"),
   TalkClientCreate("talk.client.create"),
+  TalkClientTranscript("talk.client.transcript"),
+  TalkClientClose("talk.client.close"),
   TalkClientToolCall("talk.client.toolCall"),
   TalkClientSteer("talk.client.steer"),
   TalkSessionCreate("talk.session.create"),

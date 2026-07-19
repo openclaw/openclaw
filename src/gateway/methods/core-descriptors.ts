@@ -87,6 +87,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
   { name: "talk.config", scope: "dynamic" },
   { name: "talk.client.create", scope: "operator.write" },
+  { name: "talk.client.transcript", scope: "operator.write" },
+  { name: "talk.client.close", scope: "operator.write" },
   { name: "talk.client.toolCall", scope: "operator.write" },
   { name: "talk.client.steer", scope: "operator.write" },
   { name: "talk.session.create", scope: "operator.write" },

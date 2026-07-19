@@ -85,10 +85,13 @@ import {
   TalkCatalogResultSchema,
   TalkClientCreateParamsSchema,
   TalkClientCreateResultSchema,
+  TalkClientCloseParamsSchema,
+  TalkClientMutationResultSchema,
   TalkAgentControlResultSchema,
   TalkClientSteerParamsSchema,
   TalkClientToolCallParamsSchema,
   TalkClientToolCallResultSchema,
+  TalkClientTranscriptParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
   TalkSessionAppendAudioParamsSchema,
@@ -788,8 +791,11 @@ export const validateTalkConfigParams = lazyCompile(TalkConfigParamsSchema);
 export const validateTalkConfigResult = lazyCompile(TalkConfigResultSchema);
 export const validateTalkClientCreateParams = lazyCompile(TalkClientCreateParamsSchema);
 export const validateTalkClientCreateResult = lazyCompile(TalkClientCreateResultSchema);
+export const validateTalkClientCloseParams = lazyCompile(TalkClientCloseParamsSchema);
+export const validateTalkClientMutationResult = lazyCompile(TalkClientMutationResultSchema);
 export const validateTalkClientToolCallParams = lazyCompile(TalkClientToolCallParamsSchema);
 export const validateTalkClientToolCallResult = lazyCompile(TalkClientToolCallResultSchema);
+export const validateTalkClientTranscriptParams = lazyCompile(TalkClientTranscriptParamsSchema);
 export const validateTalkClientSteerParams = lazyCompile(TalkClientSteerParamsSchema);
 export const validateTalkAgentControlResult = lazyCompile(TalkAgentControlResultSchema);
 export const validateTalkSessionCreateParams = lazyCompile(TalkSessionCreateParamsSchema);
@@ -1203,10 +1209,13 @@ export {
   TalkCatalogResultSchema,
   TalkClientCreateParamsSchema,
   TalkClientCreateResultSchema,
+  TalkClientCloseParamsSchema,
+  TalkClientMutationResultSchema,
   TalkAgentControlResultSchema,
   TalkClientSteerParamsSchema,
   TalkClientToolCallParamsSchema,
   TalkClientToolCallResultSchema,
+  TalkClientTranscriptParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
   TalkSessionAppendAudioParamsSchema,
@@ -1529,10 +1538,13 @@ export type {
   TalkCatalogResult,
   TalkClientCreateParams,
   TalkClientCreateResult,
+  TalkClientCloseParams,
+  TalkClientMutationResult,
   TalkClientSteerParams,
   TalkAgentControlResult,
   TalkClientToolCallParams,
   TalkClientToolCallResult,
+  TalkClientTranscriptParams,
   TalkConfigParams,
   TalkConfigResult,
   TalkSessionAppendAudioParams,
