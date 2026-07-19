@@ -1,4 +1,5 @@
 // Whatsapp tests cover process message plugin behavior.
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
@@ -18,7 +19,9 @@ const {
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
   deliverReplyMock: vi.fn(async () => ({ visibleReplySent: true })),
-  replyResolverMock: vi.fn(async () => undefined),
+  replyResolverMock: vi.fn<() => Promise<ReplyPayload | ReplyPayload[] | undefined>>(
+    async () => undefined,
+  ),
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
