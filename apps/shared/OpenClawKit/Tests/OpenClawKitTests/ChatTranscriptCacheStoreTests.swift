@@ -174,6 +174,57 @@ struct ChatTranscriptCacheStoreTests {
         #expect(ChatToolDiff.resolveDiff(name: "edit", arguments: nil, details: decoded.details)?.stat == nil)
     }
 
+    @Test func `transcript cache keeps bounded patch envelopes and strips other arguments`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let oversizedInput = "*** Begin Patch\n*** Add File: cached.txt\n" +
+            String(repeating: "+line\n", count: 12000) + "*** End Patch"
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "toolCall",
+                    text: nil,
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil,
+                    name: "apply_patch",
+                    arguments: AnyCodable([
+                        "input": AnyCodable(oversizedInput),
+                        "patch": AnyCodable("ignored alias"),
+                        "ignored": AnyCodable("drop me"),
+                    ])),
+                OpenClawChatMessageContent(
+                    type: "toolCall",
+                    text: nil,
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil,
+                    name: "exec",
+                    arguments: AnyCodable(["command": AnyCodable("echo secret")])),
+            ],
+            timestamp: 1)
+
+        let cacheable = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        let patchArguments = try #require(cacheable.content[0].arguments?.dictionaryValue)
+        #expect(Set(patchArguments.keys) == ["input"])
+        #expect(patchArguments["input"]?.stringValue?.utf16.count == 64000)
+        #expect(patchArguments["input"]?.stringValue?.hasSuffix("\n...(truncated)...") == true)
+        #expect(cacheable.content[1].arguments == nil)
+
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        await store.storeTranscript(sessionKey: "main", messages: [message])
+        let decoded = try #require(await store.loadTranscript(sessionKey: "main").first)
+        #expect(decoded.content[0].arguments == cacheable.content[0].arguments)
+        #expect(decoded.content[1].arguments == nil)
+        let resolved = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: decoded.content[0].arguments,
+            details: nil))
+        #expect(resolved.lines.last?.kind == .skip)
+        #expect(resolved.stat == nil)
+    }
+
     @Test func `transcript keeps only most recent messages within bound`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
