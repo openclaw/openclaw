@@ -18,9 +18,6 @@ export const pluginSdkDocMetadata = {
   health: {
     category: "core",
   },
-  sandbox: {
-    category: "runtime",
-  },
   "approval-runtime": {
     category: "runtime",
   },
@@ -36,13 +33,7 @@ export const pluginSdkDocMetadata = {
   "approval-gateway-runtime": {
     category: "runtime",
   },
-  "approval-reference-runtime": {
-    category: "runtime",
-  },
   "approval-native-runtime": {
-    category: "runtime",
-  },
-  "approval-reaction-runtime": {
     category: "runtime",
   },
   "approval-reply-runtime": {
@@ -51,16 +42,10 @@ export const pluginSdkDocMetadata = {
   "plugin-entry": {
     category: "core",
   },
-  "access-groups": {
-    category: "channel",
-  },
   "channel-actions": {
     category: "channel",
   },
   "channel-config-schema": {
-    category: "channel",
-  },
-  "chat-channel-ids": {
     category: "channel",
   },
   "channel-contract": {
@@ -84,49 +69,19 @@ export const pluginSdkDocMetadata = {
   "command-status": {
     category: "channel",
   },
-  "command-status-runtime": {
-    category: "runtime",
-  },
   "secret-input": {
     category: "channel",
   },
   "webhook-ingress": {
     category: "channel",
   },
-  "provider-onboard": {
-    category: "provider",
-  },
-  "provider-oauth-runtime": {
-    category: "provider",
-  },
-  "message-tool-delivery-hints": {
-    category: "runtime",
-  },
-  "tool-results": {
-    category: "utilities",
-  },
   "widget-html": {
     category: "utilities",
-  },
-  "provider-selection-runtime": {
-    category: "provider",
-  },
-  "provider-catalog-live-runtime": {
-    category: "provider",
-  },
-  "provider-model-types": {
-    category: "provider",
   },
   "runtime-store": {
     category: "runtime",
   },
   "session-store-runtime": {
-    category: "runtime",
-  },
-  "session-transcript-runtime": {
-    category: "runtime",
-  },
-  "sqlite-runtime": {
     category: "runtime",
   },
   "agent-runtime": {
@@ -135,20 +90,8 @@ export const pluginSdkDocMetadata = {
   "agent-harness-runtime": {
     category: "runtime",
   },
-  "speech-core": {
-    category: "provider",
-  },
   "speech-settings": {
     category: "provider",
-  },
-  "realtime-voice": {
-    category: "provider",
-  },
-  "tts-runtime": {
-    category: "runtime",
-  },
-  "inline-image-data-url-runtime": {
-    category: "runtime",
   },
   "allow-from": {
     category: "utilities",
