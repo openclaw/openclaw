@@ -1,18 +1,15 @@
-脚本启动于 2026-07-19 12:17:03+08:00 [COMMAND="npx tsx evidence-110642.mjs" <not executed on terminal>]
 
 === SSE Argument Chunking: UTF-16 Safety Evidence ===
 
+    Input length: 285 code units, chunks: 2
+    chunk[0] len=255 ends=0x41 starts=0x7b safe=true
+    chunk[1] len=30 ends=0x7d starts=0xd83d safe=true
   PASS  surrogate pair across 256-code-unit boundary
+  PASS  concatenated chunks parse as valid JSON
   PASS  multiple chunks with surrogate pairs
   PASS  plain ASCII input
   PASS  empty string
-  PASS  long mixed content over 1024 code units
-    Input length: 264 code units, chunks: 2
-    chunk[0] len=256 ends=0x78 starts=0x7b safe=true
-    chunk[1] len=8 ends=0x7d starts=0x78 safe=true
   PASS  chunk boundary visualization
 
 === Results: 6 passed, 0 failed out of 6 ===
 
-⠙[1G[0K
-脚本完成于 2026-07-19 12:17:04+08:00 [COMMAND_EXIT_CODE="0"]
