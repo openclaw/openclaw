@@ -158,7 +158,7 @@ function payloadMessageIsErrorProjection(
   }
   const errorText = payload.errorMessage?.trim();
   if (!errorText) {
-    return messageText.startsWith("⚠️") || /^Error:\s*/iu.test(messageText);
+    return false;
   }
   return (
     normalizeChatErrorComparisonText(messageText) === normalizeChatErrorComparisonText(errorText)

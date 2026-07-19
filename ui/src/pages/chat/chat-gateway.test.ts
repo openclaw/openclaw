@@ -2049,26 +2049,28 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error" });
   });
 
-  it("uses a legacy error payload message as alert text when errorMessage is absent", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-    });
+  it.each([
+    "Error: the configuration uses an unsupported field.",
+    "⚠️ This operation may require additional review.",
+  ])("preserves message-only terminal output beginning with %s", (text) => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: 10,
+    };
+
     const payload: ChatEventPayload = {
       runId: "run-1",
       sessionKey: "main",
       state: "error",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Error: legacy gateway failure" }],
-        timestamp: 10,
-      },
+      message,
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toEqual([message]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "Error: legacy gateway failure" });
+    expect(state.chatRunError).toEqual({ summary: "chat error" });
   });
 
   it("preserves a legacy terminal message that completes streamed assistant content", () => {
