@@ -10,6 +10,13 @@ import { listGitTrackedFiles } from "../test-utils/repo-files.js";
 
 const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
 
+// Bound the `find` fallback used when `git ls-files` is unavailable. `find`
+// over a directory with a stalled NFS/FUSE mount can hang indefinitely; this
+// bound keeps the test suite moving and surfaces the timeout as a `find`
+// non-zero exit (which the caller maps back to `null` and falls back to the
+// in-process `readdirSync` path).
+const FIND_CHANNEL_DOCS_TIMEOUT_MS = 5_000;
+
 function lineNumberAt(source: string, index: number): number {
   return source.slice(0, index).split("\n").length;
 }
@@ -47,6 +54,8 @@ function listFindChannelDocFiles(): string[] | null {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: FIND_CHANNEL_DOCS_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     },
   );
   if (result.status !== 0) {
