@@ -672,6 +672,7 @@ describe("runSetupWizard", () => {
           remote: {
             url: "wss://stored.example.com:18789",
             token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
           },
         },
       },
@@ -704,6 +705,7 @@ describe("runSetupWizard", () => {
           remote: {
             url: "wss://flag.example.com:18789",
             token: remoteToken,
+            password: undefined,
           },
         }),
       }),
@@ -713,7 +715,7 @@ describe("runSetupWizard", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
   });
 
-  it("does not send a stored remote token to an overridden URL", async () => {
+  it("does not reuse stored remote credentials for an overridden URL", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -726,6 +728,7 @@ describe("runSetupWizard", () => {
           remote: {
             url: "wss://stored.example.com:18789",
             token: { source: "env", provider: "default", id: "STORED_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "STORED_GATEWAY_PASSWORD" },
           },
         },
       },
@@ -755,6 +758,7 @@ describe("runSetupWizard", () => {
           remote: {
             url: "wss://flag.example.com:18789",
             token: undefined,
+            password: undefined,
           },
         }),
       }),

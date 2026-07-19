@@ -82,8 +82,9 @@ entry for the same inference-gated OpenClaw assistant.
 prompted wizard, while noninteractive setup uses the automation path.
 In interactive onboarding, `--remote-url` and `--remote-token` prefill the
 remote Gateway step and take precedence over stored remote values for that run.
-Changing the URL without passing a token does not reuse the stored token. The
-token remains masked and uses the wizard's selected plaintext or SecretRef storage mode.
+Changing the URL does not reuse stored credentials unless you also pass a token.
+The token remains masked and uses the wizard's selected plaintext or SecretRef
+storage mode.
 
 ### Baseline mode
 

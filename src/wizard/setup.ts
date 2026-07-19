@@ -446,6 +446,7 @@ async function runSetupWizardOnce(
                 : remoteUrlChanged
                   ? { token: undefined }
                   : {}),
+              ...(remoteUrlChanged ? { password: undefined } : {}),
             },
           },
         };
