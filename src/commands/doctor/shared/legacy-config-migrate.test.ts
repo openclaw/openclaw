@@ -1717,7 +1717,7 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config).toBeNull();
   });
 
-  it("does not rewrite removed routing.transcribeAudio migrations when new config exists", () => {
+  it("consolidates existing per-capability media config without reviving removed routing keys", () => {
     const res = migrateLegacyConfigForTest({
       routing: {
         transcribeAudio: {
@@ -1733,8 +1733,13 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toStrictEqual([]);
-    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([
+      "Consolidated tools.media image/audio/video model settings into capability-tagged tools.media.models entries.",
+    ]);
+    expect(res.config?.tools?.media).toEqual({
+      models: [{ command: "existing", type: "cli", capabilities: ["audio"] }],
+      audio: { preferredModel: "cli:existing" },
+    });
   });
 
   it("drops invalid audio.transcription payloads", () => {
@@ -1749,7 +1754,7 @@ describe("legacy migrate audio transcription", () => {
     expect(findLegacyConfigIssues(raw)).toEqual([
       {
         path: "audio.transcription",
-        message: "Use tools.media.audio.models instead.",
+        message: "Use a capability-tagged tools.media.models entry instead.",
       },
     ]);
     const res = migrateLegacyConfigForTest(raw);
@@ -1772,14 +1777,40 @@ describe("legacy migrate audio transcription", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["audio.transcription"]);
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
+    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.models."]);
     expect(res.config).not.toHaveProperty("audio");
-    expect(res.config?.tools?.media?.audio?.models).toEqual([
+    expect(res.config?.tools?.media?.models).toEqual([
       {
         type: "cli",
         command: "whisper-cli",
         args: ["--model", "small", "{{MediaPath}}", "--input={{MediaPath}}"],
         timeoutSeconds: 30,
+        capabilities: ["audio"],
+      },
+    ]);
+    expect(res.config?.tools?.media?.audio).toEqual({
+      enabled: true,
+      preferredModel: "cli:whisper-cli",
+    });
+  });
+
+  it("keeps audio.transcription when the shared list only has unrelated capabilities", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: { transcription: { command: ["whisper-cli", "{input}"] } },
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
+        },
+      },
+    });
+
+    expect(res.config?.tools?.media?.models).toEqual([
+      { provider: "openai", model: "vision", capabilities: ["image"] },
+      {
+        type: "cli",
+        command: "whisper-cli",
+        args: ["{{MediaPath}}"],
+        capabilities: ["audio"],
       },
     ]);
   });

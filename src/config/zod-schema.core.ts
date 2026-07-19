@@ -964,10 +964,6 @@ export const ExecutableTokenSchema = z
 
 const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
 
-const MediaUnderstandingCapabilitiesSchema = z
-  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
-  .optional();
-
 const MediaUnderstandingAttachmentsSchema = z
   .object({
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
@@ -977,6 +973,10 @@ const MediaUnderstandingAttachmentsSchema = z
       .optional(),
   })
   .strict()
+  .optional();
+
+const MediaUnderstandingCapabilitiesSchema = z
+  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
   .optional();
 
 const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
@@ -1011,15 +1011,28 @@ const MediaUnderstandingModelSchema = z
   .strict()
   .optional();
 
-const ToolsMediaUnderstandingSchema = z
+const ToolsMediaCapabilitySchema = z
   .object({
     enabled: z.boolean().optional(),
+    preferredModel: z.string().trim().min(1).optional(),
     scope: MediaUnderstandingScopeSchema,
     maxBytes: z.number().int().positive().optional(),
     maxChars: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
-    models: z.array(MediaUnderstandingModelSchema).optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolsMediaAudioSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    preferredModel: z.string().trim().min(1).optional(),
+    scope: MediaUnderstandingScopeSchema,
+    maxBytes: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    ...MediaUnderstandingRuntimeFields,
+    attachments: MediaUnderstandingAttachmentsSchema,
     echoTranscript: z.boolean().optional(),
     echoFormat: z.string().optional(),
   })
@@ -1030,9 +1043,9 @@ export const ToolsMediaSchema = z
   .object({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
-    image: ToolsMediaUnderstandingSchema.optional(),
-    audio: ToolsMediaUnderstandingSchema.optional(),
-    video: ToolsMediaUnderstandingSchema.optional(),
+    image: ToolsMediaCapabilitySchema.optional(),
+    audio: ToolsMediaAudioSchema.optional(),
+    video: ToolsMediaCapabilitySchema.optional(),
   })
   .strict()
   .optional();

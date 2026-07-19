@@ -85,6 +85,8 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
 export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
+  /** Prefer a matching shared model entry. */
+  preferredModel?: string;
   /** Optional scope gating for understanding. */
   scope?: MediaUnderstandingScopeConfig;
   /** Default max bytes to send. */
@@ -117,6 +119,9 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   echoFormat?: string;
 };
 
+/** Per-capability defaults and policy. Models live only in tools.media.models. */
+export type MediaUnderstandingCapabilityConfig = Omit<MediaUnderstandingConfig, "models">;
+
 export type LinkModelConfig = {
   /** Use a CLI command for link processing. */
   type?: "cli";
@@ -142,13 +147,13 @@ export type LinkToolsConfig = {
 };
 
 export type MediaToolsConfig = {
-  /** Shared model list applied across image/audio/video. */
+  /** Canonical model list for image/audio/video, selected by capability tags. */
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
-  image?: MediaUnderstandingConfig;
-  audio?: MediaUnderstandingConfig;
-  video?: MediaUnderstandingConfig;
+  image?: MediaUnderstandingCapabilityConfig;
+  audio?: MediaUnderstandingCapabilityConfig;
+  video?: MediaUnderstandingCapabilityConfig;
 };
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";

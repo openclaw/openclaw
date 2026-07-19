@@ -199,7 +199,7 @@ async function runImageDescribe(params: {
       if (!result.result.text) {
         if (isMissingMediaUnderstandingProvider(result.result)) {
           throw new Error(
-            "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
+            "No image understanding provider is configured or ready. Configure an image-capable tools.media.models entry or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
           );
         }
         throw new Error(`No description returned for image: ${resolvedPath}`);

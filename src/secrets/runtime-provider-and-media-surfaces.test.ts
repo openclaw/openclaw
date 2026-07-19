@@ -530,31 +530,26 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
-  it("treats section media model request refs as inactive when model capabilities exclude the section", async () => {
-    const sectionTokenRef = {
-      source: "env" as const,
-      provider: "default" as const,
-      id: "MEDIA_AUDIO_SECTION_FILTERED_TOKEN",
-    };
+  it("treats shared media model request refs as inactive when their capabilities are disabled", async () => {
+    const fixtureRef = envTokenRef("config-token");
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         tools: {
           media: {
-            audio: {
-              enabled: true,
-              models: [
-                {
-                  provider: "openai",
-                  capabilities: ["video"],
-                  request: {
-                    auth: {
-                      mode: "authorization-bearer",
-                      token: sectionTokenRef,
-                    },
+            audio: { enabled: true },
+            video: { enabled: false },
+            models: [
+              {
+                provider: "openai",
+                capabilities: ["video"],
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: fixtureRef,
                   },
                 },
-              ],
-            },
+              },
+            ],
           },
         },
       }),
@@ -563,12 +558,12 @@ describe("secrets runtime provider and media surfaces", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request?.auth).toEqual({
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
       mode: "authorization-bearer",
-      token: sectionTokenRef,
+      token: fixtureRef,
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "tools.media.audio.models.0.request.auth.token",
+      "tools.media.models.0.request.auth.token",
     );
   });
 

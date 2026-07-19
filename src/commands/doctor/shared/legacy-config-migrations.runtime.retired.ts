@@ -300,7 +300,121 @@ function stripRetiredTuningKnobs(raw: Record<string, unknown>): boolean {
   return changed;
 }
 
+const MEDIA_CAPABILITIES = ["image", "audio", "video"] as const;
+function stableConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableConfigValue);
+  }
+  const record = getRecord(value);
+  if (!record) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(record)
+      .toSorted()
+      .map((key) => [key, stableConfigValue(record[key])]),
+  );
+}
+
+function mediaModelSignature(model: Record<string, unknown>): string {
+  const { capabilities: _capabilities, ...rest } = model;
+  return JSON.stringify(stableConfigValue(rest));
+}
+
+function scopeLegacyMediaModel(
+  model: Record<string, unknown>,
+  capability: string,
+): Record<string, unknown> | undefined {
+  if (
+    Array.isArray(model.capabilities) &&
+    !model.capabilities.some((value) => value === capability)
+  ) {
+    return undefined;
+  }
+  return { ...model, capabilities: [capability] };
+}
+
+function hasLegacyMediaCapabilityConfig(value: unknown): boolean {
+  const media = getRecord(value);
+  return MEDIA_CAPABILITIES.some((capability) => {
+    const config = getRecord(media?.[capability]);
+    return Array.isArray(config?.models);
+  });
+}
+
+function consolidateMediaCapabilityConfig(raw: Record<string, unknown>, changes: string[]): void {
+  const media = getRecord(getRecord(raw.tools)?.media);
+  if (!media) {
+    return;
+  }
+  const sharedModels = Array.isArray(media.models)
+    ? media.models.filter(
+        (value): value is Record<string, unknown> => getRecord(value) !== undefined,
+      )
+    : [];
+  const migratedModels: Record<string, unknown>[] = [];
+  let changed = false;
+
+  for (const capability of MEDIA_CAPABILITIES) {
+    const config = getRecord(media[capability]);
+    if (!config) {
+      continue;
+    }
+    const legacyModels = Array.isArray(config.models)
+      ? config.models.filter(
+          (value): value is Record<string, unknown> => getRecord(value) !== undefined,
+        )
+      : [];
+    const migratedBySignature = new Map<string, Record<string, unknown>>();
+    const eligibleLegacyModels = legacyModels.flatMap((legacyModel) => {
+      const scoped = scopeLegacyMediaModel(legacyModel, capability);
+      return scoped ? [scoped] : [];
+    });
+    for (const migrated of eligibleLegacyModels) {
+      const signature = mediaModelSignature(migrated);
+      const duplicate = migratedBySignature.get(signature);
+      if (duplicate) {
+        continue;
+      }
+      migratedBySignature.set(signature, migrated);
+      migratedModels.push(migrated);
+    }
+    if (Object.hasOwn(config, "models")) {
+      delete config.models;
+      changed = true;
+    }
+    if (Object.keys(config).length === 0) {
+      delete media[capability];
+    }
+    changed = changed || legacyModels.length > 0;
+  }
+  const canonicalModels = [...migratedModels, ...sharedModels];
+  if (canonicalModels.length > 0) {
+    media.models = canonicalModels;
+  }
+  if (changed) {
+    changes.push(
+      "Consolidated tools.media image/audio/video model settings into capability-tagged tools.media.models entries.",
+    );
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "runtime.media-models-consolidation",
+    describe: "Consolidate per-capability media model configuration",
+    legacyRules: [
+      rule(
+        ["tools", "media"],
+        "Per-capability media model settings moved to capability-tagged tools.media.models entries.",
+        hasLegacyMediaCapabilityConfig,
+      ),
+    ],
+    apply: (raw, changes) => {
+      migrateMediaDeepgram(raw, changes);
+      consolidateMediaCapabilityConfig(raw, changes);
+    },
+  }),
   defineLegacyConfigMigration({
     id: "runtime.tuning-knobs-purge",
     describe: "Remove retired runtime tuning knobs",

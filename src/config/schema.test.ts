@@ -1010,27 +1010,25 @@ describe("config schema", () => {
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
     const result = ToolsSchema.safeParse({
       media: {
-        image: {
-          models: [
-            {
-              provider: "openai",
-              model: "gpt-4.1-mini",
-              request: {
-                allowPrivateNetwork: true,
-              },
+        models: [
+          {
+            provider: "openai",
+            model: "gpt-4.1-mini",
+            capabilities: ["image"],
+            request: {
+              allowPrivateNetwork: true,
             },
-          ],
-        },
+          },
+        ],
       },
     });
 
     expect(result.success).toBe(false);
     if (!result.success) {
       const requestIssue = result.error.issues.find(
-        (issue) =>
-          JSON.stringify(issue.path) === JSON.stringify(["media", "image", "models", 0, "request"]),
+        (issue) => JSON.stringify(issue.path) === JSON.stringify(["media", "models", 0, "request"]),
       );
-      expect(requestIssue?.path).toEqual(["media", "image", "models", 0, "request"]);
+      expect(requestIssue?.path).toEqual(["media", "models", 0, "request"]);
       const requestKeys = (requestIssue as { keys?: unknown } | undefined)?.keys;
       expect(requestKeys).toEqual(["allowPrivateNetwork"]);
     }

@@ -119,22 +119,11 @@ export function resolveModelEntries(params: {
 }): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
-  const entries = [
-    ...(config?.models ?? []).map((entry, index) => ({
-      entry,
-      source: "capability" as const,
-      secretOwnerId: runtimeMediaModelSecretOwnerId({
-        source: "capability",
-        capability,
-        index,
-      }),
-    })),
-    ...sharedModels.map((entry, index) => ({
-      entry,
-      source: "shared" as const,
-      secretOwnerId: runtimeMediaModelSecretOwnerId({ source: "shared", index }),
-    })),
-  ];
+  const entries = sharedModels.map((entry, index) => ({
+    entry,
+    source: "shared" as const,
+    secretOwnerId: runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+  }));
   if (entries.length === 0) {
     return [];
   }
@@ -159,7 +148,31 @@ export function resolveModelEntries(params: {
       }
       return caps.includes(capability);
     })
-    .map(({ entry, secretOwnerId }) => ({ entry, secretOwnerId }));
+    .map(({ entry, secretOwnerId }) => ({ entry, secretOwnerId }))
+    .toSorted((left, right) => {
+      const preferred = config?.preferredModel?.trim();
+      if (!preferred) {
+        return 0;
+      }
+      return (
+        Number(matchesPreferredMediaModel(right.entry, preferred)) -
+        Number(matchesPreferredMediaModel(left.entry, preferred))
+      );
+    });
+}
+
+function matchesPreferredMediaModel(
+  entry: MediaUnderstandingModelConfig,
+  preferred: string,
+): boolean {
+  if (entry.type === "cli" || entry.command) {
+    return preferred === `cli:${entry.command ?? ""}`;
+  }
+  const model = entry.model?.trim();
+  if (!model) {
+    return preferred === `provider:${entry.provider?.trim() ?? ""}`;
+  }
+  return preferred === model || preferred === `${entry.provider?.trim() ?? ""}/${model}`;
 }
 
 /** Resolves the bounded media-understanding task concurrency from config. */

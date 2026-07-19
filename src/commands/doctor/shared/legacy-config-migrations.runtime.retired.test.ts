@@ -42,6 +42,138 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
+  it("consolidates modality model lists with capability tags and exact deduplication", () => {
+    const result = applyAll({
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "shared", capabilities: ["image"] }],
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "shared" }],
+          },
+          audio: {
+            timeoutSeconds: 20,
+            models: [
+              { provider: "deepgram", model: "nova-3" },
+              { provider: "deepgram", model: "nova-3" },
+              { provider: "local", model: "same", timeoutSeconds: 20 },
+            ],
+          },
+          video: { models: [{ provider: "local", model: "same", timeoutSeconds: 20 }] },
+        },
+      },
+    });
+
+    expect(result.raw).toEqual({
+      tools: {
+        media: {
+          models: [
+            { provider: "openai", model: "shared", capabilities: ["image"] },
+            {
+              provider: "deepgram",
+              model: "nova-3",
+              capabilities: ["audio"],
+            },
+            {
+              provider: "local",
+              model: "same",
+              timeoutSeconds: 20,
+              capabilities: ["audio"],
+            },
+            {
+              provider: "local",
+              model: "same",
+              timeoutSeconds: 20,
+              capabilities: ["video"],
+            },
+            { provider: "openai", model: "shared", capabilities: ["image"] },
+          ],
+          image: { enabled: true },
+          audio: { timeoutSeconds: 20 },
+        },
+      },
+    });
+  });
+
+  it("keeps modality defaults for auto-detection and preserves distinct legacy entries", () => {
+    const result = applyAll({
+      tools: {
+        media: {
+          models: [
+            { provider: "openai", model: "shared", capabilities: ["image", "audio"] },
+            { provider: "fallback", capabilities: ["audio"] },
+          ],
+          image: {
+            timeoutSeconds: 180,
+            models: [{ provider: "openai", model: "shared", prompt: "Describe details" }],
+          },
+          audio: {
+            language: "en",
+            models: [{ provider: "local-default" }],
+          },
+        },
+      },
+    });
+
+    expect(getPath(result.raw, "tools.media.models")).toEqual([
+      {
+        provider: "openai",
+        model: "shared",
+        prompt: "Describe details",
+        capabilities: ["image"],
+      },
+      { provider: "local-default", capabilities: ["audio"] },
+      { provider: "openai", model: "shared", capabilities: ["image", "audio"] },
+      { provider: "fallback", capabilities: ["audio"] },
+    ]);
+    expect(getPath(result.raw, "tools.media.image.timeoutSeconds")).toBe(180);
+    expect(getPath(result.raw, "tools.media.audio.language")).toBe("en");
+  });
+
+  it("preserves independent fallback order across capability lists", () => {
+    const result = applyAll({
+      tools: {
+        media: {
+          image: { models: ["a", "b", "c"].map((model) => ({ provider: "p", model })) },
+          audio: { models: ["c", "b", "a"].map((model) => ({ provider: "p", model })) },
+        },
+      },
+    });
+    const models = getPath(result.raw, "tools.media.models") as Array<{
+      model: string;
+      capabilities: string[];
+    }>;
+    expect(
+      models.filter((model) => model.capabilities.includes("image")).map((model) => model.model),
+    ).toEqual(["a", "b", "c"]);
+    expect(
+      models.filter((model) => model.capabilities.includes("audio")).map((model) => model.model),
+    ).toEqual(["c", "b", "a"]);
+  });
+
+  it("preserves explicit legacy capability filtering", () => {
+    const result = applyAll({
+      tools: {
+        media: {
+          image: {
+            models: [
+              { provider: "skip", model: "audio-only", capabilities: ["audio"] },
+              {
+                provider: "keep",
+                model: "image-first",
+                capabilities: ["image", "audio"],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(getPath(result.raw, "tools.media.models")).toEqual([
+      { provider: "keep", model: "image-first", capabilities: ["image"] },
+    ]);
+    expect(getPath(result.raw, "tools.media.image.preferredModel")).toBeUndefined();
+  });
   it.each([
     "auth.cooldowns",
     "secrets.resolution",
@@ -136,7 +268,7 @@ describe("retired runtime config migrations", () => {
       mcp: { servers: { docs: { connectionTimeoutMs: 2000, requestTimeoutMs: 3000 } } },
       nodeHost: { mcp: { servers: { local: { connectionTimeoutMs: 4000 } } } },
       tools: {
-        media: { audio: { providerOptions: { deepgram: { smart_format: true } } } },
+        media: {},
         message: { crossContext: { allowWithinProvider: true, allowAcrossProviders: true } },
       },
     });

@@ -174,8 +174,7 @@ Gateway restarts; use `captureEnabled: false` for a persistent stop.
 Logbook resolves the observation model in this order:
 
 1. `plugins.entries.logbook.config.visionModel`
-2. the first image-capable Codex entry under `tools.media.image.models`
-3. the first image-capable Codex entry under `tools.media.models`
+2. the first image-capable Codex entry under `tools.media.models`
 
 Other media providers are skipped because they do not currently expose the
 structured extraction contract Logbook requires. Setting

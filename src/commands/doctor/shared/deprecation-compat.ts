@@ -63,6 +63,22 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-media-models-consolidation",
+    deprecated: "2026-07-19",
+    warningStarts: "2026-07-19",
+    removeAfter: "2026-09-18",
+    owner: "tools",
+    introduced: "2026-07-19",
+    source: "tools.media.image/audio/video models",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.ts",
+    replacement: "capability-tagged tools.media.models plus per-capability policy and defaults",
+    docsPath: "/nodes/media-understanding",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts",
+      "src/config/dead-config-keys.test.ts",
+    ],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-runtime-tuning-knobs-purge",
     deprecated: "2026-07-19",
     warningStarts: "2026-07-19",
@@ -279,7 +295,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-26",
     source: "audio.transcription",
     migration: "src/commands/doctor/shared/legacy-config-migrations.audio.ts",
-    replacement: "tools.media.audio.models",
+    replacement: "capability-tagged tools.media.models",
     docsPath: "/tools/media-overview",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
