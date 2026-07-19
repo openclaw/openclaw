@@ -95,6 +95,26 @@ describe("normalizeSlackOutboundText", () => {
     expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
   });
 
+  it("drops italic markers that Slack cannot parse at adjacent word boundaries", () => {
+    const cases = [
+      [
+        "そう。*「生産性が上がる」という前提が怪しい*んですよね。",
+        "そう。「生産性が上がる」という前提が怪しいんですよね。",
+      ],
+      ["これは*重要*。", "これは重要。"],
+      ["this is *very*important", "this is veryimportant"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(normalizeSlackOutboundText(input)).toBe(expected);
+    }
+  });
+
+  it("preserves italic markers at valid Slack boundaries", () => {
+    expect(normalizeSlackOutboundText("*重要*。 This is _very_ important.")).toBe(
+      "_重要_。 This is _very_ important.",
+    );
+  });
+
   it("re-chunks on rendered length and still prefers word boundaries", () => {
     const chunks = markdownToSlackMrkdwnChunks("alpha <<", 8);
 
@@ -104,6 +124,11 @@ describe("normalizeSlackOutboundText", () => {
         .map((chunk, index) => ({ index, length: chunk.length }))
         .filter((chunk) => chunk.length > 8),
     ).toStrictEqual([]);
+  });
+
+  it("keeps invalid italic boundaries plain when chunking", () => {
+    expect(markdownToSlackMrkdwnChunks("これは*重要*です。", 100)).toEqual(["これは重要です。"]);
+    expect(markdownToSlackMrkdwnChunks("*重要*。", 100)).toEqual(["_重要_。"]);
   });
 });
 

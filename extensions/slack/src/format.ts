@@ -3,6 +3,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkTextForOutbound,
   markdownToIR,
+  type MarkdownIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
 } from "openclaw/plugin-sdk/text-chunking";
@@ -105,6 +106,44 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
 type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
+
+const SLACK_MRKDWN_WORD_CHARACTER_RE = /[\p{L}\p{M}\p{N}_]/u;
+
+function getCodePointBefore(text: string, index: number): string {
+  if (index <= 0) {
+    return "";
+  }
+  const lastCodeUnit = text.charCodeAt(index - 1);
+  const isLowSurrogate = lastCodeUnit >= 0xdc00 && lastCodeUnit <= 0xdfff;
+  if (isLowSurrogate && index > 1) {
+    const previousCodeUnit = text.charCodeAt(index - 2);
+    const isHighSurrogate = previousCodeUnit >= 0xd800 && previousCodeUnit <= 0xdbff;
+    if (isHighSurrogate) {
+      return text.slice(index - 2, index);
+    }
+  }
+  return text[index - 1] ?? "";
+}
+
+function getCodePointAt(text: string, index: number): string {
+  const codePoint = text.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+}
+
+function makeSlackItalicBoundariesSafe(ir: MarkdownIR): MarkdownIR {
+  // Slack renders `_` literally when an italic marker touches an outer word character.
+  const styles = ir.styles.filter((span) => {
+    if (span.style !== "italic") {
+      return true;
+    }
+    const before = getCodePointBefore(ir.text, span.start);
+    const after = getCodePointAt(ir.text, span.end);
+    return (
+      !SLACK_MRKDWN_WORD_CHARACTER_RE.test(before) && !SLACK_MRKDWN_WORD_CHARACTER_RE.test(after)
+    );
+  });
+  return styles.length === ir.styles.length ? ir : { ...ir, styles };
+}
 
 type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
@@ -352,14 +391,16 @@ function buildSlackRenderOptions() {
 }
 
 function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions = {}): string {
-  const ir = markdownToIR(markdown ?? "", {
-    assistantTranscriptRoleHeaders: true,
-    linkify: false,
-    autolink: false,
-    headingStyle: "bold",
-    blockquotePrefix: "> ",
-    tableMode: options.tableMode,
-  });
+  const ir = makeSlackItalicBoundariesSafe(
+    markdownToIR(markdown ?? "", {
+      assistantTranscriptRoleHeaders: true,
+      linkify: false,
+      autolink: false,
+      headingStyle: "bold",
+      blockquotePrefix: "> ",
+      tableMode: options.tableMode,
+    }),
+  );
   return renderMarkdownWithMarkers(ir, buildSlackRenderOptions());
 }
 
@@ -439,14 +480,16 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = markdownToIR(markdown ?? "", {
-    assistantTranscriptRoleHeaders: true,
-    linkify: false,
-    autolink: false,
-    headingStyle: "bold",
-    blockquotePrefix: "> ",
-    tableMode: options.tableMode,
-  });
+  const ir = makeSlackItalicBoundariesSafe(
+    markdownToIR(markdown ?? "", {
+      assistantTranscriptRoleHeaders: true,
+      linkify: false,
+      autolink: false,
+      headingStyle: "bold",
+      blockquotePrefix: "> ",
+      tableMode: options.tableMode,
+    }),
+  );
   const renderOptions = buildSlackRenderOptions();
   return renderMarkdownIRChunksWithinLimit({
     ir,
