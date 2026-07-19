@@ -1435,7 +1435,11 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
-          try { reader?.releaseLock(); } catch {}
+          try {
+            reader?.releaseLock();
+          } catch {
+            // release errors are non-fatal
+          }
           await release();
         }
       } catch (err) {
