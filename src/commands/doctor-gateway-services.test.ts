@@ -1866,7 +1866,7 @@ describe("maybeScanExtraGatewayServices", () => {
     ["bootout", true],
     ["unload", false],
   ])(
-    "moves the plist when %s succeeds and the other launchctl call times out",
+    "moves the plist when %s succeeds, the other call times out, and print confirms it is gone",
     async (_, bootoutOk) => {
       setupLegacyMacService();
       const timeout = launchctlFailure({ timedOut: true });
