@@ -357,6 +357,9 @@ const config = {
     "src/boards/board-layout.ts": ["types"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
+    // Test and E2E callers reach these hooks through runtime.test-support.ts;
+    // the full-tree companion config still audits their actual consumers.
+    "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
