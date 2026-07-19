@@ -93,7 +93,6 @@ describe("openclaw.changes.list", () => {
           nextHash: "hash-b",
           changedPaths: ["gateway.port"],
         }),
-        1_000,
         3_000,
       );
       configStore.register(
@@ -106,7 +105,6 @@ describe("openclaw.changes.list", () => {
           changedPaths: ["gateway.bind"],
         }),
         2_000,
-        5_000,
       );
       configStore.register(
         "failed",
@@ -117,7 +115,6 @@ describe("openclaw.changes.list", () => {
           nextHash: "failed-b",
         }),
         3_000,
-        5_500,
       );
       configStore.register(
         "observe",
