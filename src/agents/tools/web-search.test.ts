@@ -721,6 +721,25 @@ describe("web_search normalized output contract", () => {
     expect(normalized.message).toContain("quota exceeded");
   });
 
+  it("keeps structured provider error serialization surrogate-safe at the cap", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-demo",
+      query: "emoji error",
+      // The emoji straddles the 2000-unit cut: a plain slice would keep only
+      // its high surrogate half.
+      result: { error: { message: `${"x".repeat(1_987)}🤖` } },
+    });
+
+    if (normalized.kind !== "error") {
+      throw new Error("expected error branch");
+    }
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(
+        normalized.message,
+      ),
+    ).toBe(false);
+  });
+
   it("keeps ordinary Source attribution lines in answer content", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-answer",
