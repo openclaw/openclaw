@@ -82,12 +82,15 @@ function writeManagedLegacy(stateDir: string, version: string): string {
 }
 
 function setInstallTimestamp(packageDir: string, timestampMs: number): void {
-  if (!resolveRetainedManagedNpmInstallPackageInfo(packageDir)) {
+  const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
+  if (!packageInfo) {
     throw new Error(`Expected managed npm package dir: ${packageDir}`);
   }
   const timestamp = new Date(timestampMs);
   fs.utimesSync(path.join(packageDir, "package.json"), timestamp, timestamp);
   fs.utimesSync(packageDir, timestamp, timestamp);
+  fs.utimesSync(path.join(packageInfo.projectRoot, "package.json"), timestamp, timestamp);
+  fs.utimesSync(packageInfo.projectRoot, timestamp, timestamp);
 }
 
 afterEach(() => {

@@ -127,26 +127,37 @@ export type RecoveredManagedNpmInstallCandidate = {
   pluginId: string;
 };
 
-function readManagedNpmInstallTimestampMs(packageDir: string): number {
-  for (const filePath of [path.join(packageDir, "package.json"), packageDir]) {
+function readManagedNpmInstallTimestampMs(params: {
+  packageDir: string;
+  projectRoot: string;
+  sharedLegacyRoot: boolean;
+}): number {
+  // Isolated flat/generation roots have an OpenClaw-owned project manifest that
+  // is rewritten during install. The legacy root is shared, so only its
+  // package-local directory mtime can represent this plugin's install.
+  const timestampPaths = params.sharedLegacyRoot
+    ? [params.packageDir]
+    : [path.join(params.projectRoot, "package.json"), params.projectRoot];
+  for (const filePath of timestampPaths) {
     try {
       return fs.statSync(filePath).mtimeMs;
     } catch {
-      // Recovery already verified the package directory. Missing package metadata
-      // simply leaves the package directory mtime as the final recency signal.
+      // Recovery already verified the package directory. Missing project
+      // metadata simply leaves the containing directory as the final signal.
     }
   }
   return 0;
 }
 
-function buildRecoveredManagedNpmInstallCandidatesForRoot(
-  npmRoot: string,
-): RecoveredManagedNpmInstallCandidate[] {
-  const rootManifest = readJsonObjectFileSync(path.join(npmRoot, "package.json"));
+function buildRecoveredManagedNpmInstallCandidatesForRoot(params: {
+  projectRoot: string;
+  sharedLegacyRoot: boolean;
+}): RecoveredManagedNpmInstallCandidate[] {
+  const rootManifest = readJsonObjectFileSync(path.join(params.projectRoot, "package.json"));
   const dependencies = readStringRecord(rootManifest?.dependencies);
   const candidates: RecoveredManagedNpmInstallCandidate[] = [];
   for (const [packageName, dependencySpec] of Object.entries(dependencies)) {
-    const packageDir = path.join(npmRoot, "node_modules", ...packageName.split("/"));
+    const packageDir = path.join(params.projectRoot, "node_modules", ...packageName.split("/"));
     let stat: fs.Stats;
     try {
       stat = fs.statSync(packageDir);
@@ -170,7 +181,11 @@ function buildRecoveredManagedNpmInstallCandidatesForRoot(
         : undefined;
     candidates.push({
       pluginId,
-      installTimestampMs: readManagedNpmInstallTimestampMs(packageDir),
+      installTimestampMs: readManagedNpmInstallTimestampMs({
+        packageDir,
+        projectRoot: params.projectRoot,
+        sharedLegacyRoot: params.sharedLegacyRoot,
+      }),
       installRecord: {
         source: "npm",
         spec: `${packageName}@${dependencySpec}`,
@@ -188,9 +203,18 @@ export function listRecoveredManagedNpmInstallCandidates(
   options: InstalledPluginIndexStoreOptions = {},
 ): RecoveredManagedNpmInstallCandidate[] {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
-  return [npmRoot, ...listManagedPluginNpmProjectRootsSync(npmRoot)].flatMap((projectRoot) =>
-    buildRecoveredManagedNpmInstallCandidatesForRoot(projectRoot),
-  );
+  return [
+    ...buildRecoveredManagedNpmInstallCandidatesForRoot({
+      projectRoot: npmRoot,
+      sharedLegacyRoot: true,
+    }),
+    ...listManagedPluginNpmProjectRootsSync(npmRoot).flatMap((projectRoot) =>
+      buildRecoveredManagedNpmInstallCandidatesForRoot({
+        projectRoot,
+        sharedLegacyRoot: false,
+      }),
+    ),
+  ];
 }
 
 function recordsShareInstallPath(
