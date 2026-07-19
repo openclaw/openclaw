@@ -112,6 +112,8 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
     context: { facts: ChannelIngressMonitorFacts; receivedAt: number },
   ) => void | Promise<void>;
   onAdmissionFailure?: (raw: TRaw, error: unknown) => void | Promise<void>;
+  /** False lets repeated requests fill drain capacity while earlier claims remain active. */
+  waitForDeliveryIdleBeforeRepump?: boolean;
   drain?: ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata>;
   abortSignal?: AbortSignal;
   now?: () => number;
@@ -130,6 +132,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 ) {
   const now = options.now ?? Date.now;
   const appendRetryDelaysMs = options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS;
+  const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const { pruneIntervalMs, ...pruneOptions } = options.retention;
   const shutdown = new AbortController();
   const drainAbortSignal = options.abortSignal
@@ -399,12 +402,19 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
                 activeDeliveries.size >= options.drain.startLimit),
           }),
         );
-        if (started > 0) {
+        if (waitForDeliveryIdleBeforeRepump) {
+          await waitForActiveDeliveries();
+          await activeDrain.waitForIdle();
+        } else if (started > 0) {
           // Failed-retryable delivery settles after the channel callback returns.
           // Wake once the drain has released or failed those claims.
           scheduleDrainIdleWake(activeDrain);
         }
-        if (!running || isAborted() || (!requested && started === 0)) {
+        if (
+          !running ||
+          isAborted() ||
+          (!requested && (!waitForDeliveryIdleBeforeRepump || started === 0))
+        ) {
           break;
         }
       }
@@ -452,18 +462,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     facts: ChannelIngressMonitorFacts;
     payload: TStoredPayload;
     receivedAt: number;
-  }): Promise<void> => {
+  }): Promise<Awaited<ReturnType<Queue["enqueue"]>>> => {
     let lastError: unknown;
     for (const delayMs of appendRetryDelaysMs) {
       if (delayMs > 0) {
         await sleep(delayMs);
       }
       try {
-        await getQueue().enqueue(params.facts.eventId, params.payload, {
+        const result = await getQueue().enqueue(params.facts.eventId, params.payload, {
           receivedAt: params.receivedAt,
           laneKey: params.facts.laneKey,
         });
-        return;
+        return result;
       } catch (error) {
         lastError = error;
       }
@@ -506,10 +516,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               options.payload.storage === "raw-event"
                 ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
                 : options.payload.encode({ version: options.payload.version, body });
-            await admitOnce({ facts, payload, receivedAt });
+            const queueResult = await admitOnce({ facts, payload, receivedAt });
             durablyAdmitted = true;
             await options.onDurableAdmission?.(raw, { facts, receivedAt });
-            return { kind: "durable" } as const;
+            return { kind: "durable", queueResult } as const;
           } catch (error) {
             await options.onAdmissionFailure?.(raw, error);
             throw error;
