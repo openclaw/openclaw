@@ -1273,8 +1273,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const currentMatchIndex = matches.length
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
+    // The discussion iframe has no intrinsic height, so its host wrapper must
+    // stretch; content-sized kinds (files, tool details) keep auto height.
+    const fillHost = this.visibleContent?.kind === "session-discussion";
     return html`
-      <div @click=${this.handlePanelClick}>
+      <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,

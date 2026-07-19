@@ -1031,6 +1031,15 @@
   padding: 0;
 }
 
+/* Host wrapper for full-height panel kinds: the discussion iframe has no
+   intrinsic height, so the wrapper must stretch for height:100% to resolve. */
+.sidebar-panel-host--fill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 openclaw-session-discussion {
   display: flex;
   height: 100%;
