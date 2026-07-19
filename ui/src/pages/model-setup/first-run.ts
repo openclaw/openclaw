@@ -24,7 +24,8 @@ export function isDefaultChatLanding(
 export function locationsMatch(
   left: RouteLocation,
   right: RouteLocation,
-  sessionKeysMatch: (left: string, right: string) => boolean = (left, right) => left === right,
+  sessionKeysMatch: (left: string, right: string) => boolean = (candidateLeft, candidateRight) =>
+    candidateLeft === candidateRight,
 ): boolean {
   if (left.pathname !== right.pathname || left.hash !== right.hash) {
     return false;
