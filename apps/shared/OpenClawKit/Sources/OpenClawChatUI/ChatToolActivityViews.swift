@@ -220,11 +220,11 @@ struct ChatToolActivityRow: View {
             if let stat = self.resolvedDiff?.stat {
                 Text(verbatim: "+\(stat.added)")
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(Color.green.opacity(0.9))
+                    .foregroundStyle(OpenClawChatTheme.success.opacity(0.9))
                     .lineLimit(1)
                 Text(verbatim: "−\(stat.removed)")
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(Color.red.opacity(0.9))
+                    .foregroundStyle(OpenClawChatTheme.danger.opacity(0.9))
                     .lineLimit(1)
             }
 
@@ -282,9 +282,9 @@ struct ChatToolActivityRow: View {
     private func diffBackground(_ kind: ChatToolDiffLineKind) -> Color {
         switch kind {
         case .add:
-            Color.green.opacity(0.14)
+            OpenClawChatTheme.success.opacity(0.14)
         case .del:
-            Color.red.opacity(0.12)
+            OpenClawChatTheme.danger.opacity(0.12)
         case .ctx, .skip:
             .clear
         }
