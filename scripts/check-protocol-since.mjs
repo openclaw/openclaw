@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-// Enforces release-train metadata on core gateway methods added by the current branch.
+// Enforces release-train metadata on core gateway methods.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -29,17 +29,29 @@ function tryRunGit(args) {
 }
 
 function resolveBaseCommit() {
+  const explicitBase = process.env.PROTOCOL_SINCE_BASE_SHA?.trim();
+  if (explicitBase) {
+    if (!/^[0-9a-f]{40}$/u.test(explicitBase)) {
+      throw new Error("PROTOCOL_SINCE_BASE_SHA must be a full commit SHA.");
+    }
+    if (tryRunGit(["cat-file", "-e", `${explicitBase}:${descriptorPath}`]) === undefined) {
+      throw new Error(`PROTOCOL_SINCE_BASE_SHA ${explicitBase} is unavailable in this checkout.`);
+    }
+    return explicitBase;
+  }
   const mainMergeBase = tryRunGit(["merge-base", "HEAD", "origin/main"]);
   if (mainMergeBase) {
     return mainMergeBase;
   }
   // Pull-request CI checks out a synthetic merge commit without creating origin/main.
   // Its first parent is the exact base used to build the merge result.
-  const parents = runGit(["show", "-s", "--format=%P", "HEAD"]).split(/\s+/u);
+  const parents = (tryRunGit(["show", "-s", "--format=%P", "HEAD"]) ?? "").split(/\s+/u);
   if (parents.length === 2 && parents[0]) {
     return parents[0];
   }
-  throw new Error("Could not resolve origin/main or a two-parent pull-request merge checkout.");
+  throw new Error(
+    "Could not resolve PROTOCOL_SINCE_BASE_SHA, origin/main, or a two-parent pull-request merge checkout.",
+  );
 }
 
 function unwrapExpression(expression) {
@@ -128,14 +140,13 @@ function currentTrain() {
 try {
   const train = currentTrain();
   const mergeBase = resolveBaseCommit();
-  const baseSource = runGit(["show", `${mergeBase}:${descriptorPath}`]);
   const currentSource = fs.readFileSync(path.join(repoRoot, descriptorPath), "utf8");
+  const currentSpecs = collectMethodSpecs(currentSource, descriptorPath);
+  const baseSource = runGit(["show", `${mergeBase}:${descriptorPath}`]);
   const baseNames = new Set(
     collectMethodSpecs(baseSource, `${descriptorPath}@${mergeBase}`).map((s) => s.name),
   );
-  const added = collectMethodSpecs(currentSource, descriptorPath).filter(
-    (spec) => !baseNames.has(spec.name),
-  );
+  const added = currentSpecs.filter((spec) => !baseNames.has(spec.name));
   const violations = added.filter((spec) => spec.since !== train);
 
   if (violations.length > 0) {
