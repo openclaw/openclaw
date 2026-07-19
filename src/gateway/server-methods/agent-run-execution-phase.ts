@@ -398,6 +398,15 @@ export function startAgentRunExecution(params: {
               prepared.activeRunAbort.entry.sessionId = sessionId;
             }
           },
+          onSessionResetCommitted: (commit) => {
+            emitSessionsChanged(params.context, {
+              sessionKey: commit.key,
+              ...(commit.key === "global"
+                ? { agentId: commit.agentId ?? params.activeSessionAgentId }
+                : {}),
+              reason: commit.reason,
+            });
+          },
           workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
             spawnedBy: params.spawnedBy,
             workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,

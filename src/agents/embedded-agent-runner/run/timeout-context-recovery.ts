@@ -3,6 +3,7 @@ import type { ContextEngine, ContextEngineSessionTarget } from "../../../context
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { deriveContextPromptTokens, normalizeUsage } from "../../usage.js";
+import type { DeferEmbeddedHookSessionReset } from "../compaction-hook-reset-api.js";
 import { runPostCompactionSideEffects } from "../compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
@@ -51,6 +52,7 @@ export async function recoverEmbeddedRunTimeout(input: {
   thinkLevel: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   authProfileId?: string;
   authProfileIdSource: "auto" | "user";
+  deferEmbeddedHookSessionReset: DeferEmbeddedHookSessionReset;
   resolveContextEnginePluginId: () => string | undefined;
   buildRuntimeSettings: (settings: {
     tokenBudget?: number | null;

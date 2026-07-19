@@ -1,6 +1,7 @@
 // Tests compact command behavior for session compaction and reply status.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
@@ -20,16 +21,21 @@ vi.mock("./commands-compact.runtime.js", () => ({
   resolveSessionFilePathOptions: vi.fn(() => ({})),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
+vi.mock("../../gateway/session-reset-service.js", () => ({
+  performGatewaySessionReset: vi.fn(async () => ({ ok: true })),
+}));
 
 const {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,
+  enqueueSystemEvent,
   formatContextUsageShort,
   incrementCompactionCount,
   isEmbeddedAgentRunAbortableForCompaction,
   resolveSessionFilePathOptions,
   waitForEmbeddedAgentRunEnd,
 } = await import("./commands-compact.runtime.js");
+const { performGatewaySessionReset } = await import("../../gateway/session-reset-service.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
 function buildCompactParams(
@@ -198,6 +204,7 @@ describe("handleCompactCommand", () => {
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
     expect(call.authProfileId).toBe("github-copilot:work");
     expect(call.authProfileIdSource).toBe("user");
+    expect(typeof call.deferEmbeddedHookSessionReset).toBe("function");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
   });
@@ -528,6 +535,115 @@ describe("handleCompactCommand", () => {
     }
     expect(call.sessionEntry.sessionId).toBe("target-session");
     expect(call.tokensAfter).toBe(321);
+  });
+
+  it("flushes after-compaction reset requests after recording the terminal status event", async () => {
+    vi.mocked(performGatewaySessionReset).mockImplementationOnce(async (request) => {
+      request.onCommitted?.({
+        key: request.key,
+        sessionId: "reset-session",
+      });
+      return { ok: true } as never;
+    });
+    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
+      input.deferEmbeddedHookSessionReset?.({
+        key: "agent:main:whatsapp:direct:12345",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:hook",
+      });
+      return {
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 999,
+          tokensAfter: 321,
+        },
+      };
+    });
+
+    const params = {
+      ...buildCompactParams("/compact", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      sessionEntry: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    } as HandleCommandsParams;
+
+    await handleCompactCommand(params, true);
+
+    expect(vi.mocked(enqueueSystemEvent)).toHaveBeenCalledWith(
+      "Compacted (999 → 321) • Context 12.1k",
+      { sessionKey: "agent:main:main" },
+    );
+    expect(vi.mocked(performGatewaySessionReset)).toHaveBeenCalledOnce();
+    const statusEventOrder = vi.mocked(enqueueSystemEvent).mock.invocationCallOrder.at(-1);
+    const resetOrder = vi.mocked(performGatewaySessionReset).mock.invocationCallOrder.at(-1);
+    expect(statusEventOrder).toBeLessThan(resetOrder ?? 0);
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      {
+        sessionKey: "agent:main:whatsapp:direct:12345",
+        agentId: "main",
+        reason: "new",
+      },
+    ]);
+  });
+
+  it("guards delayed after-compaction resets against replaced sessions", async () => {
+    const sessionStore = {
+      "agent:main:main": {
+        sessionId: "target-session",
+        lifecycleRevision: "target-revision",
+        updatedAt: Date.now(),
+      },
+    };
+    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
+      input.deferEmbeddedHookSessionReset?.({
+        key: "agent:main:main",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:hook",
+      });
+      sessionStore["agent:main:main"] = {
+        sessionId: "replacement-session",
+        lifecycleRevision: "replacement-revision",
+        updatedAt: Date.now(),
+      };
+      return {
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 999,
+          tokensAfter: 321,
+        },
+      };
+    });
+    vi.mocked(performGatewaySessionReset).mockImplementationOnce(async (request) => {
+      expect(request.assertCurrent).toEqual(expect.any(Function));
+      expect(() => request.assertCurrent?.()).toThrow("is no longer target-session");
+      return { ok: true } as never;
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: sessionStore["agent:main:main"],
+        sessionStore,
+      } as unknown as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(performGatewaySessionReset)).toHaveBeenCalledOnce();
   });
 
   it("reports unknown context when terminal compaction omits the post-compaction count", async () => {

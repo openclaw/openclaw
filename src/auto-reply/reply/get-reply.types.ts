@@ -4,6 +4,7 @@ import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-ru
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
+import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { QueueMode } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -27,6 +28,7 @@ type InternalReplySessionOptions = {
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

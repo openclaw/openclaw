@@ -20,6 +20,7 @@ import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
+  refreshCronSessionAfterResetCommit,
   resolveCronLifecycleRevisionIdentity,
   type MutableCronSession,
 } from "./run-session-state.js";
@@ -120,6 +121,102 @@ describe("createPersistCronSessionEntry", () => {
     expect(cronSession.resetBoundaryPending).toBeDefined();
   });
 
+  it("refreshes detached cron state after a hook reset commits a fresh row", () => {
+    const agentSessionKey = "agent:main:cron:budget-reset";
+    const runSessionKey = `${agentSessionKey}:run:run-session-id`;
+    const resetEntry = makeSessionEntry({
+      sessionId: "reset-session-id",
+      sessionFile: "/tmp/reset-session.jsonl",
+      compactionCount: 0,
+    });
+    const cronSession = makeCronSession(
+      makeSessionEntry({
+        sessionId: "exhausted-session-id",
+        sessionFile: "/tmp/exhausted-session.jsonl",
+        compactionCount: 12,
+      }),
+    );
+
+    refreshCronSessionAfterResetCommit({
+      cronSession,
+      agentSessionKey,
+      runSessionKey,
+      commit: { key: runSessionKey, sessionId: "reset-session-id" },
+      latestEntry: resetEntry,
+    });
+
+    expect(cronSession.sessionEntry).toMatchObject({
+      sessionId: "reset-session-id",
+      sessionFile: "/tmp/reset-session.jsonl",
+      compactionCount: 0,
+    });
+    expect(cronSession.initialSessionEntry).toMatchObject({
+      sessionId: "reset-session-id",
+      sessionFile: "/tmp/reset-session.jsonl",
+      compactionCount: 0,
+    });
+    expect(cronSession.store[runSessionKey]).toMatchObject({
+      sessionId: "reset-session-id",
+    });
+    expect(cronSession.store[agentSessionKey]).toMatchObject({
+      sessionId: "reset-session-id",
+    });
+  });
+
+  it("persists same-key hook reset sessions after refreshing the ownership baseline", async () => {
+    const sessionKey = "agent:main:cron:budget-reset";
+    const resetTranscriptPath = await createTranscriptFile();
+    const previousEntry = makeSessionEntry({
+      sessionId: "exhausted-session-id",
+      sessionFile: "/tmp/exhausted-session.jsonl",
+      compactionCount: 12,
+      lifecycleRevision: "old-revision",
+    });
+    const resetEntry = makeSessionEntry({
+      sessionId: "reset-session-id",
+      sessionFile: resetTranscriptPath,
+      compactionCount: 0,
+      lifecycleRevision: "reset-revision",
+    });
+    const persistedStore: Record<string, SessionEntry> = {
+      [sessionKey]: resetEntry,
+    };
+    const cronSession = {
+      ...makeCronSession({ ...previousEntry, totalTokens: 500 }),
+      initialSessionEntry: previousEntry,
+      lifecycleRevision: crypto.randomUUID(),
+      store: { [sessionKey]: previousEntry },
+    } as MutableCronSession;
+
+    refreshCronSessionAfterResetCommit({
+      cronSession,
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
+      commit: { key: sessionKey, sessionId: "reset-session-id" },
+      latestEntry: resetEntry,
+    });
+    cronSession.sessionEntry.totalTokens = 42;
+
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+    });
+
+    await expect(persist()).resolves.toBeUndefined();
+    expect(persistedStore[sessionKey]).toMatchObject({
+      sessionId: "reset-session-id",
+      sessionFile: resetTranscriptPath,
+      compactionCount: 0,
+      totalTokens: 42,
+    });
+    expect(persistedStore[sessionKey]?.sessionId).not.toBe("exhausted-session-id");
+    expect(cronSession.initialSessionEntry).toMatchObject({
+      sessionId: "reset-session-id",
+      totalTokens: 42,
+    });
+  });
+
   it("owns an exact hidden continuation row without colliding with another run", async () => {
     const runSessionKey = "agent:main:cron:job:run:run-session-id";
     const lifecycleRevision = crypto.randomUUID();
@@ -218,7 +315,10 @@ describe("createPersistCronSessionEntry", () => {
     });
 
     store[runSessionKey] = makeSessionEntry({
-      cronRunContinuation: { lifecycleRevision: replacementLifecycleRevision, phase: "ready" },
+      cronRunContinuation: {
+        lifecycleRevision: replacementLifecycleRevision,
+        phase: "ready",
+      },
     });
     await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
     expect(store[runSessionKey]?.cronRunContinuation?.lifecycleRevision).toBe(
@@ -360,7 +460,9 @@ describe("createPersistCronSessionEntry", () => {
 
   it("does not let an older concurrent run reclaim a persisted lifecycle revision", async () => {
     const sessionKey = "agent:main:session";
-    const initialSessionEntry = makeSessionEntry({ lifecycleRevision: "initial-revision" });
+    const initialSessionEntry = makeSessionEntry({
+      lifecycleRevision: "initial-revision",
+    });
     const persistedStore: Record<string, SessionEntry> = {
       [sessionKey]: initialSessionEntry,
     };
@@ -404,7 +506,9 @@ describe("createPersistCronSessionEntry", () => {
     const activeRevision = crypto.randomUUID();
     const nextRevision = crypto.randomUUID();
     const activeEntry = makeSessionEntry({ lifecycleRevision: activeRevision });
-    const persistedStore: Record<string, SessionEntry> = { [sessionKey]: activeEntry };
+    const persistedStore: Record<string, SessionEntry> = {
+      [sessionKey]: activeEntry,
+    };
     const nextSession = {
       ...makeCronSession(makeSessionEntry({ lifecycleRevision: nextRevision })),
       initialSessionEntry: activeEntry,
@@ -437,7 +541,9 @@ describe("createPersistCronSessionEntry", () => {
   it("claims an initial row after a concurrent pin and rename", async () => {
     const sessionKey = "agent:main:session";
     const lifecycleRevision = crypto.randomUUID();
-    const initialSessionEntry = makeSessionEntry({ lifecycleRevision: "initial-revision" });
+    const initialSessionEntry = makeSessionEntry({
+      lifecycleRevision: "initial-revision",
+    });
     const cronSession = {
       ...makeCronSession(
         makeSessionEntry({
@@ -550,7 +656,9 @@ describe("createPersistCronSessionEntry", () => {
     };
     delete currentEntry.elevatedLevel;
     delete currentEntry.inheritedToolAllow;
-    const persistedStore: Record<string, SessionEntry> = { [sessionKey]: currentEntry };
+    const persistedStore: Record<string, SessionEntry> = {
+      [sessionKey]: currentEntry,
+    };
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: sessionKey,

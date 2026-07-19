@@ -182,6 +182,13 @@ export type AgentCommandOpts = {
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when compaction rotates the active run onto a successor session. */
   onSessionIdChanged?: (sessionId: string) => void;
+  /** Called after a hook-triggered session reset commits during this run. */
+  onSessionResetCommitted?: (commit: {
+    key: string;
+    sessionId: string;
+    reason: "new" | "reset";
+    agentId?: string;
+  }) => void;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Internal prompt-mode override for trusted local/gateway callsites. */

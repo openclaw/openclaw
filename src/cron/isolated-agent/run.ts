@@ -449,7 +449,10 @@ async function resolveCronDeliveryContext(params: {
       deliveryPlan,
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
-      sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
+      sourceDelivery: resolveCronSourceDeliveryPlan({
+        deliveryPlan,
+        resolvedDelivery,
+      }),
     };
   }
   if (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan)) {
@@ -466,7 +469,10 @@ async function resolveCronDeliveryContext(params: {
       deliveryPlan,
       deliveryRequested: false,
       resolvedDelivery,
-      sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
+      sourceDelivery: resolveCronSourceDeliveryPlan({
+        deliveryPlan,
+        resolvedDelivery,
+      }),
     };
   }
   const { resolveDeliveryTarget } = await loadCronDeliveryRuntime();
@@ -487,7 +493,10 @@ async function resolveCronDeliveryContext(params: {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,
     resolvedDelivery,
-    sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
+    sourceDelivery: resolveCronSourceDeliveryPlan({
+      deliveryPlan,
+      resolvedDelivery,
+    }),
   };
 }
 
@@ -1202,18 +1211,21 @@ async function finalizeCronRun(params: {
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
   let telemetry: CronRunTelemetry | undefined;
+  const sessionResetCommitted = Boolean(execution.sessionResetCommitted);
 
   // Late aborted results may still contain billable usage. Recheck before each
   // metadata mutation because lazy runtime loads below can yield to the timeout.
   if (!params.isAborted()) {
-    if (finalRunResult.meta?.systemPromptReport) {
+    if (!sessionResetCommitted && finalRunResult.meta?.systemPromptReport) {
       prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
     }
-    adoptCronRunSessionMetadata({
-      entry: prepared.cronSession.sessionEntry,
-      sessionKey: prepared.agentSessionKey,
-      runMeta: finalRunResult.meta?.agentMeta,
-    });
+    if (!sessionResetCommitted) {
+      adoptCronRunSessionMetadata({
+        entry: prepared.cronSession.sessionEntry,
+        sessionKey: prepared.agentSessionKey,
+        runMeta: finalRunResult.meta?.agentMeta,
+      });
+    }
   }
   const usage = finalRunResult.meta?.agentMeta?.usage;
   const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;
@@ -1234,7 +1246,7 @@ async function finalizeCronRun(params: {
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  if (!params.isAborted()) {
+  if (!params.isAborted() && !sessionResetCommitted) {
     setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
       provider: providerUsed,
       model: modelUsed,
@@ -1285,8 +1297,10 @@ async function finalizeCronRun(params: {
         }),
       }),
     );
-    prepared.cronSession.sessionEntry.inputTokens = input;
-    prepared.cronSession.sessionEntry.outputTokens = output;
+    if (!sessionResetCommitted) {
+      prepared.cronSession.sessionEntry.inputTokens = input;
+      prepared.cronSession.sessionEntry.outputTokens = output;
+    }
     const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
       input_tokens: input,
       output_tokens: output,
@@ -1301,19 +1315,21 @@ async function finalizeCronRun(params: {
     if (aggregateTotalTokens > 0) {
       telemetryUsage.total_tokens = aggregateTotalTokens;
     }
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      prepared.cronSession.sessionEntry.totalTokens = totalTokens;
-      prepared.cronSession.sessionEntry.totalTokensFresh = true;
-    } else {
-      prepared.cronSession.sessionEntry.totalTokens = undefined;
-      prepared.cronSession.sessionEntry.totalTokensFresh = false;
+    if (!sessionResetCommitted) {
+      if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+        prepared.cronSession.sessionEntry.totalTokens = totalTokens;
+        prepared.cronSession.sessionEntry.totalTokensFresh = true;
+      } else {
+        prepared.cronSession.sessionEntry.totalTokens = undefined;
+        prepared.cronSession.sessionEntry.totalTokensFresh = false;
+      }
+      prepared.cronSession.sessionEntry.cacheRead = cacheRead;
+      prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
     }
-    prepared.cronSession.sessionEntry.cacheRead = cacheRead;
-    prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
     // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
     // cumulative run usage, so assign directly instead of accumulating).
     // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
-    if (runEstimatedCostUsd !== undefined) {
+    if (!sessionResetCommitted && runEstimatedCostUsd !== undefined) {
       prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
     }
     telemetry = {
@@ -1374,7 +1390,9 @@ async function finalizeCronRun(params: {
       error: params.abortReason(),
       diagnostics: mergeCronRunDiagnostics(
         prepared.preflightDiagnostics,
-        createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
+        createCronRunDiagnosticsFromAgentResult(finalRunResult, {
+          finalStatus: "error",
+        }),
         createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
       ),
       ...telemetry,
@@ -1410,7 +1428,9 @@ async function finalizeCronRun(params: {
       error,
       diagnostics: mergeCronRunDiagnostics(
         prepared.preflightDiagnostics,
-        createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
+        createCronRunDiagnosticsFromAgentResult(finalRunResult, {
+          finalStatus: "error",
+        }),
         createCronRunDiagnosticsFromError("agent-run", error),
       ),
       ...telemetry,
@@ -1437,7 +1457,9 @@ async function finalizeCronRun(params: {
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
       ...(hasFatalErrorPayload
-        ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
+        ? {
+            error: embeddedRunError ?? "cron isolated run returned an error payload",
+          }
         : {}),
       summary,
       outputText,

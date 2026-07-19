@@ -2,6 +2,7 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { SessionSuspensionParams } from "../../session-suspension.js";
 import { resolveRunWorkspaceDir } from "../../workspace-run.js";
+import type { DeferEmbeddedHookSessionReset } from "../compaction-hook-reset-api.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
@@ -32,4 +33,5 @@ export type PreparedEmbeddedRunInput = {
   lifecycleGeneration: NonNullable<RunEmbeddedAgentParams["lifecycleGeneration"]>;
   suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  deferEmbeddedHookSessionReset: DeferEmbeddedHookSessionReset;
 };

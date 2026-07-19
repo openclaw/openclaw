@@ -5,7 +5,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 export type CommandSessionMetadataChange = {
   sessionKey: string;
   agentId?: string;
-  reason: "command-metadata";
+  reason: "command-metadata" | "new" | "reset";
 };
 
 const commandSessionMetadataChanges = new WeakMap<object, CommandSessionMetadataChange[]>();
@@ -28,6 +28,18 @@ function addChange(target: object, change: CommandSessionMetadataChange): void {
 export function markCommandSessionMetadataChanged(
   params: Pick<HandleCommandsParams, "agentId" | "ctx" | "rootCtx" | "sessionKey">,
 ): void {
+  markCommandSessionMetadataChange({
+    ctx: params.ctx,
+    rootCtx: params.rootCtx,
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    reason: "command-metadata",
+  });
+}
+
+export function markCommandSessionMetadataChange(
+  params: Pick<HandleCommandsParams, "ctx" | "rootCtx"> & CommandSessionMetadataChange,
+): void {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return;
@@ -35,7 +47,7 @@ export function markCommandSessionMetadataChanged(
   const change: CommandSessionMetadataChange = {
     sessionKey,
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    reason: "command-metadata",
+    reason: params.reason,
   };
   const targets = new Set<object>();
   if (params.rootCtx && typeof params.rootCtx === "object") {

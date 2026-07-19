@@ -51,10 +51,15 @@ import {
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
 import type {
   CronLiveSelection,
+  CronSessionResetCommit,
   MutableCronSession,
   PersistCronSessionEntry,
 } from "./run-session-state.js";
-import { syncCronSessionLiveSelection } from "./run-session-state.js";
+import {
+  refreshCronSessionAfterResetCommit,
+  syncCronSessionLiveSelection,
+} from "./run-session-state.js";
+import { loadCronSessionEntryLatest } from "./session.js";
 import { resolveFallbackCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -190,6 +195,7 @@ export type CronExecutionResult = {
   runStartedAt: number;
   runEndedAt: number;
   liveSelection: CronLiveSelection;
+  sessionResetCommitted?: CronSessionResetCommit;
 };
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
@@ -298,8 +304,26 @@ function createCronPromptExecutor(params: {
       }
     | undefined;
   let attemptMediaTaskIds: ReadonlySet<string> = new Set();
+  let sessionResetCommitted: CronSessionResetCommit | undefined;
   const currentAttemptCommittedMedia = () =>
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
+  const refreshCronSessionStateAfterResetCommit = (commit: CronSessionResetCommit) => {
+    sessionResetCommitted = { ...commit };
+    const latest = loadCronSessionEntryLatest(params.cronSession.storePath, commit.key);
+    if (!latest) {
+      logWarn(
+        `[cron:${params.job.id}] Hook reset committed for ${commit.key}, but latest session row was unavailable`,
+      );
+      return;
+    }
+    refreshCronSessionAfterResetCommit({
+      cronSession: params.cronSession,
+      agentSessionKey: params.agentSessionKey,
+      runSessionKey: params.runSessionKey,
+      commit,
+      latestEntry: latest,
+    });
+  };
 
   const runPrompt = async (promptText: string) => {
     const userTurnTranscriptRecorder =
@@ -580,6 +604,7 @@ function createCronPromptExecutor(params: {
           onExecutionStarted: params.onExecutionStarted,
           onExecutionPhase: params.onExecutionPhase,
           onLaneWait: params.onLaneWait,
+          onSessionResetCommitted: refreshCronSessionStateAfterResetCommit,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
           userTurnTranscriptRecorder,
@@ -612,6 +637,7 @@ function createCronPromptExecutor(params: {
       fallbackModel,
       runEndedAt,
       liveSelection: params.liveSelection,
+      sessionResetCommitted,
     }),
   };
 }
@@ -771,7 +797,8 @@ export async function executeCronRun(params: {
     }
   }
 
-  let { runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState();
+  let { runResult, fallbackProvider, fallbackModel, runEndedAt, sessionResetCommitted } =
+    executor.getState();
   if (!runResult) {
     throw new Error("cron isolated run returned no result");
   }
@@ -826,7 +853,8 @@ export async function executeCronRun(params: {
         "Use tools when needed, including sessions_spawn for parallel subtasks, wait for spawned subagents to finish, then return only the final summary.",
       ].join(" ");
       await executor.runPrompt(continuationPrompt);
-      ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
+      ({ runResult, fallbackProvider, fallbackModel, runEndedAt, sessionResetCommitted } =
+        executor.getState());
     }
   }
 
@@ -840,6 +868,7 @@ export async function executeCronRun(params: {
     runStartedAt,
     runEndedAt,
     liveSelection: params.liveSelection,
+    sessionResetCommitted,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

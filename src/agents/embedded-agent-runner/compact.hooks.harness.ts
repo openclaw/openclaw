@@ -79,6 +79,11 @@ export const sessionCompactImpl = vi.fn(async () => ({
   tokensBefore: 120,
   details: { ok: true },
 }));
+export const performGatewaySessionResetMock = vi.fn(async (params: { key: string }) => ({
+  ok: true as const,
+  key: params.key,
+  entry: { sessionId: "reset-session" },
+}));
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
@@ -1006,6 +1011,10 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../plugins/memory-runtime.js", () => ({
     getActiveMemorySearchManager: getMemorySearchManagerMock,
+  }));
+
+  vi.doMock("../../gateway/session-reset-service.js", () => ({
+    performGatewaySessionReset: performGatewaySessionResetMock,
   }));
 
   vi.doMock("../date-time.js", () => ({

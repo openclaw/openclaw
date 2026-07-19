@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -64,6 +65,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
 >();
 const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
 const FOLLOWUP_TEST_SESSION_STORE_PATHS = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -4546,6 +4548,110 @@ describe("createFollowupRunner compaction", () => {
     expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
       await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
     );
+  });
+
+  it("keeps hook-reset sessions after followup auto-compaction returns stale metadata", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-compaction-reset-"), "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+      updatedAt: Date.now(),
+      compactionCount: 4,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+          agentId?: string;
+        }) => void;
+      }) => {
+        args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        const resetEntry: SessionEntry = {
+          sessionId: "session-reset",
+          sessionFile: path.join(path.dirname(storePath), "session-reset.jsonl"),
+          updatedAt: Date.now(),
+          compactionCount: 0,
+        };
+        sessionStore.main = resetEntry;
+        replaceSessionEntrySync({ sessionKey: "main", storePath }, resetEntry);
+        args.onSessionResetCommitted?.({
+          key: "main",
+          sessionId: "session-reset",
+          reason: "new",
+          agentId: "agent-1",
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              sessionId: "session-stale-compacted",
+              sessionFile: path.join(path.dirname(storePath), "session-stale-compacted.jsonl"),
+              compactionCount: 1,
+              lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+            },
+          },
+        };
+      },
+    );
+
+    const onSessionMetadataChanges = vi.fn();
+    const runner = createFollowupRunner({
+      opts: {
+        onBlockReply: vi.fn(async () => {}),
+        onSessionMetadataChanges,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    const queuedNext = createQueuedRun({
+      prompt: "next",
+      run: {
+        sessionId: "session",
+        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+      },
+    });
+    const queueSettings: QueueSettings = { mode: "followup" };
+    enqueueFollowupRun("main", queuedNext, queueSettings);
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session",
+          sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+        },
+      }),
+    );
+
+    expect(expectDefined(sessionStore.main, "sessionStore.main test invariant").sessionId).toBe(
+      "session-reset",
+    );
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(0);
+    expect(queuedNext.run.sessionId).toBe("session-reset");
+    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-reset.jsonl")),
+    );
+    expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+      { sessionKey: "main", agentId: "agent-1", reason: "new" },
+    ]);
   });
 
   it("does not count failed compaction end events in followup runs", async () => {

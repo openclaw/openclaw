@@ -1,5 +1,9 @@
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { resolveCompactionSuccessorTranscript } from "../../../context-engine/types.js";
+import {
+  buildEmbeddedHookApi,
+  type DeferEmbeddedHookSessionReset,
+} from "../compaction-hook-reset-api.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -13,8 +17,16 @@ export function createEmbeddedRunCompactionRuntime(input: {
   hookRunner: PreparedEmbeddedRunInput["hookRunner"];
   hookContext: PreparedEmbeddedRunInput["hookContext"];
   sessionPromptState: SessionPromptState;
+  deferEmbeddedHookSessionReset: DeferEmbeddedHookSessionReset;
 }) {
-  const { runParams: params, contextEngine, hookRunner, hookContext, sessionPromptState } = input;
+  const {
+    runParams: params,
+    contextEngine,
+    hookRunner,
+    hookContext,
+    sessionPromptState,
+    deferEmbeddedHookSessionReset,
+  } = input;
   const resolveActiveHookContext = () => ({
     ...hookContext,
     sessionId: sessionPromptState.sessionId,
@@ -90,6 +102,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       return;
     }
     try {
+      const resetSessionKey = params.sessionKey?.trim();
       await hookRunner.runAfterCompaction(
         {
           messageCount: -1,
@@ -100,7 +113,18 @@ export function createEmbeddedRunCompactionRuntime(input: {
             sessionPromptState.sessionFile,
           ...(previousSessionId ? { previousSessionId } : {}),
         },
-        resolveActiveHookContext(),
+        {
+          ...resolveActiveHookContext(),
+          ...(params.modelSelectionLocked === true || !resetSessionKey
+            ? {}
+            : {
+                api: buildEmbeddedHookApi({
+                  agentId: hookContext.agentId,
+                  sessionKey: resetSessionKey,
+                  deferResetSession: deferEmbeddedHookSessionReset,
+                }),
+              }),
+        },
       );
     } catch (error) {
       log.warn(`after_compaction hook failed during ${reason}: ${String(error)}`);

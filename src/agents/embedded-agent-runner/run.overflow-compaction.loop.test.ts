@@ -1,6 +1,10 @@
 // Coverage for the overflow compaction retry loop in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import type {
+  ToolOutcomeObservation,
+  ToolOutcomeObserver,
+} from "../agent-tools.before-tool-call.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -18,6 +22,7 @@ import {
   mockedIsLikelyContextOverflowError,
   mockedLog,
   mockedMarkAuthProfileSuccess,
+  mockedPerformGatewaySessionReset,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
@@ -78,6 +83,24 @@ function makeUserMessage(content: string = baseParams.prompt) {
   return { role: "user" as const, content, timestamp: 1 };
 }
 
+function emitRepeatedToolFailures(
+  onToolOutcome: ToolOutcomeObserver | undefined,
+  count: number,
+): void {
+  const observation: ToolOutcomeObservation = {
+    toolName: "message",
+    argsHash: "same-target",
+    resultHash: "same-error",
+    isError: true,
+  };
+  for (let i = 0; i < count; i += 1) {
+    onToolOutcome?.({
+      ...observation,
+      toolCallOrdinal: i,
+    });
+  }
+}
+
 describe("overflow compaction in run loop", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
@@ -102,7 +125,8 @@ describe("overflow compaction in run loop", () => {
         lower.includes("request_too_large") ||
         lower.includes("request size exceeds") ||
         lower.includes("context window exceeded") ||
-        lower.includes("prompt too large")
+        lower.includes("prompt too large") ||
+        lower.includes("estimated context size exceeds safe threshold during tool loop")
       );
     });
   });
@@ -117,9 +141,9 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactArg = requireMockCallArg(mockedCompactDirect, 0);
-    expect(requireRecord(compactArg.runtimeContext, "runtime context").authProfileId).toBe(
-      "test-profile",
-    );
+    const runtimeContext = requireRecord(compactArg.runtimeContext, "runtime context");
+    expect(runtimeContext.authProfileId).toBe("test-profile");
+    expect(runtimeContext).not.toHaveProperty("deferEmbeddedHookSessionReset");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(
       mockedLog.warn,
@@ -306,6 +330,47 @@ describe("overflow compaction in run loop", () => {
     });
 
     expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).thinkLevel).toBe("adaptive");
+  });
+
+  it("does not abort deterministic live tool failures unless loop detection is enabled", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      emitRepeatedToolFailures(
+        (attemptParams as { onToolOutcome?: ToolOutcomeObserver }).onToolOutcome,
+        5,
+      );
+      return makeAttemptResult({ promptError: null });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...baseParams,
+      config: undefined,
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("aborts deterministic live tool failures when loop detection is enabled", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      emitRepeatedToolFailures(
+        (attemptParams as { onToolOutcome?: ToolOutcomeObserver }).onToolOutcome,
+        5,
+      );
+      return makeAttemptResult({ promptError: null });
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        config: {
+          tools: {
+            loopDetection: {
+              enabled: true,
+            },
+          },
+        } as never,
+      }),
+    ).rejects.toThrow("CRITICAL: tool message failed 5 times");
   });
 
   it("does not wait for post-run auth-profile success bookkeeping before returning", async () => {
@@ -800,6 +865,57 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expectLogIncludes(mockedLog.warn, "auto-compaction failed");
+  });
+
+  it("resets the session after unrecoverable tool-loop overflow recovery", async () => {
+    const overflowError = makeOverflowError(
+      "Context overflow: estimated context size exceeds safe threshold during tool loop.",
+    );
+
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction timed out",
+    });
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(mockedPerformGatewaySessionReset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "test-key",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:tool-loop-overflow-recovery",
+      }),
+    );
+    expectLogIncludes(
+      mockedLog.warn,
+      "queued session reset after unrecoverable tool-loop overflow",
+    );
+  });
+
+  it("does not reset temporary overflow runs without an owned session key", async () => {
+    const overflowError = makeOverflowError(
+      "Context overflow: estimated context size exceeds safe threshold during tool loop.",
+    );
+
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction timed out",
+    });
+
+    const result = await runEmbeddedAgent({ ...baseParams, sessionKey: undefined });
+
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(mockedPerformGatewaySessionReset).not.toHaveBeenCalled();
+    expectLogExcludes(
+      mockedLog.warn,
+      "queued session reset after unrecoverable tool-loop overflow",
+    );
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {

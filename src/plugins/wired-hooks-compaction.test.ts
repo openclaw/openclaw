@@ -1,7 +1,7 @@
 /**
  * Test: before_compaction & after_compaction hook wiring
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ const hookMocks = vi.hoisted(() => ({
     runAfterCompaction: vi.fn(async () => {}),
   },
   emitAgentEvent: vi.fn(),
+  performGatewaySessionReset: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -22,6 +23,10 @@ vi.mock("../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   registerAgentEventLifecycleRotationHandler: vi.fn(),
+}));
+
+vi.mock("../gateway/session-reset-service.js", () => ({
+  performGatewaySessionReset: hookMocks.performGatewaySessionReset,
 }));
 
 import {
@@ -38,6 +43,7 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.runAfterCompaction.mockClear();
     hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
     hookMocks.emitAgentEvent.mockClear();
+    hookMocks.performGatewaySessionReset.mockClear();
   });
 
   function createCompactionEndCtx(params: {
@@ -45,17 +51,27 @@ describe("compaction hook wiring", () => {
     messages?: unknown[];
     sessionFile?: string;
     sessionKey?: string;
+    agentId?: string;
+    sessionId?: string;
     compactionCount?: number;
     withRetryHooks?: boolean;
+    deferEmbeddedHookSessionReset?: (request: unknown) => void;
   }) {
     return {
       params: {
         runId: params.runId,
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
         session: {
           messages: params.messages ?? [],
           sessionFile: params.sessionFile,
         },
+        ...(params.deferEmbeddedHookSessionReset
+          ? {
+              deferEmbeddedHookSessionReset: params.deferEmbeddedHookSessionReset,
+            }
+          : {}),
       },
       state: { compactionInFlight: true },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -91,9 +107,20 @@ describe("compaction hook wiring", () => {
     >;
     return {
       event: afterCalls[0]?.[0] as
-        | { messageCount?: number; compactedCount?: number; sessionFile?: string }
+        | {
+            messageCount?: number;
+            compactedCount?: number;
+            sessionFile?: string;
+          }
         | undefined,
-      hookCtx: afterCalls[0]?.[1] as { sessionKey?: string } | undefined,
+      hookCtx: afterCalls[0]?.[1] as
+        | {
+            sessionKey?: string;
+            api?: {
+              resetSession?: (reason?: "new" | "reset") => Promise<unknown>;
+            };
+          }
+        | undefined,
     };
   }
 
@@ -107,7 +134,9 @@ describe("compaction hook wiring", () => {
       if (!params.call.hookCtx) {
         throw new Error("Expected compaction hook context");
       }
-      expect(params.call.hookCtx).toEqual({ sessionKey: params.expectedSessionKey });
+      expect(params.call.hookCtx).toEqual(
+        expect.objectContaining({ sessionKey: params.expectedSessionKey }),
+      );
     }
   }
 
@@ -119,7 +148,7 @@ describe("compaction hook wiring", () => {
       aborted?: boolean;
     },
   ) {
-    handleCompactionEnd(
+    return handleCompactionEnd(
       ctx as never,
       {
         type: "compaction_end",
@@ -144,7 +173,10 @@ describe("compaction hook wiring", () => {
       ensureCompactionPromise: vi.fn(),
     };
 
-    handleCompactionStart(ctx as never, { type: "compaction_start", reason: "threshold" });
+    handleCompactionStart(ctx as never, {
+      type: "compaction_start",
+      reason: "threshold",
+    });
 
     expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
     expectCompactionEvent({
@@ -168,7 +200,7 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it("calls runAfterCompaction when willRetry is false", () => {
+  it("calls runAfterCompaction when willRetry is false", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const ctx = createCompactionEndCtx({
@@ -179,7 +211,10 @@ describe("compaction hook wiring", () => {
       compactionCount: 1,
     });
 
-    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
 
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
     expectCompactionEvent({
@@ -201,7 +236,74 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it("does not call runAfterCompaction when willRetry is true but still increments counter", () => {
+  it("provides a deferred reset API to final after-compaction hooks", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const deferredReset = vi.fn();
+    (hookMocks.runner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, hookCtx: unknown) => {
+        const api = (
+          hookCtx as {
+            api?: { resetSession?: (reason?: "new" | "reset") => unknown };
+          }
+        ).api;
+        expect(api?.resetSession).toEqual(expect.any(Function));
+        await api?.resetSession?.("reset");
+      },
+    );
+
+    const ctx = createCompactionEndCtx({
+      runId: "r2-reset",
+      messages: [1, 2],
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:discord-public:cron:heartbeat",
+      agentId: "discord-public",
+      sessionId: "session-heartbeat",
+      compactionCount: 1,
+      deferEmbeddedHookSessionReset: deferredReset,
+    });
+
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
+
+    expect(deferredReset).toHaveBeenCalledWith({
+      key: "agent:discord-public:cron:heartbeat",
+      agentId: "discord-public",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
+    });
+    expect(hookMocks.performGatewaySessionReset).not.toHaveBeenCalled();
+  });
+
+  it("withholds the reset API without a run-owned after-compaction reset queue", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    (hookMocks.runner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, hookCtx: unknown) => {
+        expect((hookCtx as { api?: unknown }).api).toBeUndefined();
+      },
+    );
+
+    const ctx = createCompactionEndCtx({
+      runId: "r2-no-reset-queue",
+      messages: [1, 2],
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:discord-public:cron:heartbeat",
+      agentId: "discord-public",
+      sessionId: "session-heartbeat",
+      compactionCount: 1,
+    });
+
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
+
+    expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(hookMocks.performGatewaySessionReset).not.toHaveBeenCalled();
+  });
+
+  it("does not call runAfterCompaction when willRetry is true but still increments counter", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const ctx = createCompactionEndCtx({
@@ -210,7 +312,10 @@ describe("compaction hook wiring", () => {
       withRetryHooks: true,
     });
 
-    runCompactionEnd(ctx, { willRetry: true, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, {
+      willRetry: true,
+      result: { summary: "compacted" },
+    });
 
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
     // Counter is incremented even with willRetry — compaction succeeded (#38905)
@@ -232,13 +337,13 @@ describe("compaction hook wiring", () => {
       { willRetry: false, result: { summary: "compacted" }, aborted: true },
     ],
     ["does not increment counter when result is undefined", { willRetry: false }],
-  ] as const)("%s", (_name, event) => {
+  ] as const)("%s", async (_name, event) => {
     const ctx = createCompactionEndCtx({ runId: "r3c" });
-    runCompactionEnd(ctx, event);
+    await runCompactionEnd(ctx, event);
     expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
   });
 
-  it("resets stale assistant usage after final compaction", () => {
+  it("resets stale assistant usage after final compaction", async () => {
     const messages = [
       { role: "user", content: "hello" },
       {
@@ -264,7 +369,10 @@ describe("compaction hook wiring", () => {
       getLastCompactionTokensAfter: vi.fn(() => undefined),
     };
 
-    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
 
     const assistantOne = messages[1] as { usage?: unknown };
     const assistantTwo = messages[2] as { usage?: unknown };
@@ -272,7 +380,7 @@ describe("compaction hook wiring", () => {
     expect(assistantTwo.usage).toEqual(makeZeroUsageSnapshot());
   });
 
-  it("does not clear assistant usage while compaction is retrying", () => {
+  it("does not clear assistant usage while compaction is retrying", async () => {
     const messages = [
       {
         role: "assistant",
@@ -290,9 +398,13 @@ describe("compaction hook wiring", () => {
       getCompactionCount: () => 0,
     };
 
-    runCompactionEnd(ctx, { willRetry: true });
+    await runCompactionEnd(ctx, { willRetry: true });
 
     const assistant = messages[0] as { usage?: unknown };
-    expect(assistant.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
+    expect(assistant.usage).toEqual({
+      totalTokens: 184_297,
+      input: 130_000,
+      output: 2_000,
+    });
   });
 });

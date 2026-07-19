@@ -10,7 +10,22 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
+import {
+  buildEmbeddedHookApi,
+  createEmbeddedHookSessionResetQueue,
+  type DeferEmbeddedHookSessionReset,
+  type EmbeddedHookApi,
+} from "./compaction-hook-reset-api.js";
 import { log } from "./logger.js";
+
+type CompactionHookContext = {
+  sessionId: string;
+  agentId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  messageProvider?: string;
+  api?: EmbeddedHookApi;
+};
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
   const mode = config?.agents?.defaults?.compaction?.postIndexSync;
@@ -133,14 +148,12 @@ export async function runPostCompactionSideEffects(params: {
 type CompactionHookRunner = {
   hasHooks?: (hookName?: string) => boolean;
   runBeforeCompaction?: (
-    metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },
-    context: {
-      sessionId: string;
-      agentId: string;
-      sessionKey: string;
-      workspaceDir: string;
-      messageProvider?: string;
+    metrics: {
+      messageCount: number;
+      tokenCount?: number;
+      sessionFile?: string;
     },
+    context: CompactionHookContext,
   ) => Promise<void> | void;
   runAfterCompaction?: (
     metrics: {
@@ -149,13 +162,7 @@ type CompactionHookRunner = {
       compactedCount: number;
       sessionFile: string;
     },
-    context: {
-      sessionId: string;
-      agentId: string;
-      sessionKey: string;
-      workspaceDir: string;
-      messageProvider?: string;
-    },
+    context: CompactionHookContext,
   ) => Promise<void> | void;
 };
 
@@ -303,6 +310,7 @@ export async function runAfterCompactionHooks(params: {
   sessionId: string;
   sessionAgentId: string;
   hookSessionKey: string;
+  modelSelectionLocked?: boolean;
   missingSessionKey: boolean;
   workspaceDir: string;
   messageProvider?: string;
@@ -320,7 +328,19 @@ export async function runAfterCompactionHooks(params: {
     sessionId: string;
     sessionKey: string;
   }) => void | Promise<void>;
+  deferResetSession?: DeferEmbeddedHookSessionReset;
 }) {
+  const deferResetSession = params.deferResetSession;
+  const localResetQueue =
+    params.modelSelectionLocked === true || params.missingSessionKey || deferResetSession
+      ? undefined
+      : createEmbeddedHookSessionResetQueue();
+  const effectiveDeferResetSession =
+    deferResetSession ??
+    (localResetQueue
+      ? (request: Parameters<typeof localResetQueue.deferResetSession>[0]) =>
+          localResetQueue.deferResetSession(request)
+      : undefined);
   try {
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
       sessionId: params.sessionId,
@@ -350,6 +370,24 @@ export async function runAfterCompactionHooks(params: {
   }
   if (params.hookRunner?.hasHooks?.("after_compaction")) {
     try {
+      const hookContext: CompactionHookContext = {
+        sessionId: params.sessionId,
+        agentId: params.sessionAgentId,
+        sessionKey: params.hookSessionKey,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider,
+        ...(params.modelSelectionLocked === true ||
+        params.missingSessionKey ||
+        !effectiveDeferResetSession
+          ? {}
+          : {
+              api: buildEmbeddedHookApi({
+                agentId: params.sessionAgentId,
+                sessionKey: params.hookSessionKey,
+                deferResetSession: effectiveDeferResetSession,
+              }),
+            }),
+      };
       await params.hookRunner.runAfterCompaction?.(
         {
           messageCount: params.messageCountAfter,
@@ -358,19 +396,15 @@ export async function runAfterCompactionHooks(params: {
           sessionFile: params.sessionFile,
           ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
         },
-        {
-          sessionId: params.sessionId,
-          agentId: params.sessionAgentId,
-          sessionKey: params.hookSessionKey,
-          workspaceDir: params.workspaceDir,
-          messageProvider: params.messageProvider,
-        },
+        hookContext,
       );
     } catch (err) {
       log.warn("after_compaction hook failed", {
         errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });
+    } finally {
+      await localResetQueue?.flush();
     }
   }
 }

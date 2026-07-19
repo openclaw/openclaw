@@ -1701,6 +1701,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
             onHookMessages: params.onCompactionHookMessages,
+            deferResetSession: params.deferEmbeddedHookSessionReset,
+            modelSelectionLocked: params.modelSelectionLocked,
           });
           return {
             ok: true,

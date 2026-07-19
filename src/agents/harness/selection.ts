@@ -42,6 +42,7 @@ import {
   resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
   type AgentHarnessPolicy,
 } from "./policy.js";
+import { harnessOwnsPrivateLifecycleResetAuthority } from "./private-authority.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
 import {
   buildAgentHarnessSupportContext,
@@ -512,6 +513,9 @@ async function runSelectedAgentHarnessAttempt(
       ]
     : [];
   const pluginParams = withoutInternalHarnessAuthority(internalParams);
+  const harnessParams = shouldPreserveLifecycleResetQueue(harness)
+    ? preserveLifecycleResetQueue(internalParams, pluginParams)
+    : pluginParams;
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -523,7 +527,7 @@ async function runSelectedAgentHarnessAttempt(
       // Resolve plugin policy after entering the host scope. Ring-zero tools are
       // trusted setup authority and must survive ordinary deny-all policy.
       const attemptParams =
-        harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
+        harness.id === "openclaw" ? harnessParams : preparePluginHarnessParams(harnessParams);
       return runAgentHarnessLifecycleAttempt(harness, attemptParams);
     }),
   );
@@ -583,11 +587,35 @@ function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): 
 function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
 ): EmbeddedRunAttemptParams {
-  if (!Object.hasOwn(params, "systemAgentTool")) {
+  if (
+    !Object.hasOwn(params, "systemAgentTool") &&
+    !Object.hasOwn(params, "deferEmbeddedHookSessionReset")
+  ) {
     return params;
   }
-  const { systemAgentTool: _systemAgentTool, ...pluginParams } = params;
+  const {
+    deferEmbeddedHookSessionReset: _deferEmbeddedHookSessionReset,
+    systemAgentTool: _systemAgentTool,
+    ...pluginParams
+  } = params;
   return pluginParams;
+}
+
+function shouldPreserveLifecycleResetQueue(harness: AgentHarness): boolean {
+  return harnessOwnsPrivateLifecycleResetAuthority(harness);
+}
+
+function preserveLifecycleResetQueue(
+  internalParams: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  pluginParams: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams {
+  if (!Object.hasOwn(internalParams, "deferEmbeddedHookSessionReset")) {
+    return pluginParams;
+  }
+  return {
+    ...pluginParams,
+    deferEmbeddedHookSessionReset: internalParams.deferEmbeddedHookSessionReset,
+  } as EmbeddedRunAttemptParams;
 }
 
 function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {

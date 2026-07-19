@@ -327,7 +327,13 @@ async function compactTrackedSdkSession(params: {
 // the token (see `tokenFingerprint` in `src/auth-bridge.ts`), so
 // rotating the token under the same profile id still invalidates
 // the compat key without ever serializing the raw credential.
-type CopilotSessionCompatParams = AgentHarnessAttemptParams | AgentHarnessCompactParams;
+type CopilotDeferredHookSessionReset = Parameters<
+  typeof runAgentHarnessAfterCompactionHook
+>[0]["ctx"]["deferEmbeddedHookSessionReset"];
+type CopilotAgentHarnessCompactParams = AgentHarnessCompactParams & {
+  deferEmbeddedHookSessionReset?: CopilotDeferredHookSessionReset;
+};
+type CopilotSessionCompatParams = AgentHarnessAttemptParams | CopilotAgentHarnessCompactParams;
 
 function readAgentIdFromSessionKey(sessionKey: unknown): string | undefined {
   if (typeof sessionKey !== "string") {
@@ -552,16 +558,23 @@ function computeSessionCompactKey(params: CopilotSessionCompatParams): string {
 }
 
 function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
+  const internalParams = params as CopilotAgentHarnessCompactParams;
+  const agentId = params.agentId ?? readAgentIdFromSessionKey(params.sessionKey);
+  const resetSessionKey = params.sessionKey;
+  const deferEmbeddedHookSessionReset = internalParams.deferEmbeddedHookSessionReset;
   return {
     ...(params.runId ? { runId: params.runId } : {}),
-    agentId: params.agentId,
+    agentId,
     sessionKey: params.sessionKey,
+    resetSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
     modelProviderId: params.provider,
     modelId: params.model,
     trigger: params.trigger,
     ...buildAgentHookContextChannelFields(params),
+    modelSelectionLocked: params.modelSelectionLocked,
+    ...(deferEmbeddedHookSessionReset ? { deferEmbeddedHookSessionReset } : {}),
   };
 }
 

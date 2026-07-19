@@ -25,6 +25,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { harnessOwnsPrivateLifecycleResetAuthority } from "./private-authority.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
@@ -64,6 +65,21 @@ function assertAgentHarnessContextEngineSupport(
     operation: "agent-run",
     host: buildAgentHarnessContextEngineHostSupport(harness),
   });
+}
+
+function stripInternalAttemptLifecycleOwner(
+  harness: AgentHarness,
+  params: AgentHarnessAttemptParams,
+): AgentHarnessAttemptParams {
+  if (harnessOwnsPrivateLifecycleResetAuthority(harness)) {
+    return params;
+  }
+  if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {
+    return params;
+  }
+  const { deferEmbeddedHookSessionReset: _deferEmbeddedHookSessionReset, ...handoffParams } =
+    params as AgentHarnessAttemptParams & { deferEmbeddedHookSessionReset?: unknown };
+  return handoffParams;
 }
 
 function agentHarnessDiagnosticBase(
@@ -281,7 +297,7 @@ export async function runAgentHarnessLifecycleAttempt(
     }
     const runAndClassify = async () => {
       phase = "send";
-      const rawResult = await execute(params);
+      const rawResult = await execute(stripInternalAttemptLifecycleOwner(harness, params));
       phase = "resolve";
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.

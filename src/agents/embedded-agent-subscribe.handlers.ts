@@ -144,7 +144,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       case "compaction_end":
         scheduleEvent(evt, () => {
-          handleCompactionEnd(ctx, {
+          return handleCompactionEnd(ctx, {
             type: "compaction_end",
             reason: evt.reason,
             willRetry: evt.willRetry,

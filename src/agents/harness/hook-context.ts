@@ -9,6 +9,7 @@ import type {
   PluginHookChannelContext,
   PluginHookContextWindowSource,
 } from "../../plugins/hook-types.js";
+import type { DeferEmbeddedHookSessionReset } from "../embedded-agent-runner/compaction-hook-reset-api.js";
 
 /**
  * Input facts used to build the agent portion of plugin hook events.
@@ -22,6 +23,7 @@ export type AgentHarnessHookContext = {
   jobId?: string;
   agentId?: string;
   sessionKey?: string;
+  resetSessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
   modelProviderId?: string;
@@ -37,6 +39,8 @@ export type AgentHarnessHookContext = {
   chatId?: string;
   channel?: string;
   channelContext?: PluginHookChannelContext;
+  modelSelectionLocked?: boolean;
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
 };
 
 /** Builds the sparse hook context object passed to agent harness plugin hooks. */

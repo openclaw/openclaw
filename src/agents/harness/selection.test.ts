@@ -2,7 +2,6 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
@@ -61,15 +60,17 @@ it("identifies harnesses that expose OpenClaw tools", () => {
   expect(agentHarnessExposesOpenClawTools("custom")).toBe(false);
 });
 
-vi.mock("./builtin-openclaw.js", () => ({
-  createOpenClawAgentHarness: (): AgentHarness => ({
-    id: "openclaw",
-    label: "OpenClaw embedded agent",
-    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
-    supports: () => ({ supported: true, priority: 0 }),
-    runAttempt: agentRunAttempt,
-  }),
-}));
+vi.mock("./builtin-openclaw.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./builtin-openclaw.js")>();
+  return {
+    ...original,
+    createOpenClawAgentHarness: (): AgentHarness => {
+      const harness = original.createOpenClawAgentHarness();
+      harness.runAttempt = agentRunAttempt;
+      return harness;
+    },
+  };
+});
 vi.mock("../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: unknown) => model,
@@ -503,6 +504,98 @@ describe("runAgentHarnessAttempt", () => {
       expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
+
+  it("preserves the lifecycle-owned reset queue for the bundled Copilot harness", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    let receivedResetQueue: unknown;
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+      receivedResetQueue = (
+        attemptParams as EmbeddedRunAttemptParams & {
+          deferEmbeddedHookSessionReset?: unknown;
+        }
+      ).deferEmbeddedHookSessionReset;
+      return createAttemptResult("copilot");
+    });
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "GitHub Copilot agent runtime",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "copilot" },
+    );
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "copilot"),
+    ) as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset?: typeof deferEmbeddedHookSessionReset;
+      systemAgentTool?: SystemAgentToolOptions;
+    };
+    params.deferEmbeddedHookSessionReset = deferEmbeddedHookSessionReset;
+    params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    params.toolsAllow = ["openclaw"];
+
+    await runAgentHarnessAttempt(params);
+
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    expect(receivedResetQueue).toBe(deferEmbeddedHookSessionReset);
+    expect("systemAgentTool" in (pluginRunAttempt.mock.calls[0]?.[0] ?? {})).toBe(false);
+  });
+
+  it("strips lifecycle-owned reset queues from non-bundled harnesses using bundled ids", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    let receivedResetQueue: unknown;
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+      receivedResetQueue = (
+        attemptParams as EmbeddedRunAttemptParams & {
+          deferEmbeddedHookSessionReset?: unknown;
+        }
+      ).deferEmbeddedHookSessionReset;
+      return createAttemptResult("copilot");
+    });
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "Imposter Copilot runtime",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "workspace-runtime" },
+    );
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "copilot"),
+    ) as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset?: typeof deferEmbeddedHookSessionReset;
+    };
+    params.deferEmbeddedHookSessionReset = deferEmbeddedHookSessionReset;
+
+    await runAgentHarnessAttempt(params);
+
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    expect(receivedResetQueue).toBeUndefined();
+  });
+
+  it("preserves the lifecycle-owned reset queue for the built-in OpenClaw harness", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "openclaw"),
+    ) as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset?: typeof deferEmbeddedHookSessionReset;
+      systemAgentTool?: SystemAgentToolOptions;
+    };
+    params.deferEmbeddedHookSessionReset = deferEmbeddedHookSessionReset;
+    params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    params.toolsAllow = ["openclaw"];
+
+    await runAgentHarnessAttempt(params);
+
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
+    expect(agentRunAttempt.mock.calls[0]?.[0]).toHaveProperty(
+      "deferEmbeddedHookSessionReset",
+      deferEmbeddedHookSessionReset,
+    );
+    expect("systemAgentTool" in (agentRunAttempt.mock.calls[0]?.[0] ?? {})).toBe(false);
+  });
 
   it.each([
     { name: "missing", toolsAllow: undefined },
@@ -2372,6 +2465,114 @@ describe("selectAgentHarness", () => {
     });
     expect(compact).not.toHaveBeenCalled();
     expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hand raw compaction reset queues to plugin compact handlers", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const harness: AgentHarness = {
+      id: "workspace-runtime",
+      label: "Workspace runtime",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("workspace-runtime")),
+      compact,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "workspace-runtime" });
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "workspace-runtime",
+        deferEmbeddedHookSessionReset: vi.fn(),
+      }),
+    ).resolves.toMatchObject({ ok: true, compacted: true });
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("deferEmbeddedHookSessionReset");
+  });
+
+  it.each(["codex", "copilot"] as const)(
+    "preserves compaction reset queues for bundled %s compact handlers",
+    async (id) => {
+      const deferEmbeddedHookSessionReset = vi.fn();
+      const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+        ok: true,
+        compacted: true,
+      }));
+      registerAgentHarness(
+        {
+          id,
+          label: `${id} agent runtime`,
+          supports: (ctx) =>
+            ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+          runAttempt: vi.fn(async () => createAttemptResult(id)),
+          compact,
+        },
+        { ownerPluginId: id },
+      );
+
+      await expect(
+        maybeCompactAgentHarnessSession({
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: id,
+          deferEmbeddedHookSessionReset,
+        }),
+      ).resolves.toMatchObject({ ok: true, compacted: true });
+
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(compact.mock.calls[0]?.[0]).toHaveProperty(
+        "deferEmbeddedHookSessionReset",
+        deferEmbeddedHookSessionReset,
+      );
+    },
+  );
+
+  it("strips compaction reset queues from non-bundled compact handlers using bundled ids", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "Imposter Copilot runtime",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+        compact,
+      },
+      { ownerPluginId: "workspace-runtime" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "copilot",
+        deferEmbeddedHookSessionReset,
+      }),
+    ).resolves.toMatchObject({ ok: true, compacted: true });
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("deferEmbeddedHookSessionReset");
   });
 
   it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {

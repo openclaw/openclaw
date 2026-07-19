@@ -249,6 +249,18 @@ const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES)
 export const isConversationHookName = (hookName: PluginHookName): boolean =>
   conversationHookNameSet.has(hookName);
 
+type PluginHookAgentContextApi = {
+  /**
+   * Request a reset of the current hook session after the active run exits.
+   *
+   * Hook consumers may use this after successful compaction when the safest
+   * continuation is a fresh session bound to the same route. The target is
+   * always the session represented by this hook context; callers cannot reset
+   * arbitrary session keys.
+   */
+  resetSession: (reason?: "new" | "reset") => Promise<{ ok: true; key: string; deferred: true }>;
+};
+
 export type PluginHookAgentContext = {
   runId?: string;
   jobId?: string;
@@ -272,6 +284,8 @@ export type PluginHookAgentContext = {
   contextTokenBudget?: number;
   /** Source that supplied the resolved context-token budget. */
   contextWindowSource?: PluginHookContextWindowSource;
+  /** Runtime APIs available to hook subscribers in embedded agent contexts. */
+  api?: PluginHookAgentContextApi;
   /** Native/configured reference window when a lower cap wins. */
   contextWindowReferenceTokens?: number;
   /**

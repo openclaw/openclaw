@@ -93,6 +93,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(hookContext?.sessionKey).toBe("test-key");
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
     expect(hookContext?.trigger).toBe("cron");
+    expect(hookContext?.api).toBeUndefined();
     expect(hookContext?.senderId).toBeUndefined();
     expect(hookContext?.chatId).toBeUndefined();
     expect(hookContext?.channel).toBeUndefined();

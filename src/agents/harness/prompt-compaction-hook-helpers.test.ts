@@ -4,7 +4,10 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
-import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
+import {
+  runAgentHarnessAfterCompactionHook,
+  resolveAgentHarnessBeforePromptBuildResult,
+} from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
   resetGlobalHookRunner();
@@ -118,5 +121,87 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(heartbeatHandler).not.toHaveBeenCalled();
     expect(promptHandler).toHaveBeenCalledTimes(1);
     expect(result.prompt).toBe("turn policy\n\ndue commitment");
+  });
+});
+
+describe("runAgentHarnessAfterCompactionHook", () => {
+  it("does not expose resetSession for model-locked harness compactions", async () => {
+    const deferResetSession = vi.fn();
+    const afterCompaction = vi.fn((_event, ctx) => {
+      expect(ctx.api).toBeUndefined();
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+
+    await runAgentHarnessAfterCompactionHook({
+      sessionFile: "/tmp/session.jsonl",
+      compactedCount: 1,
+      ctx: {
+        agentId: "agent-1",
+        sessionKey: "session-1",
+        modelSelectionLocked: true,
+        deferEmbeddedHookSessionReset: deferResetSession,
+      },
+    });
+
+    expect(afterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferResetSession).not.toHaveBeenCalled();
+  });
+
+  it("binds resetSession to the canonical reset key instead of the hook session key", async () => {
+    const deferResetSession = vi.fn();
+    const afterCompaction = vi.fn(async (_event, ctx) => {
+      expect(ctx.sessionKey).toBe("agent:agent-1:sandbox:policy");
+      await expect(ctx.api?.resetSession("new")).resolves.toMatchObject({
+        ok: true,
+        key: "agent:agent-1:discord:channel:123",
+        deferred: true,
+      });
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+
+    await runAgentHarnessAfterCompactionHook({
+      sessionFile: "/tmp/session.jsonl",
+      compactedCount: 1,
+      ctx: {
+        agentId: "agent-1",
+        sessionKey: "agent:agent-1:sandbox:policy",
+        resetSessionKey: "agent:agent-1:discord:channel:123",
+        deferEmbeddedHookSessionReset: deferResetSession,
+      },
+    });
+
+    expect(afterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferResetSession).toHaveBeenCalledWith({
+      key: "agent:agent-1:discord:channel:123",
+      agentId: "agent-1",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+  });
+
+  it("does not expose resetSession without a caller-owned lifecycle queue", async () => {
+    const afterCompaction = vi.fn((_event, ctx) => {
+      expect(ctx.sessionKey).toBe("agent:agent-1:sandbox:policy");
+      expect(ctx.api).toBeUndefined();
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+
+    await runAgentHarnessAfterCompactionHook({
+      sessionFile: "/tmp/session.jsonl",
+      compactedCount: 1,
+      ctx: {
+        agentId: "agent-1",
+        sessionKey: "agent:agent-1:sandbox:policy",
+        resetSessionKey: "agent:agent-1:discord:channel:123",
+      },
+    });
+
+    expect(afterCompaction).toHaveBeenCalledTimes(1);
   });
 });

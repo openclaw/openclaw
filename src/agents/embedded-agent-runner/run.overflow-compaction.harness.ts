@@ -147,6 +147,22 @@ export const mockedGlobalHookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
+export const mockedPerformGatewaySessionReset = vi.fn(
+  async (params: { key: string; reason?: "new" | "reset"; commandSource?: string }) => ({
+    ok: true as const,
+    key: params.key,
+    entry: { sessionId: "reset-session" },
+  }),
+);
+const mockedDeferredHookSessionResetRequests: Array<{
+  key: string;
+  agentId?: string;
+  reason: "new" | "reset";
+  commandSource: string;
+  assertCurrent?: () => void;
+  onCommitted?: (commit: { key: string; sessionId: string }) => void;
+}> = [];
+
 export const mockedContextEngine = {
   info: { ownsCompaction: false as boolean },
   compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
@@ -467,6 +483,15 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedGlobalHookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   mockedContextEngine.info.ownsCompaction = false;
+  mockedPerformGatewaySessionReset.mockClear();
+  mockedPerformGatewaySessionReset.mockImplementation(
+    async (params: { key: string; reason?: "new" | "reset"; commandSource?: string }) => ({
+      ok: true as const,
+      key: params.key,
+      entry: { sessionId: "reset-session" },
+    }),
+  );
+  mockedDeferredHookSessionResetRequests.length = 0;
   mockedResolveContextEngine.mockReset();
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
@@ -896,6 +921,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     waitForDeferredTurnMaintenanceForSession: mockedWaitForDeferredTurnMaintenanceForSession,
   }));
 
+  vi.doMock("../../gateway/session-reset-service.js", () => ({
+    performGatewaySessionReset: mockedPerformGatewaySessionReset,
+  }));
+
   vi.doMock("./model.js", () => ({
     createEmptyAgentDiscoveryStores: mockedCreateEmptyAgentDiscoveryStores,
     resolveModelAsync: mockedResolveModelAsync,
@@ -977,6 +1006,55 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./run/payloads.js", () => ({
     buildEmbeddedRunPayloads: mockedBuildEmbeddedRunPayloads,
+  }));
+
+  vi.doMock("./compaction-hook-reset-api.js", () => ({
+    buildEmbeddedHookApi: vi.fn(
+      (params?: {
+        agentId?: string;
+        sessionKey?: string;
+        commandSource?: string;
+        deferResetSession?: (request: {
+          key: string;
+          agentId?: string;
+          reason: "new" | "reset";
+          commandSource: string;
+        }) => void;
+      }) => ({
+        resetSession: vi.fn(async (reason: "new" | "reset" = "reset") => {
+          const key = params?.sessionKey ?? "test-key";
+          params?.deferResetSession?.({
+            key,
+            ...(params?.agentId ? { agentId: params.agentId } : {}),
+            reason,
+            commandSource: params?.commandSource ?? "embedded-agent:hook",
+          });
+          return { ok: true, key, deferred: true };
+        }),
+      }),
+    ),
+    createEmbeddedHookSessionResetQueue: vi.fn(() => {
+      const pending = new Map<string, (typeof mockedDeferredHookSessionResetRequests)[number]>();
+      return {
+        deferResetSession: vi.fn(
+          (request: (typeof mockedDeferredHookSessionResetRequests)[number]) => {
+            mockedDeferredHookSessionResetRequests.push(request);
+            pending.set(request.key, request);
+          },
+        ),
+        flush: vi.fn(async () => {
+          const requests = Array.from(pending.values());
+          pending.clear();
+          for (const request of requests) {
+            request.assertCurrent?.();
+            const result = await mockedPerformGatewaySessionReset(request);
+            if (result.ok) {
+              request.onCommitted?.({ key: result.key, sessionId: result.entry.sessionId });
+            }
+          }
+        }),
+      };
+    }),
   }));
 
   vi.doMock("./compaction-hooks.js", () => ({

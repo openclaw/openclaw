@@ -6,6 +6,7 @@ import {
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   resolveSessionWorkStartError,
@@ -371,7 +372,26 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               completed,
               reason,
             });
+          let resetGuardSessionId = sessionId;
+          const assertCompactionResetCurrent = () => {
+            const currentEntry = loadAccessorSessionEntryForGatewayTarget({
+              key,
+              cfg,
+              agentId: requestedAgentId,
+            }).entry;
+            if (
+              !currentEntry ||
+              currentEntry.sessionId !== resetGuardSessionId ||
+              currentEntry.lifecycleRevision !== lifecycleRevision ||
+              resolveSessionWorkStartError(target.canonicalKey, currentEntry)
+            ) {
+              const error = new Error("stale compaction hook reset");
+              error.name = "AbortError";
+              throw error;
+            }
+          };
           let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
+          const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
           try {
             result = await runGatewaySessionCompaction({
               cfg,
@@ -381,6 +401,21 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               sessionKey: target.canonicalKey,
               sessionStoreKey: compactTarget.primaryKey,
               storePath,
+              deferEmbeddedHookSessionReset: (request) =>
+                hookSessionResetQueue.deferResetSession({
+                  ...request,
+                  assertCurrent: request.assertCurrent ?? assertCompactionResetCurrent,
+                  onCommitted: (commit) => {
+                    request.onCommitted?.(commit);
+                    emitSessionsChanged(context, {
+                      sessionKey: commit.key,
+                      ...(commit.key === "global"
+                        ? { agentId: request.agentId ?? target.agentId ?? requestedAgentId }
+                        : {}),
+                      reason: request.reason,
+                    });
+                  },
+                }),
             });
           } catch (err) {
             emitCompactionEnd(false, formatErrorMessage(err));
@@ -447,12 +482,16 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               );
               return;
             }
+            if (result.result?.sessionId) {
+              resetGuardSessionId = result.result.sessionId;
+            }
             recordSessionCompacted({
               sessionKey: target.canonicalKey,
               operationId,
               sessionId: result.result?.sessionId ?? sessionId,
               agentId: target.agentId ?? requestedAgentId,
             });
+            await hookSessionResetQueue.flush();
           }
 
           emitCompactionEnd(result.ok && result.compacted, result.reason);

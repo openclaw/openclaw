@@ -81,6 +81,9 @@ type CopilotAttemptOperation = "attempt" | "settled-tool-finalization";
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+type CopilotDeferredHookSessionReset = NonNullable<
+  Parameters<typeof runAgentHarnessAfterCompactionHook>[0]["ctx"]["deferEmbeddedHookSessionReset"]
+>;
 export type CopilotSessionConfig = Pick<
   SessionConfig,
   | "availableTools"
@@ -136,6 +139,7 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   copilotHome?: string;
   cwd?: string;
   enableSessionTelemetry?: boolean;
+  deferEmbeddedHookSessionReset?: CopilotDeferredHookSessionReset;
   hooksConfig?: CopilotHooksConfig;
   infiniteSessionConfig?: SessionConfig["infiniteSessions"];
   initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & { sdkSessionId?: string };
@@ -439,6 +443,7 @@ export async function runCopilotAttempt(
     readString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
     readString((input as { sessionKey?: unknown }).sessionKey) ??
     readString(input.sessionId);
+  const resetSessionKey = readString((input as { sessionKey?: unknown }).sessionKey);
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
     config: input.config,
@@ -462,6 +467,7 @@ export async function runCopilotAttempt(
     jobId: input.jobId,
     agentId: sessionAgentId,
     sessionKey: sandboxSessionKey,
+    resetSessionKey,
     sessionId: input.sessionId,
     workspaceDir: resolvedWorkspaceForSandbox,
     modelProviderId: modelRef.provider,
@@ -470,6 +476,10 @@ export async function runCopilotAttempt(
     ...(input.config ? { config: input.config } : {}),
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),
+    modelSelectionLocked: input.modelSelectionLocked,
+    ...(input.deferEmbeddedHookSessionReset
+      ? { deferEmbeddedHookSessionReset: input.deferEmbeddedHookSessionReset }
+      : {}),
   };
   const finishAttempt = (result: AgentHarnessAttemptResult) =>
     settledToolFinalization

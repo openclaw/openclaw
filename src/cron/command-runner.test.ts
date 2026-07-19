@@ -139,28 +139,31 @@ describe("runCronCommandJob", () => {
   it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    const shellCommand = [
-      "sleep 60 &",
-      "child_pid=$!",
-      `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
-      'wait "$child_pid"',
-    ].join("\n");
+    try {
+      const shellCommand = [
+        "sleep 60 &",
+        "child_pid=$!",
+        `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
+        'wait "$child_pid"',
+      ].join("\n");
 
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 0.5,
-      }),
-    });
+      const result = await runCronCommandJob({
+        job: makeCommandJob({
+          kind: "command",
+          argv: ["sh", "-lc", shellCommand],
+          timeoutSeconds: 2,
+        }),
+      });
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command timed out");
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("command timed out");
 
-    const childPid = Number.parseInt(await fs.readFile(childPidPath, "utf8"), 10);
-    expect(Number.isSafeInteger(childPid)).toBe(true);
-    await expect.poll(() => isProcessRunning(childPid)).toBe(false);
-    await fs.rm(tempDir, { recursive: true, force: true });
+      const childPid = Number.parseInt(await fs.readFile(childPidPath, "utf8"), 10);
+      expect(Number.isSafeInteger(childPid)).toBe(true);
+      await expect.poll(() => isProcessRunning(childPid)).toBe(false);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("marks no-output timeouts as cron errors", async () => {
