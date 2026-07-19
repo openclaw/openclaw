@@ -3,10 +3,16 @@
 import { X509Certificate } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 import { loadGatewayTlsRuntime } from "./gateway.js";
+
+const { runExecMock } = vi.hoisted(() => ({ runExecMock: vi.fn() }));
+vi.mock("../../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../process/exec.js")>();
+  return { ...actual, runExec: runExecMock };
+});
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-gateway-tls-test-");
@@ -177,6 +183,20 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.certPath).not.toBe("   ");
     expect(result.keyPath).toBeTruthy();
     expect(result.keyPath).not.toBe("\t");
+  });
+
+  it("bounds openssl certificate generation with a timeout", async () => {
+    runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+
+    await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+    expect(runExecMock).toHaveBeenCalledOnce();
+    expect(runExecMock.mock.calls[0]?.[0]).toMatch(/openssl$/);
+    expect(runExecMock.mock.calls[0]?.[1]).toContain("req");
+    expect(runExecMock.mock.calls[0]?.[2]).toMatchObject({ timeoutMs: 30_000 });
   });
 
   it("does not fall back for non-empty paths with leading/trailing spaces", async () => {
