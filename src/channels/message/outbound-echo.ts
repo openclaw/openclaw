@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import { outboundMessageIdentities } from "./outbound-echo-state.js";
 
 type OutboundMessageIdentityScope = {
   channel: string;
@@ -16,22 +17,6 @@ export type OutboundMessageIdentity = OutboundMessageIdentityScope &
 
 const OUTBOUND_ECHO_WINDOW_MS = 30_000;
 const OUTBOUND_MESSAGE_IDENTITY_MAX_ENTRIES = 10_000;
-const OUTBOUND_MESSAGE_IDENTITIES_KEY = Symbol.for("openclaw.outboundMessageIdentities");
-
-type OutboundMessageIdentityState = Map<string, number>;
-
-function resolveState(): OutboundMessageIdentityState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[OUTBOUND_MESSAGE_IDENTITIES_KEY];
-  if (existing instanceof Map) {
-    return existing as OutboundMessageIdentityState;
-  }
-  const created: OutboundMessageIdentityState = new Map();
-  globalStore[OUTBOUND_MESSAGE_IDENTITIES_KEY] = created;
-  return created;
-}
-
-const outboundMessageIdentities = resolveState();
 
 function resolveIdentityKeys(identity: OutboundMessageIdentity): string[] {
   const channel = normalizeLowercaseStringOrEmpty(identity.channel);
@@ -104,12 +89,3 @@ export function isRecentOutboundMessageIdentity(identity: OutboundMessageIdentit
   }
   return false;
 }
-
-export const outboundMessageIdentityTesting = {
-  clear(): void {
-    outboundMessageIdentities.clear();
-  },
-  size(): number {
-    return outboundMessageIdentities.size;
-  },
-};

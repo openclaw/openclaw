@@ -19,10 +19,8 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import {
-  outboundMessageIdentityTesting,
-  recordOutboundMessageIdentity,
-} from "../message/outbound-echo.js";
+import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
+import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
@@ -212,7 +210,7 @@ describe("channel turn kernel", () => {
     vi.clearAllMocks();
     recordInboundSessionCore.mockResolvedValue(undefined);
     dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch());
-    outboundMessageIdentityTesting.clear();
+    outboundMessageIdentities.clear();
     resetDiagnosticEventsForTest();
     resetLogger();
     setLoggerOverride({ level: "info" });

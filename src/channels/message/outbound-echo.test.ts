@@ -1,13 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isRecentOutboundMessageIdentity,
-  outboundMessageIdentityTesting,
-  recordOutboundMessageIdentity,
-} from "./outbound-echo.js";
+import { outboundMessageIdentities } from "./outbound-echo-state.js";
+import { isRecentOutboundMessageIdentity, recordOutboundMessageIdentity } from "./outbound-echo.js";
 
 describe("outbound message identity registry", () => {
   beforeEach(() => {
-    outboundMessageIdentityTesting.clear();
+    outboundMessageIdentities.clear();
     vi.restoreAllMocks();
   });
 
@@ -93,7 +90,7 @@ describe("outbound message identity registry", () => {
       });
     }
 
-    expect(outboundMessageIdentityTesting.size()).toBe(10_000);
+    expect(outboundMessageIdentities.size).toBe(10_000);
     expect(
       isRecentOutboundMessageIdentity({
         channel: "discord",
