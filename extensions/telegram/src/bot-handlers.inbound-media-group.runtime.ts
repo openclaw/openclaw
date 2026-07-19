@@ -281,6 +281,22 @@ export function createTelegramInboundMediaGroupRuntime(
             ),
         }).catch(() => {});
       }
+      // Preserve per-image captions from all media group messages so the
+      // agent sees every image's caption, not just the first one.
+      const perImageCaptions: string[] = [];
+      for (const { msg } of entry.messages) {
+        const caption = msg.caption?.trim();
+        if (caption && caption.length > 0) {
+          perImageCaptions.push(caption);
+        }
+      }
+      if (perImageCaptions.length > 1) {
+        primary.msg = {
+          ...primary.msg,
+          caption: perImageCaptions.map((c, i) => `Image ${i + 1}: ${c}`).join("\n"),
+        };
+      }
+
       const result = await processMessageWithReplyChain({
         ctx: primary.ctx,
         msg: primary.msg,
