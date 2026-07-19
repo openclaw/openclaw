@@ -705,7 +705,7 @@ export async function handleTelegramAction(
       readStringParam(params, "message", { allowEmpty: false });
     const caption = readStringParam(params, "caption", { allowEmpty: false });
     const buttons = resolveTelegramButtonsFromParams(params, undefined, {
-      allowWebAppButtons: resolveTelegramTargetChatType(String(chatId ?? "")) === "direct",
+      allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
     });
     if (content == null && caption == null && buttons === undefined) {
       throw new Error("content required.");
