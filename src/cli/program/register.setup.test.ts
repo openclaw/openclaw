@@ -165,6 +165,12 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+    await runCli(["setup", "--no-tailscale-reset-on-exit"]);
+
+    expect(lastWizardOptions()?.tailscaleResetOnExit).toBe(false);
+  });
+
   it("runs baseline setup command when --baseline is set", async () => {
     await runCli(["setup", "--baseline", "--workspace", "/tmp/ws"]);
 

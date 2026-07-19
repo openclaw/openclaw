@@ -712,7 +712,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         gateway: {
           remote: {
             url: "wss://old.example.test",
-            transport: "direct",
+            transport: "ssh",
+            remotePort: 24680,
+            sshTarget: "operator@old.example.test",
+            sshIdentity: "/tmp/old-identity",
+            sshHostKeyPolicy: "openssh",
             token: "test-token",
             password: { source: "env", provider: "default", id: "REMOTE_PASSWORD" },
             tlsFingerprint: "sha256:test-fingerprint",
@@ -734,13 +738,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = readTestConfig();
 
       expect(cfg.gateway?.mode).toBe("remote");
-      expect(cfg.gateway?.remote).toMatchObject({
+      expect(cfg.gateway?.remote).toEqual({
         url: `ws://127.0.0.1:${port}`,
         token,
-        transport: "direct",
       });
-      expect(cfg.gateway?.remote?.password).toBeUndefined();
-      expect(cfg.gateway?.remote?.tlsFingerprint).toBeUndefined();
       expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);

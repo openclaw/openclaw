@@ -178,6 +178,11 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().tailscaleResetOnExit).toBe(true);
   });
 
+  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+    await runCli(["onboard", "--no-tailscale-reset-on-exit"]);
+    expect(setupWizardOptions().tailscaleResetOnExit).toBe(false);
+  });
+
   it("forwards remote seed flags to setup wizard options", async () => {
     const remoteToken = ["fixture", "value"].join("-");
     await runCli([
