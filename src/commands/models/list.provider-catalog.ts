@@ -113,5 +113,5 @@ export async function loadProviderCatalogModelsForList(
       }
       return !providerFilter || provider === providerFilter;
     })
-    .map((entry) => ({ ...entry }) as Model);
+    .map((entry) => Object.assign({}, entry) as Model);
 }
