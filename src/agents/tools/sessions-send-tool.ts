@@ -700,7 +700,7 @@ export function createSessionsSendTool(opts?: {
         extraSystemPrompt: agentMessageContext,
         inputProvenance,
       };
-      const maxPingPongTurns = resolvePingPongTurns(cfg);
+      const maxPingPongTurns = resolvePingPongTurns();
 
       // Skip the A2A ping-pong + announce flow when the current caller is the
       // parent of a parent-owned child session it spawned itself and another

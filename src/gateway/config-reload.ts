@@ -164,6 +164,8 @@ export function startGatewayConfigReloader(opts: {
   initialAuthoredConfig: unknown;
   initialSnapshotValid: boolean;
   initialSnapshotIssues: ConfigFileSnapshot["issues"];
+  /** Keeps watcher-heavy tests immediate without reopening config-level debounce tuning. */
+  testDebounceMs?: number;
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
@@ -259,7 +261,13 @@ export function startGatewayConfigReloader(opts: {
   let currentReapplyRuntimeOverlays =
     initialCandidate?.reapplyRuntimeOverlays ?? ((config: OpenClawConfig) => config);
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
-  let settings = resolveGatewayReloadSettings(currentConfig);
+  const resolveSettings = (config: OpenClawConfig) => {
+    const resolved = resolveGatewayReloadSettings(config);
+    return opts.testDebounceMs === undefined
+      ? resolved
+      : { ...resolved, debounceMs: opts.testDebounceMs };
+  };
+  let settings = resolveSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pending = false;
   let running = false;
@@ -467,7 +475,7 @@ export function startGatewayConfigReloader(opts: {
     let committedRuntimeConfig: OpenClawConfig | null = null;
     let publishedRuntimeEnv: ConfigRuntimeEnvPublication | undefined;
     let runtimeEnvCommitted = false;
-    const nextSettings = resolveGatewayReloadSettings(nextConfig);
+    const nextSettings = resolveSettings(nextConfig);
     const isCurrent = () => configWriteEpoch === transactionEpoch;
     const assertCurrent = () => {
       if (!isCurrent()) {
@@ -513,7 +521,7 @@ export function startGatewayConfigReloader(opts: {
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
-        settings = resolveGatewayReloadSettings(runtimeConfig);
+        settings = resolveSettings(runtimeConfig);
         appliedRevision.defer(plan, nextConfigRevisionHash);
       },
     };
@@ -636,9 +644,7 @@ export function startGatewayConfigReloader(opts: {
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
-        settings = committedRuntimeConfig
-          ? resolveGatewayReloadSettings(committedRuntimeConfig)
-          : nextSettings;
+        settings = committedRuntimeConfig ? resolveSettings(committedRuntimeConfig) : nextSettings;
         commitPublishedRuntimeEnv();
       } catch (error) {
         ownership.rollbackRuntimeEnv();

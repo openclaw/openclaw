@@ -264,12 +264,15 @@ async function callSubagentGateway(
   ) {
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
+    // Agent launches are host-owned even when the parent request came from CLI/HTTP.
+    // Reusing that external identity makes collector preflight treat the launch as spoofed.
+    const forceSyntheticClient = request.method === "agent" || scopes != null;
     return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
       request.method,
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
-        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },

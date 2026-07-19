@@ -227,7 +227,11 @@ class SystemAgentTuiBackend implements TuiBackend {
   }
 
   async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
-    const model = splitModelRef(typeof opts.model === "string" ? opts.model : undefined);
+    if (opts.model !== undefined) {
+      throw new Error(
+        "OpenClaw cannot change the model inside its active verified session. Exit and run `openclaw onboard`, then start OpenClaw again.",
+      );
+    }
     return {
       ok: true,
       path: "openclaw",
@@ -236,13 +240,8 @@ class SystemAgentTuiBackend implements TuiBackend {
         sessionId: "openclaw",
         displayName: "OpenClaw",
         updatedAt: Date.now(),
-        ...(model.model ? { model: model.model } : {}),
-        ...(model.provider ? { modelProvider: model.provider } : {}),
       },
-      resolved: {
-        modelProvider: model.provider,
-        model: model.model,
-      },
+      resolved: {},
     };
   }
 

@@ -55,6 +55,47 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("rejects malformed model policy refs during config validation", () => {
+    for (const entry of ["", "///", "provider//model", "nogarbageprovider"]) {
+      const result = validateConfigObject({
+        agents: { defaults: { modelPolicy: { allow: [entry] } } },
+      });
+
+      expect(result.ok, entry || "empty entry").toBe(false);
+      if (result.ok) {
+        continue;
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: "agents.defaults.modelPolicy.allow.0" }),
+      );
+    }
+  });
+
+  it("accepts exact refs, nested wildcards, configured aliases, and compat selectors", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            "openrouter/openai/gpt-oss-120b:free": {},
+          },
+          modelPolicy: {
+            allow: [
+              "openai/gpt-5.6-sol",
+              "provider/a/b/c/d/e/f",
+              "clawrouter/anthropic/*",
+              "provider/a/b/c/d/*",
+              "sonnet",
+              "openrouter:free",
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
@@ -299,38 +340,6 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
-  });
-
-  it("accepts runRetries configuration on defaults and agent entries", () => {
-    const result = AgentDefaultsSchema.parse({
-      runRetries: {
-        base: 24,
-        max: 160,
-      },
-    });
-    expect(result?.runRetries?.base).toBe(24);
-    expect(result?.runRetries?.max).toBe(160);
-
-    const agentResult = AgentEntrySchema.parse({
-      id: "test",
-      runRetries: {
-        min: 10,
-        max: 50,
-      },
-    });
-    expect(agentResult?.runRetries?.min).toBe(10);
-    expect(agentResult?.runRetries?.max).toBe(50);
-  });
-
-  it("rejects runRetries with max < min", () => {
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({ runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "test", runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
   });
 
   it("accepts compaction.truncateAfterCompaction", () => {
