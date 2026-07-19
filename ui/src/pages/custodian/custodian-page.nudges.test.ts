@@ -632,6 +632,60 @@ describe("custodian page nudges", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores a stale question reply outcome after a same-owner reconnect", async () => {
+    let resolveQuestion!: (value: { sessionId: string; reply: string; action: "none" }) => void;
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Choose one.",
+        action: "none",
+        question: {
+          id: "access",
+          header: "Access",
+          question: "How should OpenClaw work?",
+          options: [{ label: "Full access" }, { label: "Ask first" }],
+          isOther: false,
+        },
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveQuestion = resolve;
+          }),
+      );
+    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
+      },
+    });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    setGatewaySnapshot({ connected: false, reconnecting: true });
+    await page.updateComplete;
+    setGatewaySnapshot({ connected: true, reconnecting: false });
+    await page.updateComplete;
+    resolveQuestion({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Moving on.",
+      action: "none",
+    });
+
+    await Promise.resolve();
+    await page.updateComplete;
+    const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
+    expect(action.disabled).toBe(true);
+    action.click();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("restores an event nudge after its request fails", async () => {
     const request = vi
       .fn()

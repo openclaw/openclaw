@@ -489,8 +489,6 @@ export class CustodianPage extends OpenClawLightDomElement {
     // meaningful whitespace and must reach the agent exactly as entered.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
-    const sessionVariant = this.sessionVariant;
-    const sessionOwnershipKey = this.sessionOwnershipKey;
     if (questionReply) {
       // A failed wizard reply may have arrived, so block nudges until the session outcome is known.
       this.questionReplyUncertain = true;
@@ -513,16 +511,14 @@ export class CustodianPage extends OpenClawLightDomElement {
       },
     ];
     this.input = "";
-    const outcome = await this.requestReply(client, {
+    const reply = this.requestReply(client, {
       sessionId: this.sessionId,
       ...this.welcomeVariant(),
       message,
     });
-    if (
-      questionReply &&
-      this.sessionVariant === sessionVariant &&
-      this.sessionOwnershipKey === sessionOwnershipKey
-    ) {
+    const replyEpoch = this.requestEpoch;
+    const outcome = await reply;
+    if (questionReply && this.requestEpoch === replyEpoch) {
       this.questionReplyUncertain = outcome !== "sent";
     }
     return outcome;
