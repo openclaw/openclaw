@@ -175,7 +175,7 @@ const mcpToolFilterSchema = z
     for (const field of ["include", "exclude"] as const) {
       const seen = new Set<string>();
       for (const [index, value] of (filter[field] ?? []).entries()) {
-        if (/[?\[\]]/.test(value)) {
+        if (value.includes("?") || value.includes("[") || value.includes("]")) {
           ctx.addIssue({
             code: "custom",
             path: [field, index],
