@@ -2396,7 +2396,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2425,7 +2425,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2455,7 +2455,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
       messages: { tts: { enabled: true, auto: "tagged", mode: "final" } },
     });
@@ -2492,7 +2492,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live" },
       },
       messages: { tts: { enabled: true, auto: "tagged", mode: "final" } },
     });
@@ -2534,7 +2534,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live" },
       },
       messages: { tts: { enabled: true, auto: "tagged", mode: "final" } },
     });
@@ -2574,7 +2574,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live" },
       },
       messages: { tts: { enabled: true, auto: "tagged", mode: "final" } },
     });
@@ -2617,7 +2617,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2647,7 +2647,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2681,7 +2681,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2712,7 +2712,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2745,7 +2745,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2790,7 +2790,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2856,7 +2856,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2897,7 +2897,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 
@@ -2934,7 +2934,7 @@ describe("tryDispatchAcpReply", () => {
     const cfg = createAcpTestConfig({
       acp: {
         enabled: true,
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+        stream: { deliveryMode: "live" },
       },
     });
 

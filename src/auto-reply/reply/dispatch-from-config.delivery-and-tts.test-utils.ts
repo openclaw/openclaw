@@ -11,6 +11,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -38,7 +39,6 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -2059,7 +2059,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(partialCallback).not.toHaveBeenCalled();
   });
 
-
   it("delivers media blocks with text stripped when captioned final TTS is active", async () => {
     setNoAbort();
     ttsMocks.state.statusSnapshot = {
@@ -2126,7 +2125,6 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
-
 
   it("strips text from tool-result media when captioned final TTS is active", async () => {
     setNoAbort();
@@ -2206,7 +2204,6 @@ describe("dispatchReplyFromConfig", () => {
     ) as ReplyPayload;
     expect(delivered.text).toBe("Searching...");
   });
-
 
   it("delivers accumulated block text when captioned final TTS media send fails", async () => {
     setNoAbort();
@@ -2392,7 +2389,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(textFallback).toBeDefined();
   });
 
-
   it("delivers accumulated block text when captioned final TTS media route is hook-suppressed", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
@@ -2442,7 +2438,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(textFallback).toBeDefined();
   });
 
-
   it("delivers accumulated block text when captioned final is ordinary media-only", async () => {
     setNoAbort();
     // Regression: in captioned-final mode a suppressed text-only block accumulates,
@@ -2484,6 +2479,5 @@ describe("dispatchReplyFromConfig", () => {
     );
     expect(blockTextDelivered).toBe(true);
   });
-
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

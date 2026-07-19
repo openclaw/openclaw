@@ -4,78 +4,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import {
+  channelPluginMocks,
+  createCoordinator,
+  createDefaultCoordinator,
+  createDispatcher,
+  createVisibleChatAcpCoordinator,
+  deliveryMocks,
+  raceWithTimeoutResult,
+  resetAcpDeliveryMocks,
+  ttsMocks,
+  visibleChatCtx,
+} from "./dispatch-acp-delivery.test-utils.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
-const ttsMocks = vi.hoisted(() => ({
-  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as { payload: unknown };
-    return params.payload;
-  }),
-}));
-
-const deliveryMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(
-    async (
-      _params: unknown,
-    ): Promise<{
-      ok: boolean;
-      messageId?: string;
-      suppressed?: boolean;
-      reason?: string;
-    }> => ({ ok: true, messageId: "mock-message" }),
-  ),
-  runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
-}));
-
-const channelPluginMocks = vi.hoisted(() => ({
-  accountIds: ["default"] as string[],
-  defaultAccountId: undefined as string | undefined,
-  replyToModeForAccount: undefined as
-    | ((accountId: string | null | undefined) => "all" | "off")
-    | undefined,
-  shouldTreatDeliveredTextAsVisible: (({
-    kind,
-    text,
-  }: {
-    kind: "tool" | "block" | "final";
-    text?: string;
-  }) => kind === "block" && typeof text === "string" && text.trim().length > 0) as
-    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
-    | undefined,
-  shouldTreatRoutedTextAsVisible: undefined as
-    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
-    | undefined,
-  getChannelPlugin: vi.fn((channelId: string) => {
-    if (channelId !== "visiblechat") {
-      return undefined;
-    }
-    return {
-      config: {
-        listAccountIds: () => channelPluginMocks.accountIds,
-        resolveAccount: () => ({}),
-        ...(channelPluginMocks.defaultAccountId
-          ? { defaultAccountId: () => channelPluginMocks.defaultAccountId ?? "default" }
-          : {}),
-      },
-      ...(channelPluginMocks.replyToModeForAccount
-        ? {
-            threading: {
-              resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
-                channelPluginMocks.replyToModeForAccount?.(accountId) ?? "all",
-            },
-          }
-        : {}),
-      outbound: {
-        shouldTreatDeliveredTextAsVisible: channelPluginMocks.shouldTreatDeliveredTextAsVisible,
-        shouldTreatRoutedTextAsVisible: channelPluginMocks.shouldTreatRoutedTextAsVisible,
-      },
-    };
-  }),
-}));
-
+// vi.mock stays in this test file (not test-utils): Vitest hoists a test file's vi.mock above
+// every import, so the mocks register before dispatch-acp-delivery.js and its helper module
+// load. reply-threading.ts binds getChannelPlugin at module-eval time, so late registration
+// would leave account/routing resolution on the real implementation.
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
@@ -92,69 +41,6 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: (params: unknown) => deliveryMocks.runMessageAction(params),
 }));
-
-function createDispatcher(): ReplyDispatcher {
-  return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
-    waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
-}
-
-function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>) {
-  return createAcpDispatchDeliveryCoordinator({
-    cfg: createAcpTestConfig(),
-    ctx: buildTestCtx({
-      Provider: "visiblechat",
-      Surface: "visiblechat",
-      SessionKey: "agent:codex-acp:session-1",
-    }),
-    dispatcher: createDispatcher(),
-    inboundAudio: false,
-    shouldRouteToOriginating: false,
-    ...(onReplyStart ? { onReplyStart } : {}),
-  });
-}
-
-async function raceWithTimeoutResult<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutResult: T,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-function createVisibleChatAcpCoordinator(cfg: OpenClawConfig) {
-  return createAcpDispatchDeliveryCoordinator({
-    cfg,
-    ctx: buildTestCtx({
-      Provider: "visiblechat",
-      Surface: "visiblechat",
-      SessionKey: "agent:codex-acp:session-1",
-    }),
-    dispatcher: createDispatcher(),
-    inboundAudio: false,
-    shouldRouteToOriginating: true,
-    originatingChannel: "visiblechat",
-    originatingTo: "channel:thread-1",
-  });
-}
 
 async function expectVisibleChatBlockRoutesToAccount(
   cfg: OpenClawConfig,
@@ -180,37 +66,12 @@ async function expectVisibleChatBlockRoutesToAccount(
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
-    deliveryMocks.routeReply.mockClear();
-    deliveryMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock-message" });
-    deliveryMocks.runMessageAction.mockClear();
-    deliveryMocks.runMessageAction.mockResolvedValue({ ok: true as const });
-    channelPluginMocks.getChannelPlugin.mockClear();
-    channelPluginMocks.accountIds = ["default"];
-    channelPluginMocks.defaultAccountId = undefined;
-    channelPluginMocks.replyToModeForAccount = undefined;
-    channelPluginMocks.shouldTreatDeliveredTextAsVisible = ({
-      kind,
-      text,
-    }: {
-      kind: "tool" | "block" | "final";
-      text?: string;
-    }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
-    channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
+    resetAcpDeliveryMocks();
   });
 
   it("bypasses TTS when skipTts is requested", async () => {
     const dispatcher = createDispatcher();
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
+    const coordinator = createDefaultCoordinator(dispatcher);
 
     await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
     await coordinator.settleVisibleText();
@@ -225,11 +86,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       cfg: createAcpTestConfig({
         tts: { enabled: true },
       }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher,
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -262,11 +119,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   it("tracks visible direct block text for dispatcher-backed delivery", async () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher: createDispatcher(),
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -298,17 +151,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         await deliveryGate;
       },
     });
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
+    const coordinator = createDefaultCoordinator(dispatcher);
 
     let deliverySettled = false;
     const deliveryPromise = coordinator.deliver("block", { text: "hello" }, { skipTts: true });
@@ -342,17 +185,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   it("excludes direct output cancelled by a core before-delivery hook", async () => {
     const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
     dispatcher.appendBeforeDeliver?.(() => null);
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
+    const coordinator = createDefaultCoordinator(dispatcher);
 
     await expect(
       coordinator.deliver("block", { text: "cancelled output" }, { skipTts: true }),
@@ -370,17 +203,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       },
     });
     dispatcher.appendBeforeDeliver?.((payload) => ({ ...payload, text: "transport rewrite" }));
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
+    const coordinator = createDefaultCoordinator(dispatcher);
 
     await expect(
       coordinator.deliver("block", { text: "canonical runtime text" }, { skipTts: true }),
@@ -432,17 +255,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         await deliveryGate;
       },
     });
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
+    const coordinator = createDefaultCoordinator(dispatcher);
 
     await expect(coordinator.deliver("block", { text: "hello" }, { skipTts: true })).resolves.toBe(
       true,
@@ -488,11 +301,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     });
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher,
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -516,11 +325,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       cfg: createAcpTestConfig({
         tts: { enabled: true },
       }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher,
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -547,11 +352,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       cfg: createAcpTestConfig({
         tts: { enabled: true },
       }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher,
       inboundAudio: false,
       shouldRouteToOriginating: false,
@@ -575,17 +376,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("keeps final fallback notices out of ACP transcript accumulation", async () => {
     const dispatcher = createDispatcher();
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
+    const coordinator = createDefaultCoordinator(dispatcher);
 
     const delivered = await coordinator.deliver("final", {
       text: "Model Fallback: openai/gpt-5.5",
@@ -680,17 +471,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
       markComplete: vi.fn(),
     };
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-    });
+    const coordinator = createDefaultCoordinator(dispatcher);
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
@@ -753,11 +534,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher,
       inboundAudio: false,
       suppressUserDelivery: true,
@@ -781,11 +558,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher,
       inboundAudio: false,
       suppressUserDelivery: true,
@@ -806,11 +579,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher,
       inboundAudio: false,
       suppressUserDelivery: true,
@@ -1017,11 +786,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   it("treats routed plugin-owned block text as visible", async () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher: createDispatcher(),
       inboundAudio: false,
       shouldRouteToOriginating: true,
@@ -1048,11 +813,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     });
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher: createDispatcher(),
       inboundAudio: false,
       shouldRouteToOriginating: true,
@@ -1079,11 +840,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     });
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
+      ctx: visibleChatCtx(),
       dispatcher: createDispatcher(),
       inboundAudio: false,
       shouldRouteToOriginating: true,
@@ -1240,9 +997,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [{ payload: { mediaUrls?: string[]; text?: string } }]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<
+          [{ payload: { mediaUrls?: string[]; text?: string } }]
+        >
+      )[0],
+      "deliveryMocks.routeReply.mock.calls[0] test invariant",
+    );
     const routedPayload = routeParams.payload;
     expect(routedPayload.mediaUrls).toEqual(["https://example.com/image.png"]);
     expect(routedPayload.text).toBeUndefined();
@@ -1276,9 +1038,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [{ payload: { mediaUrls?: string[]; text?: string } }]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<
+          [{ payload: { mediaUrls?: string[]; text?: string } }]
+        >
+      )[0],
+      "deliveryMocks.routeReply.mock.calls[0] test invariant",
+    );
     const routedPayload = routeParams.payload;
     expect(routedPayload.mediaUrls).toEqual(["https://example.com/tool-image.png"]);
     expect(routedPayload.text).toBeUndefined();
@@ -1309,9 +1076,12 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
-      [{ payload: { text?: string } }]
-    >;
+    const [routeParams] = expectDefined(
+      (
+        deliveryMocks.routeReply.mock.calls as unknown as Array<[{ payload: { text?: string } }]>
+      )[0],
+      "deliveryMocks.routeReply.mock.calls[0] test invariant",
+    );
     const routedPayload = routeParams.payload;
     expect(routedPayload.text).toBe("Searching...");
   });
