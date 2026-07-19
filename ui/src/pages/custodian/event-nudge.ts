@@ -49,7 +49,7 @@ export function reconcileCustodianEventNudge(
   return sameIncident ? [current, pending] : [next, null];
 }
 
-export function eventNudgeText(nudge: CustodianEventNudge): string {
+function eventNudgeText(nudge: CustodianEventNudge): string {
   if (nudge.kind === "config-reload") {
     return t("custodian.nudge.configReload");
   }
