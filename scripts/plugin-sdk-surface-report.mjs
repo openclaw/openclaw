@@ -115,7 +115,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "config-runtime": 123,
   "config-contracts": 1,
   // +1 each: unified implicit-mention config and AgentThinkingLevel types.
-  "config-types": 427,
+  // +1: SwarmConfig mirrors the public tools.swarm config contract.
+  "config-types": 428,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 26,
@@ -280,7 +281,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: AgentThinkingLevel shared by default-turn and compaction config.
       // +9: shared ingress monitor factory and lifecycle/result contracts across
       // channel-outbound and its two deprecated compatibility barrels.
-      8177,
+      // +1: SwarmConfig exposes the tools.swarm contract through config-types.
+      8178,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -347,7 +349,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
       // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
       // +1: AgentThinkingLevel mirrored by deprecated config-types.
-      3013,
+      // +1: SwarmConfig mirrored by deprecated config-types.
+      3014,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
