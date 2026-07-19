@@ -54,12 +54,12 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
   deviceToken?: string;
-  featureCapabilities?: string[];
   featureMethods?: string[];
   historyMessages?: unknown[];
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
@@ -259,11 +259,11 @@ function normalizeScenario(
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
+    featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
-    featureCapabilities: scenario.featureCapabilities ?? [],
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
