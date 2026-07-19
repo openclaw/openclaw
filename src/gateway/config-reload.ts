@@ -249,7 +249,6 @@ export function startGatewayConfigReloader(opts: {
   let currentSourceConfig = initialSourceConfig;
   let currentRawHash = opts.initialSnapshotRawHash;
   let lastObservedRawHash = opts.initialSnapshotRawHash;
-  let currentAuthoredConfig = opts.initialAuthoredConfig;
   let currentFingerprintedAuthoredConfig = fingerprintConfigSnapshotAuthoredConfig(
     opts.initialAuthoredConfig,
     { env: process.env, homedir },
@@ -301,7 +300,6 @@ export function startGatewayConfigReloader(opts: {
 
   const updateAcceptedSnapshot = (rawHash: string, authoredConfig: unknown) => {
     currentRawHash = rawHash;
-    currentAuthoredConfig = authoredConfig;
     currentFingerprintedAuthoredConfig = fingerprintConfigSnapshotAuthoredConfig(authoredConfig, {
       env: process.env,
       homedir,
@@ -973,7 +971,9 @@ export function startGatewayConfigReloader(opts: {
               if (!ownership.isCurrent()) {
                 throw new GatewayConfigReloadSupersededError();
               }
-              updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
+              if (typeof snapshot.hash === "string") {
+                updateAcceptedSnapshot(snapshot.hash, snapshot.parsed);
+              }
             });
             return;
           }

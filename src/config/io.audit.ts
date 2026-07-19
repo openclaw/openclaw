@@ -11,8 +11,8 @@ import { redactSensitiveArgv } from "./redact-argv.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
-export const CONFIG_AUDIT_PATH_CAP = 64;
-export const CONFIG_AUDIT_ISSUE_CAP = 64;
+const CONFIG_AUDIT_PATH_CAP = 64;
+const CONFIG_AUDIT_ISSUE_CAP = 64;
 const CONFIG_SET_VALUE_OPTIONS = new Set([
   "--batch-file",
   "--batch-json",
@@ -150,8 +150,8 @@ export const CONFIG_AUDIT_SCOPE = "config-audit";
 export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
 export const CONFIG_AUDIT_STORE_LABEL =
   "SQLite diagnostic_events/config-audit state (latest 50000 rows)";
-export const CONFIG_SNAPSHOT_SCOPE = "config-snapshot";
-export const CONFIG_SNAPSHOT_KEY = "latest";
+const CONFIG_SNAPSHOT_SCOPE = "config-snapshot";
+const CONFIG_SNAPSHOT_KEY = "latest";
 const CONFIG_JOURNAL_FINGERPRINT_KEY_FILENAME = "config-journal-fingerprint.key";
 const CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES = 32;
 const CONFIG_JOURNAL_REDACTION_MARKER = "***";
@@ -159,7 +159,7 @@ const LEGACY_CONFIG_AUDIT_LOG_FILENAME = ["config-audit", "jsonl"].join(".");
 
 export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
-export type ConfigWriteAuditRecord = {
+type ConfigWriteAuditRecord = {
   ts: string;
   source: "config-io";
   event: "config.write";
@@ -277,7 +277,7 @@ export type ConfigAuditRecord =
   | ConfigObserveAuditRecord
   | ConfigExternalChangeAuditRecord;
 
-export type ConfigSnapshotAuditRecord = {
+type ConfigSnapshotAuditRecord = {
   configPath: string;
   rawHash: string;
   fingerprintedAuthoredConfig: unknown;
