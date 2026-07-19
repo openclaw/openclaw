@@ -48,6 +48,7 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { callGatewayFromCli } from "./gateway-rpc.js";
 
 type DiagnosticLike = { level: string; code: string; path: string; message: string };
 
@@ -315,6 +316,11 @@ export async function runClawsAddCommand(
     addResult = await applyClawAddPlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
       runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+      cronGateway: {
+        add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+        list: async (agentId) =>
+          await callGatewayFromCli("cron.list", {}, { agentId, includeDisabled: true }),
+      },
     });
   } catch (error) {
     const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
@@ -427,6 +433,9 @@ export async function runClawsRemoveCommand(
     const result = await applyClawRemovePlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
+      cronGateway: {
+        remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
+      },
     });
     if (opts.json) {
       writeRuntimeJson(runtime, result);

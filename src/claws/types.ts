@@ -109,7 +109,7 @@ type ClawRemoteMcpServer = ClawMcpServerCommon & {
 
 type ClawMcpServer = ClawStdioMcpServer | ClawRemoteMcpServer;
 
-type ClawCronJob = {
+export type ClawCronJob = {
   id: string;
   name?: string;
   schedule: {

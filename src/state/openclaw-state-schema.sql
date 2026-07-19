@@ -1987,6 +1987,20 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS claw_cron_refs (
+  agent_id TEXT NOT NULL,
+  manifest_id TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  declaration_key TEXT NOT NULL UNIQUE,
+  scheduler_job_id TEXT UNIQUE,
+  status TEXT NOT NULL,
+  job_json TEXT NOT NULL,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, manifest_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,
