@@ -39,6 +39,7 @@ enum ChatToolDiff {
     private static let maxInputLines = 600
     private static let maxRenderLines = 400
     private static let maxLocalPairs = 8
+    private static let maxWritePreviewLines = 80
     private static let maxLocalInputCharacters = 120_000
 
     private static let editToolNames: Set<String> = [
@@ -54,6 +55,7 @@ enum ChatToolDiff {
         "str_replace_based_edit_tool",
     ]
     private static let writeToolNames: Set<String> = ["write", "write_file", "create_file"]
+    private static let patchToolNames: Set<String> = ["apply_patch", "applypatch", "patch"]
 
     private static func parseDetailsDiffResult(_ diff: String) -> ParsedDetailsDiff? {
         guard !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -162,16 +164,19 @@ enum ChatToolDiff {
             }
         }
 
-        if let detailsDiff = self.resolveDetailsDiff(details) {
-            return detailsDiff
-        }
-
-        guard let argumentsRecord else { return nil }
+        // Plugin tools own their details schema; only edit-family tools may
+        // interpret details.diff as a filesystem diff (mirrors the web guard).
         if self.editToolNames.contains(normalizedName) {
-            return self.resolveEditDiff(argumentsRecord, details: nil)
+            return self.resolveEditDiff(argumentsRecord, details: details)
         }
         if self.writeToolNames.contains(normalizedName) {
+            if let detailsDiff = self.resolveDetailsDiff(details) {
+                return detailsDiff
+            }
             return self.resolveWriteDiff(argumentsRecord, keys: ["content", "text", "file_text"])
+        }
+        if self.patchToolNames.contains(normalizedName) {
+            return self.resolveDetailsDiff(details)
         }
         return nil
     }
@@ -289,9 +294,22 @@ enum ChatToolDiff {
         keys: [String]) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
         guard let content = self.string(in: arguments, keys: keys) else { return nil }
-        let lines = self.computeLineDiff(old: "", new: content)
-        guard !lines.isEmpty else { return nil }
-        return (lines, ChatToolDiffStat(added: self.splitLines(content).count, removed: 0))
+        let allLines = self.splitLines(content)
+        guard !allLines.isEmpty else { return nil }
+        // Written content is fully known, so number additions from line 1 and
+        // keep the exact stat even when the rendered preview is clipped.
+        var lines: [ChatToolDiffLine] = []
+        var remainingCharacters = self.maxLocalInputCharacters
+        for (index, text) in allLines.prefix(self.maxWritePreviewLines).enumerated() {
+            let lineCharacters = text.utf16.count
+            guard lineCharacters <= remainingCharacters else { break }
+            remainingCharacters -= lineCharacters
+            lines.append(ChatToolDiffLine(kind: .add, lineNo: index + 1, text: text))
+        }
+        if lines.count < allLines.count {
+            lines.append(ChatToolDiffLine(kind: .skip, text: ""))
+        }
+        return (lines, ChatToolDiffStat(added: allLines.count, removed: 0))
     }
 
     private static func resolveEditDiff(

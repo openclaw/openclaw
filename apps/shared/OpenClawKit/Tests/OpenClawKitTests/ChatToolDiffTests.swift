@@ -142,8 +142,8 @@ struct ChatToolDiffTests {
             details: nil))
 
         #expect(resolved.lines == [
-            ChatToolDiffLine(kind: .add, text: "one"),
-            ChatToolDiffLine(kind: .add, text: "two"),
+            ChatToolDiffLine(kind: .add, lineNo: 1, text: "one"),
+            ChatToolDiffLine(kind: .add, lineNo: 2, text: "two"),
         ])
         #expect(resolved.stat == ChatToolDiffStat(added: 2, removed: 0))
     }
@@ -154,8 +154,8 @@ struct ChatToolDiffTests {
             arguments: AnyCodable(["command": "create", "file_text": "one\ntwo"]),
             details: nil))
         #expect(create.lines == [
-            ChatToolDiffLine(kind: .add, text: "one"),
-            ChatToolDiffLine(kind: .add, text: "two"),
+            ChatToolDiffLine(kind: .add, lineNo: 1, text: "one"),
+            ChatToolDiffLine(kind: .add, lineNo: 2, text: "two"),
         ])
         #expect(create.stat == ChatToolDiffStat(added: 2, removed: 0))
 
@@ -163,7 +163,7 @@ struct ChatToolDiffTests {
             name: "str_replace_editor",
             arguments: AnyCodable(["command": "create", "content": "fallback"]),
             details: nil))
-        #expect(createFallback.lines == [ChatToolDiffLine(kind: .add, text: "fallback")])
+        #expect(createFallback.lines == [ChatToolDiffLine(kind: .add, lineNo: 1, text: "fallback")])
         #expect(createFallback.stat == ChatToolDiffStat(added: 1, removed: 0))
 
         let insert = try #require(ChatToolDiff.resolveDiff(
@@ -181,7 +181,7 @@ struct ChatToolDiffTests {
             arguments: AnyCodable(["content": content]),
             details: nil))
 
-        #expect(resolved.lines.count == 401)
+        #expect(resolved.lines.count == 81)
         #expect(resolved.lines.last == ChatToolDiffLine(kind: .skip, text: ""))
         #expect(resolved.stat == ChatToolDiffStat(added: 401, removed: 0))
     }
@@ -191,6 +191,21 @@ struct ChatToolDiffTests {
             name: "custom_tool",
             arguments: AnyCodable(["oldText": "old", "newText": "new"]),
             details: nil) == nil)
+    }
+
+    @Test func `unknown tools never interpret details as a diff`() {
+        #expect(ChatToolDiff.resolveDiff(
+            name: "custom_tool",
+            arguments: nil,
+            details: AnyCodable(["diff": AnyCodable("+1 added\n-1 removed")])) == nil)
+    }
+
+    @Test func `patch tools resolve persisted details`() throws {
+        let resolved = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: nil,
+            details: AnyCodable(["diff": AnyCodable("+1 added\n-1 removed")])))
+        #expect(resolved.stat == ChatToolDiffStat(added: 1, removed: 1))
     }
 
     @Test func `truncated details omit the stat`() throws {

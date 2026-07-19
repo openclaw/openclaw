@@ -251,6 +251,9 @@ struct ChatToolActivityRow: View {
                 .foregroundStyle(.secondary.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 2)
+                // Reuses the existing localized "Collapsed" key so omitted
+                // preview rows stay announced to assistive tech.
+                .accessibilityLabel(Text("Collapsed"))
         } else {
             HStack(spacing: 6) {
                 if let lineNo = line.lineNo {
@@ -259,7 +262,9 @@ struct ChatToolActivityRow: View {
                         .foregroundStyle(.secondary.opacity(0.6))
                         .frame(minWidth: 34, alignment: .trailing)
                 }
-                Text(line.text)
+                // Bound per-line render work; generated/minified payloads can put
+                // megabytes on a single line.
+                Text(verbatim: String(line.text.unicodeScalars.prefix(2000)))
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
                     .foregroundStyle(self.diffTextColor(line.kind))
                     .lineLimit(1)
@@ -267,6 +272,21 @@ struct ChatToolActivityRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(self.diffBackground(line.kind))
+            // Color alone must not carry add/del semantics for assistive tech.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: Self
+                    .accessibilityMarker(line.kind) + String(line.text.unicodeScalars.prefix(2000))))
+        }
+    }
+
+    private static func accessibilityMarker(_ kind: ChatToolDiffLineKind) -> String {
+        switch kind {
+        case .add:
+            "+ "
+        case .del:
+            "\u{2212} "
+        case .ctx, .skip:
+            ""
         }
     }
 
