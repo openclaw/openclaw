@@ -85,7 +85,7 @@ describe("noteWorkspaceStatus", () => {
           }),
         ],
         typedHooks: [
-          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" }),
+          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" }),
         ],
       }),
     );
@@ -230,9 +230,7 @@ describe("noteWorkspaceStatus", () => {
         ],
       }),
     });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([
-      "legacy-plugin still uses legacy before_agent_start",
-    ]);
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue(["legacy-plugin is hook-only"]);
     mocks.listTaskFlowRecords.mockReturnValue([
       {
         flowId: "flow-123",
@@ -258,7 +256,7 @@ describe("noteWorkspaceStatus", () => {
         severity: "warning",
         path: "plugins",
         requirement: "plugin-compatibility",
-        message: "legacy-plugin still uses legacy before_agent_start",
+        message: "legacy-plugin is hook-only",
       }),
       expect.objectContaining({
         checkId: "core/doctor/workspace-status",
@@ -437,11 +435,9 @@ describe("noteWorkspaceStatus", () => {
           hookCount: 1,
         }),
       ],
-      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" })],
+      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" })],
     });
-    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, [
-      "legacy-plugin still uses legacy before_agent_start",
-    ]);
+    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, ["legacy-plugin is hook-only"]);
     try {
       expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
         config: {},
@@ -460,7 +456,7 @@ describe("noteWorkspaceStatus", () => {
       );
       expect(compatibilityCalls).toHaveLength(1);
       const [body] = expectDefined(compatibilityCalls[0], "(compatibilityCalls)[0] test invariant");
-      expect(body).toContain("legacy-plugin still uses legacy before_agent_start");
+      expect(body).toContain("legacy-plugin is hook-only");
     } finally {
       noteSpy.mockRestore();
     }

@@ -2,11 +2,8 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChannelGatewayContext,
-  ChannelId,
-  ChannelPlugin,
-} from "../channels/plugins/types.public.js";
+import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -307,6 +304,28 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
+  });
+
+  it("aborts the crashed task's signal before starting its replacement", async () => {
+    const signals: AbortSignal[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      signals.push(ctx.abortSignal);
+      throw new Error("crash");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 2,
+      "expected a crash-loop restart",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    // A crashed startAccount can leave background work racing on its signal
+    // (e.g. a reconnect loop). The replacement must never overlap that lifetime.
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
   });
 
   it.each(["resolve", "reject"] as const)(

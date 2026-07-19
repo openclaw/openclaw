@@ -11,7 +11,7 @@ minimumReleaseAgeExclude:
   # Local immutable artifact; verified by scripts/verify-contracts-artifact.mjs.
   - "@openclaw/contracts@0.1.0"
   - "@openclaw/crabline@0.1.11"
-  - "@openclaw/fs-safe@0.4.1"
+  - "@openclaw/fs-safe@0.4.4"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.3"
   - "@openclaw/uirouter@0.1.0"
@@ -157,4 +157,3 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
-  "@openclaw/fs-safe@0.4.1": patches/@openclaw__fs-safe@0.4.1.patch

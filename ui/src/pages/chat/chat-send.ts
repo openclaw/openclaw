@@ -19,6 +19,7 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
 import {
@@ -120,6 +121,7 @@ export type ChatHost = ChatInputHistoryState &
     chatRunId: string | null;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
+    chatRunError?: { summary: string } | null;
     lastError?: string | null;
     chatError?: string | null;
     hello: GatewayHelloOk | null;
@@ -135,7 +137,12 @@ export type ChatHost = ChatInputHistoryState &
     /** Prepared from the browser override and current Gateway effective queue mode. */
     chatFollowUpMode?: ControlUiFollowUpMode;
     /** Selected message to reply to (right-click / keyboard shortcut). */
-    chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+    chatReplyTarget?: {
+      messageId: string;
+      text: string;
+      senderLabel?: string | null;
+      sourceMessageId?: string | null;
+    } | null;
     /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
     chatSideResultPending?: ChatSideResultPending | null;
     /** Retired/handled BTW run ids whose late events must not reach the transcript. */
@@ -262,6 +269,7 @@ async function requestChatSend(
     sessionKey?: string;
     agentId?: string;
     queueMode?: QueueMode;
+    replyToId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -277,6 +285,7 @@ async function requestChatSend(
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
     deliver: false,
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.queueMode ? { queueMode: params.queueMode } : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
@@ -425,7 +434,7 @@ function confirmChatResetCommand(text: string) {
   if (typeof globalThis.confirm !== "function") {
     return false;
   }
-  return globalThis.confirm("Start a new session? This will reset the current chat.");
+  return globalThis.confirm("Start a new thread? This will reset the current chat.");
 }
 
 function isBtwCommand(text: string) {
@@ -440,12 +449,14 @@ function enqueuePendingSendMessage(
   submittedAtMs = controlUiNowMs(),
   sendState?: ChatQueueItem["sendState"],
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
+  replyToId?: string,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return null;
   }
+  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId);
   const pending: ChatQueueItem = {
     id: generateUUID(),
     text: trimmed,
@@ -458,7 +469,9 @@ function enqueuePendingSendMessage(
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
+    ...(sender ? { sender } : {}),
     ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
+    ...(replyToId ? { replyToId } : {}),
   };
   host.chatQueue = [...host.chatQueue, pending];
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
@@ -835,6 +848,7 @@ async function sendQueuedChatMessage(
           runId,
           sessionKey,
           agentId: prepared.agentId,
+          ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
         });
     updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
     recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
@@ -1828,6 +1842,14 @@ async function drainStoredChatOutbox(
               sendResetSlashCommand(host, message, resetOpts),
           },
         );
+        if (dispatchResult === "deferred") {
+          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+            ...entry,
+            sendError: undefined,
+            sendState: "waiting-idle",
+          }));
+          return "blocked";
+        }
         if (dispatchResult === "failed") {
           const commandStillCurrent = commandScopeIsCurrent();
           const error =
@@ -2154,6 +2176,8 @@ export async function handleSendChat(
     return;
   }
 
+  host.chatRunError = null;
+
   if (shouldInterpretChatCommands) {
     // Natural words such as "wait" and "exit" are stop aliases only while a
     // run exists. Keep the explicit /stop command available at any time.
@@ -2248,10 +2272,17 @@ export async function handleSendChat(
           host.chatMessage = "";
           resetChatInputHistoryNavigation(host);
         }
-        const queued = enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
-          args: parsed.args,
-          name: parsed.command.key,
-        });
+        const queued = enqueueChatMessage(
+          host,
+          message,
+          undefined,
+          isChatResetCommand(message),
+          {
+            args: parsed.args,
+            name: parsed.command.key,
+          },
+          resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+        );
         if (queued) {
           queued.sendState = reconnectSafeQueuedSendState(host);
         }
@@ -2322,7 +2353,10 @@ export async function handleSendChat(
         if (dispatchResult === "failed") {
           opts?.onLocalCommandSendRejected?.();
         }
-        if (dispatchResult === "failed" && messageOverride == null) {
+        if (
+          (dispatchResult === "failed" || dispatchResult === "cancelled") &&
+          messageOverride == null
+        ) {
           const restorePlan = pendingComposerRestorePlan(host, {
             previousAttachments: attachmentsToSend,
             previousDraft,
@@ -2346,7 +2380,11 @@ export async function handleSendChat(
   }
 
   const replyTarget = host.chatReplyTarget;
-  const effectiveMessage = replyTarget ? prependReplyQuote(message, replyTarget) : message;
+  // Persisted transcript ids ride chat.send as replyToId so the Gateway can
+  // hydrate reply context like Discord; synthetic ids fall back to a quote.
+  const replyToId = replyTarget?.sourceMessageId?.trim() || undefined;
+  const effectiveMessage =
+    replyTarget && !replyToId ? prependReplyQuote(message, replyTarget) : message;
 
   const refreshSessions = shouldInterpretChatCommands && isChatResetCommand(message);
   const submitKey = chatSubmitKey(
@@ -2381,6 +2419,7 @@ export async function handleSendChat(
       submittedAtMs,
       initialSendState,
       skillWorkshopRevision,
+      replyToId,
     );
     if (!queued) {
       return;

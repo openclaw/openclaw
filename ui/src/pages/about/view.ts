@@ -1,3 +1,4 @@
+import "../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
@@ -16,6 +17,7 @@ import {
 import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/about.css";
 import { brandIcons } from "./brand-icons.ts";
 
@@ -101,6 +103,27 @@ function renderUnavailable() {
   return html`<span class="muted">${t("aboutPage.unavailable")}</span>`;
 }
 
+// Always-relative commit age; the exact localized timestamp lives on hover
+// (title) so the row stays compact for any artifact age.
+function renderCommitAge(commitAt: string | null) {
+  if (!commitAt) {
+    return nothing;
+  }
+  const timestamp = Date.parse(commitAt);
+  if (!Number.isFinite(timestamp)) {
+    return nothing;
+  }
+  const exact = new Intl.DateTimeFormat(i18n.getLocale(), {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
+  return html`
+    <time class="about-commit__age" dir="auto" datetime=${commitAt} title=${exact}
+      >${formatRelativeTimestamp(timestamp, { fallback: "" })}</time
+    >
+  `;
+}
+
 function renderCommit(props: AboutProps) {
   const commit = props.buildInfo.commit;
   if (!commit) {
@@ -113,7 +136,7 @@ function renderCommit(props: AboutProps) {
       <openclaw-tooltip .content=${label}>
         <button
           type="button"
-          class="btn btn--icon"
+          class="about-commit__copy"
           aria-label=${label}
           aria-busy=${props.copyState === "copying" ? "true" : nothing}
           ?disabled=${props.copyState === "copying"}
@@ -122,6 +145,7 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
+      ${renderCommitAge(props.buildInfo.commitAt)}
       <span class="about-sr-only" role="status" aria-live="polite"
         >${copyStatus(props.copyState)}</span
       >

@@ -88,18 +88,6 @@ OpenClaw classifies every loaded plugin into a shape based on its actual registr
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape and capability breakdown. See [CLI reference](/cli/plugins#inspect) for details.
 
-### Legacy hooks
-
-The `before_agent_start` hook remains supported as a compatibility path for hook-only plugins. Legacy real-world plugins still depend on it.
-
-Direction:
-
-- keep it working
-- document it as legacy
-- prefer `before_model_resolve` for model/provider override work
-- prefer `before_prompt_build` for prompt mutation work
-- remove only after real usage drops and fixture coverage proves migration safety
-
 ### Compatibility signals
 
 `openclaw doctor`, `openclaw plugins inspect <id>`, `openclaw status --all`, and `openclaw plugins doctor` surface these compatibility notices:
@@ -108,7 +96,6 @@ Direction:
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | **config valid**                           | Config parses fine and plugins resolve                                                                        |
 | **hook-only** (info)                       | Plugin registers only hooks; a supported path, but not migrated to capability registration yet                |
-| **legacy `before_agent_start`** (warn)     | Plugin uses the deprecated `before_agent_start` hook instead of `before_model_resolve`/`before_prompt_build`  |
 | **deprecated memory-embedding API** (warn) | Non-bundled plugin uses the old memory-specific embedding provider API instead of `registerEmbeddingProvider` |
 | **hard error**                             | Config is invalid or plugin failed to load                                                                    |
 
@@ -199,6 +186,8 @@ The current boundary is:
 - channel plugins execute the final action through their action adapter
 
 For channel plugins, the SDK surface is `ChannelMessageActionAdapter.describeMessageTool(...)`. That unified discovery call lets a plugin return its visible actions, capabilities, and schema contributions together so those pieces do not drift apart.
+
+Message action names use a deliberately closed, core-owned vocabulary so every transport can render every action. Plugins add action names through a core PR; runtime registration is intentionally unsupported.
 
 When a channel-specific message-tool param carries a media source such as a local path or remote media URL, the plugin should also return `mediaSourceParams` from `describeMessageTool(...)`. Core uses that explicit list to apply sandbox path normalization and outbound media-access hints without hardcoding plugin-owned param names. Prefer action-scoped maps there, not one channel-wide flat list, so a profile-only media param does not get normalized on unrelated actions like `send`.
 
@@ -320,7 +309,6 @@ import {
   describeImageWithModel,
   transcribeOpenAiCompatibleAudio,
 } from "openclaw/plugin-sdk/media-understanding";
-import { createPluginBackedWebSearchProvider } from "openclaw/plugin-sdk/provider-web-search";
 
 const plugin: OpenClawPluginDefinition = {
   id: "exampleai",
@@ -353,12 +341,12 @@ const plugin: OpenClawPluginDefinition = {
       },
     });
 
-    api.registerWebSearchProvider(
-      createPluginBackedWebSearchProvider({
-        id: "exampleai-search",
-        // credential + fetch logic
-      }),
-    );
+    api.registerWebSearchProvider({
+      id: "exampleai-search",
+      createTool() {
+        // Return the vendor-owned web search tool.
+      },
+    });
   },
 };
 

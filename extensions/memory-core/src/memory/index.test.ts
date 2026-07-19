@@ -395,8 +395,6 @@ describe("memory index", () => {
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
             store: { vector: { enabled: params.vectorEnabled ?? false } },
-            // Perf: keep test indexes to a single chunk to reduce sqlite work.
-            chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
             remote: params.batchEnabled
               ? {
@@ -412,7 +410,7 @@ describe("memory index", () => {
             extraPaths: params.extraPaths,
             multimodal: params.multimodal,
             sources: params.sources,
-            rememberAcrossConversations: params.rememberAcrossConversations,
+            rememberAcrossConversations: params.rememberAcrossConversations ?? false,
             experimental: { sessionMemory: params.sessionMemory ?? false },
           },
         },

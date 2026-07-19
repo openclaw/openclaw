@@ -1,11 +1,11 @@
 ---
-summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+summary: "Memory search providers, retrieval modes, QMD, and multimodal indexing"
 title: "Memory configuration reference"
 sidebarTitle: "Memory config"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
-  - You want to tune hybrid search, MMR, or temporal decay
+  - You want to enable hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
 
@@ -44,9 +44,9 @@ transcript persistence, and safe rollout guidance.
 
 ## Remember across conversations
 
-| Key                           | Type      | Default | Description                                                                    |
-| ----------------------------- | --------- | ------- | ------------------------------------------------------------------------------ |
-| `rememberAcrossConversations` | `boolean` | `false` | Use relevant context from this agent's other recognized private conversations. |
+| Key                           | Type      | Default                                                    | Description                                                                    |
+| ----------------------------- | --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `rememberAcrossConversations` | `boolean` | On for personal installs; off with configured DM isolation | Use relevant context from this agent's other recognized private conversations. |
 
 Configure it per agent when only a trusted personal agent should use
 cross-conversation transcript recall:
@@ -67,7 +67,10 @@ cross-conversation transcript recall:
 ```
 
 The value follows normal `agents.defaults.memorySearch` inheritance with a
-per-agent override. Enabling it implies session transcript indexing and
+per-agent override. When unset, it defaults on only if global
+`session.dmScope` is unset or `"main"` and no binding has a `session.dmScope`
+override. Any configured DM isolation defaults it off. An explicit `true` or
+`false` always wins. Enabling it implies session transcript indexing and
 adds `sessions` to the agent's resolved memory sources. With QMD, it also
 enables that agent's session export; no separate
 `memory.qmd.sessions.enabled` setting is required for this mode.
@@ -369,20 +372,7 @@ All under `memorySearch.sync` unless noted:
 | `onSessionStart`               | `boolean` | `true`  | Sync the memory index when a session starts                           |
 | `onSearch`                     | `boolean` | `true`  | Sync lazily on search after detecting content changes                 |
 | `watch`                        | `boolean` | `true`  | Watch memory files (chokidar) and schedule reindex on changes         |
-| `watchDebounceMs`              | `number`  | `1500`  | Debounce window for coalescing rapid file-watch events                |
-| `intervalMinutes`              | `number`  | `0`     | Periodic reindex interval in minutes (`0` disables)                   |
 | `sessions.postCompactionForce` | `boolean` | `true`  | Force a session reindex after compaction-triggered transcript updates |
-
-<ParamField path="chunking.tokens" type="number">
-  Chunk size in tokens used when splitting memory sources before embedding (default: 400).
-</ParamField>
-<ParamField path="chunking.overlap" type="number">
-  Token overlap between adjacent chunks to preserve context near split boundaries (default: 80).
-</ParamField>
-
-<Note>
-Changing `chunking.tokens` or `chunking.overlap` changes chunk boundaries and invalidates the existing index identity (see the Warning under Provider selection).
-</Note>
 
 ---
 
@@ -397,25 +387,20 @@ All under `memorySearch.query`:
 
 And under `memorySearch.query.hybrid`:
 
-| Key                   | Type      | Default | Description                        |
-| --------------------- | --------- | ------- | ---------------------------------- |
-| `enabled`             | `boolean` | `true`  | Enable hybrid BM25 + vector search |
-| `vectorWeight`        | `number`  | `0.7`   | Weight for vector scores (0-1)     |
-| `textWeight`          | `number`  | `0.3`   | Weight for BM25 scores (0-1)       |
-| `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
+| Key       | Type      | Default | Description                        |
+| --------- | --------- | ------- | ---------------------------------- |
+| `enabled` | `boolean` | `true`  | Enable hybrid BM25 + vector search |
 
 <Tabs>
   <Tab title="MMR (diversity)">
-    | Key           | Type      | Default | Description                          |
-    | ------------- | --------- | ------- | ------------------------------------- |
-    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking                |
-    | `mmr.lambda`  | `number`  | `0.7`   | 0 = max diversity, 1 = max relevance |
+    | Key           | Type      | Default | Description           |
+    | ------------- | --------- | ------- | --------------------- |
+    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking |
   </Tab>
   <Tab title="Temporal decay (recency)">
-    | Key                          | Type      | Default | Description               |
-    | ---------------------------- | --------- | ------- | -------------------------- |
-    | `temporalDecay.enabled`      | `boolean` | `false` | Enable recency boost      |
-    | `temporalDecay.halfLifeDays` | `number`  | `30`    | Score halves every N days |
+    | Key                     | Type      | Default | Description          |
+    | ----------------------- | --------- | ------- | -------------------- |
+    | `temporalDecay.enabled` | `boolean` | `false` | Enable recency boost |
 
     Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 
@@ -433,10 +418,8 @@ And under `memorySearch.query.hybrid`:
           maxResults: 6,
           minScore: 0.35,
           hybrid: {
-            vectorWeight: 0.7,
-            textWeight: 0.3,
-            mmr: { enabled: true, lambda: 0.7 },
-            temporalDecay: { enabled: true, halfLifeDays: 30 },
+            mmr: { enabled: true },
+            temporalDecay: { enabled: true },
           },
         },
       },
@@ -491,12 +474,11 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (i
 
 ## Embedding cache
 
-| Key                | Type      | Default | Description                                  |
-| ------------------ | --------- | ------- | -------------------------------------------- |
-| `cache.enabled`    | `boolean` | `true`  | Cache chunk embeddings in SQLite             |
-| `cache.maxEntries` | `number`  | unset   | Best-effort upper bound on cached embeddings |
+| Key             | Type      | Default | Description                      |
+| --------------- | --------- | ------- | -------------------------------- |
+| `cache.enabled` | `boolean` | `true`  | Cache chunk embeddings in SQLite |
 
-Prevents re-embedding unchanged text during reindex or transcript updates. Leave `maxEntries` unset for an unbounded cache; set it when disk growth matters more than peak reindex speed. When set, the oldest entries (by last-updated time) are pruned first once the cache exceeds the limit.
+Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ---
 
@@ -536,10 +518,10 @@ Session indexing is opt-in and runs asynchronously. Results can be slightly stal
 
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
-`tree` visibility only exposes the current session and sessions it spawned. To
-let ordinary `memory_search` calls inspect unrelated sessions, intentionally
-widen visibility to `agent` (or `all` only when cross-agent recall is also
-required and agent-to-agent policy allows it).
+`tree` visibility exposes the current session, sessions it spawned, and
+same-agent group sessions watched through ambient group awareness. Other
+unrelated sessions require `agent` visibility (or `all` only when cross-agent
+recall is also required and agent-to-agent policy allows it).
 
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private

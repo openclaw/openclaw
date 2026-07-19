@@ -61,6 +61,8 @@ export type SystemAgentChatEngineOptions = {
   runAgentTurn?: SystemAgentTurnRunner;
   /** Test seam for the approval-intent classifier. */
   classifyApproval?: SystemAgentApprovalClassifier;
+  /** Test seam for the audited host operation executor. */
+  executeOperation?: typeof executeSystemAgentOperation;
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
@@ -83,6 +85,8 @@ type SystemAgentChatReply = {
   agentDraft?: "hatch";
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
+  /** The hosted wizard will consume the next message as its current step answer. */
+  wizardInputPending?: boolean;
   /** Present when the host must leave chat for an interactive handoff. */
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
@@ -195,13 +199,14 @@ function wizardStepChatQuestion(step: WizardStep | null): SystemAgentChatQuestio
     return undefined;
   }
   if (step.type === "confirm") {
+    const yesRecommended = step.initialValue !== false;
     return {
       id: step.id,
       header: step.title ?? "Confirm",
       question: step.message ?? "Continue?",
       options: [
-        { label: "Yes", reply: "yes", recommended: true },
-        { label: "No", reply: "no" },
+        { label: "Yes", reply: "yes", ...(yesRecommended ? { recommended: true } : {}) },
+        { label: "No", reply: "no", ...(!yesRecommended ? { recommended: true } : {}) },
       ],
     };
   }
@@ -368,7 +373,7 @@ export class SystemAgentChatEngine {
   private hostProposalResolution: "approved" | "declined" | undefined;
   private readonly history: SystemAgentAssistantTurn[] = [];
   private readonly agentSession: SystemAgentSession;
-  private readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  private verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Turns run strictly one at a time; interleaved handles corrupt wizard/pending state. */
   private turnQueue: Promise<unknown> = Promise.resolve();
 
@@ -425,6 +430,20 @@ export class SystemAgentChatEngine {
     this.history.push({ role: "assistant", text });
   }
 
+  /** Seed only conversational context; wizard and approval state intentionally stay fresh. */
+  seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
+    this.history.push(...turns.map((turn) => ({ ...turn })));
+  }
+
+  historyLength(): number {
+    return this.history.length;
+  }
+
+  /** Return copies so the server can persist exactly the engine's sanitized commit. */
+  historySince(index: number): SystemAgentAssistantTurn[] {
+    return this.history.slice(index).map((turn) => ({ role: turn.role, text: turn.text }));
+  }
+
   async dispose(): Promise<void> {
     this.wizardBridge?.session.cancel();
     this.wizardBridge = null;
@@ -459,6 +478,7 @@ export class SystemAgentChatEngine {
     return {
       ...reply,
       ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
     };
   }
@@ -608,7 +628,8 @@ export class SystemAgentChatEngine {
     const capture = createCaptureRuntime();
     let result: SystemAgentOperationResult | undefined;
     try {
-      result = await executeSystemAgentOperation(operation, capture, {
+      const executeOperation = this.opts.executeOperation ?? executeSystemAgentOperation;
+      result = await executeOperation(operation, capture, {
         approved: true,
         deps: this.commandDeps(),
         // The model turn, approval classifier, and operation preflight all
@@ -616,6 +637,7 @@ export class SystemAgentChatEngine {
         beforePersistentApply: async () => {
           await this.requirePersistentApplyInference(capture);
         },
+        onVerifiedInferenceChanged: (binding) => this.rebindVerifiedInference(binding),
       });
     } catch (error) {
       if (isSystemAgentInferenceUnavailableError(error)) {
@@ -628,14 +650,14 @@ export class SystemAgentChatEngine {
     const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
       .filter(Boolean)
       .join("\n\n");
-    // The hatch is a ceremony: a fresh-install setup just created the agent,
+    // The hatch is a ceremony: setup or an explicit creation just seeded the agent,
     // so hand the user straight into it instead of parking them here. The
     // seeded BOOTSTRAP runs the birth sequence on the agent's first turn.
     // Only on clean post-write verification: a non-null verify means the
     // written config is suspect, and handing off would bury the warning in an
     // agent session that may not answer — stay in setup to repair it.
     if (
-      operation.kind === "setup" &&
+      (operation.kind === "setup" || operation.kind === "create-agent") &&
       result?.applied &&
       result.bootstrapPending === true &&
       verify === null
@@ -651,6 +673,7 @@ export class SystemAgentChatEngine {
           kind: "open-tui",
           agentDraft: "hatch",
           ...(operation.workspace ? { workspace: operation.workspace } : {}),
+          ...(result.agentId ? { agentId: result.agentId } : {}),
         },
       };
     }
@@ -931,12 +954,14 @@ export class SystemAgentChatEngine {
 
     let result: SystemAgentOperationResult | undefined;
     try {
-      result = await executeSystemAgentOperation(operation, capture, {
+      const executeOperation = this.opts.executeOperation ?? executeSystemAgentOperation;
+      result = await executeOperation(operation, capture, {
         approved: this.opts.yes === true || !isPersistentSystemAgentOperation(operation),
         deps: this.commandDeps(),
         beforePersistentApply: async () => {
           await this.requirePersistentApplyInference(capture);
         },
+        onVerifiedInferenceChanged: (binding) => this.rebindVerifiedInference(binding),
       });
     } catch (error) {
       if (isSystemAgentInferenceUnavailableError(error)) {
@@ -962,12 +987,8 @@ export class SystemAgentChatEngine {
   }
 
   private async requireVerifiedInference() {
-    const binding = this.opts?.verifiedInference;
-    if (
-      !binding ||
-      binding !== this.verifiedInference ||
-      this.agentSession.verifiedInference !== this.verifiedInference
-    ) {
+    const binding = this.verifiedInference;
+    if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
     try {
@@ -982,12 +1003,8 @@ export class SystemAgentChatEngine {
   }
 
   private async requirePersistentApplyInference(runtime: RuntimeEnv) {
-    const binding = this.opts?.verifiedInference;
-    if (
-      !binding ||
-      binding !== this.verifiedInference ||
-      this.agentSession.verifiedInference !== this.verifiedInference
-    ) {
+    const binding = this.verifiedInference;
+    if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
     try {
@@ -1007,6 +1024,17 @@ export class SystemAgentChatEngine {
       return this.throwInferenceUnavailable([error], false);
     }
     return this.throwInferenceUnavailable([], false);
+  }
+
+  private rebindVerifiedInference(binding: SystemAgentVerifiedInferenceBinding): void {
+    if (binding.execution.agentId !== this.verifiedInference.execution.agentId) {
+      return;
+    }
+    // Native CLI continuity is route-owned. Keep the conversation transcript,
+    // but force the next turn to establish a session for the new verified route.
+    delete this.agentSession.cliSession;
+    this.verifiedInference = binding;
+    this.agentSession.verifiedInference = binding;
   }
 
   private throwInferenceUnavailable(failures: readonly unknown[] = [], cancelWizard = true): never {

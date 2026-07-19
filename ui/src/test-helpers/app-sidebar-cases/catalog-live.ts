@@ -148,7 +148,7 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
-    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
+    expect(button?.getAttribute("aria-label")).toBe("New thread — Claude Code");
     button?.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
@@ -264,7 +264,7 @@ describe("AppSidebar session catalog pagination", () => {
                 name: "Claude session",
                 status: "stored",
                 archived: false,
-                openClawSessionKey: backingSessionKey,
+                sessionKey: backingSessionKey,
                 canContinue: true,
                 canArchive: false,
               },

@@ -441,7 +441,7 @@ export async function detectSetupInference(
     probe("pi"),
     probe("opencode"),
   ]);
-  if (antigravity.found) {
+  if (antigravity.found && !antigravity.timedOut) {
     unavailableCandidates.push({
       id: "antigravity-cli",
       label: "Antigravity CLI",
@@ -450,7 +450,7 @@ export async function detectSetupInference(
         "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
     });
   }
-  if (pi.found) {
+  if (pi.found && !pi.timedOut) {
     unavailableCandidates.push({
       id: "pi-cli",
       label: "Pi CLI",
@@ -459,7 +459,7 @@ export async function detectSetupInference(
         "Pi CLI is installed, but its whole-agent sessions require separate setup and are not a reusable guided-setup inference route.",
     });
   }
-  if (opencode.found) {
+  if (opencode.found && !opencode.timedOut) {
     unavailableCandidates.push({
       id: "opencode-cli",
       label: "OpenCode CLI",

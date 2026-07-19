@@ -177,6 +177,48 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_entries_status
   ON session_entries(status, session_key)
   WHERE status IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS board_tabs (
+  session_key TEXT NOT NULL,
+  tab_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position >= 0),
+  chat_dock TEXT NOT NULL DEFAULT 'right' CHECK (chat_dock IN ('left', 'right', 'bottom', 'hidden')),
+  created_by TEXT NOT NULL CHECK (created_by IN ('user', 'agent')),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  PRIMARY KEY (session_key, tab_id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS board_widgets (
+  session_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  tab_id TEXT NOT NULL,
+  title TEXT,
+  content_kind TEXT NOT NULL CHECK (content_kind IN ('html', 'mcp-app')),
+  html BLOB,
+  descriptor_json TEXT,
+  sha256 TEXT NOT NULL,
+  view_generation TEXT,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  size_w INTEGER NOT NULL CHECK (size_w BETWEEN 1 AND 12),
+  size_h INTEGER NOT NULL CHECK (size_h BETWEEN 1 AND 20),
+  position INTEGER NOT NULL CHECK (position >= 0),
+  manifest TEXT NOT NULL DEFAULT '{}',
+  grant_state TEXT NOT NULL DEFAULT 'none' CHECK (grant_state IN ('none', 'pending', 'granted', 'rejected')),
+  granted_sha TEXT,
+  created_by TEXT NOT NULL CHECK (created_by IN ('user', 'agent')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, name),
+  FOREIGN KEY (session_key, tab_id) REFERENCES board_tabs(session_key, tab_id) ON DELETE CASCADE,
+  CHECK (
+    (content_kind = 'html' AND html IS NOT NULL AND descriptor_json IS NULL AND view_generation IS NOT NULL) OR
+    (content_kind = 'mcp-app' AND html IS NULL AND descriptor_json IS NOT NULL AND view_generation IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position
+  ON board_widgets(session_key, tab_id, position);
+
 CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
   session_key TEXT NOT NULL PRIMARY KEY,
   run_session_key TEXT NOT NULL,
@@ -203,6 +245,13 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS session_transcript_generations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  generation TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -216,6 +265,19 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
   ON trajectory_runtime_events(session_id, run_id, seq)
   WHERE run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  event_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, run_id, seq),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_acp_parent_stream_run
+  ON acp_parent_stream_events(run_id, seq);
 
 CREATE TABLE IF NOT EXISTS transcript_event_identities (
   session_id TEXT NOT NULL,
