@@ -10,13 +10,27 @@ vi.mock("../logging/subsystem.js", () => ({
 
 import { readResponseBodySnippet } from "./http-error-body.js";
 
-function bodyLessResponse(text: string): Response {
+function bodyLessResponse(
+  text: string,
+  options: { contentLength?: number | null; delayedText?: boolean } = {},
+): Response {
   const encoder = new TextEncoder();
+  const headers = new Headers();
+  if (options.contentLength !== undefined && options.contentLength !== null) {
+    headers.set("content-length", String(options.contentLength));
+  }
+  let resolveText: ((value: string) => void) | undefined;
+  const textPromise = options.delayedText
+    ? new Promise<string>((resolve) => {
+        resolveText = resolve;
+      })
+    : Promise.resolve(text);
   return {
     body: null,
-    text: async () => text,
+    headers,
+    text: async () => textPromise,
     arrayBuffer: async () => encoder.encode(text).buffer as ArrayBuffer,
-  } as unknown as Response;
+  } as unknown as Response & { _resolveText?: (value: string) => void };
 }
 describe("readResponseBodySnippet", () => {
   it("returns full text when under both limits (body-less path)", async () => {
@@ -144,6 +158,67 @@ describe("readResponseBodySnippet", () => {
   });
 });
 
+
+
+describe("readResponseBodySnippet body-less path safety", () => {
+  it("rejects an oversize Content-Length without materializing the body", async () => {
+    const huge = "x".repeat(10_000);
+    let textCalled = false;
+    const response = {
+      body: null,
+      headers: new Headers({ "content-length": String(huge.length) }),
+      text: async () => {
+        textCalled = true;
+        return huge;
+      },
+      arrayBuffer: async () => {
+        textCalled = true;
+        return new Uint8Array().buffer;
+      },
+    } as unknown as Response;
+    const result = await readResponseBodySnippet(response, {
+      maxBytes: 64,
+      maxChars: 200,
+    });
+    expect(result).toBe("");
+    expect(textCalled).toBe(false);
+  });
+
+  it("streams a body-less response and stops at limits.maxBytes (cancelled wrapper)", async () => {
+    const encoded = new TextEncoder().encode("a".repeat(200));
+    let textCalled = false;
+    const response = {
+      body: null,
+      headers: new Headers(),
+      text: async () => {
+        textCalled = true;
+        // Decode the bytes (no copy beyond the existing array).
+        return new TextDecoder().decode(encoded);
+      },
+      arrayBuffer: async () => encoded.buffer.slice(
+        encoded.byteOffset,
+        encoded.byteOffset + encoded.byteLength,
+      ) as ArrayBuffer,
+    } as unknown as Response;
+    const result = await readResponseBodySnippet(response, {
+      maxBytes: 50,
+      maxChars: 200,
+    });
+    const byteLen = new TextEncoder().encode(result).length;
+    expect(byteLen).toBeLessThanOrEqual(50);
+    expect(result.length).toBeLessThan(200);
+    expect(textCalled).toBe(true);
+  });
+
+  it("accepts a body-less response whose declared Content-Length fits within limits.maxBytes", async () => {
+    const response = bodyLessResponse("short body");
+    const result = await readResponseBodySnippet(response, {
+      maxBytes: 1024,
+      maxChars: 50,
+    });
+    expect(result).toBe("short body");
+  });
+});
 describe("readResponseBodySnippet error visibility", () => {
   beforeEach(() => {
     mockWarn.mockClear();
