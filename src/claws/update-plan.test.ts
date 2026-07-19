@@ -329,11 +329,20 @@ describe("buildClawUpdatePlan", () => {
         expect.objectContaining({
           kind: "package",
           id: "plugin:new-plugin",
+          effect: expect.objectContaining({
+            version: "1.0.0",
+            integrity: `sha256:${"a".repeat(64)}`,
+            installId: "new-plugin",
+          }),
           requiresDistinctConsent: true,
         }),
         expect.objectContaining({
           kind: "mcpServer",
           id: "search",
+          effect: expect.objectContaining({
+            url: "https://mcp.example.com/search",
+            auth: "oauth",
+          }),
           desired: expect.objectContaining({
             summary: "remote server; auth configured",
             digest: expect.any(String),
@@ -343,6 +352,7 @@ describe("buildClawUpdatePlan", () => {
         expect.objectContaining({
           kind: "cronJob",
           id: "daily",
+          effect: expect.objectContaining({ message: "Updated report" }),
           requiresDistinctConsent: true,
         }),
       ]),
@@ -682,14 +692,8 @@ describe("buildClawUpdatePlan", () => {
     );
   });
 
-  it("releases an independently owned managed package instead of removing it", async () => {
+  it("releases a removed package declaration without uninstalling its artifact", async () => {
     const current = await fixture();
-    const database = openOpenClawStateDatabase({ env: current.env }).db;
-    database
-      .prepare(
-        "UPDATE claw_package_refs SET relationship = 'managed', origin = 'pre-existing', independent_owner = 1 WHERE agent_id = 'worker' AND package_ref = 'triage'",
-      )
-      .run();
     const parsed = parseClawManifest({
       ...current.manifest,
       packages: current.manifest.packages.filter((pkg) => pkg.ref !== "triage"),

@@ -430,6 +430,7 @@ function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeEnv): vo
     runtime.log(
       `  ${change.requiresDistinctConsent ? "!" : "-"} ${change.path}: ${current} -> ${desired} (${change.action})`,
     );
+    runtime.log(redactSensitiveText(`      effect: ${JSON.stringify(change.effect)}`));
   }
   if (plan.blockers.length > 0) {
     runtime.error(formatDiagnostics(plan.blockers));
