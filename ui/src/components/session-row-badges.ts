@@ -30,8 +30,9 @@ export function renderSessionRowBadges(params: {
     ? placementState
     : undefined;
   const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
-  const displayedPlacementState =
-    cloudPlacementState ?? (workspaceConflictCount > 0 ? placementState : undefined);
+  // Child rows suppress ordinary placement chrome, but a retained conflict must stay discoverable.
+  const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
+  const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   if (
     !hasAutomation &&
     !params.hasOpenPullRequest &&

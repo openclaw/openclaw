@@ -116,6 +116,23 @@ describe("session row placement badges", () => {
     expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
   });
 
+  it("keeps conflict attention visible for child sessions", () => {
+    render(
+      renderSessionRowBadges({
+        isChild: true,
+        hasAutomation: false,
+        placementState: "reclaimed",
+        workspaceConflictCount: 2,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.placementState).toBe("reclaimed");
+    expect(badge?.dataset.workspaceConflicts).toBe("2");
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+  });
+
   it("uses the existing cloud badge to call out workspace conflicts", () => {
     renderBadges("active", 3);
 
