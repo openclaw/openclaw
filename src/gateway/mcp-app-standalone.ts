@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
@@ -211,7 +212,11 @@ function sendText(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
-function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: string }): void {
+function runStandaloneMcpAppHost(config: {
+  protocolVersion: string;
+  requestTimeoutMs: number;
+  viewPath: string;
+}): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
     contentWindow?: { postMessage(message: unknown, targetOrigin: string): void };
@@ -265,6 +270,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
   let requestId = 0;
   let sandboxOrigin: string | undefined;
   let teardownId: JsonRpcId | undefined;
+  const pendingRequests = new Set<AbortController>();
 
   const asRecord = (value: unknown): Record<string, unknown> | undefined =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -317,20 +323,53 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     }
     return resolved;
   };
+  const withViewResponse = async <T>(
+    init: RequestInit,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
+    // Standalone HTTP bypasses GatewayBrowserClient, so mirror its request
+    // watchdog through body consumption and retain page-lifecycle ownership.
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error("MCP App request timed out")),
+      config.requestTimeoutMs,
+    );
+    pendingRequests.add(controller);
+    try {
+      const response = await fetch(config.viewPath, { ...init, signal: controller.signal });
+      return await consume(response, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      pendingRequests.delete(controller);
+    }
+  };
   const request = async (method: string, params: unknown): Promise<unknown> => {
-    const response = await fetch(config.viewPath, {
-      method: "POST",
-      headers: {
-        Authorization: `MCP-App ${ticket}`,
-        "Content-Type": "application/json",
+    const { response, body } = await withViewResponse(
+      {
+        method: "POST",
+        headers: {
+          Authorization: `MCP-App ${ticket}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ method, params }),
+        cache: "no-store",
+        credentials: "omit",
       },
-      body: JSON.stringify({ method, params }),
-      cache: "no-store",
-      credentials: "omit",
-    });
-    const body = (await response.json().catch(() => undefined)) as
-      | { ok?: boolean; result?: unknown; error?: string }
-      | undefined;
+      async (viewResponse, signal) => ({
+        response: viewResponse,
+        body: (await viewResponse.json().catch((error: unknown) => {
+          if (signal.aborted) {
+            throw error;
+          }
+          return undefined;
+        })) as { ok?: boolean; result?: unknown; error?: string } | undefined,
+      }),
+    );
     if (response.status === 401) {
       fail("MCP App ticket was rejected");
       throw new Error("MCP App ticket was rejected");
@@ -480,23 +519,32 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     if (frame?.contentWindow) {
       post({ jsonrpc: "2.0", id: ++requestId, method: "ui/resource-teardown", params: {} });
     }
+    for (const controller of pendingRequests) {
+      controller.abort(new Error("MCP App page closed"));
+    }
+    pendingRequests.clear();
   });
   if (!ticket) {
     fail("MCP App ticket is missing");
     return;
   }
-  void fetch(config.viewPath, {
-    headers: { Authorization: `MCP-App ${ticket}` },
-    cache: "no-store",
-    credentials: "omit",
-  })
-    .then(async (response) => {
+  void withViewResponse(
+    {
+      headers: { Authorization: `MCP-App ${ticket}` },
+      cache: "no-store",
+      credentials: "omit",
+    },
+    async (response) => {
       if (!response.ok) {
         throw new Error("MCP App ticket was rejected");
       }
-      payload = (await response.json()) as ViewPayload;
-      installOperationHandlers(payload);
-      const sandboxUrl = resolveSandboxUrl(payload);
+      return (await response.json()) as ViewPayload;
+    },
+  )
+    .then((view) => {
+      payload = view;
+      installOperationHandlers(view);
+      const sandboxUrl = resolveSandboxUrl(view);
       sandboxOrigin = sandboxUrl.origin;
       frame = browser.document.createElement("iframe");
       frame.title = "MCP App";
@@ -511,6 +559,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
 function standaloneHostHtml(): { html: string; scriptHash: string } {
   const clientSource = `(${runStandaloneMcpAppHost.toString()})(${JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
+    requestTimeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
   })});`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
