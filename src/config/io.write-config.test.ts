@@ -17,8 +17,8 @@ import {
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { initializePublishedConfigRuntimeEnv, prepareConfigRuntimeEnv } from "./config-env-vars.js";
+import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { hashConfigIncludeRaw } from "./includes.js";
-import { readConfigSnapshotAuditRecord } from "./io.audit.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   createConfigIO as createObservedConfigIO,
@@ -3690,16 +3690,19 @@ describe("config io write", () => {
         configPath,
       });
       expect(slot).toMatchObject({ configPath, rawHash: result.persistedHash });
+      if (!slot) {
+        throw new Error("expected snapshot slot");
+      }
       // The slot is diff-only, so every leaf is fingerprinted.
       const slotVars =
-        (slot?.fingerprintedAuthoredConfig as { env?: { vars?: Record<string, string> } }).env
+        (slot.fingerprintedAuthoredConfig as { env?: { vars?: Record<string, string> } }).env
           ?.vars ?? {};
       expect(Object.keys(slotVars)).toHaveLength(70);
       for (const [name, value] of Object.entries(slotVars)) {
         expect(value, name).toMatch(/^fp:[0-9a-f]{12}$/);
       }
       expect(
-        (slot?.fingerprintedAuthoredConfig as { gateway?: { port?: string } }).gateway?.port,
+        (slot.fingerprintedAuthoredConfig as { gateway?: { port?: string } }).gateway?.port,
       ).toMatch(/^fp:[0-9a-f]{12}$/);
     });
   });

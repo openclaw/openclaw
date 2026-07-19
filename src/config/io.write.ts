@@ -4,20 +4,22 @@ import { isVerbose } from "../global-state.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import {
+  configSnapshotAuditRecordMatchesPath,
+  fingerprintConfigSnapshotAuthoredConfig,
+  readLatestConfigSnapshotAuditRecord,
+  restoreConfigSnapshotAuditRecord,
+  upsertConfigSnapshotAuditRecord,
+} from "./config-journal-snapshot.js";
 import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
   capConfigAuditIssues,
   capConfigAuditPaths,
-  configSnapshotAuditRecordMatchesPath,
   createConfigWriteAuditRecordBase,
-  fingerprintConfigSnapshotAuthoredConfig,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
-  readLatestConfigSnapshotAuditRecord,
-  restoreConfigSnapshotAuditRecord,
-  upsertConfigSnapshotAuditRecord,
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";

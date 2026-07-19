@@ -4,12 +4,12 @@ import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
+import { fingerprintConfigSnapshotAuthoredConfig } from "../config/config-journal-snapshot.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
   OpenClawConfig,
 } from "../config/config.js";
-import { fingerprintConfigSnapshotAuthoredConfig } from "../config/io.audit.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -55,6 +55,13 @@ vi.mock("../config/io.audit.js", async (importOriginal) => {
   return {
     ...actual,
     appendConfigAuditRecordSync: configAuditMocks.append,
+  };
+});
+
+vi.mock("../config/config-journal-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config-journal-snapshot.js")>();
+  return {
+    ...actual,
     readConfigSnapshotAuditRecord: configAuditMocks.readSnapshot,
     readLatestConfigSnapshotAuditRecord: configAuditMocks.readLatestSnapshot,
     upsertConfigSnapshotAuditRecord: configAuditMocks.upsertSnapshot,

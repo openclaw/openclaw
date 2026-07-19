@@ -4,14 +4,16 @@ import { homedir } from "node:os";
 import chokidar from "chokidar";
 import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
 import {
-  appendConfigAuditRecordSync,
-  capConfigAuditIssues,
-  capConfigAuditPaths,
   configSnapshotAuditRecordMatchesPath,
   fingerprintConfigSnapshotAuthoredConfig,
   readConfigSnapshotAuditRecord,
   readLatestConfigSnapshotAuditRecord,
   upsertConfigSnapshotAuditRecord,
+} from "../config/config-journal-snapshot.js";
+import {
+  appendConfigAuditRecordSync,
+  capConfigAuditIssues,
+  capConfigAuditPaths,
   type ConfigExternalChangeAuditRecord,
 } from "../config/io.audit.js";
 import type { ConfigWriteNotification } from "../config/io.js";
