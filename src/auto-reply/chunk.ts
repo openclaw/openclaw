@@ -197,6 +197,44 @@ export function chunkByNewline(
 export function chunkByParagraph(
   text: string,
   limit: number,
+  opts?: { splitLongParagraphs?: boolean },
+): string[] {
+  return chunkByParagraphInternal(text, limit, opts);
+}
+
+/**
+ * Core outbound planning helper: keep each top-level blank-line paragraph as its
+ * own delivery unit. Packing short adjacent paragraphs up to `limit` is a public
+ * reply-chunking concern; outbound newline mode must not rejoin logical reply
+ * blocks before channel delivery. Not part of the plugin SDK reply-chunking API.
+ */
+export function splitOutboundNewlineDeliveryUnits(
+  text: string,
+  limit: number,
+  style: "text" | "markdown",
+): string[] {
+  if (style === "markdown") {
+    // Fence-aware paragraph split without packing, then markdown length chunking.
+    const paragraphChunks = chunkByParagraphInternal(text, limit, {
+      splitLongParagraphs: false,
+      packAdjacent: false,
+    });
+    const out: string[] = [];
+    for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
+      paragraphChunk.length > limit
+        ? splitPackedFenceParagraphChunk(paragraphChunk)
+        : paragraphChunk,
+    )) {
+      out.push(...chunkMarkdownText(chunk, limit));
+    }
+    return out;
+  }
+  return chunkByParagraphInternal(text, limit, { packAdjacent: false });
+}
+
+function chunkByParagraphInternal(
+  text: string,
+  limit: number,
   opts?: { splitLongParagraphs?: boolean; packAdjacent?: boolean },
 ): string[] {
   if (!text) {
@@ -312,21 +350,11 @@ export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode):
   return chunkText(text, limit);
 }
 
-export function chunkMarkdownTextWithMode(
-  text: string,
-  limit: number,
-  mode: ChunkMode,
-  opts?: { packAdjacent?: boolean },
-): string[] {
+export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    // Outbound newline planning passes packAdjacent:false so top-level blank-line
-    // paragraphs stay separate delivery units while fenced blanks stay intact.
-    const paragraphChunks = chunkByParagraph(text, limit, {
-      splitLongParagraphs: false,
-      packAdjacent: opts?.packAdjacent,
-    });
+    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
     const out: string[] = [];
     for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
       paragraphChunk.length > limit

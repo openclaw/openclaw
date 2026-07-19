@@ -13,6 +13,7 @@ import {
   chunkTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
+  splitOutboundNewlineDeliveryUnits,
 } from "./chunk.js";
 
 function expectFencesBalanced(chunks: string[]) {
@@ -644,19 +645,20 @@ describe("chunkMarkdownTextWithMode", () => {
     ]);
   });
 
-  it("keeps top-level paragraphs separate when packAdjacent is false", () => {
-    expect(
-      chunkMarkdownTextWithMode("Alpha\n\nBeta\n\nGamma", 4000, "newline", {
-        packAdjacent: false,
-      }),
-    ).toEqual(["Alpha", "Beta", "Gamma"]);
+  it("keeps top-level paragraphs separate for outbound newline delivery units", () => {
+    expect(splitOutboundNewlineDeliveryUnits("Alpha\n\nBeta\n\nGamma", 4000, "markdown")).toEqual([
+      "Alpha",
+      "Beta",
+      "Gamma",
+    ]);
   });
 
-  it("keeps fenced blanks intact when packAdjacent is false", () => {
+  it("keeps fenced blanks intact for outbound markdown newline delivery units", () => {
     const fence = "```js\nconst a = 1;\n\nconst b = 2;\n```";
-    expect(
-      chunkMarkdownTextWithMode(`${fence}\n\nAfter`, 4000, "newline", { packAdjacent: false }),
-    ).toEqual([fence, "After"]);
+    expect(splitOutboundNewlineDeliveryUnits(`${fence}\n\nAfter`, 4000, "markdown")).toEqual([
+      fence,
+      "After",
+    ]);
   });
 
   it("does not split surrogate pairs at hard length boundaries", () => {
