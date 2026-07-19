@@ -37,6 +37,23 @@ function readAgentRunTimeoutAttribution(meta: unknown) {
   };
 }
 
+function resolveResolvedAgentAbortStopReason(
+  meta: unknown,
+  signal: AbortSignal,
+): "restart" | "rpc" | "timeout" | undefined {
+  if (!signal.aborted) {
+    return undefined;
+  }
+  const record =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? (meta as Record<string, unknown>)
+      : undefined;
+  if (record?.aborted !== true && record?.stopReason !== "toolUse") {
+    return undefined;
+  }
+  return resolveGatewayAgentAbortStopReason(signal);
+}
+
 function isGatewayAbortSignalReason(reason: unknown): boolean {
   return reason === undefined || isAbortError(reason) || readErrorName(reason) === "TimeoutError";
 }
@@ -155,8 +172,16 @@ export function dispatchAgentRunFromGateway(params: {
     restoreAdmittedRecovery: params.restoreAdmittedRecovery,
   })
     .then(async (result) => {
-      const aborted = result?.meta?.aborted === true;
-      const stopReason = aborted ? (result?.meta?.stopReason ?? "rpc") : undefined;
+      const signalStopReason = resolveResolvedAgentAbortStopReason(
+        result?.meta,
+        params.abortController.signal,
+      );
+      const aborted = result?.meta?.aborted === true || signalStopReason !== undefined;
+      const stopReason = signalStopReason
+        ? signalStopReason
+        : aborted
+          ? (result?.meta?.stopReason ?? "rpc")
+          : undefined;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
@@ -187,7 +212,7 @@ export function dispatchAgentRunFromGateway(params: {
               ? "error"
               : "ok",
         error: result?.meta?.error,
-        stopReason: result?.meta?.stopReason,
+        stopReason: stopReason ?? result?.meta?.stopReason,
         livenessState: result?.meta?.livenessState,
         timeoutPhase: timeoutAttribution.timeoutPhase,
         providerStarted: timeoutAttribution.providerStarted,
