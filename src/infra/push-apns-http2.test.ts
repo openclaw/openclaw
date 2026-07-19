@@ -45,6 +45,10 @@ const {
       return this;
     }
 
+    listenerCount(event: string): number {
+      return this.handlers.get(event)?.length ?? 0;
+    }
+
     removeListener(event: string, handler: (...args: unknown[]) => void): this {
       return this.off(event, handler);
     }
@@ -194,6 +198,20 @@ describe("connectApnsHttp2Session", () => {
     expect(session).toBe(fakeSession);
     expect(tunnelSpy).not.toHaveBeenCalled();
     expect(connectSpy).toHaveBeenCalledWith("https://api.sandbox.push.apple.com");
+  });
+
+  it("owns direct session errors until the session is fully closed", async () => {
+    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+
+    const connecting = connectApnsHttp2Session({
+      authority: "https://api.sandbox.push.apple.com",
+      timeoutMs: 10_000,
+    });
+
+    expect(fakeSession.listenerCount("error")).toBe(1);
+    await expect(connecting).resolves.toBe(fakeSession);
+    fakeSession.emit("close");
+    expect(fakeSession.listenerCount("error")).toBe(0);
   });
 
   it("rejects an already invalidated direct APNs setup before opening a session", async () => {

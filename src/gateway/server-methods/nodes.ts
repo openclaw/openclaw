@@ -1181,6 +1181,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const pendingApproval = await getPendingNodePairing(requestId);
+      const pairingGenerationBeforeApproval = pendingApproval
+        ? await captureNodePairingGeneration(pendingApproval.nodeId)
+        : null;
       const sessionBeforeApproval = pendingApproval
         ? context.nodeRegistry.get(pendingApproval.nodeId)
         : undefined;
@@ -1227,21 +1230,29 @@ export const nodeHandlers: GatewayRequestHandlers = {
         declaredCommands: approvedNode.commands ?? [],
         allowlist: currentAllowlist,
       });
-      const updatedNode = context.nodeRegistry.updateSurface(
-        approvedNode.nodeId,
-        {
-          caps: approvedNode.caps ?? [],
-          commands: currentAllowedCommands,
-          permissions: approvedNode.permissions,
-        },
-        sessionBeforeApproval?.pairingGeneration && approvedGeneration
-          ? {
-              expectedConnId: sessionBeforeApproval.connId,
-              expectedPairingGeneration: sessionBeforeApproval.pairingGeneration,
-              nextPairingGeneration: approvedGeneration.key,
-            }
-          : undefined,
-      );
+      const liveSessionGeneration =
+        sessionBeforeApproval &&
+        pairingGenerationBeforeApproval &&
+        approved.previousPairingGeneration === pairingGenerationBeforeApproval.key &&
+        sessionBeforeApproval.pairingGeneration === pairingGenerationBeforeApproval.key
+          ? pairingGenerationBeforeApproval.key
+          : null;
+      const updatedNode =
+        liveSessionGeneration && sessionBeforeApproval && approvedGeneration
+          ? context.nodeRegistry.updateSurface(
+              approvedNode.nodeId,
+              {
+                caps: approvedNode.caps ?? [],
+                commands: currentAllowedCommands,
+                permissions: approvedNode.permissions,
+              },
+              {
+                expectedConnId: sessionBeforeApproval.connId,
+                expectedPairingGeneration: liveSessionGeneration,
+                nextPairingGeneration: approvedGeneration.key,
+              },
+            )
+          : null;
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
       }
@@ -1255,7 +1266,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         },
         { dropIfSlow: true },
       );
-      respond(true, approved, undefined);
+      respond(true, { requestId: approved.requestId, node: approvedNode }, undefined);
     });
   },
   "node.pair.reject": async ({ params, respond, context, client }) => {

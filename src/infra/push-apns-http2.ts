@@ -246,13 +246,24 @@ async function openProxiedApnsHttp2Session(params: {
 
   // The CONNECT helper already completed the target TLS handshake; reuse that
   // socket so the session cannot open a separate direct route.
-  const session = http2.connect(params.authority, {
-    createConnection: () => tlsSocket,
-  });
+  const session = ownApnsHttp2SessionErrors(
+    http2.connect(params.authority, {
+      createConnection: () => tlsSocket,
+    }),
+  );
   if (params.signal?.aborted) {
     session.destroy();
     throw apnsAbortError(params.signal);
   }
+  return session;
+}
+
+function ownApnsHttp2SessionErrors(session: http2.ClientHttp2Session): http2.ClientHttp2Session {
+  // Connection failures can arrive before an async caller installs its handler.
+  // Keep the session error-owned until Node confirms destruction via `close`.
+  const consumeSessionError = () => undefined;
+  session.on("error", consumeSessionError);
+  session.once("close", () => session.off("error", consumeSessionError));
   return session;
 }
 
@@ -267,7 +278,7 @@ export async function connectApnsHttp2Session(
     if (params.signal?.aborted) {
       throw apnsAbortError(params.signal);
     }
-    const session = http2.connect(authority);
+    const session = ownApnsHttp2SessionErrors(http2.connect(authority));
     if (params.signal?.aborted) {
       session.destroy();
       throw apnsAbortError(params.signal);

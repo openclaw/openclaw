@@ -267,6 +267,48 @@ describe("nodeHandlers node.pair.approve", () => {
       undefined,
     );
   });
+
+  it("does not promote a session authenticated before external device reapproval", async () => {
+    const state = await createState("node-approve-rejects-stale-live-session");
+    const nodeId = "node-stale-surface-session";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await approveNodeSurface(state.stateDir, nodeId);
+    const staleGeneration = await captureNodePairingGeneration(nodeId);
+    expect(staleGeneration).not.toBeNull();
+    const pending = await requestNodePairing(
+      {
+        nodeId,
+        platform: "android",
+        deviceFamily: "Android",
+        clientId: "openclaw-android",
+        clientMode: "node",
+        displayName: "Galaxy A54 5G reapproved",
+      },
+      state.stateDir,
+    );
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const currentGeneration = await captureNodePairingGeneration(nodeId);
+    expect(currentGeneration?.key).not.toBe(staleGeneration?.key);
+
+    const { context, opts } = createOptions({ requestId: pending.request.requestId });
+    context.nodeRegistry.get.mockReturnValue({
+      nodeId,
+      connId: "conn-authenticated-before-reapproval",
+      pairingGeneration: staleGeneration?.key,
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.approve"],
+      'nodeHandlers["node.pair.approve"] test invariant',
+    )(opts);
+
+    expect(context.nodeRegistry.updateSurface).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
+      undefined,
+    );
+  });
 });
 
 describe("nodeHandlers node.pair.remove", () => {

@@ -100,6 +100,29 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
   return changed;
 }
 
+function pruneExpiredRetiredGenerations(
+  nodeId: string,
+  currentPairingGeneration: string | undefined,
+  nowMs: number,
+): void {
+  const states = stateByNodeId.get(nodeId);
+  if (!states) {
+    return;
+  }
+  for (const [pairingGeneration, state] of states) {
+    if (pairingGeneration === currentPairingGeneration) {
+      continue;
+    }
+    pruneExpired(state, nowMs);
+    if (state.itemsById.size === 0) {
+      states.delete(pairingGeneration);
+    }
+  }
+  if (states.size === 0) {
+    stateByNodeId.delete(nodeId);
+  }
+}
+
 function pruneStateIfEmpty(
   nodeId: string,
   pairingGeneration: string | undefined,
@@ -160,6 +183,9 @@ export function enqueueNodePendingWork(params: {
   }
   const rawNowMs = Date.now();
   const nowMs = resolveDateTimestampMs(rawNowMs);
+  // Generation changes stop touching old buckets, so sweep their TTLs from
+  // every active-generation access instead of retaining retired work forever.
+  pruneExpiredRetiredGenerations(nodeId, params.pairingGeneration, nowMs);
   const state = getOrCreateState(nodeId, params.pairingGeneration);
   pruneExpired(state, nowMs);
   // Keep one outstanding item per type so repeated status/location requests
@@ -224,6 +250,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     return { revision: 0, items: [], hasMore: false };
   }
   const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
+  pruneExpiredRetiredGenerations(normalizedNodeId, opts.pairingGeneration, nowMs);
   const state = stateByNodeId.get(normalizedNodeId)?.get(opts.pairingGeneration);
   if (state) {
     pruneExpired(state, nowMs);

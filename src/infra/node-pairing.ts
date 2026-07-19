@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import {
+  resolveNodePairingGeneration,
   withPairedDeviceRecords,
   type PairedDevice,
   type PairedDevicePendingNodeSurface,
@@ -485,7 +486,11 @@ export async function reusePendingNodePairingForReconnect(
   });
 }
 
-type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
+type ApprovedNodePairingResult = {
+  requestId: string;
+  node: NodePairingPairedNode;
+  previousPairingGeneration?: string;
+};
 type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
@@ -525,6 +530,7 @@ export async function approveNodePairing(
       return { value: { status: "forbidden" as const, missingScope }, persist: false };
     }
 
+    const previousPairingGeneration = resolveNodePairingGeneration(device)?.key;
     const now = Math.max(Date.now(), (device.nodeSurface?.approvedAtMs ?? -1) + 1);
     device.nodeSurface = {
       displayName: pending.displayName,
@@ -545,7 +551,14 @@ export async function approveNodePairing(
     if (!node) {
       return { value: null, persist: false };
     }
-    return { value: { requestId, node }, persist: true };
+    return {
+      value: {
+        requestId,
+        node,
+        ...(previousPairingGeneration ? { previousPairingGeneration } : {}),
+      },
+      persist: true,
+    };
   });
 }
 

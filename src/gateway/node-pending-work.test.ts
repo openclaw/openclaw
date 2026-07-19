@@ -67,6 +67,22 @@ describe("node pending work", () => {
     ).toEqual(["location.request", "status.request"]);
   });
 
+  it("prunes expired work from retired generations on current-generation access", () => {
+    enqueueNodePendingWork({
+      nodeId: "node-retired-generation",
+      type: "location.request",
+      expiresInMs: 1_000,
+      pairingGeneration: "generation-1",
+    });
+
+    drainNodePendingWork("node-retired-generation", {
+      pairingGeneration: "generation-2",
+      nowMs: Date.now() + 2_000,
+    });
+
+    expect(clearNodePendingWork("node-retired-generation", "generation-1")).toBe(false);
+  });
+
   it("does not let a stale drain delete replacement-generation work", () => {
     enqueueNodePendingWork({
       nodeId: "node-stale-drain",
