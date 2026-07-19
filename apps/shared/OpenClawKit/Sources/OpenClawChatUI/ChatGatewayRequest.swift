@@ -100,7 +100,7 @@ public enum OpenClawChatGatewayRequests {
             method: "question.resolve",
             params: [
                 "id": AnyCodable(id),
-                "answers": AnyCodable(["answers": AnyCodable(values)]),
+                "answers": AnyCodable(values),
             ],
             timeoutMs: self.mutationTimeoutMs)
     }

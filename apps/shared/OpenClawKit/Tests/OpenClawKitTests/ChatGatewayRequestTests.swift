@@ -248,8 +248,7 @@ struct ChatGatewayRequestTests {
         let data = try JSONEncoder().encode(request.params)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let answers = try #require(object["answers"] as? [String: Any])
-        let values = try #require(answers["answers"] as? [String: Any])
-        #expect(values["meal"] as? [String] == ["Pizza", "Salad"])
+        #expect(answers["meal"] as? [String] == ["Pizza", "Salad"])
     }
 
     @Test func `question get request carries id`() {
