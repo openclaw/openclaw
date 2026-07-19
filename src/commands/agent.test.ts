@@ -19,6 +19,8 @@ import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DURABLE_AGENT_TURN_OPERATION_KIND } from "../durable/runtime-ids.js";
+import { openDurableRuntimeStore } from "../durable/store-factory.js";
 import {
   emitAgentEvent,
   onAgentEvent,
@@ -464,6 +466,110 @@ describe("agentCommand", () => {
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("persists a direct ingress turn with one terminal durable outcome", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const stateDir = path.join(home, "durable-state");
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      const cfg = mockConfig(home, store);
+      cfg.durable = { mode: "observe" };
+      runtimeSnapshotModule.setRuntimeConfigSnapshot(cfg);
+
+      const runId = "direct-ingress-durable-proof";
+      try {
+        await agentCommandFromIngress(
+          {
+            message: "persist this direct ingress turn",
+            runId,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            allowModelOverride: false,
+            deliver: false,
+          },
+          runtime,
+        );
+
+        const durableStore = openDurableRuntimeStore();
+        try {
+          const run = durableStore.getRunByIdempotencyKey(DURABLE_AGENT_TURN_OPERATION_KIND, runId);
+          expect(run).toMatchObject({
+            status: "succeeded",
+            sourceOwner: "session_store",
+            sourceRef: "agent:main:main",
+            metadata: expect.objectContaining({ transport: "gateway" }),
+          });
+          const timeline = durableStore.getTimeline(run!.runtimeRunId);
+          expect(timeline.map((event) => event.eventType)).toEqual(
+            expect.arrayContaining([
+              "agent.turn.received",
+              "agent.turn.running",
+              "agent.turn.succeeded",
+            ]),
+          );
+          expect(
+            timeline.filter((event) =>
+              [
+                "agent.turn.abandoned",
+                "agent.turn.blocked",
+                "agent.turn.cancelled",
+                "agent.turn.failed",
+                "agent.turn.succeeded",
+              ].includes(event.eventType),
+            ),
+          ).toHaveLength(1);
+        } finally {
+          durableStore.close();
+        }
+      } finally {
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("fails direct ingress synchronously before dispatch when durable authority cannot persist", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const blockedStateDir = path.join(home, "blocked-state-root");
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      fs.writeFileSync(blockedStateDir, "not a directory");
+      process.env.OPENCLAW_STATE_DIR = blockedStateDir;
+      const cfg = mockConfig(home, store);
+      cfg.durable = { mode: "authority" };
+      runtimeSnapshotModule.setRuntimeConfigSnapshot(cfg);
+      vi.mocked(runEmbeddedAgent).mockClear();
+
+      try {
+        expect(() =>
+          agentCommandFromIngress(
+            {
+              message: "must not be accepted",
+              runId: "direct-ingress-authority-failure",
+              sessionKey: "agent:main:main",
+              agentId: "main",
+              allowModelOverride: false,
+              deliver: false,
+            },
+            runtime,
+          ),
+        ).toThrow();
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      } finally {
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+        fs.rmSync(blockedStateDir, { force: true });
+      }
+    });
   });
 
   it("reuses a Discord voice session after one stale-session rollover", async () => {

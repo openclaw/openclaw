@@ -17,6 +17,7 @@ import {
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDurableAuthorityEnabled } from "../durable/config.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -310,6 +311,17 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
 
 function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
   return isGatewayTransportError(err);
+}
+
+async function rejectUnsafeDurableEmbeddedFallback(err: unknown): Promise<void> {
+  if (!isDurableAuthorityEnabled((await loadRuntimeConfig()).durable)) {
+    return;
+  }
+  const cause = err instanceof Error ? err : undefined;
+  throw new Error(
+    "Gateway agent outcome is uncertain while durable authority is enabled; embedded fallback is disabled to prevent duplicate side effects. Inspect durable runtime state before an explicit retry.",
+    { cause },
+  );
 }
 
 function isTransientGatewayAgentConnectClose(err: unknown): boolean {
@@ -959,6 +971,7 @@ export async function agentCliCommand(
         throw err;
       }
       if (isGatewayAgentTimeoutError(err)) {
+        await rejectUnsafeDurableEmbeddedFallback(err);
         const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
         const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
         runtime.error?.(
@@ -987,6 +1000,8 @@ export async function agentCliCommand(
       if (!isGatewayAgentEmbeddedFallbackError(err)) {
         throw err;
       }
+
+      await rejectUnsafeDurableEmbeddedFallback(err);
 
       runtime.error?.(
         `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,

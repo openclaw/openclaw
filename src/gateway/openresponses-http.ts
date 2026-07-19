@@ -412,7 +412,7 @@ function createResponseResource(params: {
   };
 }
 
-async function runResponsesAgentCommand(params: {
+function runResponsesAgentCommand(params: {
   message: string;
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
@@ -645,7 +645,7 @@ export async function handleOpenResponsesHttpRequest(
   const clientTools = extractClientTools(payload);
   let toolChoicePrompt: string | undefined;
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
-  let resolvedClientTools = clientTools;
+  let resolvedClientTools: typeof clientTools;
   try {
     const toolChoiceResult = applyToolChoice({
       tools: clientTools,
@@ -993,37 +993,16 @@ export async function handleOpenResponsesHttpRequest(
     maybeFinalize();
   };
 
-  // Send initial events
   const initialResponse = createResponseResource({
     id: responseId,
     model,
     status: "in_progress",
     output: [],
   });
-
-  writeSseEvent(res, { type: "response.created", response: initialResponse });
-  writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
-
-  // Add output item
   const outputItem = createAssistantOutputItem({
     id: outputItemId,
     text: "",
     status: "in_progress",
-  });
-
-  writeSseEvent(res, {
-    type: "response.output_item.added",
-    output_index: 0,
-    item: outputItem,
-  });
-
-  // Add content part
-  writeSseEvent(res, {
-    type: "response.content_part.added",
-    item_id: outputItemId,
-    output_index: 0,
-    content_index: 0,
-    part: { type: "output_text", text: "" },
   });
 
   unsubscribe = onAgentEvent((evt) => {
@@ -1110,21 +1089,61 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
+  let agentRunPromise: ReturnType<typeof runResponsesAgentCommand>;
+  try {
+    agentRunPromise = runResponsesAgentCommand({
+      message: prompt.message,
+      images,
+      clientTools: resolvedClientTools,
+      extraSystemPrompt,
+      modelOverride,
+      streamParams,
+      sessionKey,
+      runId: responseId,
+      messageChannel,
+      deps,
+      abortSignal: abortController.signal,
+    });
+  } catch (err) {
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    logWarn(`openresponses: durable streaming intake failed: ${String(err)}`);
+    const mapped = resolveOpenAiCompatError(err);
+    const errorResponse = createResponseResource({
+      id: responseId,
+      model,
+      status: "failed",
+      output: [],
+      error: mapped
+        ? { code: mapped.error.type, message: mapped.error.message }
+        : { code: "api_error", message: "internal error" },
+      usage: createEmptyUsage(),
+    });
+    writeSseEvent(res, { type: "response.failed", response: errorResponse });
+    writeDone(res);
+    res.end();
+    return true;
+  }
+
+  writeSseEvent(res, { type: "response.created", response: initialResponse });
+  writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
+  writeSseEvent(res, {
+    type: "response.output_item.added",
+    output_index: 0,
+    item: outputItem,
+  });
+  writeSseEvent(res, {
+    type: "response.content_part.added",
+    item_id: outputItemId,
+    output_index: 0,
+    content_index: 0,
+    part: { type: "output_text", text: "" },
+  });
+
   void (async () => {
     try {
-      const result = await runResponsesAgentCommand({
-        message: prompt.message,
-        images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        modelOverride,
-        streamParams,
-        sessionKey,
-        runId: responseId,
-        messageChannel,
-        deps,
-        abortSignal: abortController.signal,
-      });
+      const result = await agentRunPromise;
 
       finalUsage = extractUsageFromResult(result);
 

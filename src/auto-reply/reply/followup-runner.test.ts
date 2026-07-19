@@ -8,6 +8,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { DURABLE_AGENT_TURN_OPERATION_KIND } from "../../durable/runtime-ids.js";
+import { openDurableRuntimeStore } from "../../durable/store-factory.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -631,6 +633,61 @@ function createQueuedRun(
 }
 
 describe("createFollowupRunner reply-lane admission", () => {
+  it("persists an admitted queued follow-up as a durable agent turn", async () => {
+    const dir = fsSync.mkdtempSync(path.join(tmpdir(), "openclaw-durable-followup-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = dir;
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          transcriptPrompt: "continue the queued task",
+          run: {
+            sessionId: "followup-session",
+            sessionKey: "main",
+            provider: "anthropic",
+            model: "claude",
+            config: { durable: { mode: "observe" } },
+          },
+        }),
+      );
+
+      const store = openDurableRuntimeStore();
+      try {
+        const run = store
+          .listRuns({ limit: 10 })
+          .find((candidate) => candidate.operationKind === DURABLE_AGENT_TURN_OPERATION_KIND);
+        expect(run).toMatchObject({
+          status: "succeeded",
+          sourceOwner: "session_store",
+          sourceRef: "main",
+          metadata: expect.objectContaining({ transport: "channel" }),
+        });
+        expect(
+          store
+            .getTimeline(run!.runtimeRunId)
+            .filter((event) => event.eventType === "agent.turn.succeeded"),
+        ).toHaveLength(1);
+      } finally {
+        store.close();
+      }
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fsSync.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("drops stale active-goal context after the persisted goal completes", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     const storePath = "/tmp/openclaw-followup-completed-goal.json";

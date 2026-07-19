@@ -1286,12 +1286,29 @@ export async function handleOpenAiHttpRequest(
     unsubscribe();
   });
 
+  let agentRunPromise: ReturnType<typeof agentCommandFromIngress>;
+  try {
+    agentRunPromise = agentCommandFromIngress(commandInput, defaultRuntime, deps);
+  } catch (err) {
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    logWarn(`openai-compat: durable streaming intake failed: ${String(err)}`);
+    const mapped = resolveOpenAiCompatError(err);
+    writeSse(res, {
+      error: mapped?.error ?? { message: "internal error", type: "api_error" },
+    });
+    writeDone(res);
+    res.end();
+    return true;
+  }
+
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentRunPromise;
       resultResolved = true;
 
       if (closed) {

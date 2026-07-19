@@ -35,6 +35,11 @@ import {
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
+import {
+  completeDurableAgentTurnLifecycle,
+  startDurableAgentTurnLifecycle,
+  type DurableAgentTurnLifecycle,
+} from "../../durable/agent-turn.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -1179,7 +1184,7 @@ export async function runReplyAgent(params: {
     shouldFollowup,
     isActive,
     isRunActive,
-    opts,
+    opts: initialOpts,
     typing,
     sessionEntry,
     sessionStore,
@@ -1201,6 +1206,7 @@ export async function runReplyAgent(params: {
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
+  let opts = initialOpts;
 
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
@@ -1499,6 +1505,10 @@ export async function runReplyAgent(params: {
       }
     }
   }
+  const durableRunId = opts?.runId ?? crypto.randomUUID();
+  if (!opts?.runId) {
+    opts = { ...opts, runId: durableRunId };
+  }
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
   const returnWithQueuedFollowupDrain = <T>(value: T): T => {
@@ -1628,8 +1638,26 @@ export async function runReplyAgent(params: {
     });
   let preflightCompactionApplied;
   let sessionAttentionAcknowledged = false;
+  let durableLifecycle: DurableAgentTurnLifecycle | undefined;
+  let durableResult: unknown;
+  let durableFailed = false;
+  let durableError: unknown;
 
   try {
+    durableLifecycle = startDurableAgentTurnLifecycle({
+      runId: durableRunId,
+      message: transcriptCommandBody ?? commandBody,
+      agentId: followupRun.run.agentId,
+      sessionKey,
+      channel: followupRun.run.messageProvider ?? sessionCtx.Surface ?? sessionCtx.Provider,
+      transport: "channel",
+      config: cfg.durable,
+    });
+    durableLifecycle.markRunning({
+      sessionId: replyOperation.sessionId,
+      trigger: isHeartbeat ? "heartbeat" : "user",
+      phase: "admitted",
+    });
     await typingSignals.signalRunStart();
 
     // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
@@ -1767,6 +1795,7 @@ export async function runReplyAgent(params: {
     );
 
     if (runOutcome.kind === "final") {
+      durableFailed = true;
       if (!replyOperation.result) {
         replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
       }
@@ -1784,6 +1813,8 @@ export async function runReplyAgent(params: {
       directlySentBlockPayloads,
       terminalFailurePayload,
     } = runOutcome;
+    durableResult = runResult;
+    durableFailed = fallbackExhausted === true || terminalFailurePayload !== undefined;
     const { autoCompactionCount } = runOutcome;
     let { didLogHeartbeatStrip } = runOutcome;
 
@@ -2681,6 +2712,7 @@ export async function runReplyAgent(params: {
 
     return result;
   } catch (error) {
+    durableError = error;
     // Drain/restart aborts stay silent and defer to post-restart main-session
     // recovery, which resumes the interrupted turn (or emits its own genuine
     // non-resumable notice). Surfacing a generic "try again" here is a false
@@ -2738,6 +2770,23 @@ export async function runReplyAgent(params: {
     returnWithQueuedFollowupDrain(undefined);
     throw error;
   } finally {
+    if (durableLifecycle) {
+      const operationResult = replyOperation.result;
+      completeDurableAgentTurnLifecycle({
+        lifecycle: durableLifecycle,
+        result: durableResult,
+        error: durableError,
+        aborted: operationResult?.kind === "aborted",
+        failed: durableFailed || operationResult?.kind === "failed",
+        summary:
+          operationResult?.kind === "aborted"
+            ? operationResult.code
+            : operationResult?.kind === "failed"
+              ? operationResult.code
+              : undefined,
+      });
+      durableLifecycle.close();
+    }
     if (!sessionAttentionAcknowledged) {
       const attentionSessionKey = sessionKey ?? followupRun.run.sessionKey;
       if (attentionSessionKey) {

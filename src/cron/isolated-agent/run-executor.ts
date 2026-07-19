@@ -13,6 +13,10 @@ import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  completeDurableAgentTurnLifecycle,
+  startDurableAgentTurnLifecycle,
+} from "../../durable/agent-turn.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -571,8 +575,8 @@ export function createCronPromptExecutor(params: {
   };
 }
 
-/** Executes an isolated cron prompt, including live model-switch and interim-ack retries. */
-export async function executeCronRun(params: {
+/** Inputs for one isolated cron agent turn. */
+export type ExecuteCronRunParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   job: CronJob;
@@ -619,7 +623,9 @@ export async function executeCronRun(params: {
   runTimeoutOverrideMs?: number;
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
-}): Promise<CronExecutionResult> {
+};
+
+async function executeCronRunInternal(params: ExecuteCronRunParams): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??
@@ -783,4 +789,44 @@ export async function executeCronRun(params: {
     runEndedAt,
     liveSelection: params.liveSelection,
   };
+}
+
+/** Executes an isolated cron prompt, including live model-switch and interim-ack retries. */
+export async function executeCronRun(params: ExecuteCronRunParams): Promise<CronExecutionResult> {
+  const runId = params.cronSession.sessionEntry.sessionId;
+  const durableLifecycle = startDurableAgentTurnLifecycle({
+    runId,
+    message: params.commandBody,
+    agentId: params.agentId,
+    sessionKey: params.runSessionKey,
+    channel: params.resolvedDelivery.channel,
+    transport: "cron",
+    deliver: params.deliveryRequested,
+    contextRefs: [{ type: "cron_job", id: params.job.id }],
+    config: params.cfg.durable,
+  });
+  try {
+    durableLifecycle.markRunning({
+      jobId: params.job.id,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      trigger: "cron",
+    });
+    const result = await executeCronRunInternal(params);
+    completeDurableAgentTurnLifecycle({
+      lifecycle: durableLifecycle,
+      result: result.runResult,
+      aborted: params.isAborted(),
+      failed: Boolean(result.runResult.meta?.error || result.runResult.meta?.failureSignal),
+    });
+    return result;
+  } catch (error) {
+    completeDurableAgentTurnLifecycle({
+      lifecycle: durableLifecycle,
+      error,
+      aborted: params.isAborted() || params.abortSignal?.aborted === true,
+    });
+    throw error;
+  } finally {
+    durableLifecycle.close();
+  }
 }

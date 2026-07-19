@@ -4423,6 +4423,40 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("does not mark a resolved model-error result as a successful task", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-result-error-" }, async (root) => {
+      useTestStateDir(root);
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      mocks.agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "model failed", isError: true }],
+        meta: {
+          durationMs: 100,
+          stopReason: "error",
+          error: { kind: "context_overflow" },
+        },
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-result-error",
+        },
+        { reqId: "task-registry-agent-run-result-error" },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId("task-registry-agent-run-result-error"), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "failed",
+          terminalSummary: "failed",
+        });
+      });
+    });
+  });
+
   it("preserves aborted async gateway agent runs as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);
