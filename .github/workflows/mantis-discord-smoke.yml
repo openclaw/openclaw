@@ -1,4 +1,4 @@
-﻿name: Mantis Discord Smoke
+name: Mantis Discord Smoke
 
 on:
   workflow_dispatch:
@@ -172,4 +172,3 @@ jobs:
           path: .artifacts/qa-e2e/mantis/
           retention-days: 14
           if-no-files-found: error
-
