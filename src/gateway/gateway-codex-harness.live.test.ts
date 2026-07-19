@@ -23,14 +23,15 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "./gateway-cli-backend.live-helpers.js";
+import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.js";
 import {
+  buildCodexHarnessLargeOutputCommand,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexStatusCommandText,
   isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
-  requireSuccessfulNativeCommandExecution,
   shouldUseCodexHarnessSubagentOnlyFastPath,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
@@ -852,14 +853,23 @@ async function verifyCodexCompactionStress(params: {
     minimum: 0,
     sessionKey: params.sessionKey,
   });
+  await requestCodexCommandText({
+    client: params.client,
+    command: "/codex permissions yolo",
+    events: params.events,
+    expectedText: "Codex permissions set to full access.",
+    sessionKey: params.sessionKey,
+  });
 
-  const outputLines = Math.ceil(CODEX_HARNESS_LARGE_OUTPUT_BYTES / 90);
   let completedCompactions = 0;
   let reportedCompactions = 0;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
     const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
     const commandMarker = `OPENCLAW-CODEX-LARGE-OUTPUT-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
-    const largeOutputCommand = `node -e 'console.log("${commandMarker}");for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`;
+    const largeOutputCommand = buildCodexHarnessLargeOutputCommand({
+      commandMarker,
+      outputBytes: CODEX_HARNESS_LARGE_OUTPUT_BYTES,
+    });
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
       eventPrefixes: ["codex_app_server.", "compaction", "tool"],
@@ -882,32 +892,18 @@ async function verifyCodexCompactionStress(params: {
     ).length;
     completedCompactions += turnCompletedCompactions;
     reportedCompactions += compactionCount;
-    const { resultIndex: commandResultIndex } = requireSuccessfulNativeCommandExecution(events, {
-      commandMarker,
-      expectedCommand: largeOutputCommand,
-    });
-
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 100,
     });
-    const serialized = JSON.stringify(history.messages ?? []);
-    const originalLengths = Array.from(serialized.matchAll(/original (\d+) chars/gu), (match) =>
-      Number(match[1]),
-    );
-    const hasTruncatedToolResult = originalLengths.some((length) => length > 10_000);
-    const postCommandCompaction = events.some(
-      (event, index) =>
-        index > commandResultIndex &&
-        event.stream === "compaction" &&
-        event.data?.phase === "end" &&
-        event.data?.completed === true,
-    );
-    // Native compaction can replace the command row after the successful large-output result.
-    expect(
-      hasTruncatedToolResult || postCommandCompaction,
-      `expected a truncated large native tool result or its later native compaction; lengths=${JSON.stringify(originalLengths)}`,
-    ).toBe(true);
+    const historyMessages = history.messages ?? [];
+    requireSuccessfulNativeCommandCompactionEvidence({
+      commandMarker,
+      events,
+      expectedCommand: largeOutputCommand,
+      messages: historyMessages,
+      minimumOutputChars: Math.floor(CODEX_HARNESS_LARGE_OUTPUT_BYTES * 0.95),
+    });
   }
 
   expect(completedCompactions, "expected at least one native automatic compaction").toBeGreaterThan(
@@ -1197,6 +1193,9 @@ async function verifyCodexGuardianProbe(params: {
   const review = assertGuardianReviewCompleted({
     events: deniedResult.events,
     label: "ask-back probe",
+    // The strict projection path is proved above. Codex may refuse this risky
+    // prompt before creating a review, so its explicit ask-back is also valid.
+    requireEvents: false,
   });
   // The approve/deny call is Codex policy-owned and may change independently.
   // OpenClaw's strict projection contract is covered by the allow probe above.

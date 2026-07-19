@@ -126,11 +126,32 @@ function readCodexHarnessToolEventData(event: unknown): CodexHarnessToolEventDat
   return data && typeof data === "object" ? (data as CodexHarnessToolEventData) : undefined;
 }
 
+function summarizeNativeCommandResult(result: unknown): Record<string, unknown> {
+  if (!result || typeof result !== "object") {
+    return { type: result === null ? "null" : typeof result };
+  }
+  const record = result as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+  for (const key of ["exitCode", "durationMs", "status"] as const) {
+    const value = record[key];
+    if (typeof value === "number" || typeof value === "boolean") {
+      summary[key] = value;
+    }
+  }
+  for (const key of ["stdout", "stderr", "output", "aggregatedOutput"] as const) {
+    const value = record[key];
+    if (typeof value === "string") {
+      summary[`${key}Chars`] = value.length;
+    }
+  }
+  return summary;
+}
+
 function shellArgvMatches(actual: readonly string[], expected: readonly string[]): boolean {
   return actual.length === expected.length && actual.every((arg, index) => arg === expected[index]);
 }
 
-function isExpectedNativeCommand(command: string, expectedCommand: string): boolean {
+export function isExpectedNativeCommand(command: string, expectedCommand: string): boolean {
   const commandArgv = splitShellArgs(command);
   const expectedArgv = splitShellArgs(expectedCommand);
   if (!commandArgv || !expectedArgv) {
@@ -142,6 +163,22 @@ function isExpectedNativeCommand(command: string, expectedCommand: string): bool
   const wrappedCommand = extractShellWrapperInlineCommand(commandArgv);
   const wrappedArgv = wrappedCommand ? splitShellArgs(wrappedCommand) : null;
   return wrappedArgv ? shellArgvMatches(wrappedArgv, expectedArgv) : false;
+}
+
+export function buildCodexHarnessLargeOutputCommand(params: {
+  commandMarker: string;
+  outputBytes: number;
+}): string {
+  if (!/^[A-Z0-9-]+$/u.test(params.commandMarker)) {
+    throw new Error(
+      "large-output command marker must contain only uppercase letters, digits, and hyphens",
+    );
+  }
+  if (!Number.isSafeInteger(params.outputBytes) || params.outputBytes <= 0) {
+    throw new Error("large-output byte count must be a positive safe integer");
+  }
+  const filler = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  return `node -e 'const p="${filler}";process.stdout.write(("${params.commandMarker}|"+p.repeat(Math.ceil(${params.outputBytes}/p.length))).slice(0,${params.outputBytes}))'`;
 }
 
 /** Requires one successful native bash execution carrying the per-turn command marker. */
@@ -181,15 +218,32 @@ export function requireSuccessfulNativeCommandExecution(
       data.isError === false &&
       result !== null &&
       typeof result === "object" &&
-      // App-server commandExecution.exitCode is optional. Completed + !isError is
-      // authoritative when Codex cannot supply it; a present nonzero code still fails.
+      // App-server commandExecution.exitCode is optional and nullable. Completed +
+      // !isError is authoritative when Codex omits it; a present nonzero code still fails.
       ((result as { exitCode?: unknown }).exitCode === undefined ||
+        (result as { exitCode?: unknown }).exitCode === null ||
         (result as { exitCode?: unknown }).exitCode === 0)
     );
   });
   if (resultIndex < 0) {
+    const observedResults = events.flatMap((event, index) => {
+      const data = readCodexHarnessToolEventData(event);
+      if (index <= startIndex || data?.phase !== "result" || data.itemId !== itemId) {
+        return [];
+      }
+      return [
+        {
+          index,
+          phase: data.phase,
+          itemId: data.itemId,
+          status: data.status,
+          isError: data.isError,
+          result: summarizeNativeCommandResult(data.result),
+        },
+      ];
+    });
     throw new Error(
-      `native bash command ${itemId} for marker ${params.commandMarker} has no successful result`,
+      `native bash command ${itemId} for marker ${params.commandMarker} has no successful result; observed=${JSON.stringify(observedResults)}`,
     );
   }
 
