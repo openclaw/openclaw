@@ -2,6 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { fetchVeniceUsage } from "./usage.js";
 
 describe("Venice usage", () => {
+  it("rejects usage JSON containing invalid UTF-8", async () => {
+    const prefix = new TextEncoder().encode('{"balances":{"usd":8.5},"consumptionCurrency":"DI');
+    const suffix = new TextEncoder().encode('EM"}');
+    const body = new Uint8Array([...prefix, 0xff, ...suffix]);
+    const snapshot = await fetchVeniceUsage({
+      token: "test-token",
+      timeoutMs: 5000,
+      fetchFn: vi.fn(async () => new Response(body)) as unknown as typeof fetch,
+    });
+
+    expect(snapshot.error).toBe("Malformed usage response");
+    expect(snapshot.windows).toEqual([]);
+  });
+
   it("maps balances and DIEM epoch allocation", async () => {
     const fetchFn = vi.fn(async () =>
       Response.json({

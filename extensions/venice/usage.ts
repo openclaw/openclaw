@@ -38,7 +38,7 @@ async function readPayload(response: Response, timeoutMs: number): Promise<Venic
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Venice usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const data = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
+  const data = objectRecord(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer)));
   if (!data) {
     throw new Error("Venice usage response is not an object");
   }
