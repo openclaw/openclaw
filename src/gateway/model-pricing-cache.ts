@@ -1,5 +1,6 @@
 // Gateway model-pricing refresh and normalization.
 // Fetches, normalizes, and schedules cached pricing for model usage estimates.
+import { isIP } from "node:net";
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   normalizeOptionalString,
@@ -805,10 +806,11 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
   if (host.startsWith("fc") || host.startsWith("fd")) {
     return true;
   }
-  if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.")) {
+  const isIpv4 = isIP(host) === 4;
+  if (isIpv4 && (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168."))) {
     return true;
   }
-  return /^172\.(1[6-9]|2\d|3[0-1])\./u.test(host) || host.startsWith("169.254.");
+  return isIpv4 && (/^172\.(1[6-9]|2\d|3[0-1])\./u.test(host) || host.startsWith("169.254."));
 }
 
 function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
