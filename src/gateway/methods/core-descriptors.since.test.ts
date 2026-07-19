@@ -7,6 +7,8 @@ const CURRENT_TRAIN_METHODS = [
   "question.resolve",
   "question.get",
   "question.list",
+  "session.discussion.info",
+  "session.discussion.open",
   "terminal.open",
   "terminal.input",
   "terminal.resize",
