@@ -2,6 +2,7 @@ import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
+import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
@@ -161,7 +162,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
               >`
             : nothing}
           ${session.pinned ? nothing : sessionState}
-          ${session.isChild ? nothing : renderSessionRowBadges(session)} ${pinnedState}
+          ${renderSessionRowBadges({
+            ...session,
+            hasApproval: sessionHasPendingApproval(this.approvalBadgeSnapshot(), session.key),
+          })}
+          ${pinnedState}
         </a>
         ${session.childSessionKeys.length > 0
           ? html`<button

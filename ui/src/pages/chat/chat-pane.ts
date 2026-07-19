@@ -24,6 +24,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { findInlineApproval } from "../../app/approval-presentation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -50,8 +51,8 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
-import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import "../../components/modal-dialog.ts";
+import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -409,6 +410,10 @@ class ChatPane extends OpenClawLightDomElement {
   constructor() {
     super();
     void new SubscriptionsController(this)
+      .watch(
+        () => this.context?.overlays,
+        (overlays, notify) => overlays.subscribe(notify),
+      )
       .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) => provider.snapshot$.subscribe(notify),
@@ -2745,6 +2750,11 @@ class ChatPane extends OpenClawLightDomElement {
     );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
+    const overlays = this.context?.overlays;
+    const approvalSnapshot = overlays?.snapshot;
+    const inlineApproval = this.active
+      ? findInlineApproval(approvalSnapshot?.approvalQueue ?? [], state.sessionKey)
+      : null;
     // Tool rows consult the global title store while rendering; point its
     // fetcher at this pane's connection. Requests capture session + agent at
     // schedule time, so later renders of other panes cannot re-route them.
@@ -2863,6 +2873,13 @@ class ChatPane extends OpenClawLightDomElement {
           ? () => void this.restoreArchivedSession(state.sessionKey)
           : null,
       error: state.lastError,
+      inlineApproval,
+      approvalBusy: approvalSnapshot?.approvalBusy,
+      approvalErrors: approvalSnapshot?.approvalErrors,
+      approvalNowMs: approvalSnapshot?.approvalNowMs,
+      onApprovalDecision: overlays
+        ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
+        : undefined,
       sessions: state.sessionsResult,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
