@@ -164,7 +164,7 @@ export function markdownToTelegramHtml(
   const telegramHtml = renderSupportedTelegramHtml(html);
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
-    return wrapMarkdownFileReferencesInHtml(telegramHtml);
+    return wrapFileReferencesInHtml(telegramHtml);
   }
   return telegramHtml;
 }
@@ -182,7 +182,6 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
 const ESCAPED_HTML_TAG_PATTERN = /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(.*?)&gt;/g;
 const TELEGRAM_HTML_ANCHOR_PATTERN =
@@ -502,22 +501,7 @@ function wrapSegmentFileRefs(
   );
 }
 
-export function wrapFileReferencesInHtml(
-  html: string,
-  options: { deLinkifyAutoLinkedAnchors?: boolean } = {},
-): string {
-  // Safety-net: de-linkify auto-generated anchors where href="http://<label>" (defense in depth for textMode: "html")
-  AUTO_LINKED_ANCHOR_PATTERN.lastIndex = 0;
-  const deLinkified =
-    options.deLinkifyAutoLinkedAnchors === false
-      ? html
-      : html.replace(AUTO_LINKED_ANCHOR_PATTERN, (_match, label: string) => {
-          if (!isAutoLinkedFileRef(`http://${label}`, label)) {
-            return _match;
-          }
-          return `<code>${escapeHtml(label)}</code>`;
-        });
-
+export function wrapFileReferencesInHtml(html: string): string {
   // Track nesting depth for tags that should not be modified
   let codeDepth = 0;
   let preDepth = 0;
@@ -526,14 +510,14 @@ export function wrapFileReferencesInHtml(
   let lastIndex = 0;
 
   // Process tags token-by-token so we can skip protected regions while wrapping plain text.
-  for (const tag of tokenizeHtmlTags(deLinkified)) {
+  for (const tag of tokenizeHtmlTags(html)) {
     const tagStart = tag.start;
     const tagEnd = tag.end;
     const isClosing = tag.closing;
     const tagName = tag.name;
 
     // Process text before this tag
-    const textBefore = deLinkified.slice(lastIndex, tagStart);
+    const textBefore = html.slice(lastIndex, tagStart);
     result += wrapSegmentFileRefs(textBefore, codeDepth, preDepth, anchorDepth);
 
     // Update tag depth (clamp at 0 for malformed HTML with stray closing tags)
@@ -546,22 +530,15 @@ export function wrapFileReferencesInHtml(
     }
 
     // Add the tag itself
-    result += deLinkified.slice(tagStart, tagEnd);
+    result += html.slice(tagStart, tagEnd);
     lastIndex = tagEnd;
   }
 
   // Process remaining text
-  const remainingText = deLinkified.slice(lastIndex);
+  const remainingText = html.slice(lastIndex);
   result += wrapSegmentFileRefs(remainingText, codeDepth, preDepth, anchorDepth);
 
   return result;
-}
-
-function wrapMarkdownFileReferencesInHtml(html: string): string {
-  // Markdown IR already distinguishes authored links from linkify output. The
-  // renderer suppresses only the latter, so do not infer provenance again from
-  // the rendered anchor and accidentally remove an authored file-style link.
-  return wrapFileReferencesInHtml(html, { deLinkifyAutoLinkedAnchors: false });
 }
 
 export function renderTelegramHtmlText(
@@ -886,7 +863,7 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
 }
 
 function renderTelegramChunkHtml(ir: MarkdownIR): string {
-  return wrapMarkdownFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(ir)));
+  return wrapFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(ir)));
 }
 
 function renderTelegramChunksWithinHtmlLimit(

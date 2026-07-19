@@ -85,24 +85,10 @@ describe("wrapFileReferencesInHtml", () => {
     }
   });
 
-  it("de-linkifies auto-linkified anchors for plain files and paths", () => {
+  it("preserves explicit links, including file-style labels", () => {
     const cases = [
-      {
-        input: '<a href="http://README.md">README.md</a>',
-        expected: "<code>README.md</code>",
-      },
-      {
-        input: '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
-        expected: "<code>squad/friday/HEARTBEAT.md</code>",
-      },
-    ] as const;
-    for (const testCase of cases) {
-      expect(wrapFileReferencesInHtml(testCase.input)).toBe(testCase.expected);
-    }
-  });
-
-  it("preserves explicit links where label differs from href", () => {
-    const cases = [
+      '<a href="http://README.md">README.md</a>',
+      '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
       '<a href="http://README.md">click here</a>',
       '<a href="http://other.md">README.md</a>',
     ] as const;
