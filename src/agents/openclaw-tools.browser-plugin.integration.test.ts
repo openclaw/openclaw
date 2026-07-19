@@ -5,6 +5,7 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
@@ -201,6 +202,32 @@ describe("createOpenClawTools browser plugin integration", () => {
     await expect(capturedParams?.context?.resolveApiKeyForProvider?.("xai")).resolves.toBe(
       "xai-profile-key",
     );
+  });
+
+  it("forwards the sandbox-exec bridge key to plugin resolution via createOpenClawTools", () => {
+    // Regression coverage for the createOpenClawTools call path specifically:
+    // this is the path ordinary (unrestricted-allowlist) agent runs actually use,
+    // as opposed to resolveOpenClawPluginToolsForOptions exercised directly above.
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const config = {
+      plugins: {
+        allow: ["browser"],
+      },
+    } as OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      sandboxed: true,
+      sandboxExecKey: "sandbox-container-abc123",
+      // Matches the real agent-tools.ts createOpenClawTools call site, which also
+      // opts out of hook wrapping; avoids requiring a full plugin-tools mock here.
+      wrapBeforeToolCallHook: false,
+    });
+
+    expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
+    const params = firstResolvePluginToolsParams();
+    const context = params.context as { sandboxExecKey?: string };
+    expect(context.sandboxExecKey).toBe("sandbox-container-abc123");
   });
 
   it("forwards plugin tool deny policy to plugin resolution", () => {

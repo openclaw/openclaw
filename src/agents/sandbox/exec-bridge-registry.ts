@@ -16,17 +16,20 @@ import type { SandboxBackendHandle } from "./backend-handle.types.js";
 
 export const SANDBOX_EXEC_BRIDGES = new Map<string, SandboxBackendHandle>();
 
-/** Registers the live sandbox backend for a session, for plugin-facing sandboxed-exec lookups. */
-export function registerSandboxExecBridge(sessionKey: string, backend: SandboxBackendHandle): void {
-  SANDBOX_EXEC_BRIDGES.set(sessionKey, backend);
+/** Registers the live sandbox backend for a container, for plugin-facing sandboxed-exec lookups. */
+export function registerSandboxExecBridge(
+  containerKey: string,
+  backend: SandboxBackendHandle,
+): void {
+  SANDBOX_EXEC_BRIDGES.set(containerKey, backend);
 }
 
-/** Looks up the live sandbox backend for a session, if one is registered. */
-export function getSandboxExecBridge(sessionKey: string): SandboxBackendHandle | undefined {
-  return SANDBOX_EXEC_BRIDGES.get(sessionKey);
+/** Looks up the live sandbox backend for a container, if one is registered. */
+export function getSandboxExecBridge(containerKey: string): SandboxBackendHandle | undefined {
+  return SANDBOX_EXEC_BRIDGES.get(containerKey);
 }
 
-/** Drops a session's sandbox-exec bridge entry (called from the same prune pass as BROWSER_BRIDGES). */
-export function pruneSandboxExecBridge(sessionKey: string): void {
-  SANDBOX_EXEC_BRIDGES.delete(sessionKey);
+/** Drops a container's sandbox-exec bridge entry (called from the same prune pass as BROWSER_BRIDGES). */
+export function pruneSandboxExecBridge(containerKey: string): void {
+  SANDBOX_EXEC_BRIDGES.delete(containerKey);
 }
