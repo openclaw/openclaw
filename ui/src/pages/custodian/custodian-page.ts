@@ -33,6 +33,7 @@ import {
   hasUnresolvedCustodianQuestion,
   readCustodianTranscript,
   renderCustodianEarlierDivider,
+  retireCustodianQuestions,
   toCustodianMessageGroup,
   type CustodianMessage,
 } from "./transcript.ts";
@@ -182,7 +183,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     client: GatewayBrowserClient,
     variant: "onboarding" | "new-agent" | "caretaker",
   ): void {
-    this.retireQuestions();
+    this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.retryParams = null;
     this.input = "";
     this.sensitive = false;
@@ -499,7 +500,8 @@ export class CustodianPage extends OpenClawLightDomElement {
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
     // A new operator turn supersedes any abandoned-turn unknown-outcome warning.
     this.abandonedTurnOutcomeUnknown = false;
-    this.retireQuestions();
+    const answeredQuestions = this.answeredQuestions;
+    this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.messages = [
       ...this.messages,
       {
@@ -519,7 +521,10 @@ export class CustodianPage extends OpenClawLightDomElement {
     const replyEpoch = this.requestEpoch;
     const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
-      this.questionReplyUncertain = outcome !== "sent";
+      this.questionReplyUncertain = outcome === "unknown";
+      if (outcome === "rejected") {
+        this.answeredQuestions = answeredQuestions;
+      }
     }
     return outcome;
   }
@@ -538,14 +543,22 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
-  private dismissQuestion(message: CustodianMessage): void {
+  private async dismissQuestion(message: CustodianMessage): Promise<void> {
     const question = message.question;
     if (!question) {
       return;
     }
-    this.dismissedQuestions = new Set(this.dismissedQuestions).add(`${message.id}:${question.id}`);
     // Closed wizard selects accept cancel; open "other" prompts use their visible free-form reply.
-    void this.send(question.isOther ? t("optionCard.skip") : "cancel", t("optionCard.skip"), true);
+    const outcome = await this.send(
+      question.isOther ? t("optionCard.skip") : "cancel",
+      t("optionCard.skip"),
+      true,
+    );
+    if (outcome !== "rejected") {
+      this.dismissedQuestions = new Set(this.dismissedQuestions).add(
+        `${message.id}:${question.id}`,
+      );
+    }
   }
 
   private answerQuestion(message: CustodianMessage, label: string): void {
@@ -554,19 +567,8 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     const option = question.options.find((candidate) => candidate.label === label);
-    this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${question.id}`);
     // Show the friendly label while sending the canonical reply that the engine parses.
     void this.send(option?.reply ?? label, label, true);
-  }
-
-  private retireQuestions(): void {
-    const answered = new Set(this.answeredQuestions);
-    for (const message of this.messages) {
-      if (message.question) {
-        answered.add(`${message.id}:${message.question.id}`);
-      }
-    }
-    this.answeredQuestions = answered;
   }
 
   private hasUnresolvedQuestion(): boolean {
@@ -668,7 +670,7 @@ export class CustodianPage extends OpenClawLightDomElement {
                       !this.chatAvailable ||
                       this.answeredQuestions.has(questionKey),
                     onSelect: (label) => this.answerQuestion(message, label),
-                    onSkip: () => this.dismissQuestion(message),
+                    onSkip: () => void this.dismissQuestion(message),
                   })
                 : nothing}
             `;

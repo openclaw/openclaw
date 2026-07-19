@@ -534,7 +534,7 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "cancel" });
     expect(page.querySelector(".chat-group.user")?.textContent).toContain("Skip for now");
-    expect(page.querySelector("openclaw-option-card")).toBeNull();
+    await waitForFast(() => expect(page.querySelector("openclaw-option-card")).toBeNull());
   });
 
   it("retires a structured question after a freeform reply", async () => {
