@@ -7,10 +7,9 @@ scenario:
   coverage:
     primary:
       - scheduling.cron
-      - agents.tool-use
+      - tools.invocation
     secondary:
       - scheduling.dedup
-      - scheduling.persistence
   gatewayConfigPatch:
     commands:
       ownerAllowFrom:
