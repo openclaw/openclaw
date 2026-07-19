@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { until } from "lit/directives/until.js";
 import type { PresenceEntry } from "../api/types.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -118,8 +117,8 @@ function renderAvatarInitials(user: PresenceViewer) {
   return html`<span style=${`background: ${avatarColor(user.id)}`}>${initialsFor(user)}</span>`;
 }
 
-async function resolveViewerAvatar(user: PresenceViewer) {
-  const avatar = await resolveAvatar({
+function resolveViewerAvatar(user: PresenceViewer) {
+  const avatar = resolveAvatar({
     id: user.email ?? user.id,
     name: user.name,
     profileAvatarUrl: user.avatarUrl,
@@ -166,7 +165,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
       data-viewer-id=${user.id}
       aria-label=${label}
     >
-      ${until(resolveViewerAvatar(user), renderAvatarInitials(user))}
+      ${resolveViewerAvatar(user)}
     </span>`;
   }
 }

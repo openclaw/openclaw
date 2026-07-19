@@ -36,10 +36,12 @@ const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
 
 /**
  * Returns a browser-safe avatar URL, or null. Only the canonical
- * /api/users/<id>/avatar route is trusted, canonicalized to origin+pathname:
- * query and fragment are dropped because they are sender-controlled.
- * Relative paths resolve against the trusted gateway origin; absolute URLs
- * must match that origin.
+ * /api/users/<id>/avatar route is trusted (pathname pinned, fragment dropped).
+ * The query is preserved: the gateway stamps a ?v=<updatedAt> revision there so
+ * the browser cache-busts a replaced avatar. Since avatars now render as plain
+ * <img> with no attached credentials, a varied query cannot amplify any
+ * client cache — the browser bounds it. Relative paths resolve against the
+ * trusted gateway origin; absolute URLs must match that origin.
  */
 function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string | null {
   try {
@@ -47,12 +49,11 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
     if (!USER_AVATAR_PATHNAME.test(parsed.pathname)) {
       return null;
     }
+    const suffix = parsed.pathname + parsed.search;
     if (parsed.origin === ORIGIN_PROBE) {
-      return gatewayOrigin ? new URL(parsed.pathname, gatewayOrigin).toString() : parsed.pathname;
+      return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
     }
-    return gatewayOrigin && parsed.origin === gatewayOrigin
-      ? gatewayOrigin + parsed.pathname
-      : null;
+    return gatewayOrigin && parsed.origin === gatewayOrigin ? gatewayOrigin + suffix : null;
   } catch {
     return null;
   }
@@ -96,7 +97,7 @@ export function resolveAvatarInitials(
  * the client never constructs a Gravatar URL — it only ever renders the
  * canonical /api/users/<id>/avatar endpoint or falls back to initials.
  */
-export async function resolveAvatar(input: IdentityAvatarInput): Promise<ResolvedIdentityAvatar> {
+export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvatar {
   // Trusted origin comes only from the app connection, never from `input`.
   const gatewayOrigin = appGatewayOrigin;
 

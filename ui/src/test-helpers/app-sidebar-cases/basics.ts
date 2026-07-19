@@ -69,7 +69,9 @@ describe("AppSidebar viewer presence", () => {
         },
         {
           instanceId: "alice-1",
-          user: { id: "alice", name: "Alice", avatarUrl: "https://example.test/alice.png" },
+          // Presence publishes avatars as the canonical gateway route; the
+          // resolver renders only that, falling back to initials otherwise.
+          user: { id: "alice", name: "Alice", avatarUrl: "/api/users/alice/avatar" },
           watchedSessions: ["agent:main:work"],
         },
         {

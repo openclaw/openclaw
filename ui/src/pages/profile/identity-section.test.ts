@@ -48,7 +48,9 @@ describe("renderIdentitySection", () => {
     await vi.waitFor(async () => {
       await (avatar as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)
         ?.updateComplete;
-      expect(avatar?.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-1/avatar");
+      expect(avatar?.querySelector("img")?.getAttribute("src")).toBe(
+        "/api/users/profile-1/avatar?v=2",
+      );
     });
 
     expect(container.querySelector("#settings-profile-identity")).not.toBeNull();

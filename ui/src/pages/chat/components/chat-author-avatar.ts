@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { until } from "lit/directives/until.js";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   resolveAvatar,
@@ -65,15 +64,14 @@ export function renderChatAuthorAvatar(
     return nothing;
   }
   const fallback = resolveAvatarInitials(sender);
-  const resolved = resolveAvatar(sender).then((avatar) => {
-    if (avatar.kind === "initials") {
-      return renderInitialsAvatar(avatar);
-    }
-    return renderResolvedAvatar(avatar, fallback);
-  });
+  const avatar = resolveAvatar(sender);
+  const resolved =
+    avatar.kind === "initials"
+      ? renderInitialsAvatar(avatar)
+      : renderResolvedAvatar(avatar, fallback);
   return html`
     <span class="chat-author-avatar" role="img" aria-label=${label} title=${label}>
-      ${until(resolved, renderInitialsAvatar(fallback))}
+      ${resolved}
     </span>
   `;
 }
