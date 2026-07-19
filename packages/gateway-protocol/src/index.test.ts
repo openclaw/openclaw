@@ -11,6 +11,10 @@ import {
   validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
+  validateDurableCoordinationGetParams,
+  validateDurableCoordinationGetResult,
+  validateDurableLimitParams,
+  validateDurableObligationsListResult,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -835,6 +839,135 @@ describe("validateTasksListParams", () => {
   it("rejects internal task statuses and unknown fields", () => {
     expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
     expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
+  });
+});
+
+describe("validateDurableCoordinationGet", () => {
+  it("accepts coordination inspection params and rejects unknown fields", () => {
+    expect(validateDurableCoordinationGetParams({ runtimeRunId: "rt_123" })).toBe(true);
+    expect(validateDurableCoordinationGetParams({ runtimeRunId: "" })).toBe(false);
+    expect(
+      validateDurableCoordinationGetParams({ runtimeRunId: "rt_123", includeSteps: true }),
+    ).toBe(false);
+  });
+
+  it("accepts the public durable coordination projection result shape", () => {
+    expect(
+      validateDurableCoordinationGetResult({
+        projection: {
+          runtimeRunId: "rt_123",
+          operationKind: "openclaw.agent.turn",
+          operationVersion: "1",
+          status: "waiting_child",
+          recoveryState: "waiting_child",
+          currentStepId: "subagents",
+          waitingReason: "child",
+          createdAt: 100,
+          updatedAt: 200,
+          refs: {
+            outputRefs: [],
+            errorRefs: [],
+            artifactRefs: [],
+          },
+          external: {
+            sessionKey: "agent:main:main",
+            taskId: "task_123",
+          },
+          children: {
+            total: 1,
+            pending: 0,
+            running: 0,
+            succeeded: 1,
+            failed: 0,
+            cancelled: 0,
+            lost: 0,
+            terminal: 1,
+            open: 0,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateDurableCoordinationGetResult({
+        projection: {
+          runtimeRunId: "rt_123",
+          operationKind: "openclaw.agent.turn",
+          operationVersion: "1",
+          status: "paused",
+          recoveryState: "waiting_child",
+          createdAt: 100,
+          updatedAt: 200,
+          refs: { outputRefs: [], errorRefs: [], artifactRefs: [] },
+          external: {},
+          children: {
+            total: 0,
+            pending: 0,
+            running: 0,
+            succeeded: 0,
+            failed: 0,
+            cancelled: 0,
+            lost: 0,
+            terminal: 0,
+            open: 0,
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("validateDurableInspection", () => {
+  it("bounds list params and requires source-backed unresolved obligations", () => {
+    expect(validateDurableLimitParams({ limit: 50 })).toBe(true);
+    expect(validateDurableLimitParams({ limit: 0 })).toBe(false);
+    expect(validateDurableLimitParams({ limit: 501 })).toBe(false);
+    expect(
+      validateDurableObligationsListResult({
+        obligations: [
+          {
+            obligationId: "state-lease:durable_execution_step:run-1:step-1",
+            sourceOwner: "state_leases",
+            sourceRef: "durable_execution_step:run-1:step-1",
+            kind: "expired_state_lease",
+            runtimeRunId: "run-1",
+            stepId: "step-1",
+            reason: "lease_expired",
+            status: "expired",
+            createdAt: 100,
+            updatedAt: 110,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateDurableObligationsListResult({
+        obligations: [
+          {
+            obligationId: "wake:wake-1",
+            kind: "pending_wake",
+            status: "pending",
+            createdAt: 100,
+            updatedAt: 100,
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateDurableObligationsListResult({
+        obligations: [
+          {
+            obligationId: "wake:wake-1",
+            sourceOwner: "wake_obligations",
+            sourceRef: "wake-1",
+            kind: "pending_wake",
+            status: "pending",
+            createdAt: 100,
+            updatedAt: 100,
+            metadata: { private: true },
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 });
 

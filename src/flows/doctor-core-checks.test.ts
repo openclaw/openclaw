@@ -170,6 +170,47 @@ describe("CORE_HEALTH_CHECKS", () => {
     ).toBe(false);
   });
 
+  it("distinguishes observation from durable recovery authority", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/durable-config");
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: { durable: { mode: "observe" } },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/durable-config",
+        severity: "info",
+        path: "durable.mode",
+      }),
+    ]);
+  });
+
+  it("warns when a durable claim can expire within one worker poll", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/durable-config");
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        durable: {
+          mode: "authority",
+          worker: { pollIntervalMs: 1_000, claimTtlMs: 1_000 },
+        },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/durable-config",
+        severity: "warning",
+        path: "durable.worker.claimTtlMs",
+      }),
+    ]);
+  });
+
   it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),

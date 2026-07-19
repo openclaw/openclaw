@@ -223,6 +223,32 @@ import {
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
   DeviceTokenRotateParamsSchema,
+  type DurableCoordinationGetParams,
+  DurableCoordinationGetParamsSchema,
+  type DurableCoordinationGetResult,
+  DurableCoordinationGetResultSchema,
+  type DurableCoordinationProjection,
+  DurableCoordinationProjectionSchema,
+  type DurableHealthGetParams,
+  DurableHealthGetParamsSchema,
+  type DurableHealthResult,
+  DurableHealthResultSchema,
+  type DurableLimitParams,
+  DurableLimitParamsSchema,
+  type DurableObligationsListResult,
+  DurableObligationsListResultSchema,
+  type WakeObligationListResult,
+  WakeObligationListResultSchema,
+  type WakeObligationIdParams,
+  WakeObligationIdParamsSchema,
+  type WakeObligationInspectResult,
+  WakeObligationInspectResultSchema,
+  type UncertaintyFactListResult,
+  UncertaintyFactListResultSchema,
+  type DeliveryAttemptEvidenceListParams,
+  DeliveryAttemptEvidenceListParamsSchema,
+  type DeliveryAttemptEvidenceListResult,
+  DeliveryAttemptEvidenceListResultSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
@@ -835,6 +861,37 @@ export const validateSessionsUsageParams =
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
+export const validateDurableCoordinationGetParams = lazyCompile<DurableCoordinationGetParams>(
+  DurableCoordinationGetParamsSchema,
+);
+export const validateDurableCoordinationGetResult = lazyCompile<DurableCoordinationGetResult>(
+  DurableCoordinationGetResultSchema,
+);
+export const validateDurableHealthGetParams = lazyCompile<DurableHealthGetParams>(
+  DurableHealthGetParamsSchema,
+);
+export const validateDurableHealthResult =
+  lazyCompile<DurableHealthResult>(DurableHealthResultSchema);
+export const validateDurableLimitParams = lazyCompile<DurableLimitParams>(DurableLimitParamsSchema);
+export const validateDurableObligationsListResult = lazyCompile<DurableObligationsListResult>(
+  DurableObligationsListResultSchema,
+);
+export const validateWakeObligationListResult = lazyCompile<WakeObligationListResult>(
+  WakeObligationListResultSchema,
+);
+export const validateWakeObligationIdParams = lazyCompile<WakeObligationIdParams>(
+  WakeObligationIdParamsSchema,
+);
+export const validateWakeObligationInspectResult = lazyCompile<WakeObligationInspectResult>(
+  WakeObligationInspectResultSchema,
+);
+export const validateUncertaintyFactListResult = lazyCompile<UncertaintyFactListResult>(
+  UncertaintyFactListResultSchema,
+);
+export const validateDeliveryAttemptEvidenceListParams =
+  lazyCompile<DeliveryAttemptEvidenceListParams>(DeliveryAttemptEvidenceListParamsSchema);
+export const validateDeliveryAttemptEvidenceListResult =
+  lazyCompile<DeliveryAttemptEvidenceListResult>(DeliveryAttemptEvidenceListResultSchema);
 export const validateConfigGetParams = lazyCompile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = lazyCompile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = lazyCompile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -1249,6 +1306,19 @@ export {
   TasksGetResultSchema,
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
+  DurableCoordinationGetParamsSchema,
+  DurableCoordinationProjectionSchema,
+  DurableCoordinationGetResultSchema,
+  DurableHealthGetParamsSchema,
+  DurableHealthResultSchema,
+  DurableLimitParamsSchema,
+  DurableObligationsListResultSchema,
+  WakeObligationListResultSchema,
+  WakeObligationIdParamsSchema,
+  WakeObligationInspectResultSchema,
+  UncertaintyFactListResultSchema,
+  DeliveryAttemptEvidenceListParamsSchema,
+  DeliveryAttemptEvidenceListResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -1638,6 +1708,19 @@ export type {
   TasksGetResult,
   TasksCancelParams,
   TasksCancelResult,
+  DurableCoordinationGetParams,
+  DurableCoordinationProjection,
+  DurableCoordinationGetResult,
+  DurableHealthGetParams,
+  DurableHealthResult,
+  DurableLimitParams,
+  DurableObligationsListResult,
+  WakeObligationListResult,
+  WakeObligationIdParams,
+  WakeObligationInspectResult,
+  UncertaintyFactListResult,
+  DeliveryAttemptEvidenceListParams,
+  DeliveryAttemptEvidenceListResult,
   CronJob,
   CronListParams,
   CronStatusParams,

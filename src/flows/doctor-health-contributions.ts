@@ -1515,6 +1515,14 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runGatewayConfigHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:durable-config",
+      label: "Durable runtime config",
+      healthCheckIds: ["core/doctor/durable-config"],
+      run: async (ctx) => {
+        await runCoreContributionHealthRepair(ctx, ["core/doctor/durable-config"]);
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
       healthChecks: {

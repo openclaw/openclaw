@@ -1489,6 +1489,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS: launchctl env overrides
   - H2: Related
 
+## cli/durable.md
+
+- Route: /cli/durable
+- Headings:
+  - H2: Usage
+  - H2: Commands
+  - H2: Enablement
+  - H2: Output Boundary
+  - H2: Related
+
 ## cli/flows.md
 
 - Route: /cli/flows
@@ -3612,6 +3622,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Node helper methods
   - H2: Audit ledger RPC
   - H2: Task ledger RPCs
+  - H3: Durable runtime inspection
   - H2: Operator helper methods
   - H3: models.list views
   - H2: Exec approvals

@@ -136,6 +136,13 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
       mod.registerAgentsCommands(program);
     },
   ),
+  defineImportedCommandGroupSpec(
+    ["durable"],
+    () => import("./register.durable.js"),
+    (mod, { program }) => {
+      mod.registerDurableCommand(program);
+    },
+  ),
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
