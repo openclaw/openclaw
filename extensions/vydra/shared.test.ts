@@ -184,6 +184,28 @@ describe("downloadVydraAsset", () => {
     });
   });
 
+  it("preserves successful response body errors before the deadline", async () => {
+    const result = await downloadVydraAsset({
+      url: "https://cdn.vydra.example/generated/test.png",
+      kind: "image",
+      timeoutMs: 250,
+      fetchFn: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("broken success body"));
+            },
+          }),
+          { status: 200 },
+        ),
+      maxBytes: 1024 * 1024,
+      requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+    }).catch((error: unknown) => error);
+
+    expect(result).toBeInstanceOf(Error);
+    expect(result).toMatchObject({ message: "broken success body" });
+  });
+
   it("does not bound a dripping body when only chunk idle timeout is used", async () => {
     // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
     const port = await listenDripServer({

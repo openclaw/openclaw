@@ -312,35 +312,35 @@ export async function downloadVydraAsset(params: {
         bodyTimeoutMs: resolveTimeoutMs,
         onBodyTimeout: () => createVydraTimeoutError(deadline),
       });
+      const mimeType =
+        result.response.headers.get("content-type")?.trim() ||
+        (params.kind === "image"
+          ? "image/png"
+          : params.kind === "audio"
+            ? "audio/mpeg"
+            : "video/mp4");
+      const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
+        timeoutMs: resolveTimeoutMs,
+        onTimeout: () => createVydraTimeoutError(deadline),
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
+      });
+      const extension = resolveVydraFileExtension(params.kind, mimeType);
+      const fileStem =
+        params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
+      return {
+        buffer,
+        mimeType,
+        fileName: `${fileStem}-1.${extension}`,
+      };
     } catch (error) {
-      // Guarded fetch can abort a non-2xx body at the same absolute deadline.
-      // Preserve timeout precedence instead of normalizing that abort as HTTP failure.
+      // The guarded request signal remains active through body consumption and
+      // can win the same absolute-deadline race. Keep timeout precedence stable.
       if (typeof deadline.deadlineAtMs === "number" && Date.now() >= deadline.deadlineAtMs) {
         throw createVydraTimeoutError(deadline);
       }
       throw error;
     }
-    const mimeType =
-      result.response.headers.get("content-type")?.trim() ||
-      (params.kind === "image"
-        ? "image/png"
-        : params.kind === "audio"
-          ? "audio/mpeg"
-          : "video/mp4");
-    const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
-      timeoutMs: resolveTimeoutMs,
-      onTimeout: () => createVydraTimeoutError(deadline),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
-    });
-    const extension = resolveVydraFileExtension(params.kind, mimeType);
-    const fileStem =
-      params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
-    return {
-      buffer,
-      mimeType,
-      fileName: `${fileStem}-1.${extension}`,
-    };
   } finally {
     await result.release();
   }
