@@ -259,6 +259,22 @@ function legacyStateDirs(homedir: () => string): string[] {
   return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
 }
 
+function isFastTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
+  const isTestRuntime =
+    env.VITEST === "true" ||
+    env.VITEST === "1" ||
+    env.VITEST_POOL_ID !== undefined ||
+    env.VITEST_WORKER_ID !== undefined ||
+    env.NODE_ENV === "test" ||
+    (env !== process.env &&
+      (process.env.VITEST === "true" ||
+        process.env.VITEST === "1" ||
+        process.env.VITEST_POOL_ID !== undefined ||
+        process.env.VITEST_WORKER_ID !== undefined ||
+        process.env.NODE_ENV === "test"));
+  return isTestRuntime && env.OPENCLAW_TEST_FAST === "1";
+}
+
 /** Resolve the current state root while preserving shipped legacy installs when present. */
 function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -270,7 +286,7 @@ function resolveStateDir(
   }
   const effectiveHome = () => resolveRequiredHomeDir(env, homedir);
   const nextDir = path.join(effectiveHome(), NEW_STATE_DIRNAME);
-  if (env.OPENCLAW_TEST_FAST === "1" || fs.existsSync(nextDir)) {
+  if (isFastTestRuntimeEnv(env) || fs.existsSync(nextDir)) {
     return nextDir;
   }
   // Existing legacy state remains authoritative until an explicit migration creates .openclaw.

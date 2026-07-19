@@ -12,6 +12,7 @@ import { callGateway } from "../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isGatewayRestartDraining,
@@ -270,7 +271,7 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError / pendingLifecycleTimeout entries. */
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
-const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;
 const SUSPENDED_DELIVERY_SUBAGENT_EXPIRY_MS = 6 * 60 * 60_000;
 const SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS = 24 * 60 * 60_000;
@@ -789,7 +790,7 @@ async function terminateAcceptedRestoredCollectorRun(params: {
         return;
       } catch {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+          const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
           timer.unref?.();
         });
       }
@@ -1227,7 +1228,7 @@ async function failAndCleanupRestoredQueuedRun(
         }
       }
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+        const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
         timer.unref?.();
       });
     }
@@ -1255,7 +1256,7 @@ async function failAndCleanupRestoredQueuedRun(
       });
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
