@@ -616,7 +616,7 @@ class WearRealtimeTalkControllerTest {
     }
 
   @Test
-  fun `relays provider output larger than the legacy queue capacity`() =
+  fun `relays provider output larger than the frame queue capacity`() =
     runTest {
       val output = mutableListOf<ByteArray>()
       val controller =
@@ -660,10 +660,9 @@ class WearRealtimeTalkControllerTest {
     }
 
   @Test
-  fun `relays every frame from a bursty Watch microphone`() =
+  fun `fails instead of dropping Watch audio when the input queue is full`() =
     runTest {
-      val releaseFirstFrame = CompletableDeferred<Unit>()
-      var appendCalls = 0
+      val forcedChannelCloses = mutableListOf<String>()
       val controller =
         WearRealtimeTalkController(
           scope = this,
@@ -675,25 +674,19 @@ class WearRealtimeTalkControllerTest {
               """{"ok":true}"""
             }
           },
-          sendGatewayFrame = { method, _, _, _ ->
-            if (method == "talk.session.appendAudio") {
-              appendCalls += 1
-              if (appendCalls == 1) releaseFirstFrame.await()
-            }
-          },
+          sendGatewayFrame = { _, _, _, _ -> },
           sendWatchFrame = { _, _, _ -> },
+          onForceCloseWatchChannel = forcedChannelCloses::add,
         )
       assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
 
-      repeat(12) { index ->
+      repeat(65) { index ->
         controller.appendAudio("watch-a", byteArrayOf(index.toByte(), 0))
       }
-      runCurrent()
-      releaseFirstFrame.complete(Unit)
-      runCurrent()
 
-      assertEquals(12, appendCalls)
-      assertTrue(controller.stop("watch-a"))
+      assertEquals(WearRealtimeTalkStatus.ERROR, controller.snapshot.value.status)
+      assertEquals(listOf("watch-a"), forcedChannelCloses)
+      runCurrent()
     }
 
   @Test

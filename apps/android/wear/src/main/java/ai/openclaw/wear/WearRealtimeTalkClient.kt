@@ -21,7 +21,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,7 +62,6 @@ internal class WearRealtimeTalkClient(
   private var channelOutput: OutputStream? = null
   private var captureJob: Job? = null
   private var readJob: Job? = null
-  private val playbackMessages = Channel<PlaybackMessage>(capacity = Channel.UNLIMITED)
   private var playbackIdleJob: Job? = null
   private var audioTrack: AudioTrack? = null
   private var playbackEndsAtMillis = 0L
@@ -73,25 +71,6 @@ internal class WearRealtimeTalkClient(
     val input: InputStream,
     val output: OutputStream,
   )
-
-  private data class PlaybackMessage(
-    val attemptId: String,
-    val type: WearRealtimeAudioFrameType,
-    val payload: ByteArray,
-  )
-
-  init {
-    scope.launch {
-      for (message in playbackMessages) {
-        if (activeAttemptId != message.attemptId) continue
-        when (message.type) {
-          WearRealtimeAudioFrameType.OUTPUT_PCM -> writeOutput(message.payload)
-          WearRealtimeAudioFrameType.CLEAR_OUTPUT -> clearOutput(resumeCapture = true)
-          WearRealtimeAudioFrameType.INPUT_PCM -> error("Watch cannot queue input audio for playback")
-        }
-      }
-    }
-  }
 
   suspend fun start(
     session: WearSession,
@@ -144,7 +123,6 @@ internal class WearRealtimeTalkClient(
 
   fun shutdown() {
     closeLocal()
-    playbackMessages.close()
     scope.cancel()
   }
 
@@ -185,17 +163,12 @@ internal class WearRealtimeTalkClient(
     readJob =
       scope.launch {
         try {
-          while (activeNodeId == nodeId) {
+          while (activeNodeId == nodeId && activeAttemptId == attemptId) {
             val frame = WearRealtimeAudioFraming.read(input) ?: break
+            if (activeNodeId != nodeId || activeAttemptId != attemptId) break
             when (frame.type) {
-              WearRealtimeAudioFrameType.OUTPUT_PCM,
-              WearRealtimeAudioFrameType.CLEAR_OUTPUT,
-              ->
-                check(
-                  playbackMessages
-                    .trySend(PlaybackMessage(attemptId, frame.type, frame.payload))
-                    .isSuccess,
-                ) { "Watch audio playback queue is unavailable" }
+              WearRealtimeAudioFrameType.OUTPUT_PCM -> writeOutput(frame.payload)
+              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> clearOutput(resumeCapture = true)
               WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone sent an invalid Watch audio frame")
             }
           }
@@ -215,15 +188,10 @@ internal class WearRealtimeTalkClient(
 
   @SuppressLint("MissingPermission")
   private fun startCaptureLocked(nodeId: String) {
-    if (_isPlaying.value || activeNodeId != nodeId) return
-    if (audioRecord != null) {
-      _isCapturing.value = true
-      return
-    }
-    if (_isCapturing.value) return
+    if (_isCapturing.value || _isPlaying.value || activeNodeId != nodeId) return
     val frameBytes =
       WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ * PCM_16_BYTES *
-        WearProtocol.REALTIME_AUDIO_FRAME_MILLIS * CAPTURE_FRAMES_PER_SEND / 1_000
+        WearProtocol.REALTIME_AUDIO_FRAME_MILLIS / 1_000
     val minimumBuffer =
       AudioRecord.getMinBufferSize(
         WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
@@ -255,7 +223,7 @@ internal class WearRealtimeTalkClient(
           while (audioRecord === recorder && activeNodeId == nodeId) {
             val read = recorder.read(buffer, 0, buffer.size)
             val evenBytes = read - (read and 1)
-            if (evenBytes <= 0 || !_isCapturing.value) continue
+            if (evenBytes <= 0 || !_isCapturing.value || audioRecord !== recorder) continue
             sendInputFrame(buffer.copyOf(evenBytes))
           }
         } catch (err: CancellationException) {
@@ -283,9 +251,7 @@ internal class WearRealtimeTalkClient(
     synchronized(audioLock) {
       if (activeNodeId == null) return
       if (!_isPlaying.value) {
-        // Keep AudioRecord alive across output so turn boundaries do not churn
-        // the Watch microphone or block the audio-channel reader during teardown.
-        _isCapturing.value = false
+        pauseCaptureLocked()
         check(audioFocus.request())
       }
       val track = audioTrack ?: createAudioTrack(bytes.size).also { audioTrack = it }
@@ -437,7 +403,6 @@ internal class WearRealtimeTalkClient(
     const val CHANNEL_RETRY_DELAY_MILLIS = 250L
     const val ISO_639_1_LANGUAGE_LENGTH = 2
     const val PCM_16_BYTES = 2
-    const val CAPTURE_FRAMES_PER_SEND = 4
     const val PLAYBACK_DRAIN_GRACE_MILLIS = 120L
   }
 }

@@ -324,7 +324,10 @@ internal class WearRealtimeTalkController(
     ) {
       return
     }
-    audioFrames?.trySend(payload.copyOf())
+    val activeSessionId = sessionId ?: return
+    if (audioFrames?.trySend(payload.copyOf())?.isSuccess != true) {
+      fail("Watch audio input is unavailable", expectedSessionId = activeSessionId)
+    }
   }
 
   fun handleGatewayEvent(
@@ -444,7 +447,7 @@ internal class WearRealtimeTalkController(
   private fun startOutputLoop(activeSessionId: String) {
     outputMessages?.close()
     outputJob?.cancel()
-    val messages = Channel<WearRealtimeOutputMessage>(capacity = Channel.UNLIMITED)
+    val messages = Channel<WearRealtimeOutputMessage>(capacity = OUTPUT_QUEUE_CAPACITY)
     outputMessages = messages
     outputJob =
       scope.launch {
@@ -453,33 +456,11 @@ internal class WearRealtimeTalkController(
           val nodeId = ownerNodeId ?: continue
           try {
             when (message.type) {
-              WearRealtimeAudioFrameType.OUTPUT_PCM -> {
+              WearRealtimeAudioFrameType.OUTPUT_PCM ->
                 chunkWearRealtimeOutput(message.payload).forEach { chunk ->
                   sendWatchFrame(nodeId, message.type, chunk)
                 }
-                val sampleCount = message.payload.size / PCM_16_BYTES
-                val durationMillis =
-                  (
-                    sampleCount *
-                      1_000L /
-                      WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ
-                  ).coerceAtLeast(1L)
-                playbackEndsAtMillis =
-                  maxOf(SystemClock.elapsedRealtime(), playbackEndsAtMillis) + durationMillis
-                schedulePlaybackIdle()
-              }
-              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
-                sendWatchFrame(nodeId, message.type, message.payload)
-                playbackEndsAtMillis = 0L
-                playbackIdleJob?.cancel()
-                updateState(
-                  active = true,
-                  listening = true,
-                  speaking = false,
-                  status = WearRealtimeTalkStatus.LISTENING,
-                  statusText = "Listening",
-                )
-              }
+              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> sendWatchFrame(nodeId, message.type, message.payload)
               WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
             }
           } catch (err: Throwable) {
@@ -489,6 +470,32 @@ internal class WearRealtimeTalkController(
               expectedSessionId = activeSessionId,
             )
             break
+          }
+          when (message.type) {
+            WearRealtimeAudioFrameType.OUTPUT_PCM -> {
+              val sampleCount = message.payload.size / PCM_16_BYTES
+              val durationMillis =
+                (
+                  sampleCount *
+                    1_000L /
+                    WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ
+                ).coerceAtLeast(1L)
+              playbackEndsAtMillis =
+                maxOf(SystemClock.elapsedRealtime(), playbackEndsAtMillis) + durationMillis
+              schedulePlaybackIdle()
+            }
+            WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
+              playbackEndsAtMillis = 0L
+              playbackIdleJob?.cancel()
+              updateState(
+                active = true,
+                listening = true,
+                speaking = false,
+                status = WearRealtimeTalkStatus.LISTENING,
+                statusText = "Listening",
+              )
+            }
+            WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
           }
         }
       }
@@ -512,7 +519,7 @@ internal class WearRealtimeTalkController(
   private fun startAppendLoop(activeSessionId: String) {
     audioFrames?.close()
     appendJob?.cancel()
-    val frames = Channel<ByteArray>(capacity = Channel.UNLIMITED)
+    val frames = Channel<ByteArray>(capacity = INPUT_QUEUE_CAPACITY)
     audioFrames = frames
     appendJob =
       scope.launch {
@@ -702,6 +709,8 @@ internal class WearRealtimeTalkController(
     const val MAX_CANCELED_ATTEMPTS = 32
     const val MAX_TRANSCRIPT_LENGTH = 1_500
     const val MAX_STATUS_LENGTH = 160
+    const val INPUT_QUEUE_CAPACITY = 64
+    const val OUTPUT_QUEUE_CAPACITY = 64
     const val SESSION_CREATE_TIMEOUT_MILLIS = 15_000L
   }
 }
