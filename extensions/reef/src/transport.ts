@@ -25,9 +25,6 @@ const REEF_WS_HANDSHAKE_MS = 30_000;
 // Cover headers and body consumption. A relay that accepts the request but
 // stops producing bytes must not pin inbox recovery forever.
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
-// A failed generation must finish closing before its replacement starts. Bound
-// the close handshake so an unresponsive peer cannot stall reconnect forever.
-const REEF_WS_CLOSE_MS = 5_000;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -247,9 +244,6 @@ export interface WebSocketLike {
     listener: (event: { error?: unknown; message?: string }) => void,
   ): void;
   close(): void;
-  // Reconnect must be able to force a stalled generation toward its real close
-  // event without allowing the replacement to overlap it.
-  terminate(): void;
 }
 
 interface ReefInboxConnectionOptions {
@@ -415,7 +409,6 @@ export class ReefInboxConnection {
       let closeComplete = false;
       let processingComplete = true;
       let terminalError: Error | undefined;
-      let closeTimer: ReturnType<typeof setTimeout> | undefined;
       let opened = false;
       let catchUpPending = false;
       let pumpScheduled = false;
@@ -423,9 +416,6 @@ export class ReefInboxConnection {
       const finish = (error?: Error) => {
         if (finished) {
           return;
-        }
-        if (closeTimer) {
-          clearTimeout(closeTimer);
         }
         finished = true;
         signal?.removeEventListener("abort", abortListener);
@@ -471,17 +461,10 @@ export class ReefInboxConnection {
             },
           );
         }
-        // Do not let a stale generation observe a later channel abort while
-        // its asynchronous WebSocket close handshake is still in flight.
-        closeTimer = setTimeout(() => {
-          try {
-            socket.terminate();
-          } catch {
-            // A failed force-close is not proof that the old generation ended.
-            // Keep waiting for its real close event instead of overlapping peers.
-            return;
-          }
-        }, REEF_WS_CLOSE_MS);
+        // The production ws client already bounds its close handshake with its
+        // native 30-second closeTimeout and emits close after destroying a
+        // non-responsive socket. Keep reconnect ordering tied to that real close
+        // event instead of imposing a second Reef-specific force-close deadline.
         socket.close();
       };
       const abortListener = () => closeAndFinish(undefined, true);

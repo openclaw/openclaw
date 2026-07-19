@@ -337,7 +337,6 @@ const INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 
 class ControlledSocket {
   closeCalls = 0;
-  terminateCalls = 0;
   private readonly listeners = new Map<string, Array<(event: unknown) => void>>();
   private closed = false;
 
@@ -352,15 +351,6 @@ class ControlledSocket {
   close(): void {
     this.closeCalls++;
     if (this.closed || !this.closeImmediately) {
-      return;
-    }
-    this.closed = true;
-    this.emit("close");
-  }
-
-  terminate(): void {
-    this.terminateCalls++;
-    if (this.closed) {
       return;
     }
     this.closed = true;
@@ -967,18 +957,17 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount);
   });
 
-  it("force-terminates a stalled failed generation before reconnecting", async () => {
+  it("waits for the socket close event without imposing a Reef force-close deadline", async () => {
     vi.useFakeTimers();
     const stalledSocket = new ControlledSocket(false);
-    const delayedTerminateSocket = {
+    const terminate = vi.fn();
+    const observableSocket = {
       addEventListener: stalledSocket.addEventListener.bind(stalledSocket),
       close: () => stalledSocket.close(),
-      terminate: () => {
-        stalledSocket.terminateCalls++;
-      },
+      terminate,
     } as unknown as WebSocketLike;
     const sockets: WebSocketLike[] = [
-      delayedTerminateSocket,
+      observableSocket,
       new ControlledSocket() as unknown as WebSocketLike,
     ];
     let socketIndex = 0;
@@ -999,15 +988,8 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     const running = inbox.start(abort.signal);
     stalledSocket.emit("message", { data: "{" });
 
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(socketIndex).toBe(1);
-    expect(stalledSocket.terminateCalls).toBe(0);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(stalledSocket.terminateCalls).toBe(1);
-    expect(socketIndex).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(terminate).not.toHaveBeenCalled();
     expect(socketIndex).toBe(1);
 
     stalledSocket.emit("close");
