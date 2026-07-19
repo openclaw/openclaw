@@ -10,7 +10,7 @@ import {
   normalizeAgentLabel,
   resolveAgentTextAvatar,
 } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
@@ -122,7 +122,7 @@ export class AgentSelect extends OpenClawLightDomElement {
       return html`<img class="agent-select__avatar" src=${imageUrl} alt="" loading="lazy" />`;
     }
     const text = resolveAgentTextAvatar(agent, identity);
-    const fallback = (normalizeAgentLabel(agent)[0] ?? "?").toUpperCase();
+    const fallback = deriveAvatarInitial(normalizeAgentLabel(agent)) || "?";
     return html`
       <span class="agent-select__avatar agent-select__avatar--text" aria-hidden="true"
         >${text ?? fallback}</span
