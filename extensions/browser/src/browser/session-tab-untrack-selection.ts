@@ -1,5 +1,3 @@
-export type SessionTabUntrackSelection = "volatile" | "durable" | "ambiguous" | "missing";
-
 export function selectSessionTabToUntrack(params: {
   volatileAvailable: boolean;
   durableAvailable: boolean;
@@ -9,7 +7,7 @@ export function selectSessionTabToUntrack(params: {
   durableIsExact: boolean;
   hasVolatileExactCandidate: boolean;
   hasDurableExactCandidate: boolean;
-}): SessionTabUntrackSelection {
+}): "volatile" | "durable" | "ambiguous" | "missing" {
   if (params.volatileIsExact && !params.hasDurableExactCandidate) {
     return "volatile";
   }
