@@ -309,6 +309,34 @@ describe("remote workspace manifest script", () => {
     expect((await runTransaction("rollback", interruptedModeNonce)).code).toBe(0);
     expect((await fs.stat(path.join(workspace, "node"))).mode & 0o777).toBe(0o555);
     await fs.chmod(path.join(workspace, "node"), 0o700);
+
+    await fs.mkdir(path.join(workspace, "parent"));
+    await fs.writeFile(path.join(workspace, "parent/child.txt"), "before\n");
+    const ancestorModeNonce = "2".repeat(32);
+    const ancestorModeBegin = await runTransaction(
+      "begin",
+      ancestorModeNonce,
+      JSON.stringify(["parent/child.txt"]),
+    );
+    const ancestorModeStaging = ancestorModeBegin.stdout.trim();
+    await fs.mkdir(path.join(ancestorModeStaging, "parent"));
+    await fs.writeFile(path.join(ancestorModeStaging, "parent/child.txt"), "after\n");
+    await fs.chmod(path.join(workspace, "parent"), 0o555);
+    await fs.chmod(workspace, 0o555);
+    expect(await runTransaction("apply", ancestorModeNonce)).toMatchObject({ code: 0, stderr: "" });
+    await expect(fs.readFile(path.join(workspace, "parent/child.txt"), "utf8")).resolves.toBe(
+      "after\n",
+    );
+    expect((await fs.stat(workspace)).mode & 0o777).toBe(0o555);
+    expect((await fs.stat(path.join(workspace, "parent"))).mode & 0o777).toBe(0o555);
+    expect((await runTransaction("rollback", ancestorModeNonce)).code).toBe(0);
+    await expect(fs.readFile(path.join(workspace, "parent/child.txt"), "utf8")).resolves.toBe(
+      "before\n",
+    );
+    expect((await fs.stat(workspace)).mode & 0o777).toBe(0o555);
+    expect((await fs.stat(path.join(workspace, "parent"))).mode & 0o777).toBe(0o555);
+    await fs.chmod(workspace, 0o700);
+    await fs.chmod(path.join(workspace, "parent"), 0o700);
   });
 
   it("keeps the gateway's canonical manifest available across a second turn", async () => {

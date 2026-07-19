@@ -178,7 +178,22 @@ const nextRoot = path.join(transaction, "next");
 const backupRoot = path.join(transaction, "backup");
 const pathsFile = path.join(transaction, "paths.json");
 const stateFile = path.join(transaction, "state.json");
+const ancestorModesFile = path.join(transaction, "ancestor-modes.json");
 const appliedFile = path.join(transaction, "applied");
+function isSafeRelativePath(relative) {
+  return (
+    typeof relative === "string" &&
+    relative &&
+    !relative.includes("\\") &&
+    !path.posix.isAbsolute(relative) &&
+    path.posix.normalize(relative) === relative &&
+    relative !== "." &&
+    relative !== ".." &&
+    relative !== ".git" &&
+    !relative.startsWith(".git/") &&
+    !relative.startsWith("../")
+  );
+}
 function parsePaths(raw) {
   const values = JSON.parse(raw);
   if (!Array.isArray(values) || values.length > 25_000) {
@@ -186,18 +201,7 @@ function parsePaths(raw) {
   }
   const paths = [...new Set(values)];
   for (const relative of paths) {
-    if (
-      typeof relative !== "string" ||
-      !relative ||
-      relative.includes("\\") ||
-      path.posix.isAbsolute(relative) ||
-      path.posix.normalize(relative) !== relative ||
-      relative === "." ||
-      relative === ".." ||
-      relative === ".git" ||
-      relative.startsWith(".git/") ||
-      relative.startsWith("../")
-    ) {
+    if (!isSafeRelativePath(relative)) {
       throw new Error("unsafe accepted workspace path");
     }
   }
@@ -282,29 +286,135 @@ function readState(candidate) {
   }
   return value;
 }
+function readAncestorModes(candidate) {
+  const candidateModes = path.join(candidate, "ancestor-modes.json");
+  if (!exists(candidateModes)) return [];
+  const value = JSON.parse(fs.readFileSync(candidateModes, "utf8"));
+  if (!Array.isArray(value) || value.length > 250_000) {
+    throw new Error("invalid accepted workspace ancestor modes");
+  }
+  const seen = new Set();
+  for (const entry of value) {
+    if (
+      !entry ||
+      (entry.relative !== "" && !isSafeRelativePath(entry.relative)) ||
+      seen.has(entry.relative) ||
+      !Number.isInteger(entry.mode) ||
+      entry.mode < 0 ||
+      entry.mode > 0o7777
+    ) {
+      throw new Error("invalid accepted workspace ancestor modes");
+    }
+    seen.add(entry.relative);
+  }
+  return value;
+}
+function writeAncestorModes(value) {
+  const temporary = ancestorModesFile + ".tmp";
+  fs.writeFileSync(temporary, JSON.stringify(value), { flag: "wx", mode: 0o600 });
+  fs.renameSync(temporary, ancestorModesFile);
+}
+function ancestorPaths(paths) {
+  const ancestors = new Set();
+  for (const relative of paths) {
+    const segments = relative.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      ancestors.add(segments.slice(0, index).join("/"));
+    }
+  }
+  if (ancestors.size + 1 > 250_000) {
+    throw new Error("accepted workspace transaction has too many ancestors");
+  }
+  return [...ancestors].sort((left, right) => {
+    const depth = left.split("/").length - right.split("/").length;
+    return depth || (left < right ? -1 : left > right ? 1 : 0);
+  });
+}
+function prepareWritableAncestors(paths) {
+  // parsePaths removes descendants of changed directories, so these are all
+  // unchanged live ancestors. Read every mode before mutating any permission.
+  const modes = ["", ...ancestorPaths(paths)].map((relative) => {
+    const target = relative ? targetPath(root, relative) : root;
+    const stats = fs.lstatSync(target);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error("unsafe accepted workspace parent");
+    }
+    return { relative, mode: stats.mode & 0o7777 };
+  });
+  writeAncestorModes(modes);
+  makeAncestorsWritable(modes);
+  return modes;
+}
+function makeAncestorsWritable(modes) {
+  const widened = [];
+  try {
+    for (const entry of modes) {
+      const target = entry.relative ? targetPath(root, entry.relative) : root;
+      const stats = fs.lstatSync(target);
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new Error("unsafe accepted workspace parent");
+      }
+      const currentMode = stats.mode & 0o7777;
+      const writableMode = entry.mode | 0o700;
+      if (currentMode !== writableMode) {
+        fs.chmodSync(target, writableMode);
+        widened.push(entry);
+      }
+    }
+  } catch (error) {
+    try {
+      restoreAncestorModes(widened);
+    } catch (restoreError) {
+      const failure = new Error("accepted workspace ancestor mode rollback failed", {
+        cause: error,
+      });
+      Object.defineProperty(failure, "restoreFailure", { value: restoreError });
+      throw failure;
+    }
+    throw error;
+  }
+}
+function restoreAncestorModes(modes) {
+  for (const entry of [...modes].reverse()) {
+    const target = entry.relative ? targetPath(root, entry.relative) : root;
+    const stats = fs.lstatSync(target);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error("unsafe accepted workspace parent");
+    }
+    if ((stats.mode & 0o7777) !== entry.mode) {
+      fs.chmodSync(target, entry.mode);
+    }
+  }
+}
 function removeTransaction(candidate = transaction) {
   removeTree(candidate);
 }
 function restoreTransaction(candidate) {
   if (!exists(candidate)) return;
+  const ancestorModes = readAncestorModes(candidate);
+  makeAncestorsWritable(ancestorModes);
   const candidateState = path.join(candidate, "state.json");
-  if (exists(candidateState)) {
-    const candidateBackup = path.join(candidate, "backup");
-    for (const entry of [...readState(candidate)].reverse()) {
-      const live = livePath(entry.relative);
-      const backup = targetPath(candidateBackup, entry.relative);
-      if (exists(backup)) {
-        removeTree(live);
-        fs.renameSync(backup, live);
-        if (entry.directoryMode !== undefined) {
+  try {
+    if (exists(candidateState)) {
+      const candidateBackup = path.join(candidate, "backup");
+      for (const entry of [...readState(candidate)].reverse()) {
+        const live = livePath(entry.relative);
+        const backup = targetPath(candidateBackup, entry.relative);
+        if (exists(backup)) {
+          removeTree(live);
+          fs.renameSync(backup, live);
+          if (entry.directoryMode !== undefined) {
+            fs.chmodSync(live, entry.directoryMode);
+          }
+        } else if (!entry.hadLive) {
+          removeTree(live);
+        } else if (entry.directoryMode !== undefined && exists(live)) {
           fs.chmodSync(live, entry.directoryMode);
         }
-      } else if (!entry.hadLive) {
-        removeTree(live);
-      } else if (entry.directoryMode !== undefined && exists(live)) {
-        fs.chmodSync(live, entry.directoryMode);
       }
     }
+  } finally {
+    restoreAncestorModes(ancestorModes);
   }
   removeTransaction(candidate);
 }
@@ -339,22 +449,23 @@ if (action === "begin") {
   process.stdout.write(nextRoot + "\n");
 } else if (action === "apply") {
   const paths = readPaths();
-  const state = paths.map((relative) => {
-    const live = livePath(relative);
-    if (!exists(live)) return { relative, hadLive: false };
-    const stats = fs.lstatSync(live);
-    return {
-      relative,
-      hadLive: true,
-      ...(stats.isDirectory() && !stats.isSymbolicLink()
-        ? { directoryMode: stats.mode & 0o7777 }
-        : {}),
-    };
-  });
-  const temporaryStateFile = stateFile + ".tmp";
-  fs.writeFileSync(temporaryStateFile, JSON.stringify(state), { flag: "wx", mode: 0o600 });
-  fs.renameSync(temporaryStateFile, stateFile);
   try {
+    const ancestorModes = prepareWritableAncestors(paths);
+    const state = paths.map((relative) => {
+      const live = livePath(relative);
+      if (!exists(live)) return { relative, hadLive: false };
+      const stats = fs.lstatSync(live);
+      return {
+        relative,
+        hadLive: true,
+        ...(stats.isDirectory() && !stats.isSymbolicLink()
+          ? { directoryMode: stats.mode & 0o7777 }
+          : {}),
+      };
+    });
+    const temporaryStateFile = stateFile + ".tmp";
+    fs.writeFileSync(temporaryStateFile, JSON.stringify(state), { flag: "wx", mode: 0o600 });
+    fs.renameSync(temporaryStateFile, stateFile);
     for (const entry of state) {
       if (!entry.hadLive) continue;
       const source = livePath(entry.relative);
@@ -378,6 +489,7 @@ if (action === "begin") {
       if (!exists(source)) continue;
       fs.renameSync(source, livePath(entry.relative));
     }
+    restoreAncestorModes(ancestorModes);
     fs.writeFileSync(appliedFile, "", { flag: "wx", mode: 0o600 });
   } catch (error) {
     restoreTransaction(transaction);
