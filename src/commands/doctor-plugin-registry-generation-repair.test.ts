@@ -14,6 +14,7 @@ import {
 import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,
+  resolveRetainedManagedNpmInstallPackageInfo,
 } from "../plugins/managed-npm-retention.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -49,6 +50,17 @@ function writeManagedGeneration(stateDir: string, version: string): string {
   });
   fs.renameSync(flatProjectRoot, generationProjectRoot);
   return path.join(generationProjectRoot, "node_modules", ...PACKAGE_NAME.split("/"));
+}
+
+function setInstallTimestamp(packageDir: string, timestamp: Date): void {
+  const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
+  if (!packageInfo) {
+    throw new Error(`Expected managed npm package dir: ${packageDir}`);
+  }
+  fs.utimesSync(path.join(packageDir, "package.json"), timestamp, timestamp);
+  fs.utimesSync(packageDir, timestamp, timestamp);
+  fs.utimesSync(path.join(packageInfo.projectRoot, "package.json"), timestamp, timestamp);
+  fs.utimesSync(packageInfo.projectRoot, timestamp, timestamp);
 }
 
 afterEach(() => {
@@ -104,8 +116,8 @@ describe("doctor managed npm generation repair", () => {
     const stalePackageDir = writeManagedFlat(stateDir, "9.0.0");
     const activeTimestamp = new Date("2026-01-02T00:00:00.000Z");
     const staleTimestamp = new Date("2026-01-01T00:00:00.000Z");
-    fs.utimesSync(path.join(activePackageDir, "package.json"), activeTimestamp, activeTimestamp);
-    fs.utimesSync(path.join(stalePackageDir, "package.json"), staleTimestamp, staleTimestamp);
+    setInstallTimestamp(activePackageDir, activeTimestamp);
+    setInstallTimestamp(stalePackageDir, staleTimestamp);
     await writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, candidates: [] });
     vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
