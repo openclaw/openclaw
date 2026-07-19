@@ -352,9 +352,37 @@ function readLegacySessionRecords(
   options: { allowMissingStore?: boolean } = {},
 ): LegacySessionRecord[] {
   // Pre-check file size to avoid OOM on corrupted or malicious store files.
-  const storeStat = fs.statSync(target.storePath, { throwIfNoEntry: false });
+  // Every metadata failure must stay on the store_unreadable recovery path:
+  // statSync only suppresses ENOENT, and a recovery command that crashes on
+  // EACCES/ENOTDIR/ELOOP would be worse than the unreadable store itself.
+  let storeStat: fs.Stats | undefined;
+  try {
+    storeStat = fs.statSync(target.storePath, { throwIfNoEntry: false });
+  } catch (err) {
+    issues.push({
+      code: "store_unreadable",
+      message: `${target.storePath}: ${String(err)}`,
+    });
+    return [];
+  }
   if (!storeStat) {
     if (options.allowMissingStore === true) {
+      // When the parent directory is inaccessible (e.g. it is a regular file),
+      // statSync with throwIfNoEntry: false returns undefined without throwing.
+      // Check the parent to distinguish genuine missing stores from corrupt paths.
+      let parentStat: fs.Stats | undefined;
+      try {
+        parentStat = fs.statSync(path.dirname(target.storePath));
+      } catch {
+        // Parent is also inaccessible — treat as store_unreadable.
+      }
+      if (parentStat && !parentStat.isDirectory()) {
+        issues.push({
+          code: "store_unreadable",
+          message: `${target.storePath}: parent path is not a directory`,
+        });
+        return [];
+      }
       return [];
     }
     issues.push({
