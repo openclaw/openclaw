@@ -452,16 +452,8 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Sub-agent",
       detailKeys: ["label", "task", "agentId", "model", "thinking", "runTimeoutSeconds", "cleanup"],
     },
-    agents_wait: {
-      emoji: "⏳",
-      title: "Wait for Agents",
-      detailKeys: ["ids", "timeoutSeconds"],
-    },
-    structured_output: {
-      emoji: "🧾",
-      title: "Structured Output",
-      detailKeys: ["result"],
-    },
+    agents_wait: { emoji: "⏳", title: "Wait for Agents", detailKeys: ["ids", "timeoutSeconds"] },
+    structured_output: { emoji: "🧾", title: "Structured Output", detailKeys: ["result"] },
     subagents: {
       emoji: "🤖",
       title: "Subagents",

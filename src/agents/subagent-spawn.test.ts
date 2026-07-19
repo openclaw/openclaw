@@ -604,7 +604,7 @@ describe("spawnSubagentDirect seam flow", () => {
       ),
     ]);
 
-    expect(results.map((result) => result.status).sort()).toEqual(["accepted", "forbidden"]);
+    expect(results.map((result) => result.status).toSorted()).toEqual(["accepted", "forbidden"]);
     expect(results.find((result) => result.status === "forbidden")?.error).toContain(
       "tools.swarm.maxChildrenPerGroup",
     );
