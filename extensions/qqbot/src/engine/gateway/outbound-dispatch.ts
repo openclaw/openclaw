@@ -519,18 +519,14 @@ export async function dispatchOutbound(
               if (hasBlockResponse && toolMediaUrls.length > 0) {
                 const urlsToSend = [...toolMediaUrls];
                 toolMediaUrls.length = 0;
+                // Reuse the tool-media helper: empty catch used to swallow both
+                // thrown failures and result.error, so the turn looked successful
+                // while tool images/files never reached QQ.
                 for (const mediaUrl of urlsToSend) {
-                  try {
-                    await sendMedia({
-                      to: qualifiedTarget,
-                      text: "",
-                      mediaUrl,
-                      accountId: account.accountId,
-                      replyToId: event.messageId,
-                      account,
-                      ...gatewayMediaContext,
-                    });
-                  } catch {}
+                  await sendToolMediaWithTimeout(mediaUrl, {
+                    resultError: "Tool media send error after block response",
+                    thrownError: "Tool media send failed after block response",
+                  });
                 }
                 return;
               }
