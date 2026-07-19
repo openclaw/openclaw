@@ -2129,6 +2129,46 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Delete Thread",
+      "translations": [
+        "حذف المحادثة",
+        "حذف سلسلة المحادثة"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Delete Thread",
+      "translations": [
+        "Radera tråd",
+        "Ta bort tråd"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Delete Thread",
+      "translations": [
+        "İleti Dizisini Sil",
+        "İş Parçacığını Sil"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Delete Thread",
+      "translations": [
+        "删除对话",
+        "删除话题"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Delete Thread",
+      "translations": [
+        "刪除對話串",
+        "刪除討論串"
+      ]
+    },
+    {
       "locale": "fr",
       "source": "Delete “%@”?",
       "translations": [
@@ -3021,11 +3061,20 @@
       ]
     },
     {
+      "locale": "fr",
+      "source": "Fork",
+      "translations": [
+        "Bifurquer",
+        "Dupliquer"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Fork",
       "translations": [
         "Fork",
-        "फ़ोर्क करें"
+        "फ़ोर्क करें",
+        "फोर्क"
       ]
     },
     {
@@ -3033,6 +3082,7 @@
       "source": "Fork",
       "translations": [
         "Buat Cabang",
+        "Cabangkan",
         "Fork"
       ]
     },
@@ -3041,6 +3091,7 @@
       "source": "Fork",
       "translations": [
         "Crea fork",
+        "Dirama",
         "Duplica",
         "Fork"
       ]
@@ -3064,6 +3115,14 @@
       ]
     },
     {
+      "locale": "pt-BR",
+      "source": "Fork",
+      "translations": [
+        "Bifurcar",
+        "Ramificar"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Fork",
       "translations": [
@@ -3077,7 +3136,16 @@
       "source": "Fork",
       "translations": [
         "แยกสาขา",
-        "แยกเซสชัน"
+        "แยกเซสชัน",
+        "แยกแขนง"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Fork",
+      "translations": [
+        "Dallandır",
+        "Çatalla"
       ]
     },
     {
@@ -3104,6 +3172,14 @@
         "分叉",
         "分支",
         "创建分支"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Fork",
+      "translations": [
+        "分支",
+        "建立分支"
       ]
     },
     {
@@ -5029,6 +5105,54 @@
     },
     {
       "locale": "ar",
+      "source": "New Thread",
+      "translations": [
+        "سلسلة محادثة جديدة",
+        "محادثة جديدة"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "New Thread",
+      "translations": [
+        "Nouveau fil",
+        "Nouveau fil de discussion"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "New Thread",
+      "translations": [
+        "新しいスレッド",
+        "新規スレッド"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "New Thread",
+      "translations": [
+        "Nieuw gesprek",
+        "Nieuwe thread"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "New Thread",
+      "translations": [
+        "Yeni İleti Dizisi",
+        "Yeni İş Parçacığı"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "New Thread",
+      "translations": [
+        "新建对话",
+        "新建话题"
+      ]
+    },
+    {
+      "locale": "ar",
       "source": "No approvals waiting",
       "translations": [
         "لا توجد موافقات بانتظار المراجعة",
@@ -5113,6 +5237,46 @@
       "translations": [
         "沒有待核准項目",
         "沒有待處理的核准"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "No archived threads",
+      "translations": [
+        "Aucun fil archivé",
+        "Aucun fil de discussion archivé"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "No archived threads",
+      "translations": [
+        "Geen gearchiveerde gesprekken",
+        "Geen gearchiveerde threads"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "No archived threads",
+      "translations": [
+        "Немає архівних гілок",
+        "Немає архівованих гілок"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "No archived threads",
+      "translations": [
+        "Không có luồng nào đã lưu trữ",
+        "Không có luồng nào được lưu trữ"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "No archived threads",
+      "translations": [
+        "沒有已封存的對話串",
+        "沒有已封存的討論串"
       ]
     },
     {
@@ -5537,6 +5701,14 @@
       "translations": [
         "OK",
         "ОК"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "OK",
+      "translations": [
+        "好",
+        "确定"
       ]
     },
     {
@@ -7106,6 +7278,62 @@
       "translations": [
         "Groep hernoemen",
         "Groepsnaam wijzigen"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Rename Thread",
+      "translations": [
+        "إعادة تسمية المحادثة",
+        "إعادة تسمية سلسلة المحادثة"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Rename Thread",
+      "translations": [
+        "Cambiar el nombre del hilo",
+        "Renombrar hilo"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Rename Thread",
+      "translations": [
+        "Renommer le fil",
+        "Renommer le fil de discussion"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Rename Thread",
+      "translations": [
+        "Gesprek hernoemen",
+        "Thread hernoemen"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Rename Thread",
+      "translations": [
+        "İleti Dizisini Yeniden Adlandır",
+        "İş Parçacığını Yeniden Adlandır"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Rename Thread",
+      "translations": [
+        "重命名对话",
+        "重命名话题"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Rename Thread",
+      "translations": [
+        "重新命名對話串",
+        "重新命名討論串"
       ]
     },
     {
@@ -8878,6 +9106,214 @@
       "translations": [
         "Час виконання цієї автоматизації ще не настав.",
         "Час запуску цієї автоматизації ще не настав."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Thread",
+      "translations": [
+        "Fil",
+        "Fil de discussion"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Thread",
+      "translations": [
+        "Conversazione",
+        "Thread"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Thread",
+      "translations": [
+        "Gesprek",
+        "Thread"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Thread",
+      "translations": [
+        "Dizi",
+        "Konu"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Thread",
+      "translations": [
+        "Chuỗi",
+        "Luồng"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Thread",
+      "translations": [
+        "对话串",
+        "话题串"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Thread",
+      "translations": [
+        "對話串",
+        "討論串"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Thread name",
+      "translations": [
+        "اسم المحادثة",
+        "اسم سلسلة المحادثة"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Thread name",
+      "translations": [
+        "Nom du fil",
+        "Nom du fil de discussion"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Thread name",
+      "translations": [
+        "Gespreksnaam",
+        "Threadnaam"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Thread name",
+      "translations": [
+        "İleti dizisi adı",
+        "İş parçacığı adı"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Thread name",
+      "translations": [
+        "对话名称",
+        "话题名称"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Thread name",
+      "translations": [
+        "對話串名稱",
+        "討論串名稱"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Threads",
+      "translations": [
+        "Fils",
+        "Fils de discussion"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Threads",
+      "translations": [
+        "Conversazioni",
+        "Thread"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Threads",
+      "translations": [
+        "Gesprekken",
+        "Threads"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Threads",
+      "translations": [
+        "Diziler",
+        "İş Parçacıkları"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Threads",
+      "translations": [
+        "Chuỗi",
+        "Luồng"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Threads",
+      "translations": [
+        "对话",
+        "话题串"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Threads",
+      "translations": [
+        "對話串",
+        "討論串"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Threads…",
+      "translations": [
+        "المحادثات…",
+        "سلاسل المحادثات…"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Threads…",
+      "translations": [
+        "Conversazioni…",
+        "Thread…"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Threads…",
+      "translations": [
+        "Gesprekken…",
+        "Threads…"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Threads…",
+      "translations": [
+        "İletişim Dizileri…",
+        "İş Parçacıkları…"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Threads…",
+      "translations": [
+        "会话…",
+        "对话…"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Threads…",
+      "translations": [
+        "對話串…",
+        "討論串…"
       ]
     },
     {
