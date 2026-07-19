@@ -13,6 +13,7 @@ import {
   quarantineSkillProposal,
   rejectSkillProposal,
   resolvePendingSkillProposal,
+  reviewSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
 import type {
@@ -39,12 +40,16 @@ import {
   readLifecycleProposalIdParam,
   readListLimitParam,
   readProposalForInspect,
+  readProposalVersionParam,
+  readReviewPageParam,
+  resolveProposalIdForRead,
   readProposalStatusParam,
   readSupportFilesParam,
 } from "./skill-workshop-tool-helpers.js";
 import {
   formatProposalInspect,
   formatProposalList,
+  formatProposalReviewResult,
   listProposalEntries,
 } from "./skill-workshop-tool-presentation.js";
 
@@ -54,11 +59,12 @@ const SKILL_WORKSHOP_ACTIONS = [
   "revise",
   "list",
   "inspect",
+  "review",
   "apply",
   "reject",
   "quarantine",
 ] as const;
-const SKILL_WORKSHOP_PROPOSAL_ACTIONS = ["create", "revise", "list", "inspect"] as const;
+const SKILL_WORKSHOP_PROPOSAL_ACTIONS = ["create", "revise", "list", "inspect", "review"] as const;
 const SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS = [
   ...SKILL_WORKSHOP_PROPOSAL_ACTIONS,
   "complete",
@@ -80,19 +86,19 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
     {
       action: stringEnum(proposalOnly ? proposalActions : SKILL_WORKSHOP_ACTIONS, {
         description: proposalOnly
-          ? `create = new skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Live-skill updates and lifecycle actions are unavailable.`
-          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); apply/reject/quarantine are explicit lifecycle actions.",
+          ? `create = new skill; revise = existing pending proposal; list/inspect/review discover or preview pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Live-skill updates and lifecycle actions are unavailable.`
+          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover proposals (not filesystem search); review = exact applied content for creates or a live unified diff for updates; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
         Type.String({
           description:
-            "Existing proposal id for action=inspect, action=revise, action=apply, action=reject, or action=quarantine.",
+            "Existing proposal id for action=inspect, action=review, action=revise, action=apply, action=reject, or action=quarantine. Required for review pages after page 1.",
         }),
       ),
       name: Type.Optional(
         Type.String({
           description:
-            "Skill/proposal name. Required for create; for inspect/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
+            "Skill/proposal name. Required for create; for inspect/review/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
         }),
       ),
       query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
@@ -108,12 +114,24 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
           description: "Maximum proposals to return for action=list. Defaults to 20.",
         }),
       ),
+      page: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description: "One-based output page for action=review. Defaults to 1.",
+        }),
+      ),
       description: Type.Optional(
         Type.String({
           maxLength: 160,
           description: proposalOnly
             ? "Skill description for create/revise; max 160 bytes."
             : "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
+        }),
+      ),
+      proposal_version: Type.Optional(
+        Type.String({
+          description:
+            "Version returned by action=review. Required for later review pages; pass it with lifecycle actions to bind the decision to the reviewed proposal.",
         }),
       ),
       skill_name: Type.Optional(
@@ -168,8 +186,8 @@ type SkillWorkshopToolOptions = {
 
 function buildSkillWorkshopToolDescription(proposalOnly: boolean): string {
   return proposalOnly
-    ? "Inspect reusable-procedure proposals and create or revise pending proposals. Live-skill updates and lifecycle actions are unavailable."
-    : "Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure proposals.";
+    ? "Inspect or review reusable-procedure proposals and create or revise pending proposals. Live-skill updates and lifecycle actions are unavailable."
+    : "Create/update/revise/list/inspect/review/apply/reject/quarantine reusable-procedure proposals.";
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
@@ -238,12 +256,39 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         });
       }
 
+      if (action === "review") {
+        const page = readReviewPageParam(params);
+        const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
+        if (page > 1 && !proposalId) {
+          throw new ToolInputError("proposal_id required for review pages after page 1");
+        }
+        const expectedVersion = readProposalVersionParam(params);
+        if (page > 1 && !expectedVersion) {
+          throw new ToolInputError("proposal_version required for review pages after page 1");
+        }
+        const review = await reviewSkillProposal({
+          workspaceDir: options.workspaceDir,
+          config: options.config,
+          env: options.env,
+          proposalId:
+            proposalId ??
+            (await resolveProposalIdForRead(params, options.workspaceDir, options.env)),
+        });
+        if (expectedVersion && expectedVersion !== review.record.proposedVersion) {
+          throw new ToolInputError(
+            `Skill proposal changed after review (expected ${expectedVersion}, current ${review.record.proposedVersion}). Restart at page 1.`,
+          );
+        }
+        return formatProposalReviewResult(review, page);
+      }
+
       if (action === "apply") {
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedVersion: readProposalVersionParam(params),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(applied.record, {
@@ -257,6 +302,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedVersion: readProposalVersionParam(params),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(rejected, {
@@ -269,6 +315,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedVersion: readProposalVersionParam(params),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(quarantined, {

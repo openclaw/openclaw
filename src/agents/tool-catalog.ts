@@ -432,7 +432,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "skill_workshop",
     label: "skill_workshop",
     description:
-      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+      "Create, update, revise, list, inspect, review, apply, reject, or quarantine Skill Workshop proposals",
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

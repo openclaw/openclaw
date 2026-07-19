@@ -1296,6 +1296,15 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
     ...(params.ctx?.config ? { config: params.ctx.config } : {}),
     ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
+  if (result?.block) {
+    return {
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-before-tool-call",
+      reason: result.blockReason || "Skill Workshop lifecycle action blocked",
+      params: params.params,
+    };
+  }
   return await resolveBeforeToolCallApprovalOutcome({
     result,
     approvalMode: params.approvalMode,

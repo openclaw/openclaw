@@ -54,6 +54,7 @@ export {
   listSkillProposals,
   resolvePendingSkillProposal,
 } from "./service-query.js";
+export { reviewSkillProposal } from "./service-review.js";
 import {
   MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS,
   SKILL_WORKSHOP_SCHEMA,
@@ -828,7 +829,7 @@ async function markProposal(
 }
 
 async function withPendingSkillProposalMutation<T>(
-  input: Pick<SkillProposalActionInput, "env" | "proposalId" | "workspaceDir">,
+  input: Pick<SkillProposalActionInput, "env" | "expectedVersion" | "proposalId" | "workspaceDir">,
   action: "applied" | "quarantined" | "rejected" | "revised",
   fn: (read: SkillProposalReadResult) => Promise<T>,
 ): Promise<T> {
@@ -840,6 +841,12 @@ async function withPendingSkillProposalMutation<T>(
       if (read.record.status !== "pending") {
         throw new Error(
           `Only pending proposals can be ${action}. Current status: ${read.record.status}.`,
+        );
+      }
+      const expectedVersion = normalizeOptionalString(input.expectedVersion);
+      if (expectedVersion && expectedVersion !== read.record.proposedVersion) {
+        throw new Error(
+          `Skill proposal changed after review (expected ${expectedVersion}, current ${read.record.proposedVersion}). Review it again before continuing.`,
         );
       }
       return await fn(read);

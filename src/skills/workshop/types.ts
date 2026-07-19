@@ -199,6 +199,7 @@ export type SkillProposalActionInput = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
+  expectedVersion?: string;
   reason?: string;
 };
 
@@ -207,6 +208,23 @@ export type SkillProposalReadResult = {
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
 };
+
+export type SkillProposalReviewUnavailableReason =
+  | "proposal-changed"
+  | "target-changed"
+  | "target-missing"
+  | "diff-limit"
+  | "output-limit";
+
+export type SkillProposalReviewResult = { record: SkillProposalRecord } & (
+  | {
+      mode: "full";
+      content: string;
+      supportFiles: SkillProposalSupportFileInput[];
+    }
+  | { mode: "diff"; diff: string }
+  | { mode: "unavailable"; reason: SkillProposalReviewUnavailableReason }
+);
 
 export type SkillProposalApplyResult = {
   record: SkillProposalRecord;

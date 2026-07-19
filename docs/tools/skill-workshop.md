@@ -112,9 +112,34 @@ Iterate on a pending proposal:
 
 ```text
 Show me the morning-catchup proposal.
+Review what the morning-catchup proposal would change.
 Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
+
+`inspect` shows the stored `PROPOSAL.md`. `review` shows what approval would
+actually write: the complete canonical `SKILL.md` and support files for a
+create proposal, or a unified diff against the hash-bound live skill for an
+update proposal. Proposal-only `status`, `version`, and `date` fields are
+removed from the review, just as they are during apply.
+
+Review is read-only. If the live skill or a proposed support-file target has
+changed or disappeared since an update proposal was created, review returns an
+unavailable reason and leaves the proposal unchanged. Applying or revising the
+same proposal revalidates it and may fail or mark it stale under the existing
+lifecycle rules.
+Long reviews are paginated; pass the first page's `proposal_id` and
+`proposal_version` when requesting each later `page` so pages cannot switch
+proposals and revisions cannot mix pages. Pass the same version with any lifecycle
+action so Skill Workshop rejects the decision if the proposal was revised in
+between. Reviews are capped at 16 pages; larger projections return
+`output-limit`. Oversized or computationally expensive diffs, including a single
+line too long to paginate without losing its diff marker, return a bounded
+`diff-limit` result instead of partial output.
+
+Existing ID-only lifecycle calls remain valid. With pending approval, Skill
+Workshop snapshots the current version into the approval request; passing the
+version from `review` binds apply, reject, or quarantine to that earlier review.
 
 Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
 approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
@@ -143,20 +168,25 @@ openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md
 # List and inspect
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop review <proposal-id>
 
 # Revise before approval
 openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
 
 # Close out
-openclaw skills workshop apply <proposal-id>
-openclaw skills workshop reject <proposal-id> --reason "Duplicate"
-openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+openclaw skills workshop apply <proposal-id> --proposal-version <version>
+openclaw skills workshop reject <proposal-id> --proposal-version <version> --reason "Duplicate"
+openclaw skills workshop quarantine <proposal-id> --proposal-version <version> --reason "Needs security review"
 ```
 
-Every subcommand takes `--agent <id>` (target workspace; defaults to
-cwd-inferred, then the default agent) and `--json` (structured output).
+Place `--agent <id>` between `workshop` and the subcommand to select a target
+workspace (defaults to cwd-inferred, then the default agent). Every subcommand
+takes `--json` for structured output.
 `propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
 `--evidence <text>` to record proposal context alongside `--proposal`.
+`review` prints the proposal version. Pass it as `--proposal-version` to
+`apply`, `reject`, or `quarantine` to reject a decision if the proposal changes
+after review. Omitting the flag keeps the existing ID-only lifecycle behavior.
 
 ## Proposal content
 
@@ -194,26 +224,29 @@ Workshop scans, hashes, and stores them with the proposal, then writes them
 beside the live `SKILL.md` only on apply.
 
 Rejected support-file paths: absolute paths, hidden path segments, path
-traversal, overlapping paths, executable files, non-UTF-8 text, null bytes,
-and paths outside the standard support folders.
+traversal, overlapping paths, control or formatting characters, executable
+files, non-UTF-8 text, null bytes, and paths outside the standard support
+folders.
 
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | update | revise | list | inspect | apply | reject | quarantine`.
+`create | update | revise | list | inspect | review | apply | reject | quarantine`.
 Other parameters apply depending on the action:
 
-| Parameter                  | Used by                                              | Notes                                                                |
-| -------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                        | Required for `create`; resolves a pending proposal by name otherwise |
-| `description`              | `create`, `update`, `revise`                         | Max 160 bytes                                                        |
-| `skill_name`               | `update`                                             | Existing skill name or key                                           |
-| `proposal_content`         | `create`, `update`, `revise`                         | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
-| `support_files`            | `create`, `update`, `revise`                         | Array of `{ path, content }`                                         |
-| `goal`, `evidence`         | `create`, `update`, `revise`                         | Free-text context                                                    |
-| `proposal_id`              | `inspect`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
-| `reason`                   | `apply`, `reject`, `quarantine`                      | Optional                                                             |
-| `query`, `status`, `limit` | `list`                                               | Filter/paginate; `limit` max 50, default 20                          |
+| Parameter                  | Used by                                                        | Notes                                                                |
+| -------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `review`, `revise`                        | Required for `create`; resolves a pending proposal by name otherwise |
+| `description`              | `create`, `update`, `revise`                                   | Max 160 bytes                                                        |
+| `skill_name`               | `update`                                                       | Existing skill name or key                                           |
+| `proposal_content`         | `create`, `update`, `revise`                                   | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
+| `support_files`            | `create`, `update`, `revise`                                   | Array of `{ path, content }`                                         |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                   | Free-text context                                                    |
+| `proposal_id`              | `inspect`, `review`, `revise`, `apply`, `reject`, `quarantine` | Target proposal; required after review page 1                        |
+| `page`                     | `review`                                                       | One-based output page; defaults to 1                                 |
+| `proposal_version`         | `review`, `apply`, `reject`, `quarantine`                      | Required after page 1; binds lifecycle decisions to the review       |
+| `reason`                   | `apply`, `reject`, `quarantine`                                | Optional                                                             |
+| `query`, `status`, `limit` | `list`                                                         | Filter/paginate; `limit` max 50, default 20                          |
 
 Agents must use `skill_workshop` for generated skill work. They must not
 create or change proposal files through `write`, `edit`, `exec`, shell
@@ -225,8 +258,8 @@ commands, or direct filesystem operations.
 `skill_workshop` to the active `tools.allow` list, or use
 `tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
 explicit `tools.allow`. Sandboxed runs do not construct the host-side
-Skill Workshop tool, so run proposal review actions from a normal host-side
-agent session or the CLI.
+Skill Workshop tool. Run `review` from a normal host-side agent session or use
+`openclaw skills workshop review <proposal-id>` from the CLI.
 </Note>
 
 ## Suggested skills
@@ -378,6 +411,7 @@ Default state directory: `~/.openclaw`.
 | Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 1 MiB) |
 | Support files                   | 64 per proposal                                                      |
 | Support file size               | 256 KiB each, 2 MiB total                                            |
+| Review output                   | 7,000 characters per page, 16 pages                                  |
 | Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)              |
 
 ## Troubleshooting
@@ -388,6 +422,7 @@ Default state directory: `~/.openclaw`.
 | `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
 | `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
 | `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
+| Review returns `output-limit`                  | Reduce the proposal/support bundle before requesting an inline review.                                                                                                                                      |
 | `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
 | `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
 | Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |

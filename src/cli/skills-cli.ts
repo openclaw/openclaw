@@ -50,11 +50,13 @@ import {
   readSkillProposalDraftDirectory,
   readSkillProposalDraftFile,
   rejectSkillProposal,
+  reviewSkillProposal,
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
 import type {
   SkillProposalManifest,
   SkillProposalReadResult,
+  SkillProposalReviewResult,
   SkillProposalSupportFileInput,
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -295,6 +297,27 @@ function formatSkillProposalInspect(read: SkillProposalReadResult): string {
   ]
     .filter((line) => line !== undefined)
     .join("\n");
+}
+
+function formatSkillProposalReview(review: SkillProposalReviewResult): string {
+  const header = [
+    `Proposal: ${review.record.id}`,
+    `Version: ${review.record.proposedVersion}`,
+    `Review: ${review.mode}`,
+    "",
+  ];
+  if (review.mode === "diff") {
+    return [...header, review.diff || "No changes would be applied."].join("\n");
+  }
+  if (review.mode === "unavailable") {
+    return [...header, `Review unavailable: ${review.reason}`].join("\n");
+  }
+  return [
+    ...header,
+    "--- SKILL.md ---",
+    review.content,
+    ...review.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
+  ].join("\n");
 }
 
 function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
@@ -819,6 +842,28 @@ export function registerSkillsCli(program: Command) {
     });
 
   workshop
+    .command("review")
+    .description("Show the exact content or diff a proposal would apply")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+        try {
+          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const review = await reviewSkillProposal({ workspaceDir, config, proposalId });
+          if (opts.json) {
+            defaultRuntime.writeJson(review);
+            return;
+          }
+          defaultRuntime.writeStdout(formatSkillProposalReview(review));
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
     .command("propose-create")
     .description("Create a pending proposal for a new workspace skill")
     .requiredOption("--name <name>", "Skill name")
@@ -986,12 +1031,22 @@ export function registerSkillsCli(program: Command) {
     .command("apply")
     .description("Apply a pending skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
+    .option("--proposal-version <version>", "Expected version returned by review")
     .option("--json", "Output as JSON", false)
     .action(
-      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+      async (
+        proposalId: string,
+        opts: { proposalVersion?: string; json?: boolean; agent?: string },
+        command: Command,
+      ) => {
         try {
           const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
+          const applied = await applySkillProposal({
+            workspaceDir,
+            config,
+            proposalId,
+            expectedVersion: opts.proposalVersion,
+          });
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;
@@ -1010,12 +1065,13 @@ export function registerSkillsCli(program: Command) {
     .command("reject")
     .description("Reject a pending skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
+    .option("--proposal-version <version>", "Expected version returned by review")
     .option("--reason <text>", "Reason for rejection")
     .option("--json", "Output as JSON", false)
     .action(
       async (
         proposalId: string,
-        opts: { reason?: string; json?: boolean; agent?: string },
+        opts: { proposalVersion?: string; reason?: string; json?: boolean; agent?: string },
         command: Command,
       ) => {
         try {
@@ -1023,6 +1079,7 @@ export function registerSkillsCli(program: Command) {
           const record = await rejectSkillProposal({
             workspaceDir,
             proposalId,
+            expectedVersion: opts.proposalVersion,
             reason: opts.reason,
           });
           if (opts.json) {
@@ -1041,12 +1098,13 @@ export function registerSkillsCli(program: Command) {
     .command("quarantine")
     .description("Quarantine a skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
+    .option("--proposal-version <version>", "Expected version returned by review")
     .option("--reason <text>", "Reason for quarantine")
     .option("--json", "Output as JSON", false)
     .action(
       async (
         proposalId: string,
-        opts: { reason?: string; json?: boolean; agent?: string },
+        opts: { proposalVersion?: string; reason?: string; json?: boolean; agent?: string },
         command: Command,
       ) => {
         try {
@@ -1054,6 +1112,7 @@ export function registerSkillsCli(program: Command) {
           const record = await quarantineSkillProposal({
             workspaceDir,
             proposalId,
+            expectedVersion: opts.proposalVersion,
             reason: opts.reason,
           });
           if (opts.json) {
