@@ -2,12 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import {
-  type PreparedWorkerSsh,
-  workerSshCommandOptions,
-  workerSshOptions,
-  workerSshRemoteCommand,
-} from "./ssh.js";
+import { type PreparedWorkerSsh, workerSshCommandOptions } from "./ssh.js";
 import type {
   WorkerTunnelHandle,
   WorkerWorkspaceCommand,
@@ -16,6 +11,7 @@ import type {
   WorkerWorkspaceSyncRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
+import { createAcceptedWorkspacePublisherFactory } from "./workspace-accepted-sync.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import {
   applyStagedWorkerWorkspace,
@@ -33,16 +29,18 @@ import {
   workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
 import {
-  MANIFEST_REF_PATTERN,
   parseManifestRef,
   parseRemoteWorkspaceDirectory,
   probeWorkspaceGitMode,
   readTransferredManifest,
+  resolveRemoteWorkspaceManifest,
   runBoundedInboundRsync as runBoundedInboundRsyncTransfer,
   stableWorkerPathComponent,
   validateWorkspaceSyncRequest,
   waitForQuiescenceRenewal,
   workerWorkspaceCommandSucceeded as success,
+  workerWorkspaceRsyncRemoteCommand,
+  workerWorkspaceSshArgv,
   workspaceSyncError,
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
@@ -112,18 +110,7 @@ export function createWorkerWorkspaceActions(
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
     const prepared = requirePrepared();
     return await runTask(
-      [
-        "ssh",
-        ...workerSshOptions(prepared, { forwarding: "disabled" }),
-        "-a",
-        "-x",
-        "-T",
-        "-p",
-        String(prepared.port),
-        "--",
-        prepared.sshTarget,
-        workerSshRemoteCommand(command.argv),
-      ],
+      workerWorkspaceSshArgv(prepared, command.argv),
       workerSshCommandOptions({
         input: command.input,
         timeoutMs: command.timeoutMs ?? WORKSPACE_TIMEOUT_MS,
@@ -267,15 +254,7 @@ export function createWorkerWorkspaceActions(
     const temporaryDirectory = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
     );
-    const rsyncSsh = workerSshRemoteCommand([
-      "ssh",
-      ...workerSshOptions(prepared, { forwarding: "disabled" }),
-      "-a",
-      "-x",
-      "-T",
-      "-p",
-      String(prepared.port),
-    ]);
+    const rsyncSsh = workerWorkspaceRsyncRemoteCommand(prepared);
     try {
       let fileListPath: string | undefined;
       if (mode === "git") {
@@ -490,10 +469,11 @@ export function createWorkerWorkspaceActions(
       await recoverWorkerWorkspaceReconciliation({ root: request.localPath, journal: pending });
       request.journal.abort();
     }
-    const baseDigest = MANIFEST_REF_PATTERN.exec(request.baseManifestRef)?.[0]?.slice(7);
-    if (!baseDigest) {
-      throw new Error("Worker workspace base manifest reference is invalid");
-    }
+    const baseDigest = await resolveRemoteWorkspaceManifest(
+      runWorkspaceCommand,
+      request.remoteWorkspaceDir,
+      request.baseManifestRef,
+    );
     const prepared = requirePrepared();
     const temporaryDirectory = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-worker-workspace-reconcile-"),
@@ -502,15 +482,16 @@ export function createWorkerWorkspaceActions(
     const manifestRoot = path.join(temporaryDirectory, "manifests");
     const baseManifestPath = path.join(manifestRoot, `${baseDigest}.json`);
     const transferListPath = path.join(temporaryDirectory, "transfer-list");
-    const rsyncSsh = workerSshRemoteCommand([
-      "ssh",
-      ...workerSshOptions(prepared, { forwarding: "disabled" }),
-      "-a",
-      "-x",
-      "-T",
-      "-p",
-      String(prepared.port),
-    ]);
+    const rsyncSsh = workerWorkspaceRsyncRemoteCommand(prepared);
+    const acceptedWorkspacePublisher = createAcceptedWorkspacePublisherFactory({
+      runWorkspaceCommand,
+      runTask,
+      ownerSignal: options.ownerSignal,
+      rsyncSsh,
+      scpTarget: prepared.scpTarget,
+      localPath: request.localPath,
+      remoteWorkspaceDir: request.remoteWorkspaceDir,
+    });
     try {
       await fs.mkdir(stagingRoot, { mode: 0o700 });
       await fs.mkdir(manifestRoot, { mode: 0o700 });
@@ -538,7 +519,6 @@ export function createWorkerWorkspaceActions(
       const baseRaw = await readTransferredManifest(baseManifestPath);
       const base = parseWorkerWorkspaceManifest(baseRaw, request.baseManifestRef);
       await fs.rm(baseManifestPath);
-      await assertWorkspaceMatchesManifest({ root: request.localPath, manifest: base });
       const verifyStable = async (expectedRef: string): Promise<void> => {
         const expectedDigest = expectedRef.slice("sha256:".length);
         const verified = await runWorkspaceCommand({
@@ -576,6 +556,10 @@ export function createWorkerWorkspaceActions(
       }
       const currentRef = parseManifestRef(currentResult.stdout.trim());
       if (currentRef === request.baseManifestRef) {
+        const { expectedRemoteRef, publishAcceptedManifest } = acceptedWorkspacePublisher(
+          base,
+          currentRef,
+        );
         await verifyStable(currentRef);
         const stagedResult = request.stagedResult
           ? await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
@@ -584,21 +568,32 @@ export function createWorkerWorkspaceActions(
               currentManifestRef: currentRef,
               baseManifestRaw: baseRaw,
               currentManifestRaw: baseRaw,
+              publishAcceptedManifest,
             })
           : undefined;
+        let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
         if (!stagedResult) {
-          request.journal.commit(currentRef);
+          appliedWorkspaceResult = await applyStagedWorkerWorkspace({
+            root: request.localPath,
+            stagingRoot,
+            baseManifestRef: request.baseManifestRef,
+            currentManifestRef: currentRef,
+            base,
+            current: base,
+            journal: request.journal,
+            publishAcceptedManifest,
+          });
         }
         return {
-          manifestRef: currentRef,
+          get manifestRef() {
+            return expectedRemoteRef();
+          },
           changed: false,
-          verifyStable: async () => await verifyStable(currentRef),
+          verifyStable: async () => await verifyStable(expectedRemoteRef()),
           verifyLocalStable: async () =>
-            await assertWorkspaceResultStable({
-              root: request.localPath,
-              base,
-              current: base,
-            }),
+            await (appliedWorkspaceResult?.verifyLocalStable() ??
+              assertWorkspaceResultStable({ root: request.localPath, base, current: base })),
+          getAppliedWorkspaceResult: () => appliedWorkspaceResult,
           ...stagedResult,
         };
       }
@@ -627,6 +622,10 @@ export function createWorkerWorkspaceActions(
       }
       const currentRaw = await readTransferredManifest(currentManifestPath);
       const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
+      const { expectedRemoteRef, publishAcceptedManifest } = acceptedWorkspacePublisher(
+        current,
+        currentRef,
+      );
       const transferPaths = workerWorkspaceTransferPaths(current, base);
       const transferPathSet = new Set(transferPaths);
       if (transferPaths.length > 0) {
@@ -672,6 +671,7 @@ export function createWorkerWorkspaceActions(
             currentManifestRef: currentRef,
             baseManifestRaw: baseRaw,
             currentManifestRaw: currentRaw,
+            publishAcceptedManifest,
           })
         : undefined;
       let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
@@ -684,12 +684,15 @@ export function createWorkerWorkspaceActions(
           base,
           current,
           journal: request.journal,
+          publishAcceptedManifest,
         });
       }
       return {
-        manifestRef: currentRef,
+        get manifestRef() {
+          return expectedRemoteRef();
+        },
         changed: true,
-        verifyStable: async () => await verifyStable(currentRef),
+        verifyStable: async () => await verifyStable(expectedRemoteRef()),
         verifyLocalStable: async () =>
           appliedWorkspaceResult
             ? await appliedWorkspaceResult.verifyLocalStable()

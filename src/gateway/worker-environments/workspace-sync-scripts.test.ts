@@ -5,8 +5,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
+  parseWorkerWorkspaceManifest,
+  serializeWorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
+import {
   REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_QUIESCE_JS,
+  REMOTE_WORKSPACE_REMOVE_PATHS_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   REMOTE_WORKSPACE_RESUME_JS,
 } from "./workspace-sync-scripts.js";
@@ -185,6 +190,179 @@ describe("remote workspace quiescence scripts", () => {
 });
 
 describe("remote workspace manifest script", () => {
+  it("removes a changed parent before descendants for file-to-directory transitions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-accepted-paths-test-"));
+    roots.push(root);
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace);
+    await fs.writeFile(path.join(workspace, "node"), "old file\n");
+
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", REMOTE_WORKSPACE_REMOVE_PATHS_JS, workspace],
+      { timeoutMs: 10_000, input: JSON.stringify(["node/child.txt", "node"]) },
+    );
+
+    expect(result.code).toBe(0);
+    await expect(fs.access(path.join(workspace, "node"))).rejects.toThrow();
+  });
+
+  it("keeps the gateway's canonical manifest available across a second turn", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-lifecycle-test-"));
+    roots.push(root);
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
+    await fs.writeFile(path.join(workspace, ".gitignore"), "");
+    for (const args of [
+      ["init", "--quiet"],
+      ["add", ".gitignore"],
+      [
+        "-c",
+        "user.name=OpenClaw Test",
+        "-c",
+        "user.email=test@openclaw.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "base",
+      ],
+    ]) {
+      const result = await runCommandWithTimeout(["git", "-C", workspace, ...args], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code).toBe(0);
+    }
+    const baseCommit = (
+      await runCommandWithTimeout(["git", "-C", workspace, "rev-parse", "HEAD"], {
+        timeoutMs: 10_000,
+      })
+    ).stdout.trim();
+    const env = { ...process.env, HOME: home };
+    const initial = await runCommandWithTimeout(
+      [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, workspace, baseCommit, "eligible"],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(initial.code).toBe(0);
+
+    await fs.writeFile(path.join(workspace, "notes.md"), "cloud edit\n", { mode: 0o664 });
+    await Promise.all([
+      fs.writeFile(path.join(workspace, "Zebra.md"), "upper\n"),
+      fs.writeFile(path.join(workspace, "éclair.md"), "unicode\n"),
+      fs.writeFile(path.join(workspace, "älg.md"), "collation\n"),
+    ]);
+    const firstTurn = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        baseCommit,
+        "eligible",
+        initial.stdout.trim().slice("sha256:".length),
+      ],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(firstTurn.code).toBe(0);
+    const firstTurnRef = firstTurn.stdout.trim();
+    const firstTurnDigest = firstTurnRef.slice("sha256:".length);
+    const manifestRoot = path.join(home, ".openclaw-worker", "manifests");
+    const firstTurnPath = path.join(manifestRoot, `${firstTurnDigest}.json`);
+    const firstTurnRaw = await fs.readFile(firstTurnPath, "utf8");
+    const firstTurnManifest = parseWorkerWorkspaceManifest(firstTurnRaw, firstTurnRef);
+    expect(firstTurnRaw).toBe(serializeWorkerWorkspaceManifest(firstTurnManifest));
+    const firstTurnPaths = (
+      JSON.parse(firstTurnRaw) as { entries: Array<{ path: string }> }
+    ).entries.map((entry) => entry.path);
+    expect(firstTurnPaths).toEqual(
+      firstTurnPaths.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    );
+
+    await fs.rm(firstTurnPath);
+    const published = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        "",
+        "publish",
+        firstTurnDigest,
+      ],
+      { timeoutMs: 10_000, baseEnv: env, input: firstTurnRaw },
+    );
+    expect(published.code).toBe(0);
+    expect(published.stdout.trim()).toBe(firstTurnRef);
+    await expect(fs.readFile(firstTurnPath, "utf8")).resolves.toBe(firstTurnRaw);
+
+    const legacy = JSON.parse(firstTurnRaw) as {
+      entries: Array<{ path: string; type: string; mode: number }>;
+    };
+    for (const entry of legacy.entries) {
+      if (entry.path === "notes.md") {
+        entry.mode = 0o664;
+      }
+    }
+    legacy.entries.sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    );
+    const legacyRaw = JSON.stringify(legacy);
+    const legacyDigest = createHash("sha256").update(legacyRaw).digest("hex");
+    await fs.writeFile(path.join(manifestRoot, `${legacyDigest}.json`), legacyRaw);
+    await fs.rm(firstTurnPath);
+
+    const legacyCanonical = structuredClone(legacy);
+    for (const entry of legacyCanonical.entries) {
+      if (entry.type === "directory") {
+        entry.mode = 0o700;
+      } else if (entry.type === "symlink") {
+        entry.mode = 0o777;
+      } else {
+        entry.mode = (entry.mode & 0o111) === 0 ? 0o644 : 0o755;
+      }
+    }
+    const legacyProducerLocale = "en-US";
+    legacyCanonical.entries.sort((left, right) =>
+      left.path.localeCompare(right.path, legacyProducerLocale),
+    );
+    const acceptedRaw = JSON.stringify(legacyCanonical);
+    const acceptedDigest = createHash("sha256").update(acceptedRaw).digest("hex");
+    const acceptedRef = `sha256:${acceptedDigest}`;
+    const acceptedPath = path.join(manifestRoot, `${acceptedDigest}.json`);
+
+    const recovered = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        "",
+        "resolve",
+        acceptedDigest,
+        legacyProducerLocale,
+      ],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(recovered.code).toBe(0);
+    expect(recovered.stdout.trim()).toBe(acceptedRef);
+    await expect(fs.readFile(acceptedPath, "utf8")).resolves.toBe(acceptedRaw);
+
+    await fs.writeFile(path.join(workspace, "notes.md"), "second cloud edit\n");
+    const secondTurn = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        REMOTE_WORKSPACE_MANIFEST_JS,
+        workspace,
+        baseCommit,
+        "eligible",
+        acceptedDigest,
+      ],
+      { timeoutMs: 10_000, baseEnv: env },
+    );
+    expect(secondTurn.code).toBe(0);
+    expect(secondTurn.stdout.trim()).not.toBe(acceptedRef);
+  });
+
   it("drops derived artifacts from the worker manifest", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-derived-test-"));
     roots.push(root);

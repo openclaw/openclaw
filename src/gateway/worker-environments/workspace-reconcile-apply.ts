@@ -39,6 +39,11 @@ export async function applyStagedWorkerWorkspace(params: {
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  publishAcceptedManifest?: (accepted: {
+    manifestRef: string;
+    manifest: WorkerWorkspaceManifest;
+    conflictPaths: string[];
+  }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult> {
   const root = await fs.realpath(params.root);
   const preserveDirectories = new Set(reconciliationDirectories(params.current.directories));
@@ -65,10 +70,12 @@ export async function applyStagedWorkerWorkspace(params: {
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
     });
+    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
     params.journal.commit(actual.manifestRef);
     return {
       ...actual,
-      conflictPaths: retainedConflictPaths(finalPreflight, preflight.applyPaths),
+      conflictPaths,
       verifyLocalStable: async () =>
         await assertActualWorkspaceManifest({
           root,
@@ -181,10 +188,12 @@ export async function applyStagedWorkerWorkspace(params: {
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
     });
+    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
     params.journal.commit(actual.manifestRef);
     return {
       ...actual,
-      conflictPaths: retainedConflictPaths(finalPreflight, preflight.applyPaths),
+      conflictPaths,
       verifyLocalStable: async () =>
         await assertActualWorkspaceManifest({
           root,
