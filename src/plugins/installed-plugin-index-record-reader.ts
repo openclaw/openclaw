@@ -161,16 +161,41 @@ function buildRecoveredManagedNpmInstallRecordsForRoot(
   return records;
 }
 
+function pickNewerRecoveredManagedNpmRecord(
+  existing: PluginInstallRecord | undefined,
+  candidate: PluginInstallRecord,
+): PluginInstallRecord {
+  if (!existing) {
+    return candidate;
+  }
+  const existingVersion = readInstallRecordVersion(existing);
+  const candidateVersion = readInstallRecordVersion(candidate);
+  // A legacy flat dir and one or more `__openclaw-generation__` dirs can hold
+  // the same plugin at once, and their on-disk order is unrelated to version.
+  // Keep the highest version so recovery reflects the newest install rather than
+  // whichever directory sorts last. On ties prefer the later candidate so a
+  // generation dir still supersedes the legacy flat dir.
+  if (existingVersion !== undefined && candidateVersion !== undefined) {
+    return compareValidSemver(existingVersion, candidateVersion) === 1 ? existing : candidate;
+  }
+  return candidate;
+}
+
 function buildRecoveredManagedNpmInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
-  const legacyRecords = buildRecoveredManagedNpmInstallRecordsForRoot(npmRoot);
-  const projectRecords: Record<string, PluginInstallRecord> = {};
+  const records: Record<string, PluginInstallRecord> = {};
+  const absorb = (source: Record<string, PluginInstallRecord>): void => {
+    for (const [pluginId, record] of Object.entries(source)) {
+      records[pluginId] = pickNewerRecoveredManagedNpmRecord(records[pluginId], record);
+    }
+  };
+  absorb(buildRecoveredManagedNpmInstallRecordsForRoot(npmRoot));
   for (const projectRoot of listManagedPluginNpmProjectRootsSync(npmRoot)) {
-    Object.assign(projectRecords, buildRecoveredManagedNpmInstallRecordsForRoot(projectRoot));
+    absorb(buildRecoveredManagedNpmInstallRecordsForRoot(projectRoot));
   }
-  return { ...legacyRecords, ...projectRecords };
+  return records;
 }
 
 function recordsShareInstallPath(
@@ -257,6 +282,26 @@ function mergeRecoveredManagedNpmMetadata(
   return next;
 }
 
+function isManagedNpmInstallPath(installPath: string | undefined, npmRoot: string): boolean {
+  if (!installPath) {
+    return false;
+  }
+  const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(installPath);
+  if (!packageInfo) {
+    return false;
+  }
+  const normalize = (value: string): string => {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? normalizeWindowsPathForComparison(resolved) : resolved;
+  };
+  const projectRoot = normalize(packageInfo.projectRoot);
+  return (
+    projectRoot === normalize(npmRoot) ||
+    normalize(path.dirname(packageInfo.projectRoot)) ===
+      normalize(resolvePluginNpmProjectsDir(npmRoot))
+  );
+}
+
 function mergeRecoveredManagedNpmRecord(params: {
   npmRoot: string;
   persisted: PluginInstallRecord | undefined;
@@ -276,6 +321,26 @@ function mergeRecoveredManagedNpmRecord(params: {
     persistedVersion !== recoveredVersion
   ) {
     return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered);
+  }
+  // A managed install/update writes the new version into a distinct managed
+  // project directory (for example an `__openclaw-generation__` dir) without
+  // removing the prior one, so the persisted record can keep pointing at an
+  // older, still-present install and the runtime loads the stale version. When
+  // the freshly-discovered managed install is a strictly newer version at a
+  // different path, repoint to it. The strict-newer comparison keeps a lingering
+  // older generation directory from superseding a current install, and the
+  // managed-path guard leaves intentional custom/outside npm installs untouched.
+  if (
+    params.persisted?.source === "npm" &&
+    isManagedNpmInstallPath(params.persisted.installPath, params.npmRoot) &&
+    !recordsShareInstallPath(params.persisted, params.recovered) &&
+    persistedVersion !== undefined &&
+    recoveredVersion !== undefined &&
+    compareValidSemver(persistedVersion, recoveredVersion) === -1
+  ) {
+    return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered, {
+      preservePersistedSpec: true,
+    });
   }
   return params.persisted ?? params.recovered;
 }
