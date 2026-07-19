@@ -38,7 +38,6 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
-import { loadModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   modelCatalogLogicalKey,
@@ -53,6 +52,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
+import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   readUtilityModelSetting,
@@ -613,10 +613,10 @@ export async function modelsStatusCommand(
         registryDiagnostics: metadataSnapshot.registryDiagnostics,
       }).map((provider) => normalizeProviderId(provider)),
     );
-    const catalog = await loadModelCatalogSnapshot({
+    const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
+      ...(agentId ? { agentId } : {}),
       readOnly: true,
-      metadataSnapshot,
     });
     const routeSourcesByModel = new Map<
       string,

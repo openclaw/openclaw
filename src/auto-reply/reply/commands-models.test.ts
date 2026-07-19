@@ -113,9 +113,9 @@ function setFastModelsCliBackendDeps(): void {
   });
 }
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: modelCatalogMocks.loadModelCatalog,
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await modelCatalogMocks.loadModelCatalog(...args);
     return { entries, routeVariants: entries };
   },
@@ -365,12 +365,17 @@ describe("handleModelsCommand", () => {
   });
 
   it("keeps explicit all browse on the full catalog path", async () => {
-    await handleModelsCommand(buildParams("/models openai all"), true);
+    const params = buildParams("/models openai all");
+    params.workspaceDir = "/tmp/spawned-workspace";
+    await handleModelsCommand(params, true);
 
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.workspaceDir).toBe(
+      "/tmp/spawned-workspace",
+    );
   });
 
-  it("reuses the current plugin metadata snapshot for read-only catalog loading", async () => {
+  it("scopes the prepared catalog without passing plugin metadata", async () => {
     const metadataSnapshot = {
       plugins: [],
       owners: {
@@ -381,11 +386,34 @@ describe("handleModelsCommand", () => {
 
     await handleModelsCommand(buildParams("/models"), true);
 
+    const params = modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0];
+    expect(params).toMatchObject({ readOnly: true, workspaceDir: "/tmp" });
+    expect(params).not.toHaveProperty("metadataSnapshot");
+  });
+
+  it("loads the selected agent lifecycle catalog", async () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [
+          {
+            id: "worker",
+            agentDir: "/tmp/models-worker-agent",
+            workspace: "/tmp/models-worker-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    await buildModelsProviderData(cfg, "worker");
+
     expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        readOnly: true,
-        metadataSnapshot,
+        agentDir: "/tmp/models-worker-agent",
       }),
+    );
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
     );
   });
 
