@@ -1522,7 +1522,7 @@
     <string name="native_ff716fc4735e067f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"받아쓰기 설정"</string>
     <string name="native_ff9dbbdfb84ddab2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"제공자 모델을 불러왔지만 준비 상태를 확인할 수 없습니다."</string>
     <string name="native_ffa7aa557b547a79" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"스레드를 삭제하시겠습니까?"</string>
-    <string name="native_ffaed354e7fe5514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw은 이 휴대전화를 스레드, 음성, 제공업체 및 Gateway를 위한 깔끔한 모바일 명령 인터페이스로 바꿔 줍니다."</string>
+    <string name="native_ffaed354e7fe5514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw는 이 휴대전화를 스레드, 음성, 제공업체 및 Gateway를 위한 깔끔한 모바일 명령 인터페이스로 바꿔 줍니다."</string>
     <string name="native_ffb6f5764bddb68c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최신순"</string>
     <string name="native_ffcf16006c652ee3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다음 주기"</string>
 </resources>
