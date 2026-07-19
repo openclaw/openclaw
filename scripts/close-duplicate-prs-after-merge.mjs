@@ -2,8 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const CLOSE_DUPES_TIMEOUT_MS = 120_000;
-
 const DEFAULT_LABELS = ["duplicate", "close:duplicate", "dedupe:child"];
 // Duplicate PR closure performs multiple sequential gh API reads and writes.
 // Keep enough headroom for GitHub latency while preventing one stalled request
