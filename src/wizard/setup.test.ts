@@ -6,6 +6,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
@@ -21,6 +22,8 @@ type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
+type VerifySetupInferenceConfig =
+  typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
@@ -111,10 +114,12 @@ const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
 const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
 const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
-const verifySetupInference = vi.hoisted(() =>
-  vi.fn<() => Promise<import("../system-agent/setup-inference.js").VerifySetupInferenceResult>>(
-    async () => ({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 250 }),
-  ),
+const verifySetupInferenceConfig = vi.hoisted(() =>
+  vi.fn<VerifySetupInferenceConfig>(async () => ({
+    ok: true,
+    modelRef: "openai/gpt-5.5",
+    latencyMs: 250,
+  })),
 );
 
 const setupChannels = vi.hoisted(() =>
@@ -183,6 +188,27 @@ const formatPluginCompatibilityNotice = vi.hoisted(() =>
 
 function getWizardNoteCalls(note: WizardPrompter["note"]) {
   return (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+}
+
+function modelConfigWithApiKey(apiKey: string): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    models: {
+      providers: {
+        openai: {
+          apiKey,
+          baseUrl: "https://api.openai.com/v1",
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function persistedWizardConfigs(): OpenClawConfig[] {
+  return (replaceConfigFile.mock.calls as unknown[][]).map(
+    ([params]) => (params as { nextConfig: OpenClawConfig }).nextConfig,
+  );
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -303,7 +329,7 @@ vi.mock("./setup.memory-import.js", () => ({
 }));
 
 vi.mock("../system-agent/setup-inference.js", () => ({
-  verifySetupInference,
+  verifySetupInferenceConfig,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -474,8 +500,8 @@ describe("runSetupWizard", () => {
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
     buildPluginCompatibilitySnapshotNotices.mockReset();
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([]);
-    verifySetupInference.mockReset();
-    verifySetupInference.mockResolvedValue({
+    verifySetupInferenceConfig.mockReset();
+    verifySetupInferenceConfig.mockResolvedValue({
       ok: true,
       modelRef: "openai/gpt-5.5",
       latencyMs: 250,
@@ -2002,14 +2028,14 @@ describe("runSetupWizard", () => {
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Test AI access now with a live completion?" }),
     );
-    expect(verifySetupInference).toHaveBeenCalledOnce();
+    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
   });
 
   it("continues classic setup when live AI verification fails", async () => {
     applyAuthChoice.mockResolvedValueOnce({
       config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
     });
-    verifySetupInference.mockResolvedValueOnce({
+    verifySetupInferenceConfig.mockResolvedValueOnce({
       ok: false,
       status: "auth",
       error: "login expired",
@@ -2038,17 +2064,93 @@ describe("runSetupWizard", () => {
     expect(select).toHaveBeenCalledWith(
       expect.objectContaining({ message: "How would you like to continue?" }),
     );
-    expect(verifySetupInference).toHaveBeenCalledOnce();
+    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
   });
 
-  it("re-enters model/auth setup once and re-verifies after a failed AI check", async () => {
-    applyAuthChoice.mockResolvedValue({
-      config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
-    });
+  it("keeps failed model/auth fixes in the verification loop without persisting them", async () => {
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-original-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-retry-invalid-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-retry-still-invalid-key"),
+      });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
-    verifySetupInference
+    verifySetupInferenceConfig
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
-      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 300 });
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "key rejected" })
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "key still rejected" });
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("fix")
+      .mockResolvedValueOnce("fix")
+      .mockResolvedValueOnce("continue") as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "demo-provider",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(3);
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(3);
+    const thirdVerification = getMockCallArg(
+      verifySetupInferenceConfig,
+      2,
+      0,
+      "third verification",
+    ) as Parameters<VerifySetupInferenceConfig>[0];
+    expect(thirdVerification.config.models?.providers?.openai?.apiKey).toBe(
+      "test-retry-still-invalid-key",
+    );
+    const secondRetry = getMockCallArg(
+      applyAuthChoice,
+      2,
+      0,
+      "second retry auth choice",
+    ) as Parameters<ApplyAuthChoice>[0];
+    expect(secondRetry.config.models?.providers?.openai?.apiKey).toBe("test-retry-invalid-key");
+    expect(select).toHaveBeenCalledTimes(3);
+    expect(
+      persistedWizardConfigs().some(
+        (config) =>
+          config.models?.providers?.openai?.apiKey === "test-retry-invalid-key" ||
+          config.models?.providers?.openai?.apiKey === "test-retry-still-invalid-key",
+      ),
+    ).toBe(false);
+  });
+
+  it("persists a model/auth fix after its live verification succeeds", async () => {
+    applyAuthChoice
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-original-key"),
+      })
+      .mockResolvedValueOnce({
+        config: modelConfigWithApiKey("test-retry-valid-key"),
+      });
+    promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
+    verifySetupInferenceConfig
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
+      .mockResolvedValueOnce({
+        ok: true,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 300,
+      });
     const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
 
@@ -2070,7 +2172,19 @@ describe("runSetupWizard", () => {
 
     expect(applyAuthChoice).toHaveBeenCalledTimes(2);
     expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
-    expect(verifySetupInference).toHaveBeenCalledTimes(2);
+    expect(verifySetupInferenceConfig).toHaveBeenCalledTimes(2);
+    const retryVerification = getMockCallArg(
+      verifySetupInferenceConfig,
+      1,
+      0,
+      "retry verification",
+    ) as Parameters<VerifySetupInferenceConfig>[0];
+    expect(retryVerification.config.models?.providers?.openai?.apiKey).toBe("test-retry-valid-key");
+    expect(
+      persistedWizardConfigs().some(
+        (config) => config.models?.providers?.openai?.apiKey === "test-retry-valid-key",
+      ),
+    ).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
