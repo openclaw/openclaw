@@ -36,7 +36,7 @@ import {
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
-import { fetchNpmPackageTargetStatus } from "../../infra/update-check.js";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";

@@ -679,6 +679,14 @@ describe("claude live session provisional results", () => {
     const rejection = expect(resultPromise).rejects.toMatchObject({
       name: "FailoverError",
       message: expect.stringMatching(/exceeded timeout/i),
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 5,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
     });
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
@@ -852,6 +860,14 @@ describe("claude live session provisional results", () => {
     const rejection = expect(resultPromise).rejects.toMatchObject({
       name: "FailoverError",
       message: expect.stringMatching(/exceeded timeout/i),
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 5,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
     });
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;

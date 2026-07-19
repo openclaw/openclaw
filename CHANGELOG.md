@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Channel plugin ingress monitors:** add a shared plugin SDK monitor for durable admission, polling, pruning, claim identity validation, adoption handoff, and shutdown, and migrate IRC, Synology Chat, and Google Chat to the shared lifecycle.
 - **External gateway supervision:** add `OPENCLAW_SUPERVISOR_MODE=external` for lifecycle owners such as OCM, preserving verified restart and deferral behavior without exposing native service authority, blocking native service mutation and self-update, and providing a versioned atomic restart-handoff consume contract. Thanks @shakkernerd.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
@@ -42,6 +43,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Reef startup reconciliation:** contain retryable relay failures during startup without supervisor restart loops, while preserving definitive-error and cancellation handling. Thanks @Yigtwxx.
+- **Codex stale-session replies:** stop model fallback after another gateway supersedes a Codex session generation and deliver a safe retry notice instead of abandoning the message silently.
+- **Bounded input and provider responses:** cap pasted auth/config input and enforce wall-clock deadlines across generated-media downloads, polling JSON, and failed response details so oversized or slow-drip streams cannot exceed resource budgets (thanks @Pick-cat).
+- **LINE durable inbound media:** retry transient content preparation, network, and response-stream failures through durable ingress so media-only messages are not acknowledged before their attachment is saved. (#110921) Thanks @edenfunf.
+- **Cloud worker derived workspace caches:** exclude Python caches, dependency trees, and macOS metadata symmetrically from outbound sync and inbound reconciliation so local cache rewrites cannot fence later cloud results or worker reclaim.
+- **Codex model status diagnostics:** report a configured Codex route as unavailable when its harness plugin is disabled, missing, or quarantined, while preserving the separate credential result and making `models status --check` fail instead of silently treating fallback execution as healthy. Thanks @shakkernerd.
 - **Gateway control-plane rate limiting:** use per-method buckets with a 30-per-minute budget so interactive admin writes remain responsive while retaining runaway-loop protection.
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
 - **ACPX cleanup process inspection:** bound host process-table reads so stalled `ps` calls cannot hang gateway startup or session cleanup while retaining fail-closed ownership checks. Thanks @Alix-007.

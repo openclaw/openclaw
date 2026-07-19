@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { refreshOnboardRecommendationsCommand } from "../commands/onboard-recommendations.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { OnboardingRecommendationsRecord } from "../state/onboarding-recommendations.js";
@@ -113,6 +114,40 @@ describe("setupAppRecommendations", () => {
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.progress).not.toHaveBeenCalled();
     expect(writeOffer).not.toHaveBeenCalled();
+  });
+
+  it("scans again after the refresh command clears an answered offer", async () => {
+    let stored: OnboardingRecommendationsRecord | null = {
+      inventoryHash: "hash",
+      matches: [],
+      offeredAt: 1,
+      acceptedAt: 2,
+      updatedAt: 2,
+    };
+    const clear = vi.fn(() => {
+      stored = null;
+      return true;
+    });
+    const recommend = vi.fn(async () => recommendationResult());
+
+    refreshOnboardRecommendationsCommand(runtime, { clear });
+    await setupAppRecommendations({
+      config: {},
+      prompter: createPrompter(),
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        readStored: () => stored,
+        writeOffer: vi.fn(),
+        deferOfferToBootstrap: () => false,
+      },
+    });
+
+    expect(clear).toHaveBeenCalledOnce();
+    expect(recommend).toHaveBeenCalledOnce();
   });
 
   it("reuses a pending stored offer without rescanning and acknowledges the answer", async () => {

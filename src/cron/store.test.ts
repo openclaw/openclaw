@@ -501,7 +501,12 @@ describe("cron store", () => {
     const store = await makeStorePath();
     const payload = makeStore("job-queued-phase", true);
     const job = expectDefined(payload.jobs[0], "payload.jobs[0] test invariant");
-    job.state = { nextRunAtMs: job.createdAtMs, queuedAtMs: job.createdAtMs + 1 };
+    job.state = {
+      nextRunAtMs: job.createdAtMs,
+      startupCatchupAtMs: job.createdAtMs,
+      pacedNextRunAtMs: job.createdAtMs,
+      queuedAtMs: job.createdAtMs + 1,
+    };
 
     await saveCronStore(store.storePath, payload);
 
@@ -509,9 +514,15 @@ describe("cron store", () => {
       .db.prepare("SELECT running_at_ms, state_json FROM cron_jobs WHERE job_id = ?")
       .get(job.id) as { running_at_ms: number | null; state_json: string };
     expect(queuedRow.running_at_ms).toBeNull();
-    expect(JSON.parse(queuedRow.state_json)).toMatchObject({ queuedAtMs: job.createdAtMs + 1 });
+    expect(JSON.parse(queuedRow.state_json)).toMatchObject({
+      queuedAtMs: job.createdAtMs + 1,
+      startupCatchupAtMs: job.createdAtMs,
+      pacedNextRunAtMs: job.createdAtMs,
+    });
     expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
       queuedAtMs: job.createdAtMs + 1,
+      startupCatchupAtMs: job.createdAtMs,
+      pacedNextRunAtMs: job.createdAtMs,
     });
 
     job.state.queuedAtMs = undefined;

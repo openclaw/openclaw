@@ -8,7 +8,10 @@ import {
   type SessionRunTerminal,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
-import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
@@ -18,7 +21,6 @@ import {
   type CompactionStatus,
   type FallbackStatus,
   type PlanStatus,
-  type QuestionStatus,
 } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
@@ -57,7 +59,6 @@ type RunLifecycleHost = Omit<
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
   planStatus?: PlanStatus | null;
-  questionStatus?: QuestionStatus | null;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
@@ -125,7 +126,8 @@ export function hasAbortableSessionRun(host: {
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && isSessionRunActive(session),
+      (session) =>
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
     ),
   );
 }
@@ -236,10 +238,6 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   const planOwner = host.planStatus?.runId;
   if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
     host.planStatus = null;
-  }
-  const questionOwner = host.questionStatus?.runId;
-  if (host.questionStatus && (!runId || !questionOwner || questionOwner === runId)) {
-    host.questionStatus = null;
   }
 }
 

@@ -1,5 +1,6 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -91,17 +92,11 @@ async function readStdin(
   stream: NodeJS.ReadableStream = process.stdin,
   maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
 ): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.byteLength;
-    if (total > maxBytes) {
-      throw new Error(`Exec approvals stdin exceeds ${maxBytes} bytes.`);
-    }
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks, total).toString("utf8");
+  const bytes = await readByteStreamWithLimit(stream, {
+    maxBytes,
+    onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
+  });
+  return bytes.toString("utf8");
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {

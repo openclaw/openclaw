@@ -1,7 +1,7 @@
 // Gateway run option collision tests cover gateway run flag registration boundaries.
-import path from "node:path";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
@@ -31,6 +31,10 @@ const cleanStaleGatewayProcessesSync = vi.fn(
   (_port?: number, _options?: { protectedPid?: number }) => [],
 );
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
+const findVerifiedGatewayListenerPidsOnPortSync = vi.fn((_port: number) => [] as number[]);
+const formatGatewayPidList = vi.fn((pids: number[]) => pids.join(", "));
+const isTerminalInteractive = vi.fn(() => true);
+const offerInvalidConfigRecovery = vi.fn(async () => ({ status: "declined" as const }));
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
@@ -245,6 +249,12 @@ vi.mock("../../infra/restart-stale-pids.js", () => ({
     cleanStaleGatewayProcessesSync(port, options),
 }));
 
+vi.mock("../../infra/gateway-processes.js", () => ({
+  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
+    findVerifiedGatewayListenerPidsOnPortSync(port),
+  formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
+}));
+
 vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
@@ -316,6 +326,16 @@ vi.mock("../command-format.js", () => ({
   formatCliCommand: (cmd: string) => cmd,
 }));
 
+vi.mock("../terminal-interactivity.js", () => ({
+  isTerminalInteractive: () => isTerminalInteractive(),
+  NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE:
+    "Refusing to kill the operator's running gateway service from a non-interactive shell. Use an isolated dev gateway (openclaw gateway run --dev, or --profile <name> with a free port) for testing.",
+}));
+
+vi.mock("../invalid-config-recovery.js", () => ({
+  offerInvalidConfigRecovery: () => offerInvalidConfigRecovery(),
+}));
+
 vi.mock("../ports.js", () => ({
   forceFreePortAndWait: (port: number, opts: unknown) => forceFreePortAndWait(port, opts),
   waitForPortBindable: (port: number, opts?: unknown) => waitForPortBindable(port, opts),
@@ -379,6 +399,12 @@ describe("gateway run option collisions", () => {
     setVerbose.mockClear();
     setConsoleSubsystemFilter.mockClear();
     forceFreePortAndWait.mockClear();
+    findVerifiedGatewayListenerPidsOnPortSync.mockReset();
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    formatGatewayPidList.mockClear();
+    isTerminalInteractive.mockReset();
+    isTerminalInteractive.mockReturnValue(true);
+    offerInvalidConfigRecovery.mockClear();
     cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
@@ -930,6 +956,25 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().auth?.token).toBe("tok_run");
     expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("refuses non-interactive --force when a verified gateway appears before signaling", async () => {
+    isTerminalInteractive.mockReturnValue(false);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValueOnce([4242]);
+    forceFreePortAndWait.mockImplementationOnce(async (_port, opts) => {
+      (opts as { beforeSignal?: () => void }).beforeSignal?.();
+      return { killed: [], waitedMs: 0, escalatedToSigkill: false };
+    });
+
+    await expect(
+      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(forceFreePortAndWait).toHaveBeenCalledTimes(1);
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("openclaw gateway run --dev");
+    expect(runtimeErrors.join("\n")).toContain("--profile <name> with a free port");
   });
 
   it("marks service-mode gateway descendants with the live gateway pid", async () => {
@@ -1544,9 +1589,7 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors).toContain(
       "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
     );
-    expect(runtimeErrors).toContain(
-      `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
-    );
+    expect(runtimeErrors).toContain(`Config write audit: ${CONFIG_AUDIT_STORE_LABEL}`);
     expect(startGatewayServer).not.toHaveBeenCalled();
     expect(readBestEffortConfig).not.toHaveBeenCalled();
   });
@@ -1568,9 +1611,7 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors).toContain(
       "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
     );
-    expect(runtimeErrors).toContain(
-      `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
-    );
+    expect(runtimeErrors).toContain(`Config write audit: ${CONFIG_AUDIT_STORE_LABEL}`);
     expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledOnce();
     expect(startGatewayServer).not.toHaveBeenCalled();
   });
@@ -1609,6 +1650,20 @@ describe("gateway run option collisions", () => {
     const options = gatewayStartOptions();
     expect(options.bind).toBe("loopback");
     expect(options.startupConfigSnapshotRead?.snapshot?.valid).toBe(false);
+  });
+
+  it("does not offer doctor repair after --allow-unconfigured reaches startup", async () => {
+    const { createInvalidConfigError } = await import("../../config/io.invalid-config.js");
+    startGatewayServer.mockRejectedValueOnce(
+      createInvalidConfigError("/tmp/openclaw.json", "gateway.mode: invalid"),
+    );
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:78",
+    );
+
+    expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
+    expect(startGatewayServer).toHaveBeenCalledOnce();
   });
 
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {

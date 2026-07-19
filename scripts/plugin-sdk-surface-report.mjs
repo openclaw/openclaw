@@ -114,8 +114,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  // +1: unified implicit-mention config type.
-  "config-types": 426,
+  // +1 each: unified implicit-mention config and AgentThinkingLevel types.
+  "config-types": 427,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 26,
@@ -163,8 +163,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // Registry sweep: 77 packages, zero fetch failures; channel-ingress and dead aliases
   // had zero consumers.
   // +11 each: durable channel-ingress drain seam (drain/lifecycle/claim/retry) mirrored by compat (#108656).
-  "channel-message": 241,
-  "channel-message-runtime": 238,
+  // +3 each: shared ingress monitor factory and lifecycle/result contracts.
+  "channel-message": 244,
+  "channel-message-runtime": 241,
   "channel-pairing-paths": 1,
   // Deprecated pairing/conversation exports from the SQLite pairing migration
   // landed on main (#105802) without entrypoint pins; not touched by this PR.
@@ -215,7 +216,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: speech-settings keeps agent prompt imports off the synthesis/runtime graph.
       // +1: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolves ask_user choices for channel plugins.
-      331,
+      // +1: ingress-effect-once gives drained channels a narrow durable side-effect guard.
+      332,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -265,7 +267,20 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
       // +1: async memory prompt preparation registration.
-      8153,
+      // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
+      // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
+      // Harvest: internal question runtime exports -2.
+      // +1: ingress-effect-once factory.
+      // +1: shared persistent-dedupe claim loop.
+      // +3: bounded raw transcript cursor request, result, and reader.
+      // +3: bounded visible transcript cursor request, result, and reader.
+      // +1: explicit AgentModelPolicyConfig shared with provider setup surfaces.
+      // +1: AgentHarnessSessionSupersededError lets harness plugins stop stale-owner fallback.
+      // +1: AgentThinkingLevel shared by default-turn and compaction config.
+      // +9: shared ingress monitor factory and lifecycle/result contracts across
+      // channel-outbound and its two deprecated compatibility barrels.
+      8177,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -301,7 +316,16 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolver.
       // +1: async memory prompt preparation registration.
-      4535,
+      // +1: canonical memory host event normalization for SQLite storage.
+      // +1: centralized remember-across-conversations effective-default resolver.
+      // +3: gateway-backed harness question runner and claim/cancel helpers.
+      // Harvest: internal question runtime callable -1.
+      // +1: ingress-effect-once factory.
+      // +1: shared persistent-dedupe claim loop.
+      // +1: bounded raw transcript cursor reader.
+      // +1: bounded visible transcript cursor reader.
+      // +3: shared ingress monitor factory across channel-outbound and compat mirrors.
+      4546,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -320,14 +344,18 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
-      3005,
+      // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
+      // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
+      // +1: AgentThinkingLevel mirrored by deprecated config-types.
+      3013,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
-      // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      104,
+      // Harvest: freeze the compat config-schema barrel to explicit exports -1;
+      // retire the Memory Core facade's event-store wildcard -1.
+      103,
       env,
     ),
   };

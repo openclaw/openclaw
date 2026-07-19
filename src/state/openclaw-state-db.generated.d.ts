@@ -501,6 +501,7 @@ export interface DiagnosticEvents {
   event_key: string;
   payload_json: string;
   scope: string;
+  sequence: Generated<number>;
 }
 
 export interface DiagnosticStabilityBundles {
@@ -899,6 +900,7 @@ export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
   notified_sequence: Generated<number>;
+  provenance: Generated<string>;
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
@@ -1235,6 +1237,7 @@ export interface WorkerWorkspacePendingResults {
   recovery_requested_at_ms: number | null;
   run_id: string;
   session_id: string;
+  staged_result_ref: string | null;
   workspace_accepted_at_ms: number | null;
 }
 
