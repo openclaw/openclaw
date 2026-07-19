@@ -22,10 +22,12 @@ type SwarmGroup = {
   running: number;
   done: number;
   failed: number;
+  narrator?: string;
   phases: SwarmPhase[];
 };
 
 type SwarmPhaseCarrier = {
+  swarmLog?: unknown;
   swarmPhase?: unknown;
 };
 
@@ -60,10 +62,13 @@ function groupTail(groupId: string): string {
 }
 
 function swarmPhase(row: GatewaySessionRow): string | undefined {
-  // Phase events will attach this optional display bucket. Until then every
-  // collector child belongs to the single unlabelled phase below.
   const phase = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmPhase;
   return typeof phase === "string" && phase.trim() ? phase.trim() : undefined;
+}
+
+function swarmLog(row: GatewaySessionRow): string | undefined {
+  const log = (row as GatewaySessionRow & SwarmPhaseCarrier).swarmLog;
+  return typeof log === "string" && log.trim() ? log.trim() : undefined;
 }
 
 function isSwarmChildForSession(row: GatewaySessionRow, sessionKey: string): boolean {
@@ -82,7 +87,7 @@ function collectActiveSwarmGroups(
   sessions: readonly GatewaySessionRow[],
   sessionKey: string,
 ): SwarmGroup[] {
-  const byGroup = new Map<string, Array<{ phase?: string; dot: SwarmDot }>>();
+  const byGroup = new Map<string, Array<{ phase?: string; log?: string; dot: SwarmDot }>>();
   for (const row of sessions) {
     const groupId = row.swarmGroupId?.trim();
     if (!groupId || !isSwarmChildForSession(row, sessionKey)) {
@@ -95,6 +100,7 @@ function collectActiveSwarmGroups(
     }
     dots.push({
       phase: swarmPhase(row),
+      log: swarmLog(row),
       dot: {
         key: row.key,
         label: row.label?.trim() || row.displayName?.trim() || row.derivedTitle?.trim() || row.key,
@@ -119,6 +125,7 @@ function collectActiveSwarmGroups(
         running: dots.filter((dot) => dot.status === "running").length,
         done: dots.filter((dot) => dot.status === "done").length,
         failed: dots.filter((dot) => dot.status === "failed").length,
+        narrator: entries.map((entry) => entry.log).find(Boolean),
         phases: [...phases.entries()].map(([title, phaseDots]) => ({ title, dots: phaseDots })),
       } satisfies SwarmGroup;
     })
@@ -155,22 +162,27 @@ export function renderSwarmWidget({
                 ${swarmStatusLabel("done")} · ${group.failed} ${swarmStatusLabel("failed")}</span
               >
             </header>
+            ${group.narrator
+              ? html`<div class="swarm-widget__narrator">${group.narrator}</div>`
+              : nothing}
             ${group.phases.map(
               (phase) => html`
-                ${phase.title
-                  ? html`<div class="swarm-widget__phase">${phase.title}</div>`
-                  : nothing}
-                <div class="swarm-widget__dots" role="list">
-                  ${phase.dots.map(
-                    (dot) => html`
-                      <span
-                        class=${`swarm-widget__dot swarm-widget__dot--${dot.status}`}
-                        role="listitem"
-                        title=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
-                        aria-label=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
-                      ></span>
-                    `,
-                  )}
+                <div class="swarm-widget__phase-row">
+                  <div class="swarm-widget__phase">
+                    ${phase.title ?? t("labsPage.swarm.defaultPhase")}
+                  </div>
+                  <div class="swarm-widget__dots" role="list">
+                    ${phase.dots.map(
+                      (dot) => html`
+                        <span
+                          class=${`swarm-widget__dot swarm-widget__dot--${dot.status}`}
+                          role="listitem"
+                          title=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
+                          aria-label=${`${dot.label}: ${swarmStatusLabel(dot.status)}`}
+                        ></span>
+                      `,
+                    )}
+                  </div>
                 </div>
               `,
             )}

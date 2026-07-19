@@ -1,0 +1,99 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+
+// Lifecycle notes are transient UI state, so bound them for long-lived board tabs.
+const MAX_TRACKED_SWARM_GROUPS = 128;
+const MAX_TRACKED_SWARM_CHILDREN = 2_048;
+
+type SwarmDisplayCarrier = {
+  swarmLog?: string;
+  swarmPhase?: string;
+};
+
+function normalizedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > limit) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) {
+      return;
+    }
+    map.delete(oldest);
+  }
+}
+
+/** Tracks transient, group-scoped Swarm notes across canonical session-list refreshes. */
+export class SwarmActivityTracker {
+  private readonly currentPhaseByGroup = new Map<string, string>();
+  private readonly latestLogByGroup = new Map<string, string>();
+  private readonly phaseByChild = new Map<string, string>();
+
+  clear(): void {
+    this.currentPhaseByGroup.clear();
+    this.latestLogByGroup.clear();
+    this.phaseByChild.clear();
+  }
+
+  observe(payload: unknown): void {
+    const event = asNullableRecord(payload);
+    if (!event) {
+      return;
+    }
+    const source = asNullableRecord(event.session) ?? event;
+    const groupId = normalizedString(event.swarmGroupId) ?? normalizedString(source.swarmGroupId);
+    if (!groupId) {
+      return;
+    }
+
+    const kind = normalizedString(event.kind);
+    const text = normalizedString(event.text);
+    if ((kind === "phase" || kind === "log") && text) {
+      setBounded(
+        kind === "phase" ? this.currentPhaseByGroup : this.latestLogByGroup,
+        groupId,
+        text,
+        MAX_TRACKED_SWARM_GROUPS,
+      );
+      return;
+    }
+
+    const childKey = normalizedString(source.key) ?? normalizedString(event.sessionKey);
+    if (!childKey) {
+      return;
+    }
+    const explicitPhase = normalizedString(source.swarmPhase) ?? normalizedString(event.swarmPhase);
+    if (explicitPhase) {
+      setBounded(this.phaseByChild, childKey, explicitPhase, MAX_TRACKED_SWARM_CHILDREN);
+      return;
+    }
+    if (!this.phaseByChild.has(childKey)) {
+      const currentPhase = this.currentPhaseByGroup.get(groupId);
+      if (currentPhase) {
+        setBounded(this.phaseByChild, childKey, currentPhase, MAX_TRACKED_SWARM_CHILDREN);
+      }
+    }
+  }
+
+  decorate(result: SessionsListResult | null): SessionsListResult | null {
+    if (!result) {
+      return result;
+    }
+    let changed = false;
+    const sessions = result.sessions.map((row): GatewaySessionRow => {
+      const carrier = row as GatewaySessionRow & SwarmDisplayCarrier;
+      const phase = this.phaseByChild.get(row.key) ?? carrier.swarmPhase;
+      const groupId = row.swarmGroupId?.trim();
+      const log = (groupId ? this.latestLogByGroup.get(groupId) : undefined) ?? carrier.swarmLog;
+      if (phase === carrier.swarmPhase && log === carrier.swarmLog) {
+        return row;
+      }
+      changed = true;
+      return { ...row, ...(phase ? { swarmPhase: phase } : {}), ...(log ? { swarmLog: log } : {}) };
+    });
+    return changed ? { ...result, sessions } : result;
+  }
+}

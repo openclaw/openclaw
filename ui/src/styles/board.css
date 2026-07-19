@@ -341,13 +341,27 @@ openclaw-board-widget-cell {
 }
 
 .swarm-widget__group-header span,
+.swarm-widget__narrator,
 .swarm-widget__phase {
   color: var(--muted, #8a919e);
   font-size: 10px;
 }
 
+.swarm-widget__narrator {
+  line-height: 1.35;
+}
+
+.swarm-widget__phase-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(56px, auto) 1fr;
+}
+
 .swarm-widget__phase {
-  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .swarm-widget__dots {
