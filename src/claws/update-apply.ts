@@ -26,7 +26,12 @@ import {
   updateClawInstallRecordStatus,
   type PersistedClawInstall,
 } from "./provenance.js";
-import { CLAW_OUTPUT_STABILITY, type ClawManifest, type ClawSourceIdentity } from "./types.js";
+import {
+  CLAW_OUTPUT_STABILITY,
+  type ClawManifest,
+  type ClawPackage,
+  type ClawSourceIdentity,
+} from "./types.js";
 import { buildClawUpdatePlan, type ClawUpdateAction, type ClawUpdatePlan } from "./update-plan.js";
 import {
   applyClawWorkspaceUpdate,
