@@ -15,6 +15,10 @@ protocol TalkRealtimeWebRTCSessionDelegate: AnyObject {
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didUpdateAudioLevels input: Double?, output: Double?)
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveUserTranscript text: String)
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript text: String)
+    func realtimeSession(
+        _ session: TalkRealtimeWebRTCSession,
+        didFailTranscriptPersistenceForEntry entryId: String,
+        error: Error)
     func realtimeSessionDidFinish(_ session: TalkRealtimeWebRTCSession)
 }
 
@@ -440,11 +444,25 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     paramsJSON: json,
                     timeoutSeconds: 5)
             },
-            failureLog: { entryId, error in
-                GatewayDiagnostics.log(
-                    "talk transcript persist FAILED entryId=\(entryId) error=\(error.localizedDescription)")
+            failureLog: { [weak self] entryId, error in
+                self?.reportTranscriptPersistenceFailure(entryId: entryId, error: error)
             })
     }
+
+    private func reportTranscriptPersistenceFailure(entryId: String, error: Error) {
+        GatewayDiagnostics.log(
+            "talk transcript persist FAILED entryId=\(entryId) error=\(error.localizedDescription)")
+        self.delegate?.realtimeSession(
+            self,
+            didFailTranscriptPersistenceForEntry: entryId,
+            error: error)
+    }
+
+    #if DEBUG
+    func _test_reportTranscriptPersistenceFailure(entryId: String, error: Error) {
+        self.reportTranscriptPersistenceFailure(entryId: entryId, error: error)
+    }
+    #endif
 
     func flushTranscriptWrites() async {
         guard let voiceSessionId = self.voiceSessionId else { return }
