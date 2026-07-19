@@ -106,6 +106,9 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     }
   }
 
+  // The iframe sandbox must include allow-same-origin: without it the frame
+  // gets an opaque origin, the discussion app's session cookie is never sent,
+  // and the embed is stuck on its sign-in card.
   private renderOpen(info: SessionDiscussionInfo): TemplateResult {
     const embedUrl = resolveDiscussionUrl(info.embedUrl);
     const openUrl = resolveDiscussionUrl(info.openUrl);
@@ -135,7 +138,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
                 class="session-discussion__frame"
                 src=${embedUrl}
                 title=${t("chat.sessionDiscussion.frameTitle")}
-                sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
+                sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
               ></iframe>
             `
           : html`<div class="session-discussion__empty">
