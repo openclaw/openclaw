@@ -24,6 +24,11 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
+import {
+  beginOpenClawAgentDatabaseRegistrationFence,
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
@@ -411,6 +416,27 @@ afterEach(() => {
 });
 
 describe("openclaw agent database", () => {
+  it("fences database registration while a parent path is being deleted", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentDir = path.join(stateDir, "agents", "deleted", "agent");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    const release = beginOpenClawAgentDatabaseRegistrationFence([agentDir]);
+
+    try {
+      expect(() =>
+        registerOpenClawAgentDatabase({ agentId: "survivor", path: databasePath, env }),
+      ).toThrow("is being deleted");
+    } finally {
+      release();
+    }
+
+    expect(() =>
+      registerOpenClawAgentDatabase({ agentId: "survivor", path: databasePath, env }),
+    ).not.toThrow();
+    unregisterOpenClawAgentDatabase({ agentId: "survivor", path: databasePath, env });
+  });
+
   it("resolves under the per-agent state directory", () => {
     const stateDir = createTempStateDir();
 

@@ -1,11 +1,13 @@
 import { existsSync, lstatSync, statSync } from "node:fs";
 import path from "node:path";
+import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -25,11 +27,51 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
+const registrationFenceCounts = new Map<string, number>();
+
+function pathsOverlap(left: string, right: string): boolean {
+  return left === right || isPathInside(left, right) || isPathInside(right, left);
+}
+
+function isOpenClawAgentDatabaseRegistrationFenced(pathname: string): boolean {
+  return resolveSqliteDatabaseFilePaths(pathname)
+    .map((filePath) => normalizeAgentDirRegistryPath(filePath))
+    .some((filePath) =>
+      [...registrationFenceCounts.keys()].some((fence) => pathsOverlap(filePath, fence)),
+    );
+}
+
+/** Fence process-local database claims while agent paths are moved to Trash. */
+export function beginOpenClawAgentDatabaseRegistrationFence(paths: readonly string[]): () => void {
+  const fences = [...new Set(paths.map((pathname) => normalizeAgentDirRegistryPath(pathname)))];
+  for (const fence of fences) {
+    registrationFenceCounts.set(fence, (registrationFenceCounts.get(fence) ?? 0) + 1);
+  }
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    for (const fence of fences) {
+      const count = registrationFenceCounts.get(fence) ?? 0;
+      if (count <= 1) {
+        registrationFenceCounts.delete(fence);
+      } else {
+        registrationFenceCounts.set(fence, count - 1);
+      }
+    }
+  };
+}
+
 export function registerOpenClawAgentDatabase(params: {
   agentId: string;
   path: string;
   env?: NodeJS.ProcessEnv;
 }): void {
+  if (isOpenClawAgentDatabaseRegistrationFenced(params.path)) {
+    throw new Error(`OpenClaw agent database ${params.path} is being deleted.`);
+  }
   let sizeBytes: number | null = null;
   try {
     sizeBytes = statSync(params.path).size;
