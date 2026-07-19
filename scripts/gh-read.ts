@@ -151,7 +151,7 @@ function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
     ) {
       continue;
     }
-    commandPath.push(arg);
+    commandPath.push(commandPath.length === 0 && arg === "cs" ? "codespace" : arg);
   }
 
   if (commandPath[0] === "run" && commandPath[1] === "watch") {

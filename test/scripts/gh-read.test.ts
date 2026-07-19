@@ -126,6 +126,14 @@ describe("gh-read helpers", () => {
       args: ["codespace", "logs", "-f=true"],
       mode: "codespace log true-valued short follow mode",
     },
+    {
+      args: ["cs", "logs", "-f"],
+      mode: "codespace alias log short follow mode",
+    },
+    {
+      args: ["cs", "-c", "example", "logs", "-f=true"],
+      mode: "codespace alias selected log true-valued short follow mode",
+    },
   ])("preserves the unbounded default for $mode", ({ args }) => {
     const received = { args: [] as string[], command: "", timeout: 120_000 as number | undefined };
     const spawnSyncImpl = vi.fn(
