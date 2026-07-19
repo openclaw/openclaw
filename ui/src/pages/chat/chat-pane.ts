@@ -2696,10 +2696,16 @@ class ChatPane extends OpenClawLightDomElement {
     ) {
       return;
     }
+    const generation = this.connectionGeneration;
     try {
       const info = await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
         sessionKey,
       });
+      // A reconnect supersedes in-flight probes; a stale result must not
+      // overwrite the new source's cache (e.g. an old "none" hiding the action).
+      if (generation !== this.connectionGeneration) {
+        return;
+      }
       this.sessionDiscussionStates.set(sessionKey, info.state);
       this.requestUpdate();
     } catch {
@@ -2724,6 +2730,7 @@ class ChatPane extends OpenClawLightDomElement {
     const canOpen =
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.open") === true;
+    const contentGeneration = this.connectionGeneration;
     const content: SidebarContent = {
       kind: "session-discussion",
       sessionKey,
@@ -2745,6 +2752,11 @@ class ChatPane extends OpenClawLightDomElement {
         });
       },
       onStateChange: (key, discussionState) => {
+        // Panels created under a previous connection may report late; their
+        // state belongs to the old provider and must not touch the new cache.
+        if (contentGeneration !== this.connectionGeneration) {
+          return;
+        }
         this.sessionDiscussionStates.set(key, discussionState);
         const current = state.sidebarContent;
         if (
