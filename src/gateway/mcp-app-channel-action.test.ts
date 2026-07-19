@@ -17,11 +17,7 @@ vi.mock("./mcp-app-standalone.js", () => ({
 }));
 
 import { materializeMcpAppChannelPresentation } from "./mcp-app-channel-action.js";
-import {
-  getMcpAppChannelOrigin,
-  mcpAppChannelOriginTesting,
-  prepareMcpAppChannelOrigin,
-} from "./mcp-app-channel-origin.js";
+import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 
 const nowMs = 1_800_000_000_000;
 const runtime = { sessionId: "runtime-session", mcpAppsEnabled: true };
@@ -34,9 +30,13 @@ const view = {
   toolResult: { privateResult: "do-not-emit-result" },
 };
 
+function resetMcpAppChannelOrigin() {
+  prepareMcpAppChannelOrigin({ origin: "https://reset.test", reachability: "tailnet" })();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mcpAppChannelOriginTesting.clear();
+  resetMcpAppChannelOrigin();
   mocks.peekRuntime.mockReturnValue(runtime);
   mocks.getView.mockReturnValue(view);
   mocks.createTicket.mockReturnValue({
@@ -121,7 +121,7 @@ describe("materializeMcpAppChannelPresentation", () => {
   });
 
   it.each([
-    ["missing origin", () => mcpAppChannelOriginTesting.clear()],
+    ["missing origin", resetMcpAppChannelOrigin],
     ["missing view", () => mocks.getView.mockReturnValue(undefined)],
     ["expired view", () => mocks.getView.mockReturnValue({ ...view, expiresAtMs: nowMs })],
     ["ticket capacity", () => mocks.createTicket.mockReturnValue(undefined)],

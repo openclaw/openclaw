@@ -20,15 +20,19 @@ vi.mock("../infra/tailscale.js", () => ({
   hasTailscaleFunnelRouteForPort: mocks.hasTailscaleFunnelRouteForPort,
 }));
 
-import { getMcpAppChannelOrigin, mcpAppChannelOriginTesting } from "./mcp-app-channel-origin.js";
+import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 function createLogger() {
   return { info: vi.fn(), warn: vi.fn() };
 }
 
+function resetMcpAppChannelOrigin() {
+  prepareMcpAppChannelOrigin({ origin: "https://reset.test", reachability: "tailnet" })();
+}
+
 afterEach(() => {
-  mcpAppChannelOriginTesting.clear();
+  resetMcpAppChannelOrigin();
   for (const fn of Object.values(mocks)) {
     fn.mockReset();
   }

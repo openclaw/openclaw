@@ -1,4 +1,4 @@
-export type McpAppChannelOrigin = {
+type McpAppChannelOrigin = {
   origin: string;
   reachability: "tailnet" | "internet";
 };
@@ -32,9 +32,3 @@ export function getMcpAppChannelOrigin(): McpAppChannelOrigin | undefined {
     ? { origin: publishedOrigin.origin, reachability: publishedOrigin.reachability }
     : undefined;
 }
-
-export const mcpAppChannelOriginTesting = {
-  clear: () => {
-    publishedOrigin = undefined;
-  },
-};
