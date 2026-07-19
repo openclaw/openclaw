@@ -202,6 +202,11 @@ try {
   throw error;
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
+  // Declared inside watchdogMain because this function is serialized via
+  // .toString() and executed in a separate Node process (see spawn() below);
+  // a closure capture of the parent PS_TIMEOUT_MS would be a ReferenceError
+  // in the watchdog child. Keep this in sync with the parent constant.
+  const PS_TIMEOUT_MS = 5000;
   const check = () => {
     try {
       const watchdogFs = require("node:fs");

@@ -182,6 +182,26 @@ describe("remote workspace quiescence scripts", () => {
     );
     expect(result.code).not.toBe(0);
   });
+
+  it("bounds every ps probe in the quiesce script with a timeout", () => {
+    // The watchdog runs serialized source via watchdogMain.toString() in a
+    // separate Node child process, so it cannot close over parent-scope
+    // constants. Regression guard for a ReferenceError that would otherwise
+    // only surface at watchdog expiry time.
+    expect(REMOTE_WORKSPACE_QUIESCE_JS).toMatch(/PS_TIMEOUT_MS\s*=\s*5000/);
+    const watchdogMatches = REMOTE_WORKSPACE_QUIESCE_JS.match(
+      /function watchdogMain\([^)]*\)\s*\{[\s\S]*?\n\}/,
+    );
+    expect(watchdogMatches).not.toBeNull();
+    expect(watchdogMatches![0]).toMatch(/PS_TIMEOUT_MS\s*=\s*5000/);
+    // Every execFileSync("ps", ...) call site in the quiesce script must
+    // carry the timeout option.
+    const psCallSites = REMOTE_WORKSPACE_QUIESCE_JS.split('execFileSync("ps"').length - 1;
+    expect(psCallSites).toBeGreaterThan(0);
+    expect(REMOTE_WORKSPACE_QUIESCE_JS.split('execFileSync("ps"').length - 1).toBe(
+      REMOTE_WORKSPACE_QUIESCE_JS.split("timeout: PS_TIMEOUT_MS").length - 1,
+    );
+  });
 });
 
 describe("remote workspace manifest script", () => {
