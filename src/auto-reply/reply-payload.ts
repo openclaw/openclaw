@@ -245,6 +245,7 @@ export type ReplyPayloadMetadata = {
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
     agentId?: string;
+    expectedSessionId?: string;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;

@@ -711,6 +711,7 @@ async function dispatchReplyFromConfigInner(
       mirror?: boolean;
       kind?: ReplyDispatchKind;
       responsePrefixContext?: ResponsePrefixContext;
+      sessionKey?: string;
     },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
@@ -721,15 +722,17 @@ async function dispatchReplyFromConfigInner(
     // runtime that produced this payload, so agent_end and message delivery
     // hooks expose the same canonical key for native command redirects.
     const agentRuntimeSessionKey =
-      ctx.CommandSource === "native"
+      options?.sessionKey ??
+      (ctx.CommandSource === "native"
         ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
-        : ctx.SessionKey;
+        : ctx.SessionKey);
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
       sessionKey: agentRuntimeSessionKey,
-      policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+      policySessionKey:
+        options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
       accountId: routedReplyAccountId,
       requesterSenderId: ctx.SenderId,
@@ -783,12 +786,33 @@ async function dispatchReplyFromConfigInner(
     }
   };
 
+  type PluginBindingTranscriptOwner = {
+    agentId: string;
+    expectedSessionId: string;
+    sessionKey: string;
+  };
   const deliverBindingPayload = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
+    transcriptOwner?: PluginBindingTranscriptOwner,
   ): Promise<boolean> => {
-    const result = await routeReplyToOriginating(payload, {
+    // Metadata is delivery-specific. Keep it off the plugin-owned payload so a
+    // reused reply object cannot carry a stale transcript owner into a later turn.
+    const bindingPayload = setReplyPayloadMetadata(
+      copyReplyPayloadMetadata(payload, { ...payload }),
+      {
+        sourceReplyTranscriptMirror: transcriptOwner
+          ? {
+              sessionKey: transcriptOwner.sessionKey,
+              agentId: transcriptOwner.agentId,
+              expectedSessionId: transcriptOwner.expectedSessionId,
+            }
+          : undefined,
+      },
+    );
+    const result = await routeReplyToOriginating(bindingPayload, {
       kind: mode === "terminal" ? "final" : "tool",
+      sessionKey: transcriptOwner?.sessionKey,
     });
     if (result) {
       if (!result.ok) {
@@ -800,17 +824,18 @@ async function dispatchReplyFromConfigInner(
     }
     markInboundDedupeReplayUnsafe();
     return mode === "additive"
-      ? dispatcher.sendToolResult(payload)
-      : dispatcher.sendFinalReply(payload);
+      ? dispatcher.sendToolResult(bindingPayload)
+      : dispatcher.sendFinalReply(bindingPayload);
   };
   const sendBindingNotice = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
+    transcriptOwner?: PluginBindingTranscriptOwner,
   ): Promise<boolean> => {
     if (suppressAutomaticSourceDelivery) {
       return false;
     }
-    return await deliverBindingPayload(payload, mode);
+    return await deliverBindingPayload(payload, mode, transcriptOwner);
   };
 
   // Hook contexts use transport-native ids (for example Slack `U123`), while
@@ -828,6 +853,57 @@ async function dispatchReplyFromConfigInner(
   const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
+  const pluginBindingSessionKey = normalizeOptionalString(
+    pluginOwnedBindingRecord?.targetSessionKey,
+  );
+  const pluginBindingSessionStoreEntry = pluginBindingSessionKey
+    ? resolveSessionStoreLookup(
+        {
+          ...ctx,
+          CommandTargetSessionKey: undefined,
+          SessionKey: pluginBindingSessionKey,
+        },
+        cfg,
+      )
+    : undefined;
+  const persistPluginBindingUserTurn = async (): Promise<
+    PluginBindingTranscriptOwner | undefined
+  > => {
+    const recorder = params.replyOptions?.userTurnTranscriptRecorder;
+    const targetSessionEntry = pluginBindingSessionStoreEntry?.entry;
+    if (!recorder || recorder.hasPersisted() || !pluginBindingSessionKey || !targetSessionEntry) {
+      return undefined;
+    }
+    const targetAgentId = resolveSessionAgentId({
+      sessionKey: pluginBindingSessionKey,
+      config: cfg,
+      fallbackAgentId: ctx.AgentId,
+    });
+    const result = await recorder.persistApproved({
+      target: {
+        sessionId: targetSessionEntry.sessionId,
+        sessionKey: pluginBindingSessionKey,
+        sessionEntry: targetSessionEntry,
+        ...(pluginBindingSessionStoreEntry?.store
+          ? { sessionStore: pluginBindingSessionStoreEntry.store }
+          : {}),
+        storePath: pluginBindingSessionStoreEntry?.storePath,
+        agentId: targetAgentId,
+        cwd: resolveAgentWorkspaceDir(cfg, targetAgentId),
+        config: cfg,
+      },
+      expectedSessionId: targetSessionEntry.sessionId,
+    });
+    if (!result) {
+      logVerbose(`plugin-bound user-turn persistence skipped because the target session changed`);
+      return undefined;
+    }
+    return {
+      agentId: targetAgentId,
+      expectedSessionId: targetSessionEntry.sessionId,
+      sessionKey: pluginBindingSessionKey,
+    };
+  };
 
   // Resolve automatic source-delivery suppression early so every outbound path
   // below (plugin-binding notices, fast-abort, normal dispatch) honors it. The
@@ -1250,12 +1326,17 @@ async function dispatchReplyFromConfigInner(
 
         switch (targetedClaimOutcome.status) {
           case "handled": {
+            const transcriptOwner = await persistPluginBindingUserTurn();
             if (targetedClaimOutcome.result.reply && shouldDeliverPluginBindingReply) {
               // A bound plugin's reply is the explicit output for this claimed turn,
               // not an automatic agent final; message-tool-only suppression must not
               // turn normal user-request bindings into silent channel responses.
               // Ambient room events keep the same privacy guard as final replies.
-              await deliverBindingPayload(targetedClaimOutcome.result.reply, "terminal");
+              await deliverBindingPayload(
+                targetedClaimOutcome.result.reply,
+                "terminal",
+                transcriptOwner,
+              );
             }
             markIdle("plugin_binding_dispatch");
             recordProcessed("completed", { reason: "plugin-bound-handled" });
@@ -1300,9 +1381,11 @@ async function dispatchReplyFromConfigInner(
             break;
           }
           case "declined": {
+            const transcriptOwner = await persistPluginBindingUserTurn();
             await sendBindingNotice(
               { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
               "terminal",
+              transcriptOwner,
             );
             markIdle("plugin_binding_declined");
             recordProcessed("completed", { reason: "plugin-bound-declined" });
@@ -1314,12 +1397,14 @@ async function dispatchReplyFromConfigInner(
             });
           }
           case "error": {
+            const transcriptOwner = await persistPluginBindingUserTurn();
             logVerbose(
               `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
             );
             await sendBindingNotice(
               { text: buildPluginBindingErrorText(pluginOwnedBinding) },
               "terminal",
+              transcriptOwner,
             );
             markIdle("plugin_binding_error");
             recordProcessed("completed", { reason: "plugin-bound-error" });

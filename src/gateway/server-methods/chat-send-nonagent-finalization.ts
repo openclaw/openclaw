@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
@@ -33,6 +33,60 @@ type DeliveredReply = {
   payload: ReplyPayload;
   kind: "block" | "final";
 };
+
+type TranscriptMirrorResolution =
+  | { kind: "none" }
+  | { kind: "invalid" }
+  | {
+      kind: "owner";
+      owner: {
+        agentId?: string;
+        expectedSessionId: string;
+        sessionKey: string;
+      };
+    };
+
+function resolveTranscriptMirrorOwner(
+  payloads: readonly ReplyPayload[],
+): TranscriptMirrorResolution {
+  if (payloads.length === 0) {
+    return { kind: "none" };
+  }
+  const owners = payloads.map(
+    (payload) => getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
+  );
+  // The older source-reply mirror shape has no expectedSessionId and keeps its
+  // existing source-session behavior. That field opts a payload into binding ownership.
+  if (owners.every((owner) => owner?.expectedSessionId === undefined)) {
+    return { kind: "none" };
+  }
+  const first = owners[0];
+  if (!first) {
+    return { kind: "invalid" };
+  }
+  const sessionKey = first.sessionKey.trim();
+  const expectedSessionId = first.expectedSessionId?.trim();
+  if (
+    !sessionKey ||
+    !expectedSessionId ||
+    owners.some(
+      (owner) =>
+        owner?.sessionKey.trim() !== sessionKey ||
+        owner.expectedSessionId?.trim() !== expectedSessionId ||
+        owner.agentId !== first.agentId,
+    )
+  ) {
+    return { kind: "invalid" };
+  }
+  return {
+    kind: "owner",
+    owner: {
+      sessionKey,
+      expectedSessionId,
+      ...(first.agentId ? { agentId: first.agentId } : {}),
+    },
+  };
+}
 
 function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[]) {
   const replies = deliveredReplies.map((entry) => entry.payload).filter(isBtwReplyPayload);
@@ -103,6 +157,9 @@ export async function finalizeChatSendNonAgentReplies(params: {
     foldCommandBlocks,
     suppressReplies,
   });
+  const transcriptMirrorResolution = resolveTranscriptMirrorOwner(rawFinalPayloads);
+  const transcriptMirrorOwner =
+    transcriptMirrorResolution.kind === "owner" ? transcriptMirrorResolution.owner : undefined;
   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
     cfg,
     sessionKey,
@@ -110,13 +167,47 @@ export async function finalizeChatSendNonAgentReplies(params: {
     accountId,
     payloads: rawFinalPayloads,
   });
-  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-    sessionKey,
-    sessionLoadOptions,
+  const requestedTranscriptSession = transcriptMirrorOwner
+    ? loadSessionEntry(transcriptMirrorOwner.sessionKey, {
+        ...sessionLoadOptions,
+        ...(transcriptMirrorOwner.agentId ? { agentId: transcriptMirrorOwner.agentId } : {}),
+      })
+    : undefined;
+  // Binding-owned payloads already retargeted the user turn. Keep the assistant
+  // beside it only when that durable target still exists. Never fall back to the
+  // source transcript after ownership metadata appears on any final payload.
+  const useTranscriptMirrorOwner = Boolean(
+    transcriptMirrorOwner &&
+    requestedTranscriptSession?.entry?.sessionId === transcriptMirrorOwner.expectedSessionId,
   );
+  if (transcriptMirrorOwner && !useTranscriptMirrorOwner) {
+    context.logGateway.warn(
+      `webchat transcript append skipped: binding-owned session changed before finalization`,
+    );
+  }
+  if (transcriptMirrorResolution.kind === "invalid") {
+    context.logGateway.warn(
+      `webchat transcript append skipped: inconsistent binding-owned transcript metadata`,
+    );
+  }
+  const canAppendAssistantTranscript =
+    transcriptMirrorResolution.kind === "none" || useTranscriptMirrorOwner;
+  const transcriptSessionKey =
+    useTranscriptMirrorOwner && transcriptMirrorOwner
+      ? transcriptMirrorOwner.sessionKey
+      : sessionKey;
+  const transcriptAgentId =
+    useTranscriptMirrorOwner && transcriptMirrorOwner
+      ? (transcriptMirrorOwner.agentId ?? agentId)
+      : agentId;
+  const resolvedTranscriptSession =
+    useTranscriptMirrorOwner && requestedTranscriptSession
+      ? requestedTranscriptSession
+      : loadSessionEntry(sessionKey, sessionLoadOptions);
+  const { storePath: latestStorePath, entry: latestEntry } = resolvedTranscriptSession;
   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
   const mediaLocalRoots = appendLocalMediaParentRoots(
-    getAgentScopedMediaLocalRoots(cfg, agentId),
+    getAgentScopedMediaLocalRoots(cfg, transcriptAgentId),
     latestStorePath ? [latestStorePath] : undefined,
   );
   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
@@ -184,18 +275,18 @@ export async function finalizeChatSendNonAgentReplies(params: {
     transcriptDisplayReply;
   let message: Record<string, unknown> | undefined;
   const shouldAppendAssistantTranscript = Boolean(
-    transcriptReply || persistedContentForAppend?.length,
+    canAppendAssistantTranscript && (transcriptReply || persistedContentForAppend?.length),
   );
   await persistUserTurnTranscript();
   if (shouldAppendAssistantTranscript) {
     const appended = await appendAssistantTranscriptMessage({
-      sessionKey,
+      sessionKey: transcriptSessionKey,
       message: transcriptReply,
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
       sessionFile: latestEntry?.sessionFile,
-      agentId,
+      agentId: transcriptAgentId,
       createIfMissing: true,
       idempotencyKey: clientRunId,
       ttsSupplement: ttsSupplementMarker,

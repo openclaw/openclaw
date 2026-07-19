@@ -16,6 +16,7 @@ import {
   emptyConfig,
   hookMocks,
   messageAuditMocks,
+  mocks,
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -163,7 +164,158 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
+    expect(
+      getReplyPayloadMetadata(firstMockArg(dispatcher.sendFinalReply, "plugin reply"))
+        ?.sourceReplyTranscriptMirror,
+    ).toBeUndefined();
     expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("persists Gateway plugin-bound turns and routed replies in the binding session", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true, reply: { text: "Codex bound reply" } },
+    });
+    const targetSessionKey = "plugin-binding:codex:history123";
+    const targetSessionEntry = {
+      sessionId: "bound-session-id",
+      updatedAt: Date.now(),
+    };
+    sessionStoreMocks.currentEntry = {
+      sessionId: "source-session-id",
+      updatedAt: Date.now(),
+    };
+    sessionStoreMocks.entriesBySessionKey.set(targetSessionKey, targetSessionEntry);
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
+      (params: { sessionKey: string }) =>
+        sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
+        sessionStoreMocks.currentEntry,
+    );
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-history-1",
+      targetSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex",
+      },
+    } satisfies SessionBindingRecord);
+    const persistApproved = vi.fn(async () => ({
+      appended: true,
+      sessionFile: "sqlite:bound-session-id",
+      sessionEntry: targetSessionEntry,
+      messageId: "user-turn-1",
+      message: { role: "user" as const, content: "continue", timestamp: Date.now() },
+    }));
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "openclaw",
+        Surface: "openclaw",
+        OriginatingChannel: "slack",
+        OriginatingTo: "user:U123",
+        To: "user:U123",
+        AccountId: "default",
+        CommandAuthorized: true,
+        BodyForAgent: "continue",
+        RawBody: "continue",
+        Body: "continue",
+        MessageSid: "msg-plugin-history",
+        SessionKey: "agent:main:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: {
+        userTurnTranscriptRecorder: {
+          hasPersisted: () => false,
+          persistApproved,
+        } as never,
+      },
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(persistApproved).toHaveBeenCalledWith({
+      target: expect.objectContaining({
+        sessionId: "bound-session-id",
+        sessionKey: targetSessionKey,
+        sessionEntry: targetSessionEntry,
+      }),
+      expectedSessionId: "bound-session-id",
+    });
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Codex bound reply" },
+        sessionKey: targetSessionKey,
+        policySessionKey: targetSessionKey,
+      }),
+    );
+    const routedCall = firstMockArg(mocks.routeReply, "plugin binding route") as {
+      payload: ReplyPayload;
+    };
+    expect(getReplyPayloadMetadata(routedCall.payload)?.sourceReplyTranscriptMirror).toMatchObject({
+      agentId: "main",
+      expectedSessionId: "bound-session-id",
+      sessionKey: targetSessionKey,
+    });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+
+    persistApproved.mockResolvedValueOnce(undefined as never);
+    mocks.routeReply.mockClear();
+    const rotatedDispatcher = createDispatcher();
+    const rotatedResult = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "openclaw",
+        Surface: "openclaw",
+        OriginatingChannel: "slack",
+        OriginatingTo: "user:U123",
+        To: "user:U123",
+        AccountId: "default",
+        CommandAuthorized: true,
+        BodyForAgent: "continue after reset",
+        RawBody: "continue after reset",
+        Body: "continue after reset",
+        MessageSid: "msg-plugin-history-rotated",
+        SessionKey: "agent:main:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher: rotatedDispatcher,
+      replyOptions: {
+        userTurnTranscriptRecorder: {
+          hasPersisted: () => false,
+          persistApproved,
+        } as never,
+      },
+      replyResolver,
+    });
+
+    expect(rotatedResult).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    const rotatedRoutedCall = firstMockArg(mocks.routeReply, "rotated plugin binding route") as {
+      payload: ReplyPayload;
+      sessionKey: string;
+    };
+    expect(rotatedRoutedCall.sessionKey).toBe("agent:main:main");
+    expect(rotatedRoutedCall.payload).toEqual({ text: "Codex bound reply" });
+    expect(getReplyPayloadMetadata(rotatedRoutedCall.payload)?.sourceReplyTranscriptMirror).toBe(
+      undefined,
+    );
+    expect(rotatedDispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {
