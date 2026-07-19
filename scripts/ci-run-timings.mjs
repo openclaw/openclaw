@@ -6,7 +6,6 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 
 const CI_RUN_TIMINGS_TIMEOUT_MS = 120_000;
-
 const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
 const RUN_JOBS_PAGE_SIZE = 20;
 const RUN_JOBS_MAX_PAGES = 25;
