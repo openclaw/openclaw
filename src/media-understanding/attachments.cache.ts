@@ -8,11 +8,12 @@ import {
   mergeInboundPathRoots,
 } from "@openclaw/media-core/inbound-path-policy";
 import { detectMime } from "@openclaw/media-core/mime";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { isAbortError } from "../infra/abort-signal.js";
 import {
   readRemoteMediaBuffer,
   type MediaFetchRetryOptions,
@@ -22,7 +23,6 @@ import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
-import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {
@@ -179,10 +179,10 @@ export class MediaAttachmentCache {
           entry.buffer = buffer;
           entry.bufferMime =
             entry.bufferMime ??
-            concreteMime(entry.attachment.mime) ??
             (await detectMime({
               buffer,
               filePath,
+              headerMime: concreteMime(entry.attachment.mime),
             }));
           entry.bufferFileName = path.basename(filePath) || `media-${params.attachmentIndex + 1}`;
           return {
@@ -219,13 +219,12 @@ export class MediaAttachmentCache {
         retry: REMOTE_MEDIA_FETCH_RETRY,
       });
       entry.buffer = fetched.buffer;
-      entry.bufferMime =
-        concreteMime(entry.attachment.mime) ??
-        fetched.contentType ??
-        (await detectMime({
-          buffer: fetched.buffer,
-          filePath: fetched.fileName ?? url,
-        }));
+      entry.bufferMime = await detectMime({
+        buffer: fetched.buffer,
+        filePath: fetched.fileName ?? url,
+        headerMime: concreteMime(entry.attachment.mime),
+        additionalMimeHints: [fetched.contentType],
+      });
       entry.bufferFileName = fetched.fileName ?? `media-${params.attachmentIndex + 1}`;
       return {
         buffer: fetched.buffer,
@@ -362,10 +361,7 @@ export class MediaAttachmentCache {
         return usableCwdCandidate;
       }
       const stateCandidate = path.resolve(resolveStateDir(), rawPath);
-      const usableStateCandidate = resolveUsableLocalCandidate(
-        stateCandidate,
-        this.localPathRoots,
-      );
+      const usableStateCandidate = resolveUsableLocalCandidate(stateCandidate, this.localPathRoots);
       if (usableStateCandidate) {
         return usableStateCandidate;
       }

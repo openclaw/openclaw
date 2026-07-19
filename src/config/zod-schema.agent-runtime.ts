@@ -833,6 +833,7 @@ const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    rememberAcrossConversations: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
     qmd: z
@@ -1014,7 +1015,7 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-export const AgentRuntimePolicySchema = z
+const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })
@@ -1030,6 +1031,12 @@ export const AgentModelRuntimeEntrySchema = z
   })
   .strict();
 
+export const AgentModelPolicySchema = z
+  .object({
+    allow: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -1041,6 +1048,7 @@ export const AgentEntrySchema = z
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
+    modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),
@@ -1163,3 +1171,4 @@ export const ToolsSchema = z
     );
   })
   .optional();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

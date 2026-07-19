@@ -1,4 +1,5 @@
 // Discord tests cover handle action plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -95,6 +96,23 @@ describe("handleDiscordMessageAction", () => {
         toolContext: { currentChannelProvider: "discord" },
       }),
     ).rejects.toThrow("durationMin must be a non-negative integer");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid autoArchiveMin before Discord thread-create runtime", async () => {
+    const cfg = discordConfig({ threads: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          threadName: "proof-thread",
+          autoArchiveMin: 999,
+        },
+        cfg,
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).rejects.toThrow("autoArchiveMin must be one of 60, 1440, 4320, or 10080 minutes");
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
@@ -688,6 +706,37 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("downgrades oversized table presentations to complete text", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Large pipeline",
+              headers: ["Account", "Stage"],
+              rows: Array.from({ length: 900 }, (_entry, index) => [
+                `account-${String(index)}-${"x".repeat(80)}`,
+                "Review",
+              ]),
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    const [call] = handleDiscordActionMock.mock.calls;
+    const payload = call?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.components).toBeUndefined();
+    expect(payload?.content).toEqual(expect.stringContaining("account-0-"));
+    expect(payload?.content).toEqual(expect.stringContaining("account-899-"));
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({
@@ -757,7 +806,10 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    const payload = expectDefined(
+      handleDiscordActionMock.mock.calls[0]?.[0],
+      "Discord search action payload",
+    );
     expect(payload).toMatchObject({
       action: "searchMessages",
       content: "test query",
@@ -784,7 +836,10 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    const payload = expectDefined(
+      handleDiscordActionMock.mock.calls[0]?.[0],
+      "Discord guild search action payload",
+    );
     expect(payload).toMatchObject({
       action: "searchMessages",
       content: "guild-wide query",

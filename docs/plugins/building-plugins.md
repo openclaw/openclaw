@@ -25,7 +25,7 @@ Bare package specs still install from npm during the launch cutover. Use the
 
 ## Requirements
 
-- Node 22.19+, Node 23.11+, or Node 24+, and `npm` or `pnpm`.
+- Node 22.22.3+, Node 24.15+, or Node 25.9+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers
@@ -137,9 +137,15 @@ local proof.
           name: "my_tool",
           description: "Echo one input value",
           parameters: Type.Object({ input: Type.String() }),
+          outputSchema: Type.Object(
+            { input: Type.String() },
+            { additionalProperties: false },
+          ),
           async execute(_id, params) {
+            const details = { input: params.input };
             return {
               content: [{ type: "text", text: `Got: ${params.input}` }],
+              details,
             };
           },
         });
@@ -247,14 +253,27 @@ register(api) {
       name: "workflow_tool",
       description: "Run a workflow",
       parameters: Type.Object({ pipeline: Type.String() }),
+      outputSchema: Type.Object(
+        { pipeline: Type.String() },
+        { additionalProperties: false },
+      ),
       async execute(_id, params) {
-        return { content: [{ type: "text", text: params.pipeline }] };
+        return {
+          content: [{ type: "text", text: params.pipeline }],
+          details: { pipeline: params.pipeline },
+        };
       },
     },
     { optional: true },
   );
 }
 ```
+
+`outputSchema` is optional. It describes the structured `details` value used by
+[Code Mode](/tools/code-mode) and [Tool Search](/tools/tool-search). Catalog
+calls reject invalid schemas before execution and validate the final value after
+tool hooks. Omit it for tools without a stable JSON result. See
+[Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
 
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:

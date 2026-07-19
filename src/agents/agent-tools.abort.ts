@@ -1,10 +1,10 @@
+import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Abort-signal wrapping for agent tools.
  * Combines per-call cancellation with run-level aborts while preserving plugin,
  * channel, and before_tool_call metadata on wrapped tools.
  */
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import { createAbortError, mergeAbortSignals } from "../infra/abort-signal.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
@@ -28,15 +28,11 @@ export function wrapToolWithAbortSignal(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const combined = mergeAbortSignals([signal, abortSignal]);
-      try {
-        if (combined.signal?.aborted) {
-          throwAbortError();
-        }
-        return await execute(toolCallId, params, combined.signal, onUpdate);
-      } finally {
-        combined.dispose();
+      const combinedSignal = signal ? AbortSignal.any([signal, abortSignal]) : abortSignal;
+      if (combinedSignal.aborted) {
+        throwAbortError();
       }
+      return await execute(toolCallId, params, combinedSignal, onUpdate);
     },
   };
   copyPluginToolMeta(tool, wrappedTool);

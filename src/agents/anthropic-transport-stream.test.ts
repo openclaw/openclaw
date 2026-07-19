@@ -3,6 +3,7 @@
  * Covers request construction, SSE parsing, aborts, tool calls, usage, and
  * provider transport hooks.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
@@ -14,6 +15,10 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
 
 vi.mock("./provider-transport-fetch.js", () => ({
   buildGuardedModelFetch: buildGuardedModelFetchMock,
+  parseRetryAfterSeconds: (headers: Headers) => {
+    const value = headers.get("retry-after");
+    return value && /^\d+$/.test(value) ? Number(value) : undefined;
+  },
 }));
 
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
@@ -875,6 +880,37 @@ describe("anthropic transport stream", () => {
     expect(headers.get("X-Provider")).toBe("foundry");
   });
 
+  it("preserves HTTP status and Retry-After in Anthropic error messages", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message: "Number of request tokens exceeded the per-minute rate limit.",
+          },
+        }),
+        {
+          status: 429,
+          headers: { "retry-after": "30" },
+        },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "test-api-key" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(
+      'HTTP 429: {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens exceeded the per-minute rate limit."}}; Retry-After: 30 seconds',
+    );
+  });
+
   it("bounds streamed Anthropic error responses without content-length", async () => {
     const encoder = new TextEncoder();
     let pullCount = 0;
@@ -907,7 +943,7 @@ describe("anthropic transport stream", () => {
     );
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe(`${"x".repeat(400)}…`);
+    expect(result.errorMessage).toBe(`HTTP 500: ${"x".repeat(400)}…`);
     expect(pullCount).toBeGreaterThanOrEqual(2);
     expect(cancelCount).toBe(1);
   });
@@ -944,10 +980,12 @@ describe("anthropic transport stream", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe(
-      "Anthropic Messages error response stalled: no data received for 10000ms",
+      "HTTP 500: Anthropic Messages error response stalled: no data received for 10000ms",
     );
     expect(cancelReason).toBeInstanceOf(Error);
-    expect((cancelReason as Error).message).toBe(result.errorMessage);
+    expect((cancelReason as Error).message).toBe(
+      "Anthropic Messages error response stalled: no data received for 10000ms",
+    );
   });
 
   it("rejects oversized Anthropic SSE frames before buffering without bound", async () => {
@@ -1261,19 +1299,19 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload.stream).toBe(true);
   });
 
-  it("fails locally when Anthropic maxTokens is non-positive after resolution", async () => {
+  it("uses a default maxTokens for custom Anthropic models that omit it", async () => {
     const model = attachModelProviderRequestTransport(
       {
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
+        id: "custom-model",
+        name: "Custom Model",
         api: "anthropic-messages",
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        provider: "custom-anthropic",
+        baseUrl: "https://custom.example/anthropic",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32000,
-        maxTokens: 0,
+        contextWindow: 200_000,
+        maxTokens: undefined as never,
       } satisfies Model<"anthropic-messages">,
       {
         proxy: {
@@ -1292,6 +1330,76 @@ describe("anthropic transport stream", () => {
         {
           apiKey: "sk-ant-api",
         } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "custom-model",
+      max_tokens: 4_096,
+      stream: true,
+    });
+  });
+
+  it("clamps the custom Anthropic maxTokens fallback to the context window", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "anthropic-messages",
+        provider: "custom-anthropic",
+        baseUrl: "https://custom.example/anthropic",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4_096,
+        maxTokens: undefined as never,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+
+    await runTransportStream(
+      model,
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "fake" } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.max_tokens).toBe(1_024);
+  });
+
+  it("fails locally when a custom Anthropic model has an invalid maxTokens", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "anthropic-messages",
+        provider: "custom-anthropic",
+        baseUrl: "https://custom.example/anthropic",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_000,
+        maxTokens: 0,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        { messages: [{ role: "user", content: "hello" }] } as Parameters<typeof streamFn>[1],
+        { apiKey: "fake" } as Parameters<typeof streamFn>[2],
       ),
     );
 
@@ -3159,9 +3267,10 @@ describe("anthropic transport stream", () => {
           ],
         },
       ]);
-      const [[url, fetchOptions]] = guardedFetchMock.mock.calls as unknown as Array<
-        [string, { method?: string }]
-      >;
+      const [url, fetchOptions] = expectDefined(
+        (guardedFetchMock.mock.calls as unknown as Array<[string, { method?: string }]>)[0],
+        "(guardedFetchMock.mock.calls as unknown as Array<[string, { method?: string }]>)[0] test invariant",
+      );
       expect(url).toBe("https://api.minimax.io/anthropic/v1/messages");
       expect(fetchOptions.method).toBe("POST");
     },
@@ -3208,6 +3317,45 @@ describe("anthropic transport stream", () => {
     );
     expect(toolResult.content).toBe("(no output)");
     expect(toolResult.is_error).toBe(false);
+  });
+
+  it("replays payload-less tool images as no output without Anthropic image blocks", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_husk", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", data: "", mimeType: "image/png" }],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "fake" } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_husk",
+    );
+    expect(toolResult.content).toBe("(no output)");
+    expect(JSON.stringify(toolResult)).not.toContain('"source"');
+    expect(JSON.stringify(toolResult)).not.toContain("see attached image");
   });
 
   it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
@@ -4062,3 +4210,4 @@ describe("anthropic transport stream", () => {
     expect(eventTypes).not.toContain("start");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

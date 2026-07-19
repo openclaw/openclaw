@@ -30,10 +30,10 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import {
-  interactiveReplyToPresentation,
-  normalizeInteractiveReply,
+  legacyInteractiveReplyToPresentation,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
-  resolveInteractiveTextFallback,
+  resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -61,9 +61,7 @@ import type {
   ClawdbotConfig,
 } from "./channel-runtime-api.js";
 import {
-  buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
-  chunkTextForOutbound,
   createActionGate,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -71,7 +69,7 @@ import {
 } from "./channel-runtime-api.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import { isRecord } from "./comment-shared.js";
-import { FeishuConfigSchema } from "./config-schema.js";
+import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
   buildFeishuModelOverrideParentCandidates,
@@ -86,10 +84,15 @@ import {
   listFeishuDirectoryPeers,
 } from "./directory.static.js";
 import { feishuDoctor } from "./doctor.js";
+import { chunkFeishuMarkdown } from "./markdown.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
-import { buildFeishuPresentationCard } from "./presentation-card.js";
+import {
+  assertFeishuCardWithinEnvelope,
+  buildFeishuPresentationCard,
+  isFeishuCardWithinEnvelope,
+} from "./presentation-card.js";
 import {
   assertFeishuChatReadAllowed,
   authorizeFeishuChatMemberRead,
@@ -977,7 +980,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       reload: { configPrefixes: ["channels.feishu"] },
       doctor: feishuDoctor,
-      configSchema: buildChannelConfigSchema(FeishuConfigSchema),
+      configSchema: FeishuChannelConfigSchema,
       config: {
         ...feishuConfigAdapter,
         setAccountEnabled: ({ cfg, accountId, enabled }) => {
@@ -1071,24 +1074,33 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const textCard = readNativeFeishuCardJson(text, {
               responsePrefix: resolveFeishuMessageActionResponsePrefix(ctx),
             });
-            const interactive = normalizeInteractiveReply(ctx.params.interactive);
+            const interactive = normalizeLegacyInteractiveReply(ctx.params.interactive);
             const presentation =
               normalizeMessagePresentation(ctx.params.presentation) ??
-              (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+              (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
             const mediaUrl = readFeishuMediaParam(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
-            const card = presentation
+            if (textCard && !presentation) {
+              assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
+            }
+            const generatedCard = presentation
               ? buildFeishuPresentationCard({
                   presentation,
                   fallbackText: textCard
                     ? undefined
-                    : resolveInteractiveTextFallback({ text, interactive }),
+                    : resolveLegacyInteractiveTextFallback({ text, interactive }),
                 })
-              : textCard;
+              : undefined;
+            const presentationCard =
+              generatedCard && isFeishuCardWithinEnvelope(generatedCard)
+                ? generatedCard
+                : undefined;
+            const presentationFellBack = Boolean(generatedCard && !presentationCard);
+            const card = presentation ? presentationCard : textCard;
             if (card && mediaUrl) {
               throw new Error(`Feishu ${ctx.action} does not support card with media.`);
             }
-            if (!card && !text && !mediaUrl) {
+            if (!card && !text && !mediaUrl && !presentationFellBack) {
               throw new Error(`Feishu ${ctx.action} requires text/message, media, or card.`);
             }
             const runtime = await loadFeishuChannelRuntime();
@@ -1098,7 +1110,32 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             }
             const sendMedia = maybeSendMedia;
             let result;
-            if (card) {
+            if (presentationFellBack && presentation) {
+              const sendPayload = runtime.feishuOutbound.sendPayload;
+              if (!sendPayload) {
+                throw new Error("Feishu presentation fallback delivery is not available.");
+              }
+              // Native card JSON is only an alternate representation of the
+              // structured presentation; never expose it in the text fallback.
+              const fallbackText = textCard ? undefined : text;
+              result = await sendPayload({
+                cfg: ctx.cfg,
+                to,
+                text: fallbackText ?? "",
+                payload: {
+                  text: fallbackText,
+                  presentation,
+                  ...(mediaUrl ? { mediaUrl } : {}),
+                  ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
+                },
+                accountId: ctx.accountId ?? undefined,
+                mediaLocalRoots: ctx.mediaLocalRoots,
+                ...(replyInThread
+                  ? { threadId: replyToMessageId }
+                  : { replyToId: replyToMessageId }),
+                ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
+              });
+            } else if (card) {
               if (containsLegacyFeishuCardCommandValue(card)) {
                 throw new Error(
                   "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
@@ -1664,8 +1701,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
           return { to: `chat:${parsed?.chatId ?? conversationId.trim()}` };
         },
-        resolveSessionConversation: ({ kind, rawId }) =>
-          resolveFeishuSessionConversation({ kind, rawId }),
+        // Same function as the public session-key artifact so the pre-registry
+        // fast path cannot drift from plugin behavior (pinned by contract test).
+        resolveSessionConversation: resolveFeishuSessionConversation,
         resolveOutboundSessionRoute: (params) => resolveFeishuOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeFeishuId,
@@ -1802,7 +1840,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: chunkTextForOutbound,
+      chunker: chunkFeishuMarkdown,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
@@ -1846,3 +1884,4 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       }),
     },
   });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

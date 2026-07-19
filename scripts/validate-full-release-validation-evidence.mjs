@@ -8,6 +8,8 @@ const FULL_RELEASE_WORKFLOW = "Full Release Validation";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const PINNED_BRANCH_PATTERN = /^release-ci\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
+const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
+const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 
 function normalizeWorkflowPathRef(ref) {
   if (!ref || ref.startsWith("refs/")) {
@@ -49,6 +51,7 @@ export function validateFullReleaseValidationEvidence({
   expectedTargetSha,
   expectedWorkflowBranch,
   isTrustedMainAncestor,
+  validateEvidenceReuseStrictly,
 }) {
   const run = normalizeFullReleaseValidationRun(rawRun);
   const checks = [
@@ -136,15 +139,96 @@ export function validateFullReleaseValidationEvidence({
       `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${manifest.targetRef ?? "<missing>"}.`,
     );
   }
-  if (Object.hasOwn(manifest, "evidenceReuse")) {
-    throw new Error("SHA-pinned validation evidence must not reuse another validation run.");
-  }
   if (!isTrustedMainAncestor?.(run.headSha)) {
     throw new Error(
       `SHA-pinned validation workflow ${run.headSha} is not reachable from current main.`,
     );
   }
+  if (Object.hasOwn(manifest, "evidenceReuse")) {
+    const reuse = manifest.evidenceReuse;
+    const exactTarget =
+      reuse?.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
+      reuse.evidenceSha === expectedTargetSha &&
+      Array.isArray(reuse.changedPaths) &&
+      reuse.changedPaths.length === 0;
+    const changelogOnly =
+      reuse?.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&
+      reuse.evidenceSha !== expectedTargetSha &&
+      Array.isArray(reuse.changedPaths) &&
+      reuse.changedPaths.length === 1 &&
+      reuse.changedPaths[0] === "CHANGELOG.md";
+    if (
+      !reuse ||
+      typeof reuse !== "object" ||
+      Array.isArray(reuse) ||
+      (!exactTarget && !changelogOnly) ||
+      !/^[1-9][0-9]*$/u.test(String(reuse.runId ?? "")) ||
+      !/^[1-9][0-9]*$/u.test(String(reuse.selectedRunId ?? ""))
+    ) {
+      throw new Error("SHA-pinned validation evidence reuse is invalid.");
+    }
+    if (typeof validateEvidenceReuseStrictly !== "function") {
+      throw new Error("SHA-pinned validation evidence reuse requires strict chain validation.");
+    }
+    const strictEvidence = validateEvidenceReuseStrictly({
+      repository: expectedRepository,
+      runId: String(expectedRunId),
+      targetSha: expectedTargetSha,
+    });
+    if (
+      strictEvidence?.schema !== "openclaw.release-validation-evidence/v3" ||
+      strictEvidence.valid !== true ||
+      String(strictEvidence.current?.runId ?? "") !== String(expectedRunId) ||
+      strictEvidence.current?.targetSha !== expectedTargetSha ||
+      strictEvidence.root?.targetSha !== reuse.evidenceSha ||
+      strictEvidence.evidenceReuse?.evidenceSha !== reuse.evidenceSha ||
+      strictEvidence.evidenceReuse?.policy !== reuse.policy ||
+      JSON.stringify(strictEvidence.evidenceReuse?.changedPaths) !==
+        JSON.stringify(reuse.changedPaths) ||
+      String(strictEvidence.evidenceReuse?.rootRunId ?? "") !== String(reuse.runId) ||
+      String(strictEvidence.evidenceReuse?.selectedRunId ?? "") !== String(reuse.selectedRunId) ||
+      strictEvidence.conclusions?.allRequiredSucceeded !== true
+    ) {
+      throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
+    }
+  }
   return { run, source: "sha-pinned-main" };
+}
+
+export function runStrictReleaseEvidenceValidation({
+  repository,
+  runId,
+  validatorFile = fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url)),
+  verifierSourceSha,
+}) {
+  const verifierSourceArgs = verifierSourceSha
+    ? ["--verifier-source-sha", verifierSourceSha, "--verifier-source-file", validatorFile]
+    : [];
+  const result = spawnSync(
+    process.execPath,
+    [
+      validatorFile,
+      "--validate-run",
+      String(runId),
+      "--repo",
+      repository,
+      "--trusted-workflow-ref",
+      "main",
+      "--json",
+      ...verifierSourceArgs,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Strict release evidence validation failed: ${result.stderr?.trim() || result.signal || result.status}.`,
+    );
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error("Strict release evidence validator returned invalid JSON.");
+  }
 }
 
 function gitIsAncestor(ancestor, target) {
@@ -180,6 +264,15 @@ function main() {
     expectedTargetSha: process.env.EXPECTED_SHA,
     expectedWorkflowBranch: process.env.EXPECTED_WORKFLOW_BRANCH,
     isTrustedMainAncestor: (sha) => gitIsAncestor(sha, trustedMainRef),
+    validateEvidenceReuseStrictly: ({ repository, runId }) =>
+      runStrictReleaseEvidenceValidation({
+        repository,
+        runId,
+        validatorFile:
+          process.env.STRICT_VALIDATOR_FILE ??
+          fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url)),
+        verifierSourceSha: process.env.GITHUB_SHA,
+      }),
   });
   console.log(
     `Using full release validation run ${result.run.databaseId} (${result.source}): ${result.run.url}`,

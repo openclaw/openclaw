@@ -74,11 +74,17 @@ describe("live-agent-probes", () => {
       }),
     ).toContain("previous OpenClaw cron MCP tool call was cancelled");
     const args = JSON.parse(spec.argsJson) as {
-      job?: { sessionTarget?: string; agentId?: string; sessionKey?: string };
+      job?: {
+        sessionTarget?: string;
+        agentId?: string;
+        sessionKey?: string;
+        delivery?: { mode?: string };
+      };
     };
     expect(args.job?.sessionTarget).toBe("session:agent:codex:acp:test");
     expect(args.job?.agentId).toBe("codex");
     expect(args.job?.sessionKey).toBe("agent:codex:acp:test");
+    expect(args.job?.delivery).toEqual({ mode: "none" });
   });
 
   it("builds a cron probe spec when the process clock is outside the Date range", () => {
@@ -110,6 +116,24 @@ describe("live-agent-probes", () => {
         expectedName: "live-mcp-abc",
         expectedMessage: "probe-abc",
         expectedSessionKey: "agent:dev:test",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("validates a current-bound cron job for an implicit live probe", () => {
+    expect(
+      assertCronJobMatches({
+        job: {
+          name: "live-mcp-def",
+          sessionTarget: "current",
+          agentId: "dev",
+          sessionKey: "agent:dev:test",
+          payload: { kind: "agentTurn", message: "probe-def" },
+        },
+        expectedName: "live-mcp-def",
+        expectedMessage: "probe-def",
+        expectedSessionKey: "agent:dev:test",
+        expectedSessionTarget: "current",
       }),
     ).toBeUndefined();
   });

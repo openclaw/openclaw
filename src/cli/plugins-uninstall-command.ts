@@ -12,7 +12,7 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
@@ -184,6 +184,7 @@ export async function runPluginUninstallCommand(
         nextConfig,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
         writeOptions: {
+          allowConfigSizeDrop: true,
           afterWrite: { mode: "restart", reason: "plugin source changed" },
         },
       }),

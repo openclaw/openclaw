@@ -41,6 +41,12 @@ openclaw channels add --channel qqbot --token "AppID:AppSecret"
 
 5. Restart the Gateway.
 
+## Inbound durability
+
+For QQ gateway turn events, OpenClaw persists the raw event before advancing the saved gateway resume sequence. Pending or retryable turns survive a Gateway restart, remain serialized per conversation, and use the provider event ID to suppress duplicate queue entries while the active or retained completion record exists.
+
+If durable admission fails, OpenClaw terminates the current gateway socket without advancing the sequence. The reconnect/resume path can then request the uncommitted event again. Delivery is still at least once across the queue-to-agent boundary, so a crash during handoff can replay a turn.
+
 Interactive setup:
 
 ```bash
@@ -109,6 +115,28 @@ Notes:
   or a structured SecretRef object.
 - Legacy `secretref:...` / `secretref-env:...` marker strings are rejected for
   `clientSecret`; use a structured SecretRef object instead.
+
+### Streaming
+
+```json5
+{
+  channels: {
+    qqbot: {
+      streaming: {
+        mode: "partial", // block streaming: "partial" (default) or "off"
+        nativeTransport: true, // use QQ's official C2C stream_messages API for DMs
+      },
+    },
+  },
+}
+```
+
+- `streaming.mode: "off"` disables block streaming for the account.
+- `streaming.nativeTransport: true` streams C2C (DM) replies through QQ's
+  official `stream_messages` API; group/channel targets are unaffected.
+- Legacy `streaming: true|false` scalars and the `streaming.c2cStreamApi` key
+  migrate to this shape via `openclaw doctor --fix`.
+- `/bot-streaming on|off` toggles the same config from a DM.
 
 ### Access policy
 

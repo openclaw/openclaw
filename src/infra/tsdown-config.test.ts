@@ -102,6 +102,8 @@ describe("tsdown config", () => {
       "cli/gateway-lifecycle.runtime",
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
+      "state/openclaw-database-verify.worker",
+      "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",
@@ -158,6 +160,14 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["plugins/hook-runner-global"]).toBe(
       "src/plugins/hook-runner-global.ts",
+    );
+  });
+
+  it("keeps worker environment bootstrap behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/worker-environments/runtime"]).toBe(
+      "src/gateway/worker-environments/runtime.ts",
     );
   });
 

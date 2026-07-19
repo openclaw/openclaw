@@ -31,11 +31,9 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
 }));
-
 vi.mock("./onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled: mocks.ensureOnboardingPluginInstalled,
 }));
-
 describe("Codex runtime plugin install repair", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -157,6 +155,29 @@ describe("Codex runtime plugin install repair", () => {
       status: "failed",
       reason: "npm registry returned EAI_AGAIN while fetching @openclaw/codex",
     });
+  });
+
+  it("allows source checkouts to use the matching bundled Codex plugin", async () => {
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("./codex-runtime-plugin-install.js");
+
+    await ensureCodexRuntimePluginForModelSelection({
+      cfg: {},
+      model: "openai/gpt-5.5",
+      prompter: {} as never,
+      runtime: {} as never,
+    });
+
+    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: {
+          pluginId: "codex",
+          label: "Codex",
+          install: { npmSpec: "@openclaw/codex", defaultChoice: "npm" },
+          trustedSourceLinkedOfficialInstall: true,
+        },
+      }),
+    );
   });
 
   it("sees an agent-scoped Codex runtime pin behind a custom OpenAI route", async () => {

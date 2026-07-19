@@ -23,7 +23,7 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { slackSecurityAdapter } from "./security.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
 
-export { setSlackChannelAllowlist, SLACK_CHANNEL } from "./setup-shared.js";
+export { SLACK_CHANNEL } from "./setup-shared.js";
 
 export { isSlackPluginAccountConfigured };
 
@@ -37,7 +37,7 @@ export const slackConfigAdapter = createScopedChannelConfigAdapter<
   resolveAccessorAccount: resolveSlackConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectSlackAccount),
   defaultAccountId: resolveDefaultSlackAccountId,
-  clearBaseFields: ["botToken", "appToken", "name"],
+  clearBaseFields: ["botToken", "appToken", "userToken", "signingSecret", "name"],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account) => account.defaultTo,
@@ -107,6 +107,7 @@ export function createSlackPluginBase(params: {
             ]
         ).concat([
           "- For line, bar, area, or pie data, use a `presentation` chart block; Slack renders it as a native chart and retains a text data summary for accessibility.",
+          "- For row-and-column data, use an explicit `presentation` table block; Slack renders it as a native table and retains a linear text summary for accessibility. Markdown pipe tables are not auto-promoted.",
           "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
           "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",
           "- Slack Block Kit or presentation text fields are sent as Slack mrkdwn directly; use `*bold*`, `_italic_`, `~strike~`, `<url|label>` links, and avoid Markdown headings or pipe tables there.",

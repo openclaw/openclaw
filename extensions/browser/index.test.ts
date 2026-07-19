@@ -67,19 +67,28 @@ function createApi() {
   const registerGatewayMethod = vi.fn();
   const registerService = vi.fn();
   const registerTool = vi.fn();
+  const openKeyedStore = vi.fn(() => ({
+    register: vi.fn(async () => undefined),
+    registerIfAbsent: vi.fn(async () => true),
+    lookup: vi.fn(async () => undefined),
+    consume: vi.fn(async () => undefined),
+    delete: vi.fn(async () => false),
+    entries: vi.fn(async () => []),
+    clear: vi.fn(async () => undefined),
+  }));
   const api = createTestPluginApi({
     id: "browser",
     name: "Browser",
     source: "test",
     rootDir: "/plugins/browser",
     config: {},
-    runtime: {} as OpenClawPluginApi["runtime"],
+    runtime: { state: { openKeyedStore } } as unknown as OpenClawPluginApi["runtime"],
     registerCli,
     registerGatewayMethod,
     registerService,
     registerTool,
   });
-  return { api, registerCli, registerGatewayMethod, registerService, registerTool };
+  return { api, openKeyedStore, registerCli, registerGatewayMethod, registerService, registerTool };
 }
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
@@ -107,6 +116,16 @@ function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
 }
 
 describe("browser plugin", () => {
+  it("opens a bounded SQLite namespace for import onboarding state", () => {
+    const { api, openKeyedStore } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "browser.system-profile-import",
+      maxEntries: 1,
+    });
+  });
+
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({
       restartPrefixes: ["browser"],
@@ -210,6 +229,42 @@ describe("browser plugin", () => {
         chatType: "direct",
       },
     });
+  });
+
+  it("passes the browser-owned run binding into the tool layer", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const binding = {
+      kind: "tab",
+      tabId: 7,
+      target: "host",
+      profile: "chrome",
+      targetId: "target-7",
+    };
+    const tool = factory({ toolBindings: { browser: binding } });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "snapshot" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({ runToolBinding: binding });
+  });
+
+  it("rejects malformed run bindings before creating the lazy browser tool", () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    expect(() => factory({ toolBindings: { browser: { kind: "tab" } } })).toThrow(
+      "invalid browser run binding",
+    );
   });
 
   it("derives group chat type for browser media scope", async () => {

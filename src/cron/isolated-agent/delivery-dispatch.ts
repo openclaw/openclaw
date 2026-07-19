@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -36,6 +37,7 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { retryAsync } from "../../infra/retry.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
@@ -104,7 +106,7 @@ export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
 }
 
 /** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
-export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
+type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 type DispatchCronDeliveryParams = {
   cfg: OpenClawConfig;
@@ -154,27 +156,17 @@ type DirectCronTranscriptMirror = {
 };
 
 /** Mutable delivery-dispatch accumulator returned to the isolated cron runner. */
-export type DispatchCronDeliveryState = {
+type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  deliveryError?: string;
   cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
   deliveryPayloads: ReplyPayload[];
 };
-
-const TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
-  /\berrorcode=unavailable\b/i,
-  /\bstatus\s*[:=]\s*"?unavailable\b/i,
-  /\bUNAVAILABLE\b/,
-  /no active .* listener/i,
-  /gateway not connected/i,
-  /gateway closed \(1006/i,
-  /gateway timeout/i,
-  /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
-];
 
 const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
@@ -923,13 +915,21 @@ async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
 }
 
 /** Clears the direct-delivery idempotency cache for deterministic tests. */
-export function resetCompletedDirectCronDeliveriesForTests() {
+function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
 
 /** Returns the direct-delivery idempotency cache size for tests. */
-export function getCompletedDirectCronDeliveriesCountForTests(): number {
+function getCompletedDirectCronDeliveriesCountForTests(): number {
   return COMPLETED_DIRECT_CRON_DELIVERIES.size;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronDeliveryDispatchTestApi")] =
+    {
+      resetCompletedDirectCronDeliveriesForTests,
+      getCompletedDirectCronDeliveriesCountForTests,
+    };
 }
 
 function summarizeDirectCronDeliveryError(error: unknown): string {
@@ -954,9 +954,8 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   if (PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
     return false;
   }
-  return TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+  return isProvenDeliveryNotSentError(error);
 }
-
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
   return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
     ? [0, 0, 0]
@@ -967,32 +966,38 @@ async function retryTransientDirectCronDelivery<T>(params: {
   jobId: string;
   signal?: AbortSignal;
   run: () => Promise<T>;
+  shouldRetryError?: (err: unknown) => boolean;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
-    if (params.signal?.aborted) {
-      throw new Error("cron delivery aborted");
-    }
-    try {
-      return await params.run();
-    } catch (err) {
-      if (!isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
-        throw err;
-      }
-      const nextAttempt = retryIndex + 2;
-      const maxAttempts = retryDelaysMs.length + 1;
-      await logCronDeliveryWarn(
-        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
-      );
-      await sleepWithAbort(delayMs, params.signal);
-    }
-  }
   if (params.signal?.aborted) {
     throw new Error("cron delivery aborted");
   }
-  return await params.run();
+  const runWithAbortCheck = async () => {
+    if (params.signal?.aborted) {
+      throw new Error("cron delivery aborted");
+    }
+    return await params.run();
+  };
+  return await retryAsync(runWithAbortCheck, {
+    attempts: retryDelaysMs.length + 1,
+    minDelayMs: 0,
+    maxDelayMs: Math.max(...retryDelaysMs),
+    delayMs: ({ attempt }) => retryDelaysMs[attempt - 1] ?? 0,
+    shouldRetry: (err) =>
+      params.signal?.aborted !== true &&
+      isTransientDirectCronDeliveryError(err) &&
+      (params.shouldRetryError?.(err) ?? true),
+    onRetry: async ({ attempt, maxAttempts, delayMs, err }) => {
+      await logCronDeliveryWarn(
+        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
+      );
+      if (delayMs === 0) {
+        await sleepWithAbort(0, params.signal);
+      }
+    },
+    sleep: async (delayMs) => await sleepWithAbort(delayMs, params.signal),
+  });
 }
-
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
@@ -1006,12 +1011,14 @@ export async function dispatchCronDelivery(
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
+  let deliveryError: string | undefined;
   let directCronSessionCleanupAttempted = false;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
     ...(result ? { result } : {}),
     delivered,
     deliveryAttempted,
+    ...(deliveryError ? { deliveryError } : {}),
     cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
     summary,
     outputText,
@@ -1193,19 +1200,19 @@ export async function dispatchCronDelivery(
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
       let hadPartialFailure = false;
-      let partialDeliverySucceededBeforeFailure = false;
+      let payloadMayHaveReachedRecipientBeforeFailure = false;
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
       const onError = params.deliveryBestEffort
         ? (err: unknown, _payload: unknown) => {
             hadPartialFailure = true;
+            deliveryError ??= formatErrorMessage(err);
             logCronDeliveryErrorDeferred(
               `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
             );
           }
         : undefined;
-
       const runDelivery = async () => {
         attemptedPayloadsForMirror.length = 0;
         const send = await sendDurableMessageBatch({
@@ -1232,15 +1239,25 @@ export async function dispatchCronDelivery(
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
         });
+        // No durable id is still ambiguous: the adapter was already invoked.
+        payloadMayHaveReachedRecipientBeforeFailure ||=
+          send.payloadOutcomes?.some(
+            (outcome) =>
+              outcome.status === "sent" ||
+              (outcome.status === "failed" && outcome.sentBeforeError) ||
+              (outcome.status === "suppressed" &&
+                outcome.reason === "adapter_returned_no_identity"),
+          ) ?? false;
         if (send.status === "failed") {
           throw send.error;
         }
         if (send.status === "partial_failed") {
-          partialDeliverySucceededBeforeFailure = send.results.length > 0;
+          payloadMayHaveReachedRecipientBeforeFailure = true;
           if (!params.deliveryBestEffort) {
             throw send.error;
           }
           hadPartialFailure = true;
+          deliveryError ??= formatErrorMessage(send.error);
         }
         return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
       };
@@ -1251,6 +1268,7 @@ export async function dispatchCronDelivery(
               jobId: params.job.id,
               signal: params.abortSignal,
               run: runDelivery,
+              shouldRetryError: () => !payloadMayHaveReachedRecipientBeforeFailure,
             })
           : await runDelivery();
       } catch (err) {
@@ -1260,7 +1278,7 @@ export async function dispatchCronDelivery(
           to: delivery.to,
           threadId: stringifyRouteThreadId(delivery.threadId),
           error: err,
-          partialDelivered: partialDeliverySucceededBeforeFailure,
+          partialDelivered: payloadMayHaveReachedRecipientBeforeFailure,
         });
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
@@ -1386,6 +1404,7 @@ export async function dispatchCronDelivery(
       await logCronDeliveryError(
         `[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`,
       );
+      deliveryError = formatErrorMessage(err);
       return null;
     }
   };
@@ -1526,12 +1545,16 @@ export async function dispatchCronDelivery(
       if (!params.deliveryBestEffort) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
+      delivered = false;
+      deliveryError = params.resolvedDelivery.error.message;
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
       return buildDeliveryState(
         params.withRunSession({
           status: "ok",
           summary,
           outputText,
+          delivered,
+          deliveryError,
           deliveryAttempted,
           ...params.telemetry,
         }),
@@ -1558,3 +1581,4 @@ export async function dispatchCronDelivery(
 
   return buildDeliveryState();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

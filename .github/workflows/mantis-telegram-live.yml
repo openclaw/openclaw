@@ -350,7 +350,7 @@ jobs:
           mkdir -p "$install_dir/src" "$HOME/.local/bin"
           git init "$install_dir/src"
           git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
           git -C "$install_dir/src" checkout --detach FETCH_HEAD
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -416,7 +416,7 @@ jobs:
           output_rel=".artifacts/qa-e2e/mantis/telegram-live"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
-          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.5}"
+          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.6-luna}"
 
           scenario_args=()
           if [[ -n "${SCENARIO_INPUT// }" ]]; then
@@ -444,7 +444,7 @@ jobs:
           telegram_exit=$?
           set -e
 
-          if [[ ! -f "$root/qa-evidence.json" && ! -f "$root/telegram-qa-summary.json" ]]; then
+          if [[ ! -f "$root/qa-evidence.json" ]]; then
             echo "Telegram live QA did not produce an evidence summary." >&2
             exit "$telegram_exit"
           fi
@@ -496,7 +496,7 @@ jobs:
             fi
           fi
 
-          cat "$root/telegram-qa-report.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$root/qa-suite-report.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Mantis Telegram artifacts
         id: upload_artifact

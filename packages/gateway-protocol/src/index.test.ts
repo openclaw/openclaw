@@ -12,8 +12,13 @@ import {
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
+  validateModelsProbeParams,
   validateNodeEventResult,
+  validateNodePluginToolsUpdateParams,
+  validateNodeSkillsUpdateParams,
+  validateNodePresenceActivityPayload,
   validateNodePresenceAlivePayload,
+  validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
@@ -86,6 +91,90 @@ describe("lazy protocol validators", () => {
     expect(validateConnectParams.errors).toBeNull();
   });
 
+  it("rejects the removed connect-time node plugin tools surface", () => {
+    expect(
+      validateConnectParams({
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: {
+          id: "test",
+          version: "1.0.0",
+          platform: "test",
+          mode: "test",
+        },
+        nodePluginTools: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects provider-unsafe node plugin tool names", () => {
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo_echo",
+            description: "Echo through a node",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo.echo",
+            description: "Invalid tool name",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("validates bounded node skill updates", () => {
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "release-helper",
+            description: "Prepare a release",
+            content: "---\nname: release-helper\ndescription: Prepare a release\n---\n\n# Release",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [{ name: "Release Helper", description: "Invalid", content: "invalid" }],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "oversized",
+            description: "Too large",
+            content: "x".repeat(64 * 1024 + 1),
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: Array.from({ length: 65 }, (_, index) => ({
+          name: `skill-${index}`,
+          description: "Too many",
+          content: "content",
+        })),
+      }),
+    ).toBe(false);
+  });
+
   it("accepts selected-agent scope on chat send, history, and abort params", () => {
     expect(
       validateChatHistoryParams({
@@ -93,6 +182,15 @@ describe("lazy protocol validators", () => {
         agentId: "work",
         limit: 50,
         offset: 100,
+      }),
+    ).toBe(true);
+    expect(
+      validateChatHistoryParams({
+        sessionKey: "global",
+        agentId: "work",
+        limit: 11,
+        messageId: "matching-message",
+        sessionId: "matching-session",
       }),
     ).toBe(true);
     expect(
@@ -137,12 +235,41 @@ describe("lazy protocol validators", () => {
   });
 
   it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
-    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(
-      true,
-    );
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(true);
     expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
+  });
+
+  it("validates bounded session transcript search params", () => {
+    expect(validateSessionsSearchParams({ query: "deployment failure" })).toBe(true);
+    expect(
+      validateSessionsSearchParams({
+        agentId: "work",
+        sessionKeys: ["agent:work:main", "agent:work:other"],
+        query: "deployment failure",
+        limit: 25,
+      }),
+    ).toBe(true);
+    expect(validateSessionsSearchParams({ agentId: "", query: "deployment failure" })).toBe(false);
+    expect(
+      validateSessionsSearchParams({
+        sessionKey: "agent:work:main",
+        query: "deployment failure",
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", sessionKeys: [] })).toBe(
+      false,
+    );
+    expect(
+      validateSessionsSearchParams({
+        query: "deployment failure",
+        sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "" })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -382,6 +509,7 @@ describe("validateTalkClientCreateParams", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        capabilities: ["camera-frame"],
       }),
     ).toBe(true);
   });
@@ -396,6 +524,15 @@ describe("validateTalkClientCreateParams", () => {
     expect(formatValidationErrors(validateTalkClientCreateParams.errors)).toContain(
       "unexpected property 'instructions'",
     );
+  });
+
+  it("rejects unknown browser capabilities", () => {
+    expect(
+      validateTalkClientCreateParams({
+        sessionKey: "agent:main:main",
+        capabilities: ["screen-frame"],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -482,6 +619,7 @@ describe("validateTalkSession", () => {
         provider: "openai",
         model: "gpt-realtime-2",
         voice: "alloy",
+        language: "de",
         mode: "realtime",
         transport: "managed-room",
         brain: "agent-consult",
@@ -531,6 +669,7 @@ describe("validateTalkSession", () => {
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
       "unexpected property 'instructionsOverride'",
     );
+    expect(validateTalkSessionCreateParams({ mode: "realtime", language: "de-DE" })).toBe(false);
   });
 
   it("accepts managed-room join, turn lifecycle params, and results", () => {
@@ -722,6 +861,19 @@ describe("validateWakeParams", () => {
 });
 
 describe("validateChatEvent", () => {
+  it("accepts an explicitly yielded final turn", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-yielded",
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "final",
+        stopReason: "end_turn",
+        yielded: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts v4 chat delta text and replacement markers", () => {
     expect(
       validateChatEvent({
@@ -812,6 +964,19 @@ describe("validateChatSendParams", () => {
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
+
+  it("accepts one-turn queue mode overrides", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    for (const queueMode of ["steer", "followup", "collect", "interrupt"] as const) {
+      expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
+    }
+    expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
+  });
 });
 
 describe("validateModelsListParams", () => {
@@ -825,6 +990,21 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateModelsProbeParams", () => {
+  it("accepts one provider with optional profile and timeout", () => {
+    expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
+    expect(
+      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+    ).toBe(true);
+  });
+
+  it("rejects missing providers, invalid timeouts, and extra fields", () => {
+    expect(validateModelsProbeParams({})).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", timeoutMs: 0 })).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", extra: true })).toBe(false);
   });
 });
 
@@ -871,6 +1051,21 @@ describe("validateNodePresenceAlivePayload", () => {
         arbitrary: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateNodePresenceActivityPayload", () => {
+  it("accepts bounded input idle time", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 12 })).toBe(true);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
+      true,
+    );
+  });
+
+  it("rejects negative, unbounded, and extra fields", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
   });
 });
 

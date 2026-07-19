@@ -57,6 +57,8 @@ openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the raw value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
 
+When the path is missing, `--json` writes `{ "error": "Config path not found: <path>" }` to stdout and exits with status 1. Without `--json`, the diagnostic remains on stderr.
+
 ```bash
 openclaw config get browser.executablePath
 openclaw config get agents.defaults.model --json
@@ -175,6 +177,8 @@ Use `--replace` only when the provided value should intentionally become the com
     openclaw config set --batch-file ./config-set.batch.json --dry-run
     ```
 
+    Batch files are limited to 8 MiB.
+
   </Tab>
 </Tabs>
 
@@ -255,6 +259,8 @@ openclaw config patch --file ./openclaw.patch.json5 --dry-run
 openclaw config patch --file ./openclaw.patch.json5
 ```
 
+Patch files are limited to 8 MiB. Piped `--stdin` patches are limited to 1 MiB.
+
 Pipe a patch over stdin for remote setup scripts:
 
 ```bash
@@ -285,9 +291,9 @@ Example patch:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.5" },
+      model: { primary: "openai/gpt-5.6-sol" },
       models: {
-        "openai/gpt-5.5": { params: { fastMode: true } },
+        "openai/gpt-5.6-sol": { params: { fastMode: true } },
       },
     },
   },
@@ -437,6 +443,8 @@ Writes to `plugins.entries` (or any subpath) always require a restart, since the
 ## Write safety
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+
+OpenClaw-owned writes reserialize JSON5 as standard JSON. When the source contains comments, the writer warns immediately before removing them; use a direct editor when preserving comments matters.
 
 <Warning>
 The active config path must be a regular file. Symlinked `openclaw.json` layouts are unsupported for writes; use `OPENCLAW_CONFIG_PATH` to point directly at the real file instead.

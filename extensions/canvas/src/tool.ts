@@ -25,6 +25,7 @@ import { CanvasToolSchema } from "./tool-schema.js";
 type CanvasToolOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentSessionKey?: string;
 };
 
 type CanvasImageSanitizationLimits = {
@@ -112,6 +113,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           command,
           params: invokeParams,
           idempotencyKey: randomUUID(),
+          ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
         });
       };
 
@@ -159,7 +161,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             payload?: { result?: string };
           };
           const result = raw?.payload?.result;
-          if (result) {
+          if (typeof result === "string") {
             return {
               content: [{ type: "text", text: result }],
               details: { result },

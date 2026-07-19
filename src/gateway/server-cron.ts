@@ -23,14 +23,15 @@ import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
-import { CronService } from "../cron/service.js";
+import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { toPublicCronJob } from "../cron/public-job.js";
+import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
-import { createCronTriggerEvaluator } from "../cron/trigger-script.js";
+import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
@@ -63,6 +64,14 @@ import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
+import {
+  bumpSessionAutomationVersion,
+  claimSessionAutomationEpoch,
+  registerSessionAutomationSource,
+  unregisterSessionAutomationSource,
+} from "./session-automation-index.js";
+import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import { loadGatewaySessionRow } from "./session-utils.js";
 
 export type GatewayCronState = {
   cron: GatewayCronServiceContract;
@@ -193,10 +202,12 @@ export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  env?: NodeJS.ProcessEnv;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const env = params.env ?? process.env;
+  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     Array.isArray(cfg.agents?.list)
@@ -352,15 +363,14 @@ export function buildGatewayCronService(params: {
   };
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveStorePath(params.cfg.session?.store, {
       agentId: agentId ?? defaultAgentId,
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
-  const triggerEvaluator =
+  const scriptRuntime =
     params.cfg.cron?.triggers?.enabled === true
-      ? createCronTriggerEvaluator({ config: params.cfg })
+      ? createCronScriptRuntime({ config: params.cfg })
       : undefined;
 
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
@@ -414,19 +424,48 @@ export function buildGatewayCronService(params: {
     }
   };
 
+  // Cron job changes flip session automation badges; push refreshed rows so
+  // subscribed session lists update without waiting for unrelated session events.
+  const broadcastCronBoundSessionChanges = (evt: CronEvent) => {
+    const job = evt.job ?? cron.getJob(evt.jobId);
+    if (!job) {
+      return;
+    }
+    const boundKeys = resolveCronJobBoundSessionKeys(job, {
+      cfg: getRuntimeConfig(),
+      defaultAgentId: cron.getDefaultAgentId(),
+    });
+    for (const sessionKey of boundKeys) {
+      // Emit even without a stored row: clients run a canonical list refresh on
+      // every sessions.changed, which also clears badges on prior bindings
+      // (e.g. after retargeting a job to a not-yet-created session).
+      const sessionRow = loadGatewaySessionRow(sessionKey);
+      params.broadcast(
+        "sessions.changed",
+        {
+          sessionKey,
+          reason: "cron-binding",
+          ts: Date.now(),
+          ...(sessionRow ? buildGatewaySessionEventFields({ sessionRow }) : {}),
+        },
+        { dropIfSlow: true },
+      );
+    }
+  };
+
   const cron = new CronService({
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
-    ...(triggerEvaluator
+    ...(scriptRuntime
       ? {
           evaluateCronTrigger: ({ job, script, state, abortSignal }) =>
-            triggerEvaluator({
+            scriptRuntime.evaluateTrigger({
               jobId: job.id,
               agentId: job.agentId,
               script,
               state,
-              toolsAllow: job.payload.kind === "agentTurn" ? job.payload.toolsAllow : undefined,
+              toolsAllow: job.payload.toolsAllow,
               abortSignal,
             }),
         }
@@ -487,6 +526,10 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        // Preserve ownership across this adapter so the wake does not self-block on
+        // the cron run that is awaiting it.
+        owningCronJobMarker: opts?.owningCronJobMarker,
+        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         heartbeat: resolveCronHeartbeatOverride({
           runtimeConfig,
           agentId,
@@ -538,8 +581,8 @@ export function buildGatewayCronService(params: {
           {
             channel: plan.channel,
             to: plan.to,
-            accountId: plan.accountId,
             threadId: plan.threadId,
+            accountId: plan.accountId,
             source: "explicit" as const,
           },
           ["channel", "to", "accountId", "threadId", "source"],
@@ -587,6 +630,7 @@ export function buildGatewayCronService(params: {
           target: {
             channel: plan.channel,
             to: plan.to,
+            threadId: plan.threadId,
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(job),
           },
@@ -624,6 +668,96 @@ export function buildGatewayCronService(params: {
               error,
             },
           },
+        };
+      }
+    },
+    runScriptJob: async ({ job, abortSignal }) => {
+      if (!scriptRuntime || job.payload.kind !== "script") {
+        return { status: "error", error: "cron script payload executor is unavailable" };
+      }
+      const execution = await scriptRuntime.executePayload({
+        jobId: job.id,
+        agentId: job.agentId,
+        script: job.payload.script,
+        state: job.state.triggerState,
+        toolsAllow: job.payload.toolsAllow,
+        timeoutSeconds: job.payload.timeoutSeconds,
+        toolBudget: job.payload.toolBudget,
+        abortSignal,
+      });
+      if (execution.kind === "error") {
+        return {
+          status: "error",
+          error: `cron script payload failed (${execution.code}): ${execution.error}`,
+        };
+      }
+      if (execution.nextCheck && !job.pacing) {
+        return {
+          status: "error",
+          error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+        };
+      }
+
+      const notify = execution.notify?.trim() ? execution.notify : undefined;
+      const plan = resolveCronDeliveryPlan(job);
+      const deliveryTrace = {
+        intended: pickDefined(
+          {
+            channel: plan.channel,
+            to: plan.to,
+            accountId: plan.accountId,
+            threadId: plan.threadId,
+            source: "explicit" as const,
+          },
+          ["channel", "to", "accountId", "threadId", "source"],
+        ),
+      };
+      const base = {
+        status: "ok" as const,
+        notify,
+        wake: execution.wake,
+        stateChanged: execution.stateChanged,
+        ...(execution.stateChanged ? { state: execution.state } : {}),
+        nextCheck: execution.nextCheck,
+        delivery: deliveryTrace,
+      };
+      if (job.sessionTarget === "main" || plan.mode !== "announce" || !notify) {
+        return { ...base, deliveryAttempted: false, delivered: false };
+      }
+
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      try {
+        await sendCronAnnouncePayloadStrict({
+          deps: params.deps,
+          cfg: runtimeConfig,
+          agentId,
+          jobId: job.id,
+          target: {
+            channel: plan.channel,
+            to: plan.to,
+            threadId: plan.threadId,
+            accountId: plan.accountId,
+            sessionKey: resolveCronDeliverySessionKey(job),
+          },
+          message: notify,
+          abortSignal: abortSignal ?? new AbortController().signal,
+        });
+        return {
+          ...base,
+          deliveryAttempted: true,
+          delivered: true,
+          delivery: { ...deliveryTrace, delivered: true },
+        };
+      } catch (err) {
+        const error = formatErrorMessage(err);
+        cronLogger.warn({ jobId: job.id, err: error }, "cron: script payload delivery failed");
+        return {
+          ...base,
+          status: job.delivery?.bestEffort ? ("ok" as const) : ("error" as const),
+          ...(job.delivery?.bestEffort ? { deliveryError: error } : { error }),
+          deliveryAttempted: true,
+          delivered: false,
+          delivery: { ...deliveryTrace, delivered: false },
         };
       }
     },
@@ -686,7 +820,12 @@ export function buildGatewayCronService(params: {
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
-      params.broadcast("cron", evt, { dropIfSlow: true });
+      // Any job/store change can alter session automation bindings, including
+      // in-place enable flips during runs; run/schedule events bump too (cheap).
+      bumpSessionAutomationVersion();
+      params.broadcast("cron", evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt, {
+        dropIfSlow: true,
+      });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
       // getJob() would return undefined. `delivery` and `usage` are
@@ -728,7 +867,16 @@ export function buildGatewayCronService(params: {
       runCronChangedHook(hookEvt);
       // Re-arm / cancel on-exit watchers when the job set changes.
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
+        broadcastCronBoundSessionChanges(evt);
         void reconcileExitWatchers();
+      } else if (evt.action === "finished") {
+        // Runs can flip enabled without an "updated" event (one-shot success,
+        // trigger.once, schedule-error auto-disable); refresh badges then too.
+        // Fully deleted jobs emit their own "removed" event instead.
+        const finishedJob = evt.job ?? cron.getJob(evt.jobId);
+        if (finishedJob?.enabled === false) {
+          broadcastCronBoundSessionChanges(evt);
+        }
       }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
@@ -740,42 +888,6 @@ export function buildGatewayCronService(params: {
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           globalFailureDestination: params.cfg.cron?.failureDestination,
-        });
-
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
-          await appendCronRunLog({
-            storePath,
-            entry: {
-              ts: Date.now(),
-              jobId: evt.jobId,
-              action: "finished",
-              status: evt.status,
-              error: evt.error,
-              summary: evt.summary,
-              diagnostics: evt.diagnostics,
-              delivered: evt.delivered,
-              deliveryStatus: evt.deliveryStatus,
-              deliveryError: evt.deliveryError,
-              failureNotificationDelivery: evt.failureNotificationDelivery,
-              delivery: evt.delivery,
-              sessionId: evt.sessionId,
-              sessionKey: evt.sessionKey,
-              runId: evt.runId,
-              runAtMs: evt.runAtMs,
-              durationMs: evt.durationMs,
-              nextRunAtMs: evt.nextRunAtMs,
-              triggerFired: evt.triggerFired,
-              model: evt.model,
-              provider: evt.provider,
-              usage: evt.usage,
-            },
-            opts: { keepLines: runLogPrune.keepLines },
-          });
-        }).catch((err: unknown) => {
-          cronLogger.warn(
-            { err: String(err), storePath, jobId: evt.jobId },
-            "cron: run log append failed",
-          );
         });
       }
     },
@@ -804,10 +916,33 @@ export function buildGatewayCronService(params: {
     exitWatcherGeneration += 1;
     exitWatchersRef.current?.cancelAll();
   };
+  const automationSource = {
+    getJobs: () => cron.getLoadedJobs(),
+    getDefaultAgentId: () => cron.getDefaultAgentId(),
+  };
+  const automationEpoch = claimSessionAutomationEpoch();
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
     stopCron();
     stopExitWatchers();
+    // Session rows must stop reporting automation from a stopped scheduler,
+    // but a reload's replacement service may already own the registration.
+    unregisterSessionAutomationSource(automationSource);
+  };
+  const startCron = cron.start.bind(cron);
+  cron.start = async () => {
+    await startCron();
+    // Register only once started, under the build-time epoch, so a stale lazy
+    // service resolving after a config reload cannot clobber the replacement.
+    registerSessionAutomationSource(automationSource, automationEpoch);
+    // Nudge subscribed clients into a canonical list refresh so automation
+    // badges match this scheduler's bindings — including clearing them when a
+    // reload lands on an empty or disabled store.
+    params.broadcast(
+      "sessions.changed",
+      { reason: "cron-bindings-loaded", ts: Date.now() },
+      { dropIfSlow: true },
+    );
   };
 
   return {
@@ -818,3 +953,4 @@ export function buildGatewayCronService(params: {
     stopExitWatchers,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

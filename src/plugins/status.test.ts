@@ -1,6 +1,8 @@
 // Covers plugin status reporting from config, discovery, and registry state.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginMemoryEmbeddingProviderRegistration } from "./registry-types.js";
+import type { PluginMemoryEmbeddingProviderRegistration } from "./registry.test-fixtures.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -10,7 +12,8 @@ import {
   DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
   HOOK_ONLY_MESSAGE,
   LEGACY_BEFORE_AGENT_START_MESSAGE,
-} from "./status.test-helpers.js";
+  REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
+} from "./status.test-fixtures.js";
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
@@ -84,7 +87,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
-  loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
+  loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
   resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
     params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
 }));
@@ -766,7 +769,10 @@ describe("plugin status reports", () => {
     expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
     expect(inspect.map((entry) => entry.shape)).toEqual(["hook-only", "hybrid-capability"]);
     expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
-    expectCapabilityKinds(inspect[1], ["text-inference", "web-search"]);
+    expectCapabilityKinds(expectDefined(inspect[1], "inspect[1] test invariant"), [
+      "text-inference",
+      "web-search",
+    ]);
   });
 
   it("treats a CLI-command-only plugin as a plain capability", () => {
@@ -896,6 +902,59 @@ describe("plugin status reports", () => {
         contracts: { memoryEmbeddingProviders: ["bundled-memory-provider"] },
       }),
     );
+
+    expectNoCompatibilityWarnings();
+  });
+
+  it("warns external plugins when load diagnostics reference removed session file APIs", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "file-backed-session-plugin",
+          name: "File-backed Session Plugin",
+          error: "The requested module does not provide an export named 'saveSessionStore'",
+          status: "error",
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "file-backed-session-plugin",
+          message: "Plugin import failed before SessionTranscriptUpdate.sessionFile migration",
+        },
+      ],
+    });
+
+    expectCompatibilityOutput({
+      notices: [
+        createCompatibilityNotice({
+          pluginId: "file-backed-session-plugin",
+          code: "removed-session-transcript-file-api",
+        }),
+      ],
+      warnings: [`file-backed-session-plugin ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`],
+    });
+  });
+
+  it("does not surface bundled session file API migration debt as user warnings", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "bundled-session-plugin",
+          name: "Bundled Session Plugin",
+          origin: "bundled",
+          error: "The requested module does not provide an export named 'sessionFile'",
+          status: "error",
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "bundled-session-plugin",
+          message: "resolveSessionFilePath failed to load",
+        },
+      ],
+    });
 
     expectNoCompatibilityWarnings();
   });

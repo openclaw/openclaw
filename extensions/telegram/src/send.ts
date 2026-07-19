@@ -4,6 +4,11 @@ import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
+  formatLocationText,
+  normalizeOutboundLocation,
+  type OutboundLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -12,9 +17,9 @@ import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -28,6 +33,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import {
+  markdownToTelegramChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -54,8 +60,9 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
-  buildTelegramRichMessagePlan,
+  buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
+  isEmptyTelegramRichMessage,
   removeTelegramRichNativeQuoteParam,
   splitTelegramRichMessageTextChunks,
   TELEGRAM_RICH_TEXT_LIMIT,
@@ -68,7 +75,7 @@ import {
   buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
   splitTelegramPlainTextChunks,
-  warnTelegramRichHtmlDegradations,
+  warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
 import {
   buildOutboundMediaLoadOptions,
@@ -100,6 +107,8 @@ type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
 type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 type TelegramSendPollParams = Parameters<TelegramApi["sendPoll"]>[3];
+type TelegramSendLocationParams = Parameters<TelegramApi["sendLocation"]>[3];
+type TelegramSendVenueParams = Parameters<TelegramApi["sendVenue"]>[5];
 type TelegramEditMessageTextParams = Parameters<TelegramApi["editMessageText"]>[3];
 type TelegramEditMessageCaptionParams = Parameters<TelegramApi["editMessageCaption"]>[2];
 type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["createForumTopic"]>[2]>;
@@ -159,7 +168,29 @@ type TelegramSendResult = {
   messageId: string;
   chatId: string;
   receipt?: MessageReceipt;
+  meta?: {
+    telegramDeliveredText?: string;
+    telegramHasInlineKeyboard?: boolean;
+  };
 };
+
+type TelegramLocationSendOpts = Pick<
+  TelegramSendOpts,
+  | "cfg"
+  | "token"
+  | "accountId"
+  | "verbose"
+  | "api"
+  | "retry"
+  | "gatewayClientScopes"
+  | "replyToMessageId"
+  | "messageThreadId"
+  | "buttons"
+  | "quoteText"
+  | "promptContextProjectionPlan"
+  | "silent"
+  | "onDeliveryResult"
+>;
 
 type TelegramOutboundSuccessLogParams = {
   accountId: string;
@@ -693,7 +724,7 @@ function createTelegramRequestWithDiag(params: {
   strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  const request = createTelegramRetryRunner({
+  const request = createChannelApiRetryRunner({
     retry: params.retry,
     configRetry: params.account.config.retry,
     verbose: params.verbose,
@@ -814,10 +845,15 @@ async function sendMessageTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
-  const reportDelivery = async (messageId: string | number, deliveredChatId: string | number) => {
+  const reportDelivery = async (
+    messageId: string | number,
+    deliveredChatId: string | number,
+    meta?: TelegramSendResult["meta"],
+  ) => {
     await opts.onDeliveryResult?.({
       messageId: String(messageId),
       chatId: String(deliveredChatId),
+      ...(meta ? { meta } : {}),
     });
   };
   const recordDeliveredPromptContext = async (
@@ -882,7 +918,9 @@ async function sendMessageTelegramWithContext(
   });
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true;
+  // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
+  // newlines, 4096 chunking) even on rich accounts; blocks are markdown-only.
+  const useRichMessages = account.config.richMessages === true && textMode !== "html";
   const tableMode =
     opts.tableMode ??
     resolveMarkdownTableMode({
@@ -1020,7 +1058,10 @@ async function sendMessageTelegramWithContext(
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, res?.chat?.id ?? chatId);
+      await reportDelivery(messageId, res?.chat?.id ?? chatId, {
+        telegramDeliveredText: chunk.plainText,
+        telegramHasInlineKeyboard: index === chunks.length - 1 && Boolean(replyMarkup),
+      });
       await recordDeliveredPromptContext(
         {
           message: res,
@@ -1066,8 +1107,16 @@ async function sendMessageTelegramWithContext(
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
+    if (textMode === "markdown") {
+      // Chunk Markdown before rendering so HTML expansion cannot introduce a
+      // second mid-word split. Caller-authored HTML keeps its safe splitter below.
+      return markdownToTelegramChunks(rawText, 4000, { tableMode }).map((chunk) => ({
+        htmlText: chunk.html,
+        plainText: telegramHtmlToPlainTextFallback(chunk.html),
+      }));
+    }
     const htmlText = renderHtmlText(rawText);
-    const fallbackText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : rawText;
+    const fallbackText = telegramHtmlToPlainTextFallback(htmlText);
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);
@@ -1117,8 +1166,6 @@ async function sendMessageTelegramWithContext(
     return splitTelegramRichMessageTextChunks({
       text: rawText,
       textLimit,
-      textMode,
-      chunkMode: resolveChunkMode(cfg, "telegram", account.accountId),
       tableMode,
       skipEntityDetection: account.config.linkPreview === false,
     });
@@ -1152,14 +1199,14 @@ async function sendMessageTelegramWithContext(
       );
       let result: TelegramMessageLike;
       let recordedParams: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined;
-      if (!chunk.text?.trim()) {
-        // plainText derives from text via telegramHtmlToPlainTextFallback, so
-        // an empty rich render has no sendable fallback.
-        sendLogger.warn("telegram richMessage chunk rendered empty HTML; skipping");
+      if (isEmptyTelegramRichMessage(chunk.richMessage)) {
+        // Gate on the rich payload only: valid rich content (media/divider HTML)
+        // can have an empty plain projection and must still send.
+        sendLogger.warn("telegram richMessage chunk rendered empty; skipping");
         continue;
       }
       try {
-        warnTelegramRichHtmlDegradations({
+        warnTelegramRichBlocksDegradations({
           context: "richMessage",
           reasons: chunk.degradationReasons,
           warn: (message) => sendLogger.warn(message),
@@ -1173,9 +1220,7 @@ async function sendMessageTelegramWithContext(
               () =>
                 richRawApi.sendRichMessage({
                   chat_id: chatId,
-                  rich_message: chunk.skipEntityDetection
-                    ? { html: chunk.text, skip_entity_detection: true }
-                    : { html: chunk.text },
+                  rich_message: chunk.richMessage,
                   ...effectiveParams,
                   ...(opts.silent === true ? { disable_notification: true } : {}),
                 }),
@@ -1186,7 +1231,7 @@ async function sendMessageTelegramWithContext(
         recordedParams = toTelegramRichMessageContextParams(richResult.acceptedParams);
       } catch (err) {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
-          html: chunk.text,
+          plainText: chunk.plainText,
           err,
           context: "richMessage",
           warn: (message) => sendLogger.warn(message),
@@ -1211,7 +1256,13 @@ async function sendMessageTelegramWithContext(
           );
           const fallbackMessageId = resolveTelegramMessageIdOrThrow(plainResult.result, context);
           recordSentMessage(chatId, fallbackMessageId, cfg);
-          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId);
+          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId, {
+            telegramDeliveredText: fallbackText,
+            telegramHasInlineKeyboard:
+              index === chunks.length - 1 &&
+              fallbackIndex === fallbackChunks.length - 1 &&
+              Boolean(replyMarkup),
+          });
           await recordDeliveredPromptContext(
             {
               message: plainResult.result,
@@ -1234,7 +1285,10 @@ async function sendMessageTelegramWithContext(
       }
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, result?.chat?.id ?? chatId);
+      await reportDelivery(messageId, result?.chat?.id ?? chatId, {
+        telegramDeliveredText: chunk.plainText,
+        telegramHasInlineKeyboard: index === chunks.length - 1 && Boolean(replyMarkup),
+      });
       await recordDeliveredPromptContext(
         {
           message: result,
@@ -1331,6 +1385,9 @@ async function sendMessageTelegramWithContext(
     let sendImageAsPhoto = true;
     const deliveryKind =
       opts.forceDocument === true && (kind === "image" || kind === "video") ? "document" : kind;
+    if (opts.asVideoNote === true && deliveryKind !== "video") {
+      throw new Error("Telegram video notes require video media.");
+    }
     if (deliveryKind === "image" && !isGif) {
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
@@ -1506,7 +1563,10 @@ async function sendMessageTelegramWithContext(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
-    await reportDelivery(mediaMessageId, resolvedChatId);
+    await reportDelivery(mediaMessageId, resolvedChatId, {
+      ...(caption ? { telegramDeliveredText: caption } : {}),
+      telegramHasInlineKeyboard: !needsSeparateText && Boolean(replyMarkup),
+    });
     await recordDeliveredPromptContext(
       {
         message: result,
@@ -1562,6 +1622,139 @@ async function sendMessageTelegramWithContext(
     direction: "outbound",
   });
   return textResult;
+}
+
+/** Send a standalone location pin or named venue through Telegram's native payload. */
+export async function sendLocationTelegram(
+  to: string,
+  input: OutboundLocation,
+  opts: TelegramLocationSendOpts,
+): Promise<TelegramSendResult> {
+  const context = resolveTelegramApiContext(opts);
+  return withTelegramApiContextLease(
+    context,
+    sendLocationTelegramWithContext(to, input, opts, context),
+  );
+}
+
+async function sendLocationTelegramWithContext(
+  to: string,
+  input: OutboundLocation,
+  opts: TelegramLocationSendOpts,
+  context: TelegramApiContext,
+): Promise<TelegramSendResult> {
+  const location = normalizeOutboundLocation(input);
+  if (!location) {
+    throw new Error("Telegram location is required.");
+  }
+  const hasName = Boolean(location.name);
+  const hasAddress = Boolean(location.address);
+  if (hasName !== hasAddress) {
+    throw new Error("Telegram venues require both location.name and location.address.");
+  }
+
+  const { cfg, account, api } = context;
+  const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+  const threadParams = buildTelegramThreadReplyParams({
+    thread: resolveTelegramSendThreadSpec({
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+      chatType: target.chatType,
+    }),
+    replyToMessageId: opts.replyToMessageId,
+    replyQuoteText: opts.quoteText,
+    useReplyIdAsQuoteSource: true,
+  });
+  const replyMarkup = buildInlineKeyboard(opts.buttons);
+  const commonParams = {
+    ...threadParams,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag: createTelegramNonIdempotentRequestWithDiag({
+      cfg,
+      account,
+      retry: opts.retry,
+      verbose: opts.verbose,
+    }),
+    chatId,
+    input: to,
+  });
+  const label = hasName ? "venue" : "location";
+  const delivery = await withTelegramNativeQuoteFallback({
+    label,
+    requestParams: commonParams,
+    request: (effectiveParams, retryLabel) =>
+      requestWithChatNotFound(
+        () =>
+          hasName
+            ? api.sendVenue(
+                chatId,
+                location.latitude,
+                location.longitude,
+                location.name ?? "",
+                location.address ?? "",
+                effectiveParams as TelegramSendVenueParams,
+              )
+            : api.sendLocation(chatId, location.latitude, location.longitude, {
+                ...effectiveParams,
+                ...(location.accuracy !== undefined
+                  ? { horizontal_accuracy: location.accuracy }
+                  : {}),
+              } as TelegramSendLocationParams),
+        retryLabel,
+      ),
+  });
+  const result = delivery.result;
+  const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);
+  const messageId = resolveTelegramMessageIdOrThrow(result, `${label} send`);
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId, cfg);
+  await opts.onDeliveryResult?.({ messageId: String(messageId), chatId: resolvedChatId });
+  const projectionPlan = opts.promptContextProjectionPlan;
+  const projection = projectionPlan?.cursor.take(projectionPlan.finalPart);
+  const recorded = await recordOutboundMessageForPromptContext({
+    cfg,
+    account,
+    ...(botUserId !== undefined ? { botUserId } : {}),
+    chatId,
+    message: result,
+    messageId,
+    text: formatLocationText(location),
+    ...(acceptedParams?.message_thread_id !== undefined
+      ? { messageThreadId: acceptedParams.message_thread_id }
+      : {}),
+    promptContextProjection: projection,
+  });
+  if (projection && !recorded) {
+    projectionPlan?.cursor.invalidate();
+  }
+  logTelegramOutboundSendOk({
+    accountId: account.accountId,
+    chatId: resolvedChatId,
+    messageId: String(messageId),
+    operation: hasName ? "sendVenue" : "sendLocation",
+    deliveryKind: label,
+    messageThreadId: acceptedParams?.message_thread_id,
+    replyToMessageId: opts.replyToMessageId,
+    silent: opts.silent,
+  });
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+  return { messageId: String(messageId), chatId: resolvedChatId };
 }
 
 export async function sendTypingTelegram(
@@ -2065,7 +2258,8 @@ async function editMessageTelegramWithContext(
   ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true;
+  // Caller-authored HTML edits keep legacy parse_mode HTML semantics too.
+  const useRichMessages = account.config.richMessages === true && textMode !== "html";
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -2076,7 +2270,7 @@ async function editMessageTelegramWithContext(
   const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
   const richRawApi = useRichMessages ? getTelegramRichRawApi(api) : undefined;
   const richMessagePlan = useRichMessages
-    ? buildTelegramRichMessagePlan(text, textMode, {
+    ? buildTelegramRichMarkdownPlan(text, {
         skipEntityDetection: opts.linkPreview === false,
         tableMode,
       })
@@ -2124,7 +2318,7 @@ async function editMessageTelegramWithContext(
     if (richRawApi && richMessagePlan) {
       const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
         replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
-      warnTelegramRichHtmlDegradations({
+      warnTelegramRichBlocksDegradations({
         context: "editMessage",
         reasons: richMessagePlan.degradationReasons,
         warn: (message) => sendLogger.warn(message),
@@ -2141,7 +2335,7 @@ async function editMessageTelegramWithContext(
         (err) => !isTelegramMessageNotModifiedError(err),
       ).catch((err: unknown) => {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
-          html: richMessagePlan.richMessage.html,
+          plainText: richMessagePlan.plainText,
           err,
           context: "editMessage",
           warn: (message) => sendLogger.warn(message),
@@ -2384,7 +2578,7 @@ async function sendPollTelegramWithContext(
   });
 
   // Normalize the poll input (validates question, options, maxSelections)
-  const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
+  const normalizedPoll = normalizePollInput(poll, { maxOptions: 12 });
 
   const threadParams = buildTelegramThreadReplyParams({
     thread: resolveTelegramSendThreadSpec({
@@ -2556,3 +2750,4 @@ async function createForumTopicTelegramWithContext(
     chatId: normalizedChatId,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

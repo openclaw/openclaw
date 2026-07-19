@@ -43,6 +43,33 @@ function releaseManifest(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function exactTargetEvidenceReuse() {
+  return {
+    changedPaths: [],
+    evidenceSha: targetSha,
+    policy: "exact-target-full-validation-v1",
+    runId: "122",
+    selectedRunId: "122",
+  };
+}
+
+function strictEvidenceReuse() {
+  return {
+    schema: "openclaw.release-validation-evidence/v3",
+    valid: true,
+    current: { runId: "123", targetSha },
+    root: { runId: "122", targetSha },
+    evidenceReuse: {
+      changedPaths: [],
+      evidenceSha: targetSha,
+      policy: "exact-target-full-validation-v1",
+      rootRunId: "122",
+      selectedRunId: "122",
+    },
+    conclusions: { allRequiredSucceeded: true },
+  };
+}
+
 function validate(
   runOverrides: Record<string, unknown> = {},
   manifestOverrides: Record<string, unknown> = {},
@@ -57,6 +84,7 @@ function validate(
     expectedTargetSha: targetSha,
     expectedWorkflowBranch: "release/2026.7.1",
     isTrustedMainAncestor,
+    validateEvidenceReuseStrictly: () => strictEvidenceReuse(),
   });
   return { isTrustedMainAncestor, result };
 }
@@ -176,24 +204,119 @@ describe("full release validation evidence", () => {
     expect(() => validate({}, {}, false)).toThrow("not reachable from current main");
   });
 
-  it("rejects evidence reuse on the SHA-pinned path", () => {
-    expect(() => validate({}, { evidenceReuse: { runId: "122" } })).toThrow(
-      "must not reuse another validation run",
+  it("accepts exact-target evidence reuse on the SHA-pinned path", () => {
+    expect(validate({}, { evidenceReuse: exactTargetEvidenceReuse() }).result.source).toBe(
+      "sha-pinned-main",
     );
+  });
+
+  it("accepts changelog-only release evidence reuse on the SHA-pinned path", () => {
+    const codeSha = "c".repeat(40);
+    const reuse = {
+      changedPaths: ["CHANGELOG.md"],
+      evidenceSha: codeSha,
+      policy: "changelog-only-release-v1",
+      runId: "122",
+      selectedRunId: "122",
+    };
+    const result = validateFullReleaseValidationEvidence({
+      run: releaseRun(),
+      manifest: releaseManifest({ evidenceReuse: reuse }),
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: "123",
+      expectedTargetSha: targetSha,
+      expectedWorkflowBranch: "release/2026.7.1",
+      isTrustedMainAncestor: () => true,
+      validateEvidenceReuseStrictly: () => ({
+        ...strictEvidenceReuse(),
+        current: { runId: "123", targetSha },
+        root: { runId: "122", targetSha: codeSha },
+        evidenceReuse: {
+          changedPaths: ["CHANGELOG.md"],
+          evidenceSha: codeSha,
+          policy: "changelog-only-release-v1",
+          rootRunId: "122",
+          selectedRunId: "122",
+        },
+      }),
+    });
+
+    expect(result.source).toBe("sha-pinned-main");
+  });
+
+  it("requires strict root and child validation for reused evidence", () => {
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun(),
+        manifest: releaseManifest({ evidenceReuse: exactTargetEvidenceReuse() }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedWorkflowBranch: "release/2026.7.1",
+        isTrustedMainAncestor: () => true,
+      }),
+    ).toThrow("requires strict chain validation");
+
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun(),
+        manifest: releaseManifest({ evidenceReuse: exactTargetEvidenceReuse() }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedWorkflowBranch: "release/2026.7.1",
+        isTrustedMainAncestor: () => true,
+        validateEvidenceReuseStrictly: () => ({
+          ...strictEvidenceReuse(),
+          conclusions: { allRequiredSucceeded: false },
+        }),
+      }),
+    ).toThrow("failed strict chain validation");
+  });
+
+  it("rejects malformed evidence reuse on the SHA-pinned path", () => {
+    expect(() =>
+      validate(
+        {},
+        { evidenceReuse: { ...exactTargetEvidenceReuse(), changedPaths: ["src/a.ts"] } },
+      ),
+    ).toThrow("evidence reuse is invalid");
+    expect(() =>
+      validate(
+        {},
+        { evidenceReuse: { ...exactTargetEvidenceReuse(), evidenceSha: "c".repeat(40) } },
+      ),
+    ).toThrow("evidence reuse is invalid");
+    expect(() =>
+      validate(
+        {},
+        {
+          evidenceReuse: {
+            ...exactTargetEvidenceReuse(),
+            changedPaths: ["src/a.ts"],
+            evidenceSha: "c".repeat(40),
+            policy: "changelog-only-release-v1",
+          },
+        },
+      ),
+    ).toThrow("evidence reuse is invalid");
   });
 
   it("keeps a pinned-shaped expected branch on the pinned trust path", () => {
     expect(() =>
       validateFullReleaseValidationEvidence({
         run: releaseRun(),
-        manifest: releaseManifest({ evidenceReuse: { runId: "122" } }),
+        manifest: releaseManifest({
+          evidenceReuse: { ...exactTargetEvidenceReuse(), selectedRunId: "" },
+        }),
         expectedRepository: "openclaw/openclaw",
         expectedRunId: "123",
         expectedTargetSha: targetSha,
         expectedWorkflowBranch: pinnedBranch,
-        isTrustedMainAncestor: () => false,
+        isTrustedMainAncestor: () => true,
+        validateEvidenceReuseStrictly: () => strictEvidenceReuse(),
       }),
-    ).toThrow("must not reuse another validation run");
+    ).toThrow("evidence reuse is invalid");
   });
 
   it("does not treat a malformed release-ci expected branch as direct", () => {

@@ -6,12 +6,18 @@ import net from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
-import { appendApnsResponseBodyCapture, createApnsResponseBodyCapture } from "./push-apns-http2.js";
+import {
+  appendApnsResponseBodyCapture,
+  createApnsResponseBodyCapture,
+  getApnsResponseBodyCaptureText,
+} from "./push-apns-http2.js";
 import {
   sendApnsAlert,
   sendApnsBackgroundWake,
   sendApnsExecApprovalAlert,
   sendApnsExecApprovalResolvedWake,
+  sendApnsPluginApprovalAlert,
+  sendApnsPluginApprovalResolvedWake,
 } from "./push-apns.js";
 
 const testAuthPrivateKey = generateKeyPairSync("ec", {
@@ -290,11 +296,32 @@ describe("push APNs send semantics", () => {
     appendApnsResponseBodyCapture(capture, "abc", 5);
     appendApnsResponseBodyCapture(capture, "def", 5);
 
-    expect(capture).toEqual({
-      text: "abcde",
-      bytes: 6,
-      truncated: true,
-    });
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
+    expect(capture).toMatchObject({ capturedBytes: 5, bytes: 6, truncated: true });
+  });
+
+  it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {
+    const splitCapture = createApnsResponseBodyCapture();
+    const emoji = Buffer.from("🚀");
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from("before "));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(0, 2));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(2));
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from(" after"));
+    expect(getApnsResponseBodyCaptureText(splitCapture)).toBe("before 🚀 after");
+
+    const cappedCapture = createApnsResponseBodyCapture();
+    const cappedPrefix = "a".repeat(8191);
+    appendApnsResponseBodyCapture(cappedCapture, Buffer.from(`${cappedPrefix}🚀`));
+    expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe(cappedPrefix);
+    expect(cappedCapture).toMatchObject({ capturedBytes: 8192, bytes: 8195, truncated: true });
+  });
+
+  it("preserves replacement decoding for a complete malformed APNs response", () => {
+    const capture = createApnsResponseBodyCapture();
+    appendApnsResponseBodyCapture(capture, Buffer.from([0x61, 0xf0, 0x9f]));
+
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("a�");
+    expect(capture).toMatchObject({ capturedBytes: 3, bytes: 3, truncated: false });
   });
 
   it("sends alert pushes with alert headers and payload", async () => {
@@ -571,6 +598,104 @@ describe("push APNs send semantics", () => {
     expect(typeof openclawPayload.ts).toBe("number");
     expect(result.ok).toBe(true);
     expect(result.transport).toBe("direct");
+  });
+
+  it("builds plugin approval alerts with request copy and a bounded body", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-alert",
+      environment: "sandbox",
+      sendResult: {
+        status: 200,
+        apnsId: "apns-plugin-approval-alert-id",
+        body: "",
+      },
+    });
+    const description = `${"x".repeat(255)}😀${"y".repeat(300)}`;
+
+    await sendApnsPluginApprovalAlert({
+      registration,
+      nodeId: "ios-node-plugin-approval-alert",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+      title: "Install plugin update",
+      description,
+      auth,
+      requestSender: send,
+    });
+
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({
+      alert: {
+        title: "Install plugin update",
+        body: `${"x".repeat(255)}…`,
+      },
+      sound: "default",
+      category: "openclaw.plugin-approval",
+      "content-available": 1,
+    });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "plugin.approval.requested",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
+    expectNoProperties(openclawPayload, [
+      "title",
+      "description",
+      "toolName",
+      "agentId",
+      "sessionKey",
+    ]);
+  });
+
+  it("falls back to the generic plugin approval title", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-fallback",
+      environment: "sandbox",
+      sendResult: { status: 200, apnsId: "apns-plugin-approval-fallback-id", body: "" },
+    });
+
+    await sendApnsPluginApprovalAlert({
+      registration,
+      nodeId: "ios-node-plugin-approval-fallback",
+      approvalId: "plugin:fallback",
+      gatewayDeviceId: "gateway-device-123",
+      title: "   ",
+      description: "Review this request.",
+      auth,
+      requestSender: send,
+    });
+
+    const aps = requireRecord(requirePayload(requireSendRequest(send)).aps, "APNs aps payload");
+    expect(requireRecord(aps.alert, "APNs alert").title).toBe("Approval required");
+  });
+
+  it("builds plugin approval cleanup pushes as silent background notifications", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-cleanup",
+      environment: "sandbox",
+      sendResult: { status: 200, apnsId: "apns-plugin-approval-cleanup-id", body: "" },
+    });
+
+    await sendApnsPluginApprovalResolvedWake({
+      registration,
+      nodeId: "ios-node-plugin-approval-cleanup",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+      auth,
+      requestSender: send,
+    });
+
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({ "content-available": 1 });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "plugin.approval.resolved",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
   });
 
   it("parses direct send failures and clamps sub-second timeouts", async () => {

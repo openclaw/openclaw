@@ -6,11 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  saveSessionStore,
-} from "../../config/sessions/store.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 
@@ -70,6 +67,82 @@ describe("applyResetModelOverride", () => {
     expect(sessionCtx.BodyStripped).toBe("summarize");
   });
 
+  it.each([
+    { name: "empty catalog", catalog: [] },
+    {
+      name: "unrelated catalog",
+      catalog: [{ provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" }],
+    },
+  ] satisfies Array<{ name: string; catalog: ModelCatalogEntry[] }>)(
+    "honors a configured primary missing from the $name",
+    async ({ catalog }) => {
+      const fixture = createResetFixture({
+        providerOverride: "openai",
+        modelOverride: "gpt-4o-mini",
+      });
+      fixture.cfg.agents = {
+        defaults: { model: { primary: "custom/private-model" } },
+      };
+      fixture.sessionCtx.BodyStripped = "custom/private-model summarize";
+
+      const result = await applyResetModelOverride({
+        cfg: fixture.cfg,
+        resetTriggered: true,
+        bodyStripped: fixture.sessionCtx.BodyStripped,
+        sessionCtx: fixture.sessionCtx,
+        ctx: fixture.ctx,
+        sessionEntry: fixture.sessionEntry,
+        sessionStore: fixture.sessionStore,
+        sessionKey: "agent:main:dm:1",
+        defaultProvider: "custom",
+        defaultModel: "private-model",
+        aliasIndex: fixture.aliasIndex,
+        modelCatalog: catalog,
+      });
+
+      expect(result.selection).toMatchObject({
+        provider: "custom",
+        model: "private-model",
+        isDefault: true,
+      });
+      expect(result.cleanedBody).toBe("summarize");
+      expect(fixture.sessionCtx.BodyStripped).toBe("summarize");
+      expect(fixture.sessionEntry.providerOverride).toBeUndefined();
+      expect(fixture.sessionEntry.modelOverride).toBeUndefined();
+    },
+  );
+
+  it("does not let the configured primary bypass an explicit model policy", async () => {
+    const fixture = createResetFixture();
+    fixture.cfg.agents = {
+      defaults: {
+        model: { primary: "custom/private-model" },
+        modelPolicy: { allow: ["openai/*"] },
+      },
+    };
+    fixture.sessionCtx.BodyStripped = "custom/private-model summarize";
+
+    const result = await applyResetModelOverride({
+      cfg: fixture.cfg,
+      resetTriggered: true,
+      bodyStripped: fixture.sessionCtx.BodyStripped,
+      sessionCtx: fixture.sessionCtx,
+      ctx: fixture.ctx,
+      sessionEntry: fixture.sessionEntry,
+      sessionStore: fixture.sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "custom",
+      defaultModel: "private-model",
+      aliasIndex: fixture.aliasIndex,
+      modelCatalog,
+    });
+
+    expect(result).toEqual({});
+    expect(fixture.sessionCtx.BodyStripped).toBe("custom/private-model summarize");
+    expect(fixture.sessionEntry.providerOverride).toBeUndefined();
+    expect(fixture.sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("clears auth profile overrides when reset applies a model", async () => {
     const { sessionEntry } = await applyResetFixture({
       resetTriggered: true,
@@ -96,11 +169,7 @@ describe("applyResetModelOverride", () => {
       modelOverride: "gpt-4o-mini",
       modelOverrideSource: "user",
     };
-    await saveSessionStore(
-      storePath,
-      { "agent:main:dm:1": concurrentEntry },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "agent:main:dm:1", storePath }, concurrentEntry);
 
     try {
       const result = await applyResetModelOverride({
@@ -128,7 +197,7 @@ describe("applyResetModelOverride", () => {
       });
       expect(fixture.sessionEntry.updatedAt).toBeGreaterThanOrEqual(concurrentEntry.updatedAt);
       expect(fixture.sessionStore["agent:main:dm:1"]).toEqual(fixture.sessionEntry);
-      expect(loadSessionStore(storePath, { skipCache: true })["agent:main:dm:1"]).toEqual(
+      expect(loadSessionEntry({ sessionKey: "agent:main:dm:1", storePath })).toEqual(
         fixture.sessionEntry,
       );
     } finally {
@@ -151,11 +220,7 @@ describe("applyResetModelOverride", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
     };
-    await saveSessionStore(
-      storePath,
-      { "agent:main:dm:1": concurrentEntry },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "agent:main:dm:1", storePath }, concurrentEntry);
 
     try {
       const result = await applyResetModelOverride({
@@ -197,11 +262,7 @@ describe("applyResetModelOverride", () => {
       modelOverride: "gpt-4o-mini",
       modelOverrideSource: "user",
     };
-    await saveSessionStore(
-      storePath,
-      { "agent:main:dm:1": rotatedEntry },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "agent:main:dm:1", storePath }, rotatedEntry);
 
     try {
       await expect(
@@ -225,9 +286,7 @@ describe("applyResetModelOverride", () => {
       expect(fixture.sessionEntry.sessionId).toBe("s1");
       expect(fixture.sessionEntry.modelOverride).toBeUndefined();
       expect(fixture.sessionStore["agent:main:dm:1"]).toBe(fixture.sessionEntry);
-      expect(loadSessionStore(storePath, { skipCache: true })["agent:main:dm:1"]).toEqual(
-        rotatedEntry,
-      );
+      expect(loadSessionEntry({ sessionKey: "agent:main:dm:1", storePath })).toEqual(rotatedEntry);
     } finally {
       clearSessionStoreCacheForTest();
       fs.rmSync(tempRoot, { recursive: true, force: true });

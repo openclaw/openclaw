@@ -12,19 +12,34 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] QR code scanning in onboarding
 - [x] Performance improvements
 - [x] Streaming support in chat UI
+- [x] Dedicated per-device Android chat session created/adopted on connect without resetting history
 - [x] Request camera/location and other permissions in onboarding/settings flow
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
+- [x] Foreground on-device Voice Wake with Gateway-synced wake words
 - [x] Screen tab full functionality
 - [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
+- [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
 - [x] Per-app language selection for translated resources follows Android system settings and persistence
 - [x] Cron job settings support details, run history, run now, edits, enable/disable, and deletion with admin-scoped Gateway access
+- [x] Wear OS companion proxies sessions, transcripts, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch
 
 ## Open in Android Studio
 
 - Open the folder `apps/android`.
+
+## Wear OS companion
+
+The `wear` app is a paired-phone companion with the same application ID and signing identity as the phone app. The watch discovers the phone through Wear OS Data Layer, then uses the phone's existing authenticated operator session. It never receives or stores Gateway tokens, passwords, TLS pins, or device-signing identity.
+
+The watch supports agent and session selection, bounded text-only transcript history, streaming reply state, text and voice replies, abort, realtime Talk within the selected session, paired-phone Gateway controls, local reply notifications, theme and automatic-speech settings, and a launch Tile. Realtime Talk streams watch microphone and playback audio over a temporary Wear OS Data Layer channel; it still uses the phone's authenticated Gateway session and closes when the selected phone or Gateway connection changes. A missing Data Layer event sequence or changed phone-process epoch triggers a fresh history request instead of applying uncertain deltas. Agent and Gateway controls are capability-negotiated so an older paired phone remains usable during staggered updates.
+
+```bash
+cd apps/android
+./gradlew :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug :wear:ktlintCheck
+```
 
 ## Build / Run
 
@@ -89,6 +104,7 @@ explicitly use a connected emulator.
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
 - Play build: `openclaw-<version>-play-release.aab`
+- Wear build: `openclaw-<version>-wear-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
@@ -106,6 +122,11 @@ metadata, signing, validation, archive, or upload step before trying again. Do
 not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
 Google Play API commands, or Play Console mutation commands.
 
+The release lane uploads the phone and Wear bundles in one atomic Google Play
+edit. It publishes the phone bundle to `GOOGLE_PLAY_TRACK` and maps the Wear
+bundle to the corresponding form-factor track (`wear:qa` for the default
+internal channel, otherwise `wear:<track>`).
+
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
 Prefer `pnpm android:release:archive`, which stamps and validates the full Git commit and one UTC build timestamp before signing. Flavor-specific direct Gradle release tasks must pass the same metadata explicitly:
@@ -115,6 +136,7 @@ cd apps/android
 commit="$(git -C ../.. rev-parse HEAD)"
 built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundlePlayRelease
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :wear:bundleRelease
 ./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundleThirdPartyRelease
 ```
 

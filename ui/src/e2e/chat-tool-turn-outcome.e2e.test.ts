@@ -38,6 +38,17 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
+async function expandCompletedWorkGroups(page: import("playwright").Page) {
+  const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
+  await workSummaries.first().waitFor();
+  for (let index = 0; index < (await workSummaries.count()); index += 1) {
+    const summary = workSummaries.nth(index);
+    if ((await summary.getAttribute("aria-expanded")) !== "true") {
+      await summary.click();
+    }
+  }
+}
+
 describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
@@ -73,6 +84,7 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
 
     await page.goto(`${server.baseUrl}chat`);
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
+    await expandCompletedWorkGroups(page);
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
       "Tool error",
@@ -141,7 +153,7 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     });
 
     await page.goto(`${server.baseUrl}chat`);
-    const activity = page.locator(".chat-activity-group__summary");
+    const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
     expect(await activity.textContent()).toContain("Read a file, edited 2 files");
     if ((await activity.getAttribute("aria-expanded")) !== "true") {
@@ -173,6 +185,151 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     await rawDetails.click();
     await page.getByText("Applied patch", { exact: true }).waitFor();
     await captureToolActivityProof(page, "parallel-multifile-expanded");
+    await context.close();
+  });
+
+  it("keeps a message-only turn visible with its first message line", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    const message = "Hello Molty, first claw-to-claw hello.";
+    await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "Send the Reef greeting.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message",
+              name: "message",
+              arguments: {
+                action: "send",
+                channel: "reef",
+                target: "@molty",
+                message: `${message}\nHidden second line.`,
+              },
+            },
+          ],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-message",
+          toolName: "message",
+          content: [{ type: "text", text: '{"status":"sent"}' }],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    const row = page.locator(".chat-tool-msg-summary", { hasText: message });
+    await row.waitFor();
+
+    expect(await page.locator(".chat-work-group").count()).toBe(0);
+    expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
+    expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
+    await captureToolActivityProof(page, "message-only-turn-visible");
+    await row.click();
+    await page.getByText("action:", { exact: true }).waitFor();
+    expect(await page.getByText("send", { exact: true }).count()).toBe(1);
+    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(
+      0,
+    );
+    await context.close();
+  });
+
+  it("sweeps a text wave over the active tool row and stops it on the result", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Ready for the running tool wave proof." }],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.getByText("Ready for the running tool wave proof.").waitFor();
+    await page.locator(".agent-chat__input textarea").fill("run a long command");
+    await page.getByRole("button", { name: "Send message" }).click();
+    const send = await gateway.waitForRequest("chat.send");
+    const runId = (send.params as { idempotencyKey?: string }).idempotencyKey as string;
+
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        toolCallId: "call-wave",
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm check:changed" },
+      },
+    });
+    // Start-phase sync is throttled and repaints on the next event, so follow
+    // with a delta (as real runs do) to surface the live card.
+    await page.waitForTimeout(200);
+    await gateway.emitGatewayEvent("chat", {
+      deltaText: "Working on it.",
+      message: {
+        content: [{ text: "Working on it.", type: "text" }],
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+      runId,
+      sessionKey: "main",
+      state: "delta",
+    });
+    await page.getByText("Working on it.").waitFor();
+
+    const runningRow = page.locator(".chat-tool-row--running");
+    await runningRow.waitFor();
+    // Visual-regression guard for the active-task text wave: the running
+    // command text must carry the glyph-clipped gradient animation.
+    const wave = await runningRow.locator(".chat-tool-row__cmd").evaluate((node) => {
+      const style = getComputedStyle(node);
+      return {
+        animationName: style.animationName,
+        backgroundClip: style.getPropertyValue("-webkit-background-clip") || style.backgroundClip,
+        color: style.color,
+      };
+    });
+    expect(wave.animationName).toBe("chatToolRowTextWave");
+    expect(wave.backgroundClip).toBe("text");
+    expect(wave.color).toBe("rgba(0, 0, 0, 0)");
+    await captureToolActivityProof(page, "tool-row-running-text-wave");
+
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        toolCallId: "call-wave",
+        name: "exec",
+        phase: "result",
+        result: { text: "done" },
+      },
+    });
+    // The wave is a live-run marker only: the result event must end it and
+    // restore plain text color even though the run has not finished yet.
+    await expect.poll(() => page.locator(".chat-tool-row--running").count()).toBe(0);
+    const settled = await page
+      .locator(".chat-tool-row__cmd")
+      .first()
+      .evaluate((node) => {
+        const style = getComputedStyle(node);
+        return { animationName: style.animationName, color: style.color };
+      });
+    expect(settled.animationName).toBe("none");
+    expect(settled.color).not.toBe("rgba(0, 0, 0, 0)");
     await context.close();
   });
 });

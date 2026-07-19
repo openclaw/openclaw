@@ -1,13 +1,13 @@
 // Slack tests cover home plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-let buildSlackHomeView: typeof import("./home.js").buildSlackHomeView;
 let registerSlackHomeEvents: typeof import("./home.js").registerSlackHomeEvents;
 let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 
 type HomeHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 function createHomeContext(params?: {
+  slashCommandName?: string;
   trackEvent?: () => void;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
 }) {
@@ -20,7 +20,11 @@ function createHomeContext(params?: {
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
   };
-  registerSlackHomeEvents({ ctx: harness.ctx, trackEvent: params?.trackEvent });
+  registerSlackHomeEvents({
+    ctx: harness.ctx,
+    slashCommandName: params?.slashCommandName,
+    trackEvent: params?.trackEvent,
+  });
   return {
     publish,
     getHomeHandler: () => harness.getHandler("app_home_opened") as HomeHandler | null,
@@ -29,7 +33,7 @@ function createHomeContext(params?: {
 
 describe("registerSlackHomeEvents", () => {
   beforeAll(async () => {
-    ({ buildSlackHomeView, registerSlackHomeEvents } = await import("./home.js"));
+    ({ registerSlackHomeEvents } = await import("./home.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
   });
 
@@ -37,7 +41,7 @@ describe("registerSlackHomeEvents", () => {
     vi.clearAllMocks();
   });
 
-  it("publishes the default Home tab view for app_home_opened", async () => {
+  it("publishes the Home tab without an inactive slash command hint", async () => {
     const trackEvent = vi.fn();
     const { publish, getHomeHandler } = createHomeContext({ trackEvent });
     const handler = getHomeHandler();
@@ -61,7 +65,39 @@ describe("registerSlackHomeEvents", () => {
     expect(publish).toHaveBeenCalledWith({
       token: "xoxb-test",
       user_id: "U123",
-      view: buildSlackHomeView(),
+      view: expect.any(Object),
+    });
+    expect(publish.mock.calls[0]?.[0]?.view.blocks[1]).toMatchObject({
+      type: "section",
+      text: {
+        text: "Send a DM or mention OpenClaw in a channel to start a session.",
+      },
+    });
+  });
+
+  it("publishes the configured slash command name", async () => {
+    const { publish, getHomeHandler } = createHomeContext({ slashCommandName: "acme" });
+
+    await getHomeHandler()!({
+      event: {
+        type: "app_home_opened",
+        user: "U123",
+        channel: "D123",
+        tab: "home",
+      },
+      body: {},
+    });
+
+    expect(publish).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      user_id: "U123",
+      view: expect.any(Object),
+    });
+    expect(publish.mock.calls[0]?.[0]?.view.blocks[1]).toMatchObject({
+      type: "section",
+      text: {
+        text: "Send a DM, mention OpenClaw in a channel, or use `/acme` to start a session.",
+      },
     });
   });
 

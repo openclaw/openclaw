@@ -1,6 +1,6 @@
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { parseChatSideResult } from "../../lib/chat/side-result.ts";
+import { parseChatSideResult, type ChatSideResult } from "../../lib/chat/side-result.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -21,8 +21,12 @@ import {
   clearToolStreamSegments,
   hasVisibleStreamParts,
 } from "./stream-reconciliation.ts";
+import {
+  authoritativeHistoryAppliedForRun,
+  rememberLiveTerminalRun,
+} from "./terminal-message-identity.ts";
 
-export type { ChatEventPayload, ChatState } from "./chat-history.ts";
+export type { ChatEventPayload } from "./chat-history.ts";
 
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
@@ -152,7 +156,7 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
@@ -162,6 +166,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
+  const authoritativeTerminalMatches = Boolean(
+    payload.runId &&
+    authoritativeHistoryAppliedForRun(state, payload.runId) &&
+    chatEventSessionMatches(state, payload),
+  );
   if (!sessionMatches && !activeRunMatches) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
@@ -221,7 +230,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+    if (authoritativeTerminalMatches) {
+      // History already owns this run's terminal message. Discard the live
+      // projection; reconcileTerminalRun below clears its remaining stream.
+      clearToolStreamSegments(state);
+    } else if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
       if (
         hasVisibleStreamParts(state, {
           includeCurrent: false,
@@ -233,11 +246,28 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         });
         clearToolStreamSegments(state);
       }
-      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
+      state.chatMessages = appendTerminalAssistantMessage(
+        state.chatMessages,
+        rememberLiveTerminalRun(finalMessage, terminalRunId),
+      );
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
-    reconcileTerminalRun("done", "done");
+    if (payload.yielded === true && payload.stopReason === "end_turn") {
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          yielded: true,
+          runId: terminalRunId,
+          sessionKey: state.sessionKey,
+          sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
+          clearLocalRun: true,
+          clearChatStream: true,
+        },
+      );
+    } else {
+      reconcileTerminalRun("done", "done");
+    }
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
@@ -280,6 +310,29 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
+  // A BTW run that fails before seeding context terminates with a plain chat
+  // event and never emits chat.side_result. Convert the failure into an error
+  // side-result card and swallow the event: detached BTW runs must not reach
+  // normal chat handling, where an idle pane would adopt them into the
+  // transcript. Successful runs clear pending via the side_result handler
+  // before their terminal chat event arrives.
+  if (
+    isTerminalChatState(payload?.state) &&
+    typeof payload?.runId === "string" &&
+    state.chatSideResultPending?.runId === payload.runId
+  ) {
+    appendChatSideChatTurn(state, {
+      kind: "btw",
+      runId: payload.runId,
+      sessionKey: payload.sessionKey ?? state.sessionKey,
+      question: state.chatSideResultPending.question,
+      text: extractBtwFailureText(payload) ?? "The side question ended without a result.",
+      isError: true,
+      ts: Date.now(),
+    });
+    state.chatSideResultPending = null;
+    return null;
+  }
   if (
     isTerminalChatState(payload?.state) &&
     typeof payload?.runId === "string" &&
@@ -307,7 +360,53 @@ export function handleChatSideResultGatewayEvent(state: ChatState, payload: unkn
   if (!chatScopedEventSessionMatches(state, sideResult.sessionKey, sideResult.agentId)) {
     return false;
   }
-  state.chatSideResult = sideResult;
+  // Runs retired before display (superseded by a newer question or dismissed)
+  // enter chatSideResultTerminalRuns via retirePendingChatSideQuestion before
+  // their side_result can arrive; live runs only enter the set below. A
+  // retired run's late result must not replace the current card, and its
+  // entry stays so the trailing terminal chat event is still swallowed.
+  if (state.chatSideResultTerminalRuns?.has(sideResult.runId)) {
+    return true;
+  }
+  // A same-session result from another run (e.g. a split pane) must not
+  // replace this pane's live pending card — displaying it would also let the
+  // dismiss button retire the hidden pending run. Record it so its trailing
+  // terminal chat event is still swallowed here.
+  const pending = state.chatSideResultPending;
+  if (pending?.runId && pending.runId !== sideResult.runId) {
+    state.chatSideResultTerminalRuns?.add(sideResult.runId);
+    return true;
+  }
+  // Follow-up commands embed prior-turn context; the server echoes that whole
+  // blob as the question. The correlated pending record holds the user's
+  // typed question, so prefer it for display.
+  const question = pending?.runId === sideResult.runId ? pending.question : sideResult.question;
+  appendChatSideChatTurn(state, { ...sideResult, question });
+  state.chatSideResultPending = null;
   state.chatSideResultTerminalRuns?.add(sideResult.runId);
   return true;
+}
+
+/** An arriving answer appends a turn and reopens a panel hidden via X/Escape. */
+function appendChatSideChatTurn(state: ChatState, turn: ChatSideResult) {
+  state.chatSideChatTurns = [...(state.chatSideChatTurns ?? []), turn];
+  state.chatSideChatHidden = false;
+}
+
+function extractBtwFailureText(payload: ChatEventPayload): string | null {
+  if (typeof payload.errorMessage === "string" && payload.errorMessage.trim()) {
+    return payload.errorMessage;
+  }
+  const message = payload.message as { content?: unknown } | undefined;
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = blocks
+    .map((block) =>
+      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+        ? (block as { text?: unknown }).text
+        : null,
+    )
+    .filter((entry): entry is string => typeof entry === "string")
+    .join("\n")
+    .trim();
+  return text || null;
 }

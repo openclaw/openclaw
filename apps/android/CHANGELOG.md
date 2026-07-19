@@ -2,7 +2,25 @@
 
 ## Unreleased
 
-Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
+Adds copy and save-as-PNG actions for rendered chat widgets.
+
+Adds foreground, on-device Voice Wake with editable Gateway-synced wake words and automatic pause during other voice activity.
+
+Fixes Android composer media leaking across Gateway, agent, and chat switches. Thanks @IWhatsskill.
+
+Fixes malformed Android agent and profile initials when display names begin with emoji. Thanks @Leon-SK668.
+
+Adds a Wear OS companion for agent and session selection, transcripts, text and voice replies, realtime Talk, Gateway controls, reply notifications, local appearance and speech settings, and a launch Tile. The watch proxies through the paired phone and stores no Gateway credentials. Thanks @sibbl and @IWhatsskill.
+
+## 2026.7.2 - 2026-07-13
+
+Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.
+
+Improves chat with per-device history, durable approval status, session search, sharing, and agent avatars.
+
+Adds provider model details, build identity, safer permission recovery, fresh Installed Apps consent, and Gateway protocol v3/v4 support.
+
+Thanks @snowzlmbot, @IWhatsskill, @NianJiuZst, and @guarismo.
 
 ## 2026.7.1 - 2026-07-08
 

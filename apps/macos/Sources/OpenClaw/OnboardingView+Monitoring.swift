@@ -44,10 +44,7 @@ extension OnboardingView {
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
         self.maybeStartAISetup(for: pageIndex)
-        // AI setup creates the workspace (BOOTSTRAP.md); re-check so the
-        // Meet-your-agent page joins the flow once setup ran.
-        self.refreshBootstrapStatus()
-        maybeKickoffOnboardingChat(for: pageIndex)
+        self.updateMemoryImportMonitoring(for: pageIndex)
     }
 
     func maybeInstallCLI(for pageIndex: Int) {
@@ -157,12 +154,21 @@ extension OnboardingView {
             OnboardingController.shared.setWindowCloseEnabled(true)
             OnboardingController.shared.busyReason = nil
         }
-        let installed = await CLIInstaller.install { message in
+        guard let target = CLIInstallPrompter.shared.installTargetForCurrentBuild() else {
+            cliStatus = "CLI installation cancelled."
+            return
+        }
+        let installed = await CLIInstaller.install(target: target) { message in
             self.cliStatus = message
         }
         guard installed else { return }
         cliExecutableReady = true
         cliInstallLocation = CLIInstaller.managedExecutableLocation()
+        if !Self.shouldActivateLocalGateway(afterCLIInstallFor: self.state.connectionMode) {
+            cliStatus = "OpenClaw CLI is ready for the Mac node."
+            cliInstalled = true
+            return
+        }
         cliStatus = "Starting OpenClaw Gateway…"
         // The step checklist shows one spinner at a time: install first,
         // then the service start.

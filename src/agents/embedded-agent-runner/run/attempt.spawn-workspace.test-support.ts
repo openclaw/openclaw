@@ -13,6 +13,7 @@ import type {
   CompactResult,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
+  ContextEngineSessionTarget,
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
@@ -45,6 +46,11 @@ type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 };
+type CapturedTrajectoryEvent = {
+  data?: Record<string, unknown>;
+  type: string;
+  workspaceDir?: string;
+};
 
 function normalizeMockProviderId(providerId?: string): string {
   // Provider ids in mocked model routing follow the same lowercase normalization
@@ -63,9 +69,10 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   appendSessionInfo: UnknownMock;
   appendLabelChange: UnknownMock;
-  rewriteFile: UnknownMock;
+  replacePersistedTranscript: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  clearNextUserMessagePersistenceSuppression: UnknownMock;
   removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
@@ -96,6 +103,7 @@ type AttemptSpawnWorkspaceHoisted = {
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
+  prepareSessionManagerForRunMock: AsyncUnknownMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
   getHistoryLimitFromSessionKeyMock: Mock<
     (sessionKey: string | undefined, config: unknown) => number | undefined
@@ -105,6 +113,7 @@ type AttemptSpawnWorkspaceHoisted = {
   compactionReserveTokens: number;
   systemPromptTexts: string[];
   embeddedSystemPromptInputs: unknown[];
+  trajectoryEvents: CapturedTrajectoryEvent[];
   sessionManager: SessionManagerMocks;
 };
 
@@ -113,6 +122,7 @@ function createSubscriptionMock(): SubscriptionMock {
   // override only the lifecycle method they need.
   return {
     assistantTexts: [] as string[],
+    getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
@@ -196,6 +206,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
+  const prepareSessionManagerForRunMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
     images: [],
     detectedRefs: [],
@@ -212,6 +223,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const compactionReserveTokens = 0;
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
+  const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
@@ -223,9 +235,10 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
-    rewriteFile: vi.fn(),
+    replacePersistedTranscript: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    clearNextUserMessagePersistenceSuppression: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
   };
   return {
@@ -256,6 +269,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
+    prepareSessionManagerForRunMock,
     detectAndLoadPromptImagesMock,
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
@@ -263,6 +277,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     compactionReserveTokens,
     systemPromptTexts,
     embeddedSystemPromptInputs,
+    trajectoryEvents,
     sessionManager,
   };
 });
@@ -330,6 +345,35 @@ vi.mock("../../../trajectory/metadata.js", () => ({
   buildTrajectoryArtifacts: (params: Record<string, unknown>) => params,
   buildTrajectoryRunMetadata: () => ({ source: "test" }),
 }));
+
+vi.mock("../../../trajectory/runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../trajectory/runtime.js")>(
+    "../../../trajectory/runtime.js",
+  );
+  return {
+    ...actual,
+    createTrajectoryRuntimeRecorder: (
+      params: Parameters<typeof actual.createTrajectoryRuntimeRecorder>[0],
+    ) => {
+      const recorder = actual.createTrajectoryRuntimeRecorder(params);
+      return {
+        enabled: true as const,
+        describeFlushState: () => recorder?.describeFlushState(),
+        flush: async () => {
+          await recorder?.flush();
+        },
+        recordEvent: (type: string, data?: Record<string, unknown>) => {
+          hoisted.trajectoryEvents.push({
+            type,
+            ...(data ? { data } : {}),
+            ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          });
+          recorder?.recordEvent(type, data);
+        },
+      };
+    },
+  };
+});
 
 vi.mock("../../sessions/index.js", () => {
   function AuthStorage() {}
@@ -401,7 +445,7 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
 }));
 
-vi.mock("../../../tts/tts.js", () => ({
+vi.mock("../../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: () => undefined,
 }));
 
@@ -512,7 +556,7 @@ vi.mock("../session-manager-cache.js", () => ({
 }));
 
 vi.mock("../session-manager-init.js", () => ({
-  prepareSessionManagerForRun: async () => {},
+  prepareSessionManagerForRun: (params: unknown) => hoisted.prepareSessionManagerForRunMock(params),
 }));
 
 vi.mock("../../session-write-lock.js", () => ({
@@ -906,6 +950,7 @@ type MutableSession = {
   isCompacting: boolean;
   isStreaming: boolean;
   agent: {
+    convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;
@@ -1053,16 +1098,19 @@ export function resetEmbeddedAttemptHarness(
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+  hoisted.prepareSessionManagerForRunMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
   hoisted.compactionReserveTokens = 0;
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
+  hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
+  hoisted.sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
   hoisted.sessionManager.buildSessionContext
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
@@ -1071,7 +1119,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.appendCustomEntry.mockReset();
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
-  hoisted.sessionManager.rewriteFile.mockReset();
+  hoisted.sessionManager.replacePersistedTranscript.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }
@@ -1250,8 +1298,9 @@ export async function createContextEngineAttemptRunner(params: {
     }) => Promise<IngestResult>;
     compact?: (params: {
       sessionId: string;
-      sessionKey?: string;
-      sessionFile: string;
+      sessionKey: string;
+      agentId?: string;
+      sessionTarget?: ContextEngineSessionTarget;
       tokenBudget?: number;
     }) => Promise<CompactResult>;
     info?: Partial<ContextEngineInfo>;
@@ -1269,6 +1318,7 @@ export async function createContextEngineAttemptRunner(params: {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-workspace-"));
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
   const sessionFile = path.join(workspaceDir, "session.jsonl");
+  const sessionStore = path.join(workspaceDir, "sessions.json");
   params.tempPaths.push(workspaceDir, agentDir);
   await fs.writeFile(sessionFile, "", "utf8");
   const seedMessages: AgentMessage[] =
@@ -1302,8 +1352,13 @@ export async function createContextEngineAttemptRunner(params: {
   }));
 
   const previousTrajectoryEnv = process.env.OPENCLAW_TRAJECTORY;
+  const previousTrajectoryDirEnv = process.env.OPENCLAW_TRAJECTORY_DIR;
   if (params.trajectory !== true) {
     process.env.OPENCLAW_TRAJECTORY = "0";
+    delete process.env.OPENCLAW_TRAJECTORY_DIR;
+  } else {
+    delete process.env.OPENCLAW_TRAJECTORY;
+    process.env.OPENCLAW_TRAJECTORY_DIR = workspaceDir;
   }
   try {
     return await (
@@ -1314,7 +1369,7 @@ export async function createContextEngineAttemptRunner(params: {
       sessionFile,
       workspaceDir,
       agentDir,
-      config: {},
+      config: { session: { store: sessionStore } },
       prompt: "hello",
       timeoutMs: 10_000,
       runId: "run-context-engine-forwarding",
@@ -1358,5 +1413,11 @@ export async function createContextEngineAttemptRunner(params: {
     } else {
       process.env.OPENCLAW_TRAJECTORY = previousTrajectoryEnv;
     }
+    if (previousTrajectoryDirEnv === undefined) {
+      delete process.env.OPENCLAW_TRAJECTORY_DIR;
+    } else {
+      process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDirEnv;
+    }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -17,18 +17,18 @@
  */
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection-normalize.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -52,7 +52,7 @@ const TOOL_TITLES_SYSTEM_PROMPT = [
   'Respond with JSON only: {"titles":{"<id>":"<title>"}} covering every item id.',
 ].join(" ");
 
-export type ToolTitleRequestItem = { id: string; name: string; input: string };
+type ToolTitleRequestItem = { id: string; name: string; input: string };
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -74,7 +74,7 @@ function normalizeItems(items: readonly ToolTitleRequestItem[]): ToolTitleReques
     // secret egress path. Redaction runs on the full schema-bounded input and
     // only then truncates — slicing first could bisect a secret so its
     // fragment no longer matches any redaction pattern.
-    const input = redactToolPayloadText(item.input).slice(0, TOOL_TITLE_INPUT_MAX_CHARS);
+    const input = truncateUtf16Safe(redactToolPayloadText(item.input), TOOL_TITLE_INPUT_MAX_CHARS);
     if (!id || !name || !input.trim() || seen.has(id)) {
       continue;
     }

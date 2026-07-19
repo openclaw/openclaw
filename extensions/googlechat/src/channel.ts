@@ -52,11 +52,19 @@ const googlechatActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
     const accounts = accountId
       ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
-          (account) => account.enabled && account.credentialSource !== "none",
+          (account) =>
+            account.enabled &&
+            account.credentialSource !== "none" &&
+            account.tokenStatus !== "configured_unavailable",
         )
       : listGoogleChatAccountIds(cfg)
           .map((id) => resolveGoogleChatAccount({ cfg, accountId: id }))
-          .filter((account) => account.enabled && account.credentialSource !== "none");
+          .filter(
+            (account) =>
+              account.enabled &&
+              account.credentialSource !== "none" &&
+              account.tokenStatus !== "configured_unavailable",
+          );
     if (accounts.length === 0) {
       return null;
     }
@@ -86,6 +94,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     groups: googlechatGroupsAdapter,
     messaging: {
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
+      targetIdComparison: "case-sensitive",
       normalizeTarget: normalizeGoogleChatTarget,
       resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {
@@ -178,6 +187,7 @@ export const googlechatPlugin = createChatChannelPlugin({
         configured: account.credentialSource !== "none",
         extra: {
           credentialSource: account.credentialSource,
+          tokenStatus: account.tokenStatus,
           audienceType: account.config.audienceType,
           audience: account.config.audience,
           webhookPath: account.config.webhookPath,

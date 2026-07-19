@@ -1,7 +1,18 @@
 import Foundation
+import SwiftUI
 import Testing
+@testable import OpenClaw
 
 struct RootTabsSourceGuardTests {
+    @Test func `unified chat voice tab icon cache follows appearance`() {
+        let light = UnifiedChatVoiceTabIcon.CacheKey(state: .active, colorScheme: .light)
+        let sameLight = UnifiedChatVoiceTabIcon.CacheKey(state: .active, colorScheme: .light)
+        let dark = UnifiedChatVoiceTabIcon.CacheKey(state: .active, colorScheme: .dark)
+
+        #expect(light == sameLight)
+        #expect(light != dark)
+    }
+
     @Test func `app applies initial scene phase before gateway admission`() throws {
         let source = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let startupTask = try Self.extract(
@@ -31,8 +42,8 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains(".safeAreaPadding(.top, 8)"))
         #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
         #expect(source.contains("Self.sidebarHideButtonAccessibilityIdentifier"))
-        #expect(source.contains("accessibilityLabel: \"Hide Sidebar\""))
-        #expect(source.contains("accessibilityLabel: \"Show Sidebar\""))
+        #expect(source.contains("accessibilityLabel: .localized(\"Hide Sidebar\")"))
+        #expect(source.contains("accessibilityLabel: .localized(\"Show Sidebar\")"))
         #expect(source.contains("action: { self.hideSidebar() }"))
         #expect(source.contains("action: { self.showSidebar() }"))
         #expect(!source.contains("private var collapsedSidebarRail: some View"))
@@ -82,24 +93,61 @@ struct RootTabsSourceGuardTests {
         #expect(!drawerContent.contains("NavigationSplitView"))
     }
 
-    @Test func `phone tab bar keeps chat first product order`() throws {
+    @Test func `phone tab bar keeps chat control agent and settings in product order`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let phoneTabContent = try Self.extract(
             source,
             from: "private var phoneTabContent: some View",
-            to: "private var sidebarSplitContent: some View")
+            to: "extension RootTabs {\n    private func updateCanvasState")
 
         let chatRange = try #require(phoneTabContent.range(of: "ChatProTab("))
-        let talkRange = try #require(phoneTabContent.range(of: "TalkProTab("))
         let controlRange = try #require(phoneTabContent.range(of: "RootTabsPhoneControlHub("))
         let agentRange = try #require(phoneTabContent.range(of: "AgentProTab("))
         let settingsRange = try #require(phoneTabContent.range(of: "SettingsProTab("))
 
-        #expect(chatRange.lowerBound < talkRange.lowerBound)
-        #expect(talkRange.lowerBound < controlRange.lowerBound)
+        #expect(chatRange.lowerBound < controlRange.lowerBound)
         #expect(controlRange.lowerBound < agentRange.lowerBound)
         #expect(agentRange.lowerBound < settingsRange.lowerBound)
-        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 3)
+        #expect(!phoneTabContent.contains("TalkProTab("))
+        #expect(!phoneTabContent.contains(".tag(AppTab.talk)"))
+        #expect(phoneTabContent.contains("UnifiedChatVoiceTabIcon.image("))
+        #expect(phoneTabContent.contains("state: self.phoneChatVoiceIconState"))
+        #expect(!phoneTabContent.contains("micLevel"))
+        #expect(!phoneTabContent.contains("playbackLevel"))
+        #expect(phoneTabContent.contains("self.appModel.talkMode.isEnabled ? \"Chat, voice active\" : \"Chat\""))
+        #expect(!phoneTabContent.contains("Label(\"Chat\", systemImage: \"bubble.left.fill\")"))
+        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 2)
+    }
+
+    @Test func `phone chat keeps one composer voice control without a tab bar accessory`() throws {
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let chromeSource = try String(contentsOf: Self.rootTabsPhoneChromeSourceURL(), encoding: .utf8)
+        let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
+
+        #expect(!rootSource.contains("tabViewBottomAccessory"))
+        #expect(!rootSource.contains("PhoneVoiceTabAccessory"))
+        #expect(!chromeSource.contains("PhoneVoiceTabAccessory"))
+        #expect(chatSource.contains("talkControl: Self.shouldExposeCaptureControl("))
+        #expect(chatSource.contains("private var talkControl: OpenClawChatTalkControl"))
+        #expect(chatSource.contains("self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)"))
+    }
+
+    @Test func `composer mic keeps voice notes behind its long press menu`() throws {
+        let controls = try String(contentsOf: Self.cleanChatComposerControlsSourceURL(), encoding: .utf8)
+        let composer = try String(contentsOf: Self.sharedChatComposerSourceURL(), encoding: .utf8)
+        let chat = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
+
+        #expect(controls.contains("Label(\"Record Voice Note\", systemImage: \"waveform\")"))
+        #expect(controls.contains("primaryAction:"))
+        #expect(controls.contains("struct OpenClawChatMicButton: View"))
+        #expect(controls.contains("private var isDictationActionEnabled: Bool"))
+        #expect(controls.contains("isDictationActive: self.dictationControl?.isActive == true"))
+        #expect(composer.contains("if self.dictationControl != nil || self.voiceNoteControl != nil"))
+        #expect(composer.contains("isRealtimeTalkActive: self.talkControl?.isEnabled == true"))
+        #expect(composer.contains("voiceNoteControl: self.voiceNoteControl"))
+        #expect(composer.contains("embedded: true"))
+        #expect(chat.contains("voiceNoteControl: self.voiceNoteControl"))
+        #expect(!chat.contains("OpenClawVoiceNoteButton("))
     }
 
     @Test func `sidebar keeps navigation model destination only`() throws {
@@ -136,7 +184,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("if self.isSidebarDrawerLayout {"))
         #expect(!source.contains("private var sidebarFooter: some View"))
         #expect(!source.contains("LabeledContent(\"Version\""))
-        #expect(navigationSource.contains("SidebarGroup(title: \"CHAT\", destinations: [.chat, .talk])"))
+        #expect(navigationSource.contains("SidebarGroup(title: \"CHAT\", destinations: [.chat])"))
         #expect(!navigationSource.contains("title: \"AGENT\""))
         #expect(navigationSource.contains("case settings"))
         #expect(!navigationSource.contains("case settingsChannels"))
@@ -173,10 +221,10 @@ struct RootTabsSourceGuardTests {
         #expect(!sidebarDetail.contains("initialRoute: .cron"))
         #expect(sidebarDetail.contains("headerTitle: \"Dreaming\""))
         #expect(sidebarDetail.contains("headerTitle: \"Usage\""))
-        #expect(sidebarDetail.contains("headerTitle: \"Cron Jobs\""))
+        #expect(sidebarDetail.contains("headerTitle: \"Automations\""))
         #expect(!sidebarDetail.contains("headerTitle: \"OpenClaw\""))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
-        #expect(agentOverviewSource.contains("title: self.headerTitle"))
+        #expect(agentOverviewSource.contains("title: .localized(self.headerTitle)"))
         #expect(!agentOverviewSource.contains("Text(\"OpenClaw\")"))
         #expect(docsSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(docsSource.contains("title: \"Docs\""))
@@ -233,7 +281,6 @@ struct RootTabsSourceGuardTests {
         let agentDestinationsSource = try String(
             contentsOf: Self.agentProTabDestinationsSourceURL(),
             encoding: .utf8)
-        let talkSource = try String(contentsOf: Self.talkProTabSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
         let overviewSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
         let overviewRowsSource = try String(contentsOf: Self.commandCenterSupportSourceURL(), encoding: .utf8)
@@ -261,7 +308,7 @@ struct RootTabsSourceGuardTests {
             settingsSource,
             from: "private struct AppearanceSettingsScreen: View",
             to: "extension SettingsProTab")
-        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: self.title, tone: self.tone)"))
+        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
         #expect(!gatewayStatus.contains("Capsule()"))
         #expect(agentDestinationsSource.contains("List {"))
@@ -275,9 +322,6 @@ struct RootTabsSourceGuardTests {
         #expect(!agentRow.contains("chevron.right"))
         #expect(agentRow.contains("Image(systemName: \"checkmark\")"))
         #expect(agentRow.contains("agentAccessibilityLabel"))
-        #expect(!talkSource.contains("conversationCard"))
-        #expect(!talkSource.contains("voiceModeCard"))
-        #expect(!talkSource.contains("statusChip"))
         #expect(settingsList.contains("Text(\"Device\")"))
         #expect(settingsList.contains(".font(OpenClawType.captionSemiBold)"))
         #expect(!settingsList.contains("ProCard("))
@@ -311,9 +355,10 @@ struct RootTabsSourceGuardTests {
         #expect(aboutDestination.contains("detailListCard"))
         #expect(aboutDestination.contains("SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())"))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"OpenClaw app version\""))
-        #expect(aboutDestination.contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
-        #expect(aboutDestination
-            .contains("SettingsDetailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
+        #expect(aboutDestination.contains(
+            "SettingsDetailRow(\"Device\", value: .verbatim(DeviceInfoHelper.deviceFamily()))"))
+        #expect(aboutDestination.contains(
+            "value: .verbatim(DeviceInfoHelper.iOSVersionStringForDisplay()))"))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Version\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Platform\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Model\""))
@@ -323,12 +368,33 @@ struct RootTabsSourceGuardTests {
         #expect(supportSource.contains("ViewThatFits(in: .horizontal)"))
         #expect(supportSource.contains("Text(\"Unavailable\")"))
         #expect(supportSource.contains(".textCase(.uppercase)"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+        #expect(diagnosticsDestination.contains(
+            "SettingsDetailRow(\"Device\", value: .verbatim(DeviceInfoHelper.deviceFamily()))"))
+        #expect(diagnosticsDestination.contains(
+            "value: .verbatim(DeviceInfoHelper.platformStringForDisplay()))"))
+        #expect(diagnosticsDestination.contains(
+            "SettingsDetailRow(\"Model\", value: .verbatim(DeviceInfoHelper.modelIdentifier()))"))
+    }
+
+    @Test func `settings exposes guarded installed and ClawHub skill management`() throws {
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let skillsSource = try String(contentsOf: Self.settingsSkillsSourceURL(), encoding: .utf8)
+
+        #expect(settingsSource.contains("title: \"Skills\""))
+        #expect(settingsSource.contains("route: .skills"))
+        #expect(skillsSource.contains("case installed"))
+        #expect(skillsSource.contains("case browse"))
+        #expect(skillsSource.contains("case setup"))
+        #expect(skillsSource.contains("case off"))
+        #expect(skillsSource.contains("method: \"skills.status\""))
+        #expect(skillsSource.contains("method: \"skills.search\""))
+        #expect(skillsSource.contains("method: \"skills.detail\""))
+        #expect(skillsSource.contains("method: \"skills.install\""))
+        #expect(skillsSource.contains("method: \"skills.update\""))
+        #expect(skillsSource.contains(".disabled(!self.warningExpanded || self.isInstalling)"))
+        #expect(skillsSource.contains("SkillManagementContract.installed"))
+        #expect(skillsSource.contains("ifCurrentRoute: route"))
+        #expect(skillsSource.contains("distinguishPreDispatchRouteChange: true"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
@@ -352,11 +418,22 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains("if !self.usesNativeNavigationChrome"))
         #expect(overviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(overviewSource.matches(of: /if !self\.usesNativeNavigationChrome/).count == 2)
-        #expect(chatSource.contains(".navigationTitle(self.headerDisplayTitle)"))
+        #expect(chatSource.contains(".navigationTitle(self.showsAgentBadge ? \"\" : self.headerDisplayTitle)"))
+        #expect(chatSource.contains("self.headerAgentIdentity"))
+        #expect(!chatSource.contains("headerAgentModelPicker"))
+        #expect(chatSource.contains(".sharedBackgroundVisibility(.hidden)"))
         #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerLeadingAction)"))
         #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
+    }
+
+    @Test func `chat keeps layered canvas behind soft native scroll edges`() throws {
+        let source = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
+
+        #expect(source.contains("drawsBackground: true"))
+        #expect(source.contains("content.scrollEdgeEffectStyle(.soft, for: .vertical)"))
+        #expect(!source.contains(".background(Color(uiColor: .systemBackground))"))
     }
 
     @Test func `phone hub keeps docs as destination only`() throws {
@@ -407,7 +484,7 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("safeAreaPadding(.bottom"))
     }
 
-    @Test func `phone hub promotes chat and talk while filtering root tabs from its destination list`() throws {
+    @Test func `phone hub promotes unified chat while filtering root tabs from its destination list`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
         #expect(source.contains("private var gatewayHeader: some View"))
@@ -415,11 +492,12 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("Text(verbatim: gatewayDisplayLabel)"))
         #expect(source.contains("Text(\"Gateway\")"))
         #expect(source.contains(".accessibilityLabel(self.gatewayAccessibilityLabel)"))
-        #expect(source.contains("private var chatTalkRow: some View"))
+        #expect(source.contains("private var chatShortcut: some View"))
         #expect(source.contains(
             ".listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))"))
-        #expect(source.contains("self.prominentDestinationCard(\n                .chat,"))
-        #expect(source.contains("self.prominentDestinationCard(\n                .talk,"))
+        #expect(source.contains("self.prominentDestinationCard(\n            .chat,"))
+        #expect(source.contains("Agent chat and recent work."))
+        #expect(!source.contains("TalkProTab("))
         #expect(source.contains("private var phoneDestinations: [RootTabs.SidebarDestination]"))
         #expect(source.contains("self.groups.flatMap(\\.destinations).filter { !self.opensRootTab($0) }"))
         #expect(source.contains("private struct ControlCircleIcon: View"))
@@ -500,7 +578,8 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("self.newCardButton(expands: true)"))
         #expect(source.contains("Label(\"New Card\", systemImage: \"plus\")"))
         #expect(source.contains(".accessibilityHint(\"Opens card title and notes entry\")"))
-        #expect(source.contains(".accessibilityHint(self.createUnavailableMessage ?? \"Creates a workboard card\")"))
+        #expect(source.contains(
+            "self.createUnavailableMessage ?? String(localized: \"Creates a workboard card\"))"))
         #expect(source.contains("if await self.createCard()"))
         #expect(source.contains(".disabled(self.isCreatingCard)"))
         #expect(!source.contains("Button(\"Create\")"))
@@ -725,10 +804,31 @@ extension RootTabsSourceGuardTests {
                 + #"[\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,"#
                 + #"[\s\S]*?ownsNavigationStack: false"#
                 + #"[\s\S]*?onRouteChange: handleSettingsRouteChange"#)
+        let approvalSuppression = try Self.extract(
+            rootSource,
+            from: "private var activeExecApprovalPromptSuppression: NodeAppModel.ExecApprovalInboxKey?",
+            to: "private var shouldCollapseSidebarAfterSelection: Bool")
+        let sidebarNavigationShell = try Self.extract(
+            rootSource,
+            from: "private var sidebarDetailNavigationShell: some View",
+            to: "private var usesSidebarTabs: Bool")
+        let settingsRoutePropagation = try Self.extract(
+            rootSource,
+            from: "private func handleSettingsRouteChange(_ route: SettingsRoute?)",
+            to: "private func showSidebar()")
+        let approvalNotificationsRoute = try Self.extract(
+            settingsTabSource,
+            from: "func openNotificationsRouteFromApprovals()",
+            to: "private func applyInitialRouteIfNeeded()")
+        let suppressionCapture = try #require(
+            approvalNotificationsRoute.range(of: "self.onApprovalNotificationsRoute?(approvalID)"))
+        let externalNavigation = try #require(
+            approvalNotificationsRoute.range(of: "navigateToRoute(.notifications)"))
+        let ownedNavigation = try #require(
+            approvalNotificationsRoute.range(of: "self.navigationPath.append(.notifications)"))
 
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
-        #expect(rootSource.matches(of: /openVoiceSettings: \{ openSettingsRoute\(\.voice\) \}/).count == 1)
-        #expect(rootSource.matches(of: /openVoiceSettings: \{ self\.selectSettingsRoute\(\.voice\) \}/).count == 1)
+        #expect(!rootSource.contains("openVoiceSettings:"))
         #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 2)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
@@ -741,9 +841,14 @@ extension RootTabsSourceGuardTests {
             .matches(of: /AgentProTab\([\s\S]*?openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/)
             .count >= 3)
         #expect(chatSource.contains("let openSettings: (() -> Void)?"))
-        #expect(chatSource.contains("private var connectionStatusButton: some View"))
-        #expect(chatSource.contains(".buttonStyle(.plain)"))
+        #expect(!chatSource.contains("private var connectionStatusButton: some View"))
+        #expect(!chatSource.contains("private var connectionPill: some View"))
+        #expect(chatSource.contains("private var gatewayAvatarStatusDot: some View"))
+        #expect(chatSource.contains(".fill(self.gatewayStatusColor)"))
+        #expect(chatSource.contains("private var showsExpandedGatewayStatus: Bool"))
+        #expect(chatSource.contains("Self.gatewayStatusShouldExpand("))
         #expect(chatSource.contains(".accessibilityIdentifier(\"chat-gateway-status\")"))
+        #expect(chatSource.contains(".accessibilityIdentifier(\"chat-gateway-settings\")"))
         #expect(chatSource.contains("composerChrome: .clean"))
         #expect(docsSource.contains("let gatewayAction: (() -> Void)?"))
         #expect(docsSource.contains(".buttonBorderShape(.capsule)"))
@@ -761,21 +866,39 @@ extension RootTabsSourceGuardTests {
         #expect(rootSource.matches(of: /SettingsProTab\(\s*initialRoute: self\.selectedSettingsRoute,/).count == 1)
         #expect(rootSource.contains(".id(self.settingsTabViewID)"))
         #expect(rootSource.contains("@State private var selectedSettingsRouteRequestID: Int = 0"))
+        #expect(rootSource.contains("@State private var activeSettingsRoute: SettingsRoute?"))
         #expect(rootSource.contains("self.selectedSettingsRouteRequestID &+= 1"))
-        #expect(rootSource.contains("@State private var suppressedExecApprovalPromptIDForNotificationSettings"))
-        #expect(rootSource.contains("private var activeExecApprovalPromptSuppressionID: String?"))
-        #expect(rootSource.contains("suppressedApprovalID: self.activeExecApprovalPromptSuppressionID"))
+        #expect(rootSource.contains("@State private var suppressedExecApprovalForNotificationSettings"))
+        #expect(rootSource.contains(
+            "private var activeExecApprovalPromptSuppression: NodeAppModel.ExecApprovalInboxKey?"))
+        #expect(rootSource.contains("suppressedApproval: self.activeExecApprovalPromptSuppression"))
+        #expect(approvalSuppression.contains("case .approvals:"))
+        #expect(approvalSuppression.contains("switch self.activeSettingsRoute"))
+        #expect(approvalSuppression.contains(
+            "NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)"))
+        #expect(sidebarNavigationShell.contains(".onChange(of: self.sidebarNavigationPath)"))
+        #expect(sidebarNavigationShell.contains("self.handleSidebarSettingsNavigationPathChange(navigationPath)"))
+        #expect(settingsRoutePropagation.contains("self.activeSettingsRoute = route"))
+        #expect(settingsRoutePropagation.contains("navigationPath: navigationPath"))
+        #expect(settingsRoutePropagation.contains("baseRoute: baseRoute"))
         #expect(rootSource.contains("if destination.settingsRoute != .notifications"))
         #expect(rootSource.contains("if route != .notifications"))
         #expect(rootSource.contains("if route == nil"))
         #expect(rootSource.contains("self.selectedSettingsRoute = nil"))
         #expect(rootSource.contains("self.selectedSidebarDestination = .settings"))
-        #expect(rootSource.contains("self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId"))
+        #expect(rootSource.contains(
+            "self.suppressedExecApprovalForNotificationSettings = NodeAppModel.execApprovalInboxKey(prompt)"))
+        #expect(rootSource.contains(
+            "onApprovalNotificationsRoute: self.suppressExecApprovalPromptForNotificationSettings"))
+        #expect(rootSource.contains("private func suppressExecApprovalPromptForNotificationSettings("))
         #expect(rootSource.contains("onRouteChange: handleSettingsRouteChange"))
         #expect(rootSource.contains("navigateToRoute: pushSidebarSettingsRoute"))
         #expect(rootSource.contains("private func pushSidebarSettingsRoute(_ route: SettingsRoute)"))
         #expect(rootSource.contains("self.sidebarNavigationPath.append(route)"))
         #expect(settingsTabSource.contains("let navigateToRoute: ((SettingsRoute) -> Void)?"))
+        #expect(settingsTabSource.contains("let onApprovalNotificationsRoute: ((String) -> Void)?"))
+        #expect(suppressionCapture.lowerBound < externalNavigation.lowerBound)
+        #expect(suppressionCapture.lowerBound < ownedNavigation.lowerBound)
         #expect(settingsTabSource.contains("navigateToRoute(.notifications)"))
         // Cross-route settings shortcuts push so Back returns to the origin
         // screen; replacing the path resets Back to the Settings root.
@@ -936,7 +1059,8 @@ extension RootTabsSourceGuardTests {
             to: "private func connectManual")
 
         #expect(modeDefaults.contains("let previousStableID = self.currentManualGatewayStableID"))
-        #expect(modeDefaults.contains("previousStableID != self.currentManualGatewayStableID"))
+        #expect(modeDefaults.contains("GatewayStableIdentifier.key(previousStableID) !="))
+        #expect(modeDefaults.contains("GatewayStableIdentifier.key(self.currentManualGatewayStableID)"))
         #expect(modeDefaults.contains("self.clearManualCredentialFields()"))
     }
 
@@ -957,13 +1081,14 @@ extension RootTabsSourceGuardTests {
             to: "func markAppSnapshotRequestStarted()")
 
         #expect(appSnapshotConsume.lowerBound < approvalSnapshotConsume.lowerBound)
-        #expect(consumeAppSnapshot.contains("if hasExistingAppSnapshot, previousGatewayID == nextGatewayID"))
+        let matchingOwnerGuard = "if hasExistingAppSnapshot, Self.gatewayIDsMatch(previousGatewayID, nextGatewayID)"
+        #expect(consumeAppSnapshot.contains(matchingOwnerGuard))
         let ownerMatchedMerge = try Self.extract(
             consumeAppSnapshot,
-            from: "if hasExistingAppSnapshot, previousGatewayID == nextGatewayID",
+            from: matchingOwnerGuard,
             to: "self.appSnapshot = merged")
         #expect(ownerMatchedMerge.contains("merged.chatItems = self.appSnapshot?.chatItems"))
-        #expect(ownerMatchedMerge.contains("merged.chatStatusText = self.appSnapshot?.chatStatusText"))
+        #expect(ownerMatchedMerge.contains("merged.chatStatus = self.appSnapshot?.chatStatus"))
     }
 
     @Test func `watch generic prompts wait for the active gateway owner`() throws {
@@ -993,7 +1118,8 @@ extension RootTabsSourceGuardTests {
 
         #expect(consumeMessage.contains("self.routeGatewayPayload(.notification"))
         #expect(consumeAppSnapshot.contains("self.clearMessagePrompt()"))
-        #expect(consumeAppSnapshot.contains("if !hasExistingAppSnapshot || previousGatewayID != nextGatewayID"))
+        #expect(consumeAppSnapshot.contains(
+            "if !hasExistingAppSnapshot || !Self.gatewayIDsMatch(previousGatewayID, nextGatewayID)"))
         #expect(source.contains("private var deferredGatewayPayloads: [DeferredGatewayPayload]"))
         #expect(routeGatewayPayload.contains("guard let activeSnapshot = appSnapshot else { return true }"))
         #expect(acceptsGatewayOwner.contains("guard let activeSnapshot = appSnapshot else { return true }"))
@@ -1003,7 +1129,7 @@ extension RootTabsSourceGuardTests {
         #expect(replay.contains("WatchDeferredPayloadOrdering.isNewerThanSnapshot"))
         #expect(replay.contains("WatchDeferredPayloadOrdering.isAtOrBeforeSnapshot"))
         #expect(replay.contains("case let .notification(message, transport):"))
-        #expect(replay.contains("approvalSnapshotGatewayID == activeGatewayID"))
+        #expect(replay.contains("approvalSnapshotGatewayID,\n                    activeGatewayID"))
         #expect(replay.contains("payload.isFullyRepresentedByExecApprovalSnapshot"))
         #expect(replay.contains("let approval = payload.approvalPrompt"))
         #expect(source.contains("if hasSameSnapshotOwner"))
@@ -1023,12 +1149,85 @@ extension RootTabsSourceGuardTests {
             to: "func markAppSnapshotRequestStarted()")
 
         #expect(identifier.contains("gatewayStableID.utf8.count"))
-        #expect(identifier.contains("gatewayStableID)\\(approvalID)"))
+        #expect(identifier.contains("approvalKey.notificationComponent"))
         #expect(routeChange.contains("removeExecApprovalNotifications(approvals: invalidatedApprovals)"))
         #expect(!source.contains("identifier: \"watch.execApproval.\\(message.approval.id)\""))
-        #expect(source.contains("let ownerlessApprovals = state.execApprovals.filter"))
+        #expect(source.contains("let ownerlessApprovals = validApprovals.filter"))
         #expect(source.contains("self.lastExecApprovalSnapshotID = nil"))
-        #expect(source.contains("\"watch.execApproval.\\(approvalID)\""))
+        #expect(source.contains("approvalKey.notificationComponent"))
+    }
+
+    @Test func `watch terminal approvals cannot be resurrected by delayed deliveries`() throws {
+        let source = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
+        let promptConsume = try Self.extract(
+            source,
+            from: "func consume(\n        execApprovalPrompt",
+            to: "func consume(\n        execApprovalSnapshot")
+        let snapshotConsume = try Self.extract(
+            source,
+            from: "func consume(\n        execApprovalSnapshot",
+            to: "func consume(appSnapshot")
+        let terminalConsumes = try Self.extract(
+            source,
+            from: "func consume(execApprovalResolved",
+            to: "func selectExecApproval")
+        let terminalHelpers = try Self.extract(
+            source,
+            from: "private static func execApprovalOwnerKey(",
+            to: "private func pruneExpiredExecApprovals")
+        let restore = try Self.extract(
+            source,
+            from: "private func restorePersistedState()",
+            to: "private func persistState()")
+        let merge = try Self.extract(
+            source,
+            from: "private func mergedExecApprovalRecord(",
+            to: "private func removeExecApproval")
+        let upsert = try Self.extract(
+            source,
+            from: "private func upsertExecApproval(",
+            to: "private func mergedExecApprovalRecord(")
+
+        #expect(promptConsume.contains("!self.isExecApprovalTerminal("))
+        #expect(promptConsume.contains("expiresAtMs <= nowMs"))
+        #expect(promptConsume.contains("self.isExecApprovalPromptSupersededBySnapshot(message)"))
+        let promptPrune = try #require(promptConsume.range(of: "self.pruneExpiredExecApprovals(nowMs: nowMs)"))
+        let promptExpiry = try #require(promptConsume.range(of: "expiresAtMs <= nowMs"))
+        #expect(promptPrune.lowerBound < promptExpiry.lowerBound)
+        #expect(snapshotConsume.contains("!self.isExecApprovalTerminal("))
+        #expect(snapshotConsume.contains("Self.snapshotCanReplace("))
+        #expect(snapshotConsume.contains("recordKey.gatewayID == WatchGatewayID.key(snapshotGatewayID)"))
+        #expect(snapshotConsume.contains(
+            "Self.gatewayIDsMatch(approval.gatewayStableID, snapshotGatewayID)"))
+        #expect(snapshotConsume.contains("WatchExecApprovalOutcome(code: .resolvedElsewhere)"))
+        #expect(snapshotConsume.contains("authoritativeOutcome: false"))
+        #expect(terminalConsumes.components(separatedBy: "self.recordExecApprovalTerminal(").count == 3)
+        #expect(terminalConsumes.contains("func terminalExecApprovalOutcomeText("))
+        #expect(terminalHelpers.contains("WatchApprovalID.key(tombstone.approvalId) == key.approvalID"))
+        #expect(terminalHelpers.contains("WatchGatewayID.key(tombstone.gatewayStableID) == key.gatewayID"))
+        #expect(terminalHelpers.contains("maxExecApprovalTerminalTombstones"))
+        #expect(terminalHelpers.contains("upgraded.recordedAt = Date()"))
+        #expect(source.contains("execApprovalTerminalTombstoneLifetime: TimeInterval"))
+        #expect(source.contains("execApprovalTerminalTombstones: [ExecApprovalTerminalTombstone]?"))
+        // WatchExecApprovalRecord's transport timestamp lives in WatchInboxMessages.swift
+        // since the watch message/model types were split out of WatchInboxStore.swift.
+        let messagesSource = try String(
+            contentsOf: Self.watchInboxMessagesSourceURL(),
+            encoding: .utf8)
+        #expect(messagesSource.contains("var sourceSentAtMs: Int64?"))
+        #expect(source.contains("var outcomeIsAuthoritative: Bool?"))
+        #expect(source.contains("guard let recordSentAtMs = record.sourceSentAtMs else { return true }"))
+        #expect(restore.contains("state.execApprovalTerminalTombstones ?? []"))
+        #expect(restore.contains("self.isExecApprovalTerminal("))
+
+        // An explicit pending readback can clear an uncertain accepted or queued send.
+        #expect(upsert.contains("guard Self.snapshotCanReplace("))
+        #expect(upsert.contains("WatchOpaqueUTF8Key(resetResolutionAttemptID)"))
+        #expect(upsert.contains("WatchOpaqueUTF8Key(activeResolutionAttemptID)"))
+        #expect(merge.contains("let isResolving = resetResolvingState ? false"))
+        #expect(merge.contains("let pendingDecision = resetResolvingState ? nil"))
+        #expect(merge.contains("let activeResolutionAttemptID = resetResolvingState ? nil"))
+        #expect(!source.contains("appliedResetDeliveryIDs"))
     }
 
     @Test func `setup route probes yield to newer manual actions`() throws {
@@ -1141,7 +1340,7 @@ extension RootTabsSourceGuardTests {
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
         #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
         #expect(appModelSource.contains("ifCurrentRoute: operatorRoute"))
-        #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 3)
+        #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 4)
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))
         #expect(channelsSource.contains("label: \"ClickClack\""))
         #expect(channelsSource.contains("Self-hosted chat bot routing."))
@@ -1181,6 +1380,164 @@ extension RootTabsSourceGuardTests {
 }
 
 extension RootTabsSourceGuardTests {
+    @Test func `approval fetch revalidates captured operator route before interpreting response`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let routeAdmission = try Self.extract(
+            source,
+            from: "private func isCurrentGatewaySessionRoute(",
+            to: "private func ackPendingForegroundNodeAction(")
+        let unified = try Self.extract(
+            source,
+            from: "private func fetchExecApprovalPrompt(",
+            to: "private static func decodeUnifiedExecApprovalGet(")
+        let legacy = try Self.extract(
+            source,
+            from: "private func fetchLegacyExecApprovalPrompt(",
+            to: "func dismissPendingExecApprovalPrompt()")
+        let unifiedSuccess = try Self.extract(
+            unified,
+            from: "let response = try await operatorGateway.request(",
+            to: "} catch is CancellationError")
+        let legacySuccess = try Self.extract(
+            legacy,
+            from: "let response = try await self.operatorGateway.request(",
+            to: "} catch is CancellationError")
+        let unifiedCatch = try #require(unified.range(of: "} catch {"))
+        let legacyCatch = try #require(legacy.range(of: "} catch {"))
+        let unifiedError = String(unified[unifiedCatch.lowerBound...])
+        let legacyError = String(legacy[legacyCatch.lowerBound...])
+        let unifiedAdmission = try #require(unifiedSuccess.range(of: "isCurrentGatewaySessionRoute"))
+        let unifiedDecode = try #require(unifiedSuccess.range(of: "decodeUnifiedExecApprovalGet"))
+        let unifiedErrorAdmission = try #require(unifiedError.range(of: "isCurrentGatewaySessionRoute"))
+        let unifiedStale = try #require(unifiedError.range(of: "isApprovalNotificationStaleError"))
+        let legacyAdmission = try #require(legacySuccess.range(of: "isCurrentGatewaySessionRoute"))
+        let legacyDecode = try #require(legacySuccess.range(of: "JSONDecoder().decode"))
+        let legacyErrorAdmission = try #require(legacyError.range(of: "isCurrentGatewaySessionRoute"))
+        let legacyStale = try #require(legacyError.range(of: "isApprovalNotificationStaleError"))
+
+        #expect(routeAdmission.contains("await session.currentRoute() == context.route"))
+        #expect(unifiedSuccess.contains("guard await self.isCurrentGatewaySessionRoute("))
+        #expect(unifiedSuccess.contains("session: self.operatorGateway"))
+        #expect(unifiedAdmission.lowerBound < unifiedDecode.lowerBound)
+        #expect(unifiedErrorAdmission.lowerBound < unifiedStale.lowerBound)
+        #expect(legacySuccess.contains("guard await self.isCurrentGatewaySessionRoute("))
+        #expect(legacySuccess.contains("session: self.operatorGateway"))
+        #expect(legacyAdmission.lowerBound < legacyDecode.lowerBound)
+        #expect(legacyErrorAdmission.lowerBound < legacyStale.lowerBound)
+    }
+
+    @Test func `approval resolve revalidates captured operator route before classifying replies`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let unified = try Self.extract(
+            source,
+            from: "private func resolveExecApprovalNotificationDecision(",
+            to: "private func execApprovalRPCFamily(")
+        let legacy = try Self.extract(
+            source,
+            from: "private func resolveLegacyExecApproval(",
+            to: "private func reconcileUnknownExecApprovalResolution(")
+        let unifiedSuccess = try Self.extract(
+            unified,
+            from: "let response = try await self.operatorGateway.request(",
+            to: "} catch {")
+        let legacySuccess = try Self.extract(
+            legacy,
+            from: "let response = try await self.operatorGateway.request(",
+            to: "} catch {")
+        let unifiedCatch = try #require(unified.range(of: "} catch {"))
+        let legacyCatch = try #require(legacy.range(of: "} catch {"))
+        let unifiedError = String(unified[unifiedCatch.lowerBound...])
+        let legacyError = String(legacy[legacyCatch.lowerBound...])
+
+        let unifiedAdmission = try #require(unifiedSuccess.range(of: "isCurrentGatewaySessionRoute"))
+        let unifiedSettled = try #require(unifiedSuccess.range(of: "markExecApprovalResolutionWriteSettled"))
+        let unifiedDecode = try #require(unifiedSuccess.range(of: "JSONDecoder().decode"))
+        let unifiedErrorAdmission = try #require(unifiedError.range(of: "isCurrentGatewaySessionRoute"))
+        let unifiedErrorReconcile = try #require(unifiedError.range(of: "reconcileUnknownExecApprovalResolution"))
+        let legacyAdmission = try #require(legacySuccess.range(of: "isCurrentGatewaySessionRoute"))
+        let legacySettled = try #require(legacySuccess.range(of: "markExecApprovalResolutionWriteSettled"))
+        let legacyDecode = try #require(legacySuccess.range(of: "JSONDecoder().decode"))
+        let legacyErrorAdmission = try #require(legacyError.range(of: "isCurrentGatewaySessionRoute"))
+        let legacyAlreadyResolved = try #require(legacyError.range(of: "isApprovalAlreadyResolvedError"))
+
+        #expect(unified.contains("ifCurrentRoute: context.route"))
+        #expect(unified.contains("distinguishPreDispatchRouteChange: true"))
+        #expect(unifiedSuccess.contains("return .uncertain("))
+        #expect(unifiedError.contains("case .routeChangedBeforeDispatch"))
+        #expect(unifiedError.contains("return .uncertain("))
+        #expect(unifiedAdmission.lowerBound < unifiedSettled.lowerBound)
+        #expect(unifiedSettled.lowerBound < unifiedDecode.lowerBound)
+        #expect(unifiedErrorAdmission.lowerBound < unifiedErrorReconcile.lowerBound)
+        #expect(legacy.contains("ifCurrentRoute: context.route"))
+        #expect(legacy.contains("distinguishPreDispatchRouteChange: true"))
+        #expect(legacySuccess.contains("return .uncertain("))
+        #expect(legacyError.contains("case .routeChangedBeforeDispatch"))
+        #expect(legacyError.contains("return .uncertain("))
+        #expect(legacyAdmission.lowerBound < legacySettled.lowerBound)
+        #expect(legacySettled.lowerBound < legacyDecode.lowerBound)
+        #expect(legacyErrorAdmission.lowerBound < legacyAlreadyResolved.lowerBound)
+    }
+
+    @Test func `phone approval write lease survives pending reconciliation`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let resolution = try Self.extract(
+            source,
+            from: "func resolvePendingExecApprovalPrompt(decision: String) async",
+            to: "private func resolveExecApprovalNotificationDecision(")
+        let presentation = try Self.extract(
+            source,
+            from: "private func presentFetchedExecApprovalPrompt(",
+            to: "private static func makeExecApprovalPrompt(")
+        let begin = try #require(resolution.range(of: "beginExecApprovalResolutionAttempt"))
+        let request = try #require(resolution.range(of: "await resolveExecApprovalNotificationDecision"))
+
+        #expect(begin.lowerBound < request.lowerBound)
+        #expect(resolution.contains("defer { self.finishExecApprovalResolutionAttempt(resolutionAttempt) }"))
+        #expect(resolution.contains("guard self.isActiveExecApprovalResolutionAttempt(resolutionAttempt)"))
+        #expect(presentation.contains("let preserveActiveResolution"))
+        // Re-presenting while the write fence is held must render as resolving.
+        #expect(presentation.contains("} else if preserveActiveResolution {"))
+        #expect(presentation.contains("self.pendingExecApprovalPromptResolving = true"))
+    }
+
+    @Test func `uncertain approval remains dismissible on modal and settings surfaces`() throws {
+        let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let dialogSource = try String(contentsOf: Self.execApprovalPromptDialogSourceURL(), encoding: .utf8)
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let approvals = try Self.extract(
+            settingsSource,
+            from: "var approvalsReviewCard: some View",
+            to: "private var approvalOutcomeColor: Color")
+
+        #expect(modelSource.contains("var pendingExecApprovalPromptCanDismiss: Bool"))
+        #expect(modelSource.contains(
+            "!self.pendingExecApprovalPromptResolving || self.pendingExecApprovalPromptErrorText != nil"))
+        #expect(dialogSource.contains("canDismiss: self.appModel.pendingExecApprovalPromptCanDismiss"))
+        #expect(dialogSource.contains(".disabled(!self.canDismiss)"))
+        #expect(approvals.contains("self.appModel.pendingExecApprovalPromptResolving,"))
+        #expect(approvals.contains("self.appModel.pendingExecApprovalPromptCanDismiss"))
+        #expect(approvals.contains("self.appModel.dismissPendingExecApprovalPrompt()"))
+    }
+
+    @Test func `approval inbox stays reopenable and modal isolates accessibility`() throws {
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let dialogSource = try String(contentsOf: Self.execApprovalPromptDialogSourceURL(), encoding: .utf8)
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+
+        #expect(rootSource.contains(".badge(self.appModel.pendingExecApprovalCount)"))
+        #expect(modelSource.contains("var pendingExecApprovalInboxItems: [ExecApprovalInboxItem]"))
+        #expect(modelSource.contains("self.dismissedExecApprovalPresentationKeys.insert(inboxKey)"))
+        #expect(modelSource.contains("func presentPendingExecApprovalFromInbox("))
+        #expect(settingsSource.contains("ForEach(self.appModel.pendingExecApprovalInboxItems)"))
+        #expect(settingsSource.contains("self.appModel.presentPendingExecApprovalFromInbox(item.id)"))
+        #expect(settingsSource.contains("Label(\"Allow Once\""))
+        #expect(settingsSource.contains("Label(\"Allow Always\""))
+        #expect(dialogSource.contains(".accessibilityHidden(prompt != nil)"))
+        #expect(dialogSource.contains(".accessibilityAddTraits(.isModal)"))
+        #expect(dialogSource.contains(".accessibilityFocused(self.$approvalCardFocused)"))
+    }
+
     static func rootTabsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1193,6 +1550,13 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Model/NodeAppModel.swift")
+    }
+
+    private static func execApprovalPromptDialogSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Gateway/ExecApprovalPromptDialog.swift")
     }
 
     private static func iOSGatewayChatTransportSourceURL() -> URL {
@@ -1331,11 +1695,11 @@ extension RootTabsSourceGuardTests {
             .appendingPathComponent("Sources/Design/ChatProTab.swift")
     }
 
-    private static func talkProTabSourceURL() -> URL {
+    private static func rootTabsPhoneChromeSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Design/TalkProTab.swift")
+            .appendingPathComponent("Sources/Design/RootTabsPhoneChrome.swift")
     }
 
     private static func docsSourceURL() -> URL {
@@ -1455,11 +1819,25 @@ extension RootTabsSourceGuardTests {
             .appendingPathComponent("WatchApp/Sources/WatchInboxStore.swift")
     }
 
+    private static func watchInboxMessagesSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("WatchApp/Sources/WatchInboxMessages.swift")
+    }
+
     private static func channelsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsChannelsDestination.swift")
+    }
+
+    private static func settingsSkillsSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/SettingsSkillsDestination.swift")
     }
 
     private static func sharedChatPreviewSourceURL() -> URL {
@@ -1468,6 +1846,22 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatView+Previews.swift")
+    }
+
+    private static func sharedChatComposerSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift")
+    }
+
+    private static func cleanChatComposerControlsSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift")
     }
 
     private static func xcodeProjectSourceURL() -> URL {

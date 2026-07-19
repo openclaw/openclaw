@@ -26,6 +26,8 @@ export type CliBackendPrepareExecutionContext = {
   agentDir?: string;
   provider: string;
   modelId: string;
+  /** Effective OpenClaw context budget selected for this run. */
+  contextTokenBudget?: number;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
 };
@@ -53,6 +55,13 @@ export type CliBackendThinkingLevel =
 
 export type CliBackendExecutionMode = "agent" | "side-question";
 
+/** Host-isolated tool grant for a CLI run with every native tool disabled. */
+type CliBackendToolAvailability = {
+  native: readonly [];
+  /** MCP tools already isolated by the host transport that may be auto-approved. */
+  mcp: readonly string[];
+};
+
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -61,6 +70,7 @@ export type CliBackendResolveExecutionArgsContext = {
   authProfileId?: string;
   thinkingLevel?: CliBackendThinkingLevel;
   executionMode?: CliBackendExecutionMode;
+  toolAvailability?: CliBackendToolAvailability;
   useResume: boolean;
   baseArgs: readonly string[];
 };
@@ -71,7 +81,7 @@ export type CliBackendResolveExecutionArgs = (
 
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
-export type CliBackendNativeToolMode = "none" | "always-on";
+export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
 
 export type CliBackendSideQuestionToolMode = "disabled";
 
@@ -80,6 +90,17 @@ export type CliBackendNormalizeConfigContext = {
   backendId: string;
   agentId?: string;
 };
+
+/** Backend-owned implementation boundary for script-backed CLI executables. */
+export type CliBackendRuntimeArtifactPolicy = Readonly<{
+  kind: "bundled-package-tree";
+  /** Exact package.json name whose complete installed tree owns inference. */
+  packageName: string;
+  /** Only the command itself may be the package entrypoint. */
+  entrypoint: "command";
+  /** Canonical basenames allowed when this backend ships a self-contained native build. */
+  nativeExecutableNames?: readonly string[];
+}>;
 
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
@@ -100,6 +121,16 @@ export type CliBackendPlugin = {
    */
   ownsNativeCompaction?: boolean;
   /**
+   * Whether embedded runs opted into `cliBackendDispatch: "subscription-auth"`
+   * execute through this backend when the selected credential is
+   * subscription-scoped (oauth/token) or unresolvable.
+   *
+   * Set only when this backend's model provider rejects or meters direct API
+   * calls on subscription tokens, so the passthrough would fail or silently
+   * bill outside plan limits. API-key credentials always keep the passthrough.
+   */
+  subscriptionAuthDispatch?: boolean;
+  /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
    * Keep provider-specific test wiring here instead of scattering it across
@@ -114,6 +145,8 @@ export type CliBackendPlugin = {
       binaryName?: string;
     };
   };
+  /** Required whenever this backend can become a verified inference owner. */
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *
@@ -178,6 +211,13 @@ export type CliBackendPlugin = {
    */
   authEpochMode?: CliBackendAuthEpochMode;
   /**
+   * Whether `prepareExecution` may auto-select a configured auth profile.
+   *
+   * Defaults to true for auth bridges. Set false for environment/config-only
+   * hooks that do not consume OpenClaw auth profiles.
+   */
+  autoSelectAuthProfile?: boolean;
+  /**
    * Backend-owned execution bridge.
    *
    * Use this on async run paths when the backend needs a generated auth/config
@@ -201,9 +241,9 @@ export type CliBackendPlugin = {
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
-   * catalog. Backends that cannot provide a true no-tools mode must mark
-   * themselves as `always-on` so callers that require disabled tools fail
-   * closed instead of launching a native harness.
+   * catalog. `selectable` backends must enforce `toolAvailability` through
+   * `resolveExecutionArgs`; `always-on` backends fail closed for restricted
+   * callers.
    */
   nativeToolMode?: CliBackendNativeToolMode;
   /**

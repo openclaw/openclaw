@@ -96,7 +96,7 @@ const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_R
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
-export function scrubAnthropicRefusalMagic(prompt: string): string {
+function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
   }
@@ -104,6 +104,18 @@ export function scrubAnthropicRefusalMagic(prompt: string): string {
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
   );
+}
+
+/** Applies only outer-transport prompt rewrites; native model owners receive the prompt verbatim. */
+export function resolveEmbeddedAttemptBasePrompt(params: {
+  nativeModelOwned: boolean;
+  provider: string;
+  prompt: string;
+}): string {
+  if (params.nativeModelOwned || params.provider !== "anthropic") {
+    return params.prompt;
+  }
+  return scrubAnthropicRefusalMagic(params.prompt);
 }
 
 export function createCompactionDiagId(): string {

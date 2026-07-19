@@ -5,20 +5,20 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
-  hasMemoryRuntime,
   listMemoryCorpusSupplements,
+  listMemoryPromptPreparations,
   listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
+  prepareMemoryPromptSection,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
+  registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
   registerMemoryPromptSection,
-  registerMemoryRuntime,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
   type MemoryPluginPublicArtifact,
-} from "./memory-state.js";
+} from "./memory-state.test-fixtures.js";
 
 function createMemoryRuntime() {
   return {
@@ -55,6 +55,7 @@ function createMemoryStateSnapshot() {
   return {
     capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
+    promptPreparations: listMemoryPromptPreparations(),
     promptSupplements: listMemoryPromptSupplements(),
   };
 }
@@ -95,68 +96,6 @@ describe("memory plugin state", () => {
       "Use custom memory tools.",
       "",
     ]);
-  });
-
-  it("adapts deprecated split registration to the unified memory capability", () => {
-    const runtime = createMemoryRuntime();
-    const promptBuilder = () => ["legacy prompt"];
-    const flushPlanResolver = () => createMemoryFlushPlan("memory/legacy.md");
-
-    registerMemoryPromptSection(promptBuilder);
-    registerMemoryFlushPlanResolver(flushPlanResolver);
-    registerMemoryRuntime(runtime);
-
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["legacy prompt"]);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/legacy.md");
-    expect(getMemoryRuntime()).toBe(runtime);
-    expect(getMemoryCapabilityRegistration()).toStrictEqual({
-      pluginId: "legacy-memory-v1",
-      capability: {
-        promptBuilder,
-        flushPlanResolver,
-        runtime,
-      },
-    });
-  });
-
-  it("prefers the registered memory capability over earlier legacy split state", async () => {
-    const runtime = createMemoryRuntime();
-    const promptBuilder = () => ["capability prompt"];
-    const flushPlanResolver = () => createMemoryFlushPlan("memory/capability.md");
-
-    registerMemoryPromptSection(() => ["legacy prompt"]);
-    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/legacy.md"));
-    registerMemoryRuntime({
-      async getMemorySearchManager() {
-        return { manager: null, error: "legacy" };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
-      },
-    });
-    registerMemoryCapability("memory-core", {
-      promptBuilder,
-      flushPlanResolver,
-      runtime,
-    });
-
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability prompt"]);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
-    await expect(
-      getMemoryRuntime()?.getMemorySearchManager({
-        cfg: {} as never,
-        agentId: "main",
-      }),
-    ).resolves.toEqual({ manager: null, error: "missing" });
-    expect(hasMemoryRuntime()).toBe(true);
-    expect(getMemoryCapabilityRegistration()).toStrictEqual({
-      pluginId: "memory-core",
-      capability: {
-        promptBuilder,
-        flushPlanResolver,
-        runtime,
-      },
-    });
   });
 
   it("lists active public memory artifacts in deterministic order", async () => {
@@ -386,6 +325,65 @@ describe("memory plugin state", () => {
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["primary", "valid"]);
   });
 
+  it("prepares immutable prompt lines once per run before synchronous assembly", async () => {
+    let compiledLines = ["compiled before"];
+    const prepare = vi.fn(async () => [...compiledLines]);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+    const params = {
+      availableTools: new Set(["wiki_search"]),
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    };
+
+    const preparedBefore = await prepareMemoryPromptSection(params);
+    compiledLines = ["compiled after"];
+
+    expect(Object.isFrozen(preparedBefore)).toBe(true);
+    expect(Object.isFrozen(preparedBefore.context)).toBe(true);
+    expect(Object.isFrozen(preparedBefore.context.availableTools)).toBe(true);
+    expect(Object.isFrozen(preparedBefore.lines)).toBe(true);
+    expect(buildMemoryPromptSection(params, preparedBefore)).toEqual(["compiled before"]);
+    expect(buildMemoryPromptSection(params, preparedBefore)).toEqual(["compiled before"]);
+    expect(prepare).toHaveBeenCalledTimes(1);
+
+    const preparedAfter = await prepareMemoryPromptSection(params);
+    expect(buildMemoryPromptSection(params, preparedAfter)).toEqual(["compiled after"]);
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects prepared state from a different run context", async () => {
+    registerMemoryPromptPreparation("memory-wiki", async () => ["private wiki state"]);
+    const prepared = await prepareMemoryPromptSection({
+      availableTools: new Set(["wiki_search"]),
+      agentId: "first",
+      agentSessionKey: "agent:first:main",
+    });
+
+    expect(() =>
+      buildMemoryPromptSection(
+        {
+          availableTools: new Set(["wiki_search"]),
+          agentId: "second",
+          agentSessionKey: "agent:second:main",
+        },
+        prepared,
+      ),
+    ).toThrow("prepared memory prompt section does not match the current run");
+  });
+
+  it("removes prompt preparations from future runs without mutating an in-flight snapshot", async () => {
+    registerMemoryPromptPreparation("memory-wiki", async () => ["prepared wiki"]);
+    const params = { availableTools: new Set<string>() };
+    const prepared = await prepareMemoryPromptSection(params);
+
+    clearMemoryPluginState();
+
+    const afterRemoval = await prepareMemoryPromptSection(params);
+    expect(buildMemoryPromptSection(params, prepared)).toEqual(["prepared wiki"]);
+    expect(buildMemoryPromptSection(params, afterRemoval)).toEqual([]);
+    expect(listMemoryPromptPreparations()).toEqual([]);
+  });
+
   it("stores memory corpus supplements", async () => {
     const supplement = {
       search: async () => [{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }],
@@ -398,33 +396,6 @@ describe("memory plugin state", () => {
     await expect(
       listMemoryCorpusSupplements()[0]?.supplement.search({ query: "alpha" }),
     ).resolves.toEqual([{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }]);
-  });
-
-  it("uses the registered flush plan resolver", () => {
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "prompt",
-      systemPrompt: "system",
-      relativePath: "memory/test.md",
-    }));
-
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/test.md");
-  });
-
-  it("stores the registered memory runtime", async () => {
-    const runtime = createMemoryRuntime();
-
-    registerMemoryRuntime(runtime);
-
-    expect(getMemoryRuntime()).toBe(runtime);
-    await expect(
-      getMemoryRuntime()?.getMemorySearchManager({
-        cfg: {} as never,
-        agentId: "main",
-      }),
-    ).resolves.toEqual({ manager: null, error: "missing" });
   });
 
   it("restoreMemoryPluginState swaps both prompt and flush state", () => {
