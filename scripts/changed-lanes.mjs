@@ -271,8 +271,8 @@ export function detectChangedLanesForPaths(params) {
         base: params.base,
         head: params.head ?? "HEAD",
         maxBuffer: GIT_OUTPUT_MAX_BUFFER,
-    timeout: GIT_EXEC_TIMEOUT_MS,
-    killSignal: "SIGKILL",
+        timeout: GIT_EXEC_TIMEOUT_MS,
+        killSignal: "SIGKILL",
         preferFirstParent: params.mergeHeadFirstParent === true,
       });
   const packageJsonChangeKind = params.paths.includes("package.json")
