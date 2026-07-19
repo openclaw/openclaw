@@ -107,8 +107,14 @@ describe("Android app i18n resources", () => {
   it("preserves a localized resource when translation memory retires its UI source", () => {
     expect(decodeAndroidResourceValue('"Sitzungen"')).toBe("Sitzungen");
     expect(decodeAndroidResourceValue('"Sag \\"Hallo\\""')).toBe('Sag "Hallo"');
-    expect(selectGeneratedTranslation("Sessions", [], "Sitzungen")).toBe("Sitzungen");
-    expect(selectGeneratedTranslation("Sessions", ["Sesiones"], "Sitzungen")).toBe("Sesiones");
+    const existing = { source: "Sessions", translation: "Sitzungen" };
+    expect(selectGeneratedTranslation("Sessions", [], existing)).toBe("Sitzungen");
+    expect(selectGeneratedTranslation("Sessions", ["Sesiones"], existing)).toBe("Sesiones");
+  });
+
+  it("does not reuse a localized resource after its English source changes", () => {
+    const existing = { source: "Sessions", translation: "Sitzungen" };
+    expect(selectGeneratedTranslation("Threads", [], existing)).toBe("");
   });
 
   it("preserves source argument indexes when a translation reorders interpolations", () => {
