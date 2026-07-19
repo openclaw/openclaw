@@ -2,7 +2,9 @@ import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MAX_A2UI_JSONL_FILE_BYTES, readA2UIJsonlFile } from "./a2ui-jsonl-file.js";
+import { readA2UIJsonlFile } from "./a2ui-jsonl-file.js";
+
+const GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 
 describe("readA2UIJsonlFile", () => {
   let tempRoot: string | undefined;
@@ -14,7 +16,7 @@ describe("readA2UIJsonlFile", () => {
     }
   });
 
-  it("reads a valid A2UI payload near the file limit", async () => {
+  it("reads a valid A2UI payload above the former 8 MiB limit", async () => {
     tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-jsonl-"));
     const filePath = path.join(tempRoot, "large.jsonl");
     const jsonl = JSON.stringify({
@@ -25,14 +27,15 @@ describe("readA2UIJsonlFile", () => {
             id: "text",
             component: {
               Text: {
-                text: { literalString: "x".repeat(MAX_A2UI_JSONL_FILE_BYTES - 1024) },
+                text: { literalString: "x".repeat(9 * 1024 * 1024) },
               },
             },
           },
         ],
       },
     });
-    expect(Buffer.byteLength(jsonl)).toBeLessThan(MAX_A2UI_JSONL_FILE_BYTES);
+    expect(Buffer.byteLength(jsonl)).toBeGreaterThan(8 * 1024 * 1024);
+    expect(Buffer.byteLength(jsonl)).toBeLessThan(GATEWAY_MAX_PAYLOAD_BYTES);
     await writeFile(filePath, jsonl);
 
     await expect(readA2UIJsonlFile(filePath)).resolves.toBe(jsonl);
@@ -42,10 +45,10 @@ describe("readA2UIJsonlFile", () => {
     tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-jsonl-"));
     const filePath = path.join(tempRoot, "oversized.jsonl");
     await writeFile(filePath, "");
-    await truncate(filePath, MAX_A2UI_JSONL_FILE_BYTES + 1);
+    await truncate(filePath, GATEWAY_MAX_PAYLOAD_BYTES + 1);
 
     await expect(readA2UIJsonlFile(filePath)).rejects.toThrow(
-      `A2UI JSONL file exceeds ${MAX_A2UI_JSONL_FILE_BYTES} bytes`,
+      `A2UI JSONL file exceeds ${GATEWAY_MAX_PAYLOAD_BYTES} bytes`,
     );
   });
 });
