@@ -279,7 +279,23 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.onToolOutcome = vi.fn();
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    let startupError: unknown;
+    let completedBeforeTurnStart = false;
+    void run.then(
+      () => {
+        completedBeforeTurnStart = true;
+      },
+      (error: unknown) => {
+        startupError = error;
+      },
+    );
+    await vi.waitFor(() => {
+      if (startupError) {
+        throw startupError;
+      }
+      expect(completedBeforeTurnStart).toBe(false);
+      expect(harness.requests.some((request) => request.method === "turn/start")).toBe(true);
+    }, fastWait);
 
     const first = harness.handleServerRequest({
       id: "request-tool-1",
