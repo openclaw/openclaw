@@ -116,6 +116,10 @@ vi.mock("../agents/provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
+vi.mock("../agents/sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: () => ({ apiRegistry: {}, llmRuntime: {} }),
+}));
+
 vi.mock("../agents/provider-secret-egress.js", async () => ({
   ...(await vi.importActual<typeof import("../agents/provider-secret-egress.js")>(
     "../agents/provider-secret-egress.js",

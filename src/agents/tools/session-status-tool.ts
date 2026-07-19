@@ -964,7 +964,15 @@ export function createSessionStatusTool(opts?: {
         callerOwnerKey: visibilityRequesterKey,
       });
       // Tool status may read persisted/configured facts, but must not start provider discovery.
-      const thinkingCatalog = await loadModelCatalog({ config: cfg, readOnly: true });
+      const thinkingCatalog = await loadPreparedModelCatalog({
+        config: cfg,
+        agentId,
+        agentDir: selectedAgentDir,
+        readOnly: true,
+        ...(statusSessionEntry.spawnedWorkspaceDir
+          ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
+          : {}),
+      });
       const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,

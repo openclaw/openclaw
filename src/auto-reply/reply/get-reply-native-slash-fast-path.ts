@@ -202,7 +202,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
     // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
-    const thinkingCatalog = await loadModelCatalog({ config: params.cfg, readOnly: true });
+    const thinkingCatalog = await loadPreparedModelCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      readOnly: true,
+    });
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,

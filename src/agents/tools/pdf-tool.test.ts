@@ -12,6 +12,10 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
+import {
+  getModelRegistryRuntime,
+  initializeModelRegistryRuntime,
+} from "../sessions/model-registry-runtime.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
@@ -114,6 +118,13 @@ function firstCompletionContext(): { systemPrompt?: string } | undefined {
   return context;
 }
 
+function createPdfModelRegistry(find: () => unknown) {
+  const modelRegistry = { find };
+  initializeModelRegistryRuntime(modelRegistry);
+  getModelRegistryRuntime(modelRegistry).llmRuntime.complete = completeMock;
+  return modelRegistry;
+}
+
 async function stubPdfToolInfra(
   agentDir: string,
   params?: {
@@ -149,6 +160,7 @@ async function stubPdfToolInfra(
             maxTokens: 8192,
             input: params?.input ?? ["text", "document"],
           }) as never;
+  const modelRegistry = createPdfModelRegistry(find);
   vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
     async (input) =>
       ({
@@ -156,7 +168,7 @@ async function stubPdfToolInfra(
           agentDir: input.agentDir,
           config: input.config,
           workspaceDir: input.workspaceDir,
-          createStores: () => ({ authStorage, modelRegistry: { find } }),
+          createStores: () => ({ authStorage, modelRegistry }),
         },
         release: vi.fn(),
       }) as never,
@@ -620,6 +632,7 @@ describe("createPdfTool", () => {
         maxTokens: 8192,
         input: ["text", "document"],
       });
+      const modelRegistry = createPdfModelRegistry(find);
       const acquirePreparedRuntimeSpy = vi.mocked(
         preparedModelRuntime.acquireAgentRunPreparedModelRuntime,
       );
@@ -628,7 +641,7 @@ describe("createPdfTool", () => {
       const parentPreparedModelRuntime = {
         agentDir,
         config: cfg,
-        createStores: () => ({ authStorage, modelRegistry: { find } }),
+        createStores: () => ({ authStorage, modelRegistry }),
       } as never;
       const tool = requirePdfTool(
         (await loadCreatePdfTool())({
@@ -661,13 +674,14 @@ describe("createPdfTool", () => {
         maxTokens: 8192,
         input: ["text", "document"],
       });
+      const modelRegistry = createPdfModelRegistry(find);
       const release = vi.fn();
       vi.mocked(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).mockResolvedValueOnce({
         snapshot: {
           agentDir: "/tmp/committed-pdf-agent",
           workspaceDir: committedWorkspace,
           config: withPdfModel(GOOGLE_PDF_MODEL),
-          createStores: () => ({ authStorage, modelRegistry: { find } }),
+          createStores: () => ({ authStorage, modelRegistry }),
         },
         release,
       } as never);
@@ -884,18 +898,20 @@ describe("createPdfTool", () => {
       expect(result.content).toEqual([{ type: "text", text: "Bedrock summary" }]);
       expect(modelAuth.requireApiKey).not.toHaveBeenCalled();
       expect(setRuntimeApiKey).not.toHaveBeenCalled();
-      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
-        model: expect.objectContaining({
-          provider: "amazon-bedrock",
-          api: "bedrock-converse-stream",
-        }),
-        cfg: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({ pdfModel: { primary: bedrockModel } }),
+      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: expect.objectContaining({
+            provider: "amazon-bedrock",
+            api: "bedrock-converse-stream",
           }),
+          cfg: expect.objectContaining({
+            agents: expect.objectContaining({
+              defaults: expect.objectContaining({ pdfModel: { primary: bedrockModel } }),
+            }),
+          }),
+          agentDir,
         }),
-        agentDir,
-      });
+      );
       expect(firstMockCall(completeMock, "complete")[2]).toMatchObject({ apiKey: "" });
     });
   });

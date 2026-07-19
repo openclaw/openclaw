@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { complete } from "../../llm/stream.js";
 import type { Context } from "../../llm/types.js";
 import {
@@ -28,6 +29,7 @@ import {
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -179,6 +181,7 @@ async function runPdfPrompt(params: {
     const runtimeAgentDir = preparedRuntime.agentDir;
     const runtimeWorkspaceDir = preparedRuntime.workspaceDir ?? params.workspaceDir;
     const { authStorage, modelRegistry } = preparedRuntime.createStores();
+    const modelRuntime = getModelRegistryRuntime(modelRegistry);
     const committedPdfModelConfig = resolvePdfModelConfigForTool({
       cfg: preparedRuntime.config,
       agentDir: runtimeAgentDir,
@@ -203,9 +206,12 @@ async function runPdfPrompt(params: {
       cfg: effectiveCfg,
       modelOverride: params.modelOverride,
       run: async (provider, modelId) => {
-        const model = applySecretRefHeaderSentinels(
-          resolveModelFromRegistry({ modelRegistry, provider, modelId }),
-          effectiveCfg,
+        const model = bindModelLlmRuntime(
+          applySecretRefHeaderSentinels(
+            resolveModelFromRegistry({ modelRegistry, provider, modelId }),
+            effectiveCfg,
+          ),
+          modelRuntime.llmRuntime,
         );
         const apiKey = await resolveModelRuntimeApiKey({
           model,
@@ -269,6 +275,7 @@ async function runPdfPrompt(params: {
           model,
           cfg: effectiveCfg,
           agentDir: runtimeAgentDir,
+          apiRegistry: modelRuntime.apiRegistry,
           ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
         });
 
