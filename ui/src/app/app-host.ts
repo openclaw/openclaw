@@ -977,8 +977,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   };
 
   private readonly handleUnhandledFileDrag = (event: DragEvent) => {
-    // Page drop targets prevent the event first; this fallback only rejects stray files
-    // so the browser cannot navigate away and discard the current app state.
+    // Bubble phase is intentional: explicit drop targets get first refusal by
+    // preventing the event, while only unaccepted file drags reach this fallback.
     const nativeFileInput = event
       .composedPath()
       .some(

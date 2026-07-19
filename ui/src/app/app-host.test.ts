@@ -470,9 +470,10 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
   it("prevents unhandled window file drops without overriding accepted targets", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    const acceptedDropTarget = document.createElement("div");
     const nativeFileInput = document.createElement("input");
     nativeFileInput.type = "file";
-    document.body.append(nativeFileInput);
+    document.body.append(acceptedDropTarget, nativeFileInput);
     shell.connectedCallback();
 
     try {
@@ -483,8 +484,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         expect(unhandled.dataTransfer.dropEffect).toBe("none");
 
         const accepted = createDragEvent(type, ["Files"]);
-        accepted.event.preventDefault();
-        window.dispatchEvent(accepted.event);
+        acceptedDropTarget.addEventListener(type, (event) => event.preventDefault(), {
+          once: true,
+        });
+        acceptedDropTarget.dispatchEvent(accepted.event);
+        expect(accepted.event.defaultPrevented).toBe(true);
         expect(accepted.dataTransfer.dropEffect).toBe("copy");
 
         const nativeAccepted = createDragEvent(type, ["Files"]);
@@ -499,6 +503,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       }
     } finally {
       shell.disconnectedCallback();
+      acceptedDropTarget.remove();
       nativeFileInput.remove();
     }
   });
