@@ -1210,6 +1210,70 @@
       ]
     },
     {
+      "locale": "id",
+      "source": "Collapsed",
+      "translations": [
+        "Ciut",
+        "Diciutkan"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Collapsed",
+      "translations": [
+        "折りたたみ",
+        "折りたたみ済み"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Collapsed",
+      "translations": [
+        "접힘",
+        "축소됨"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Collapsed",
+      "translations": [
+        "Ihopfälld",
+        "Komprimerad"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Collapsed",
+      "translations": [
+        "ยุบอยู่",
+        "ยุบแล้ว"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Collapsed",
+      "translations": [
+        "Daraltıldı",
+        "Daraltılmış"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Collapsed",
+      "translations": [
+        "Thu gọn",
+        "Đã thu gọn"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Collapsed",
+      "translations": [
+        "已折叠",
+        "已收起"
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "Command",
       "translations": [

@@ -23979,6 +23979,11 @@
       "translated": "Visa alla %lld rader"
     },
     {
+      "id": "native.apple.f80bb83a659d23f4",
+      "source": "Collapsed",
+      "translated": "Komprimerad"
+    },
+    {
       "id": "native.apple.c4e808a2ec8d49f5",
       "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
       "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"

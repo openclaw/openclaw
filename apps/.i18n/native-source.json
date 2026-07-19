@@ -38362,6 +38362,14 @@
       "id": "native.apple.065f4da5ddaf14a1"
     },
     {
+      "kind": "ui-call",
+      "line": 256,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift",
+      "source": "Collapsed",
+      "surface": "apple",
+      "id": "native.apple.f80bb83a659d23f4"
+    },
+    {
       "kind": "conditional-branch",
       "line": 1347,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptCache.swift",
