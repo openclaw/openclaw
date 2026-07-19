@@ -94,8 +94,16 @@ function isAnthropicBedrockModel(modelId: string): boolean {
   return false;
 }
 
+const bedrockStreamFn: StreamFn = (model, context, options) => {
+  if (model.api !== "bedrock-converse-stream") {
+    throw new Error(`Amazon Bedrock stream received unsupported API: ${model.api}`);
+  }
+  // The API check narrows the generic host model to the transport contract.
+  return streamSimpleBedrock(model as Parameters<typeof streamSimpleBedrock>[0], context, options);
+};
+
 function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimpleBedrock;
+  const underlying = baseStreamFn ?? bedrockStreamFn;
   return (model, context, options) =>
     underlying(model, context, {
       ...options,
@@ -533,7 +541,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     normalizeResolvedModel: normalizeBedrockResolvedModel,
-    createStreamFn: () => streamSimpleBedrock,
+    createStreamFn: ({ model }) =>
+      model.api === "bedrock-converse-stream" ? bedrockStreamFn : undefined,
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentPluginConfig = resolveCurrentPluginConfig(config);
