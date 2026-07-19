@@ -10,6 +10,7 @@ import {
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolStartedDiagnostic,
@@ -260,12 +261,12 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           };
         }),
     );
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [
       {
         ...echoTool,
         execute,
       },
-    ]);
+    ];
     const params = createParams(
       path.join(tempDir, "session-coalesced-tool.jsonl"),
       path.join(tempDir, "workspace-coalesced-tool"),

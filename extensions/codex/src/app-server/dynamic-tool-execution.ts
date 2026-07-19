@@ -56,7 +56,7 @@ type DynamicToolTimeoutDetails = {
   meta: Record<string, unknown>;
 };
 
-export type CodexDynamicToolInFlightCoalescer = {
+type CodexDynamicToolInFlightCoalescer = {
   run(
     call: CodexDynamicToolCallParams,
     execute: () => Promise<CodexDynamicToolRuntimeResponse>,
@@ -92,7 +92,7 @@ export function createCodexDynamicToolInFlightCoalescer(): CodexDynamicToolInFli
   };
 }
 
-export function buildDynamicToolInFlightKey(call: CodexDynamicToolCallParams): string {
+function buildDynamicToolInFlightKey(call: CodexDynamicToolCallParams): string {
   // Exclude callId so same-turn duplicate deliveries share one external side effect.
   // Callers still answer each app-server request with its own RPC response.
   return stableStringifyJsonValue({

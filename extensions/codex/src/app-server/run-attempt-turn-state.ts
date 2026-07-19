@@ -104,7 +104,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const openClawDynamicToolExecutions = createCodexDynamicToolExecutionRegistry();
   // Codex can issue equivalent calls under different ids while the first is
   // pending. Share only that in-flight side effect; sequential calls still run.
-  const openClawDynamicToolInFlightCoalescer = createCodexDynamicToolInFlightCoalescer();
+  const openClawDynamicToolInFlightCoalescer =
+    createCodexDynamicToolInFlightCoalescer();
   const activeTurnItemIds = new Set<string>();
   const activeCompletionBlockerItemIds = new Set<string>();
   const activeFinalizationHookRunIds = new Set<string>();

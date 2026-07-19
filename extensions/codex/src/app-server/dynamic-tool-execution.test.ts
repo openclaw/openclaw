@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildDynamicToolInFlightKey,
   createCodexDynamicToolInFlightCoalescer,
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
@@ -292,37 +291,7 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(90_000);
   });
 
-  it("builds stable in-flight keys without including the call id", () => {
-    const first = buildDynamicToolInFlightKey({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-a",
-      namespace: null,
-      tool: "process",
-      arguments: { cwd: "/workspace", command: "pwd" },
-    });
-    const second = buildDynamicToolInFlightKey({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-b",
-      namespace: null,
-      tool: "process",
-      arguments: { command: "pwd", cwd: "/workspace" },
-    });
-    const third = buildDynamicToolInFlightKey({
-      threadId: "thread-1",
-      turnId: "turn-2",
-      callId: "call-c",
-      namespace: null,
-      tool: "process",
-      arguments: { command: "pwd", cwd: "/workspace" },
-    });
-
-    expect(first).toBe(second);
-    expect(first).not.toBe(third);
-  });
-
-  it("coalesces only duplicate in-flight dynamic tool calls", async () => {
+  it("coalesces only equivalent same-turn calls while they are in flight", async () => {
     const coalescer = createCodexDynamicToolInFlightCoalescer();
     const execute = vi.fn(async () => ({
       contentItems: [{ type: "inputText" as const, text: "done" }],
@@ -341,17 +310,23 @@ describe("dynamic tool execution helpers", () => {
       callId: "call-b",
       arguments: { command: "pwd", cwd: "/workspace" },
     };
+    const otherTurnCall = {
+      ...secondCall,
+      turnId: "turn-2",
+      callId: "call-c",
+    };
 
     const [first, second] = await Promise.all([
       coalescer.run(firstCall, execute),
       coalescer.run(secondCall, execute),
+      coalescer.run(otherTurnCall, execute),
     ]);
 
     expect(first).toEqual(second);
-    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(2);
 
     await coalescer.run(secondCall, execute);
-    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(3);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
