@@ -270,6 +270,40 @@ class RealtimeAgentCoordinatorTest {
     }
 
   @Test
+  fun `transport reset rejects a reused retired run id without stranding the call`() =
+    runTest {
+      val calls = mutableListOf<GatewayCall>()
+      val coordinator =
+        coordinator(
+          calls = calls,
+          responses = { method -> if (method == "talk.client.toolCall") """{"runId":"shared-run"}""" else "{}" },
+        )
+      coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
+      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
+      runCurrent()
+
+      coordinator.resetTransport()
+      coordinator.beginSession(RealtimeAgentSession("relay-new", "session-main"))
+      coordinator.handleToolCall("call-new", "openclaw_agent_consult", null, forced = false)
+      runCurrent()
+
+      assertTrue(
+        coordinator.handleChatEvent(
+          sessionKey = "session-main",
+          runId = "shared-run",
+          state = "final",
+          message = Json.parseToJsonElement("""{"role":"assistant","content":"late"}"""),
+        ),
+      )
+      runCurrent()
+
+      val result = calls.single { it.method == "talk.session.submitToolResult" }
+      assertTrue(result.params.contains("\"sessionId\":\"relay-new\""))
+      assertTrue(result.params.contains("\"callId\":\"call-new\""))
+      assertTrue(result.params.contains("tool call returned a duplicate run id"))
+    }
+
+  @Test
   fun `old session request does not buffer a new session completion`() =
     runTest {
       val calls = mutableListOf<GatewayCall>()
@@ -457,6 +491,32 @@ class RealtimeAgentCoordinatorTest {
       assertTrue(submittedResults.getValue("call-3").contains("too many concurrent"))
       assertEquals(listOf("run-1", "run-2", "run-3"), unhandled.map { it.runId })
       assertEquals(2, calls.count { it.method == "talk.client.toolCall" })
+    }
+
+  @Test
+  fun `registered runs count against the concurrent call limit`() =
+    runTest {
+      val calls = mutableListOf<GatewayCall>()
+      var runIndex = 0
+      val coordinator =
+        coordinator(
+          calls = calls,
+          responses = { method ->
+            if (method == "talk.client.toolCall") """{"runId":"run-${++runIndex}"}""" else "{}"
+          },
+          maxCachedCompletions = 2,
+        )
+      coordinator.beginSession(RealtimeAgentSession("relay-1", "session-1"))
+
+      repeat(3) { index ->
+        coordinator.handleToolCall("call-${index + 1}", "openclaw_agent_consult", null, forced = false)
+        runCurrent()
+      }
+
+      assertEquals(2, calls.count { it.method == "talk.client.toolCall" })
+      val rejection = calls.single { it.method == "talk.session.submitToolResult" }
+      assertTrue(rejection.params.contains("\"callId\":\"call-3\""))
+      assertTrue(rejection.params.contains("too many concurrent realtime Talk tool calls"))
     }
 
   private fun kotlinx.coroutines.test.TestScope.coordinator(

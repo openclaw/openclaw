@@ -58,6 +58,7 @@ private data class RealtimeAgentPendingFinish(
 
 private data class RealtimeAgentRunRegistration(
   val completion: RealtimeAgentCompletion?,
+  val errorMessage: String?,
   val unhandled: List<RealtimeAgentUnhandledCompletion>,
 )
 
@@ -153,7 +154,7 @@ internal class RealtimeAgentCoordinator(
         val accepted =
           synchronized(lock) {
             activeSession == session &&
-              pendingCalls.size < maxCachedCompletions &&
+              pendingCalls.size + runs.size < maxCachedCompletions &&
               pendingCalls.add(pendingCall)
           }
         if (accepted) {
@@ -272,9 +273,14 @@ internal class RealtimeAgentCoordinator(
           }
           val cached = earlyCompletions.remove(runId)
           pendingCalls.remove(pendingCall)
+          var errorMessage: String? = null
           if (activeSession == session) {
             if (cached == null) {
-              runs[runId] = RealtimeAgentRun(callId = callId, session = session)
+              if (runId in retiredRunIds || runId in runs) {
+                errorMessage = "tool call returned a duplicate run id"
+              } else {
+                runs[runId] = RealtimeAgentRun(callId = callId, session = session)
+              }
             } else {
               retireRunLocked(runId)
             }
@@ -283,11 +289,14 @@ internal class RealtimeAgentCoordinator(
           }
           RealtimeAgentRunRegistration(
             completion = cached.takeIf { activeSession == session },
+            errorMessage = errorMessage,
             unhandled = drainEarlyCompletionsIfIdleLocked(),
           )
         }
       registration.unhandled.forEach(onUnhandledCompletion)
-      if (registration.completion != null) {
+      if (registration.errorMessage != null) {
+        submitError(session, callId, registration.errorMessage)
+      } else if (registration.completion != null) {
         dispatchCompletion(RealtimeAgentRun(callId = callId, session = session), registration.completion)
       }
     } catch (err: TimeoutCancellationException) {
