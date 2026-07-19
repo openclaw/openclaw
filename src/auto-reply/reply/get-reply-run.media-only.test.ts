@@ -12,6 +12,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -166,7 +167,7 @@ let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
-let replyRunTesting: typeof import("./reply-run-registry.js").testing;
+let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
@@ -306,8 +307,8 @@ describe("runPreparedReply media-only handling", () => {
       await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
       await import("./inbound-meta.js"));
-    ({ testing: replyRunTesting, getActiveReplyRunCount } =
-      await import("./reply-run-registry.js"));
+    ({ getActiveReplyRunCount } = await import("./reply-run-registry.js"));
+    ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
 
     // Load deferred reply dependencies before per-case timing starts.
     await runPreparedReply(baseParams());
@@ -729,6 +730,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it("persists pure media turns without the model-facing placeholder", async () => {
+    const params = baseParams();
+    params.ctx.ThreadHistoryBody = undefined;
+    params.ctx.MediaPath = "/tmp/input.png";
+    params.sessionCtx.ThreadHistoryBody = undefined;
+
+    await runPreparedReply(params);
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/input.png",
+    });
   });
 
   it.each([
@@ -2360,6 +2378,8 @@ describe("runPreparedReply media-only handling", () => {
           CommandBody: "No wtf",
           Provider: "telegram",
           Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
           ChatType: "group",
         },
         sessionCtx: {
@@ -2367,10 +2387,13 @@ describe("runPreparedReply media-only handling", () => {
           BodyStripped: "No wtf",
           Provider: "telegram",
           Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
           ChatType: "group",
           InboundEventKind: "room_event",
           MediaType: "audio/ogg",
           MessageSid: "35676",
+          MessageSidFull: "  ",
           SenderName: "Keśava",
           AmbientTranscriptWatermarkKey: '["telegram","","-100123",""]',
           AmbientTranscriptMessageId: "35676",
@@ -2393,8 +2416,21 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
       role: "user",
       content: "#35676 Keśava: No wtf",
+      idempotencyKey: buildChannelSourceTurnId({
+        provider: "telegram",
+        conversationId: "-100123",
+        messageId: "35676",
+      }),
       timestamp: expect.any(Number),
-      __openclaw: { senderIsOwner: false, senderName: "Keśava" },
+      __openclaw: {
+        senderIsOwner: false,
+        senderName: "Keśava",
+        transport: {
+          channel: "telegram",
+          conversationRef: expect.stringMatching(/^conv_[a-f0-9]{32}$/),
+          messageId: "35676",
+        },
+      },
     });
     call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
@@ -2790,6 +2826,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
     expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+    });
   });
 
   it("keeps active goal context out of background heartbeat turns", async () => {
@@ -3353,6 +3392,14 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: {
+        transport: {
+          channel: "telegram",
+          conversationRef: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+        },
+      },
+    });
   });
 
   it("prefers Provider over Surface when origin channel is missing", async () => {

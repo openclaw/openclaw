@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -600,6 +601,23 @@ describe("message-normalizer", () => {
       });
 
       expect(result.senderLabel).toBe("Iris");
+    });
+
+    it("formats durable sender metadata for transcript attribution", () => {
+      expect(
+        normalizeMessage({
+          role: "user",
+          content: "Prompt from Alice",
+          __openclaw: { senderId: "alice@example.com" },
+        }).senderLabel,
+      ).toBe("alice");
+      expect(
+        normalizeMessage({
+          role: "user",
+          content: "Prompt from a profile",
+          __openclaw: { senderId: "profile_123", senderName: "Alice Example" },
+        }).senderLabel,
+      ).toBe("Alice Example");
     });
   });
 });

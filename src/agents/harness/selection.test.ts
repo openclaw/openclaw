@@ -7,7 +7,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -977,6 +977,18 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("does not select Codex from a non-OpenAI model name", () => {
+    registerSuccessfulCodexHarness();
+
+    expect(resolveAgentHarnessPolicy({ provider: "custom", modelId: "gpt-5.4-codex" })).toEqual({
+      runtime: "auto",
+      runtimeSource: "implicit",
+    });
+    expect(selectAgentHarness({ provider: "custom", modelId: "gpt-5.4-codex" }).id).toBe(
+      "openclaw",
+    );
+  });
+
   it("auto-selects plugin support by default", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
@@ -993,6 +1005,23 @@ describe("selectAgentHarness", () => {
 
     expect(harness.id).toBe("codex");
     expect(supports).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects statically unrelated auto harnesses before provider discovery", () => {
+    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      autoSelection: { providerIds: ["openai", "codex"] },
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(selectAgentHarness({ provider: "deepseek", modelId: "deepseek-v4-pro" }).id).toBe(
+      "openclaw",
+    );
+    expect(supports).not.toHaveBeenCalled();
+    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
   });
 
   it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {

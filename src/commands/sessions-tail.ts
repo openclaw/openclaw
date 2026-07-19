@@ -16,6 +16,7 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.j
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readFileWindowFullySync } from "../infra/file-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -106,8 +107,14 @@ const FOLLOW_INTERVAL_MS = 1_000;
 let followIntervalMsForTests: number | undefined;
 
 /** Overrides the follow polling interval for tests. */
-export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
+function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
   followIntervalMsForTests = intervalMs;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsTailTestApi")] = {
+    setSessionsTailFollowIntervalMsForTests,
+  };
 }
 
 function resolveFollowIntervalMs(): number {
@@ -538,10 +545,10 @@ function readNewFileFollowEvents(state: FileFollowState): TrajectoryEvent[] {
       );
     }
     const buffer = Buffer.alloc(deltaBytes);
-    fs.readSync(fd, buffer, 0, buffer.length, state.offset);
-    state.offset = fileState.size;
+    const bytesRead = readFileWindowFullySync(fd, buffer, state.offset);
+    state.offset += bytesRead;
     state.fileState = fileState;
-    const combined = `${state.pending}${state.decoder.write(buffer)}`;
+    const combined = `${state.pending}${state.decoder.write(buffer.subarray(0, bytesRead))}`;
     // Keep an incomplete trailing JSON line until the next poll, matching
     // append-only writers that flush in chunks.
     const lines = combined.split(/\r?\n/u);

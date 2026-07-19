@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
-import type { SpawnResult } from "../../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { createDeferred } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -35,6 +36,7 @@ const SESSION_KEY = "agent:main:worker-turn";
 const ENVIRONMENT_ID = "environment-worker-turn";
 const OWNER_EPOCH = 3;
 const BUNDLE_HASH = "a".repeat(64);
+const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 type WorkerTurnEnvironmentRecord = NonNullable<ReturnType<WorkerTurnEnvironmentService["get"]>>;
 
@@ -95,7 +97,7 @@ describe("worker turn launcher", () => {
       expectedGeneration: placement.generation,
       patch: {
         remoteWorkspaceDir: "/worker/workspace",
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+        workspaceBaseManifestRef: MANIFEST_REF,
       },
     });
     placements.transition({
@@ -469,6 +471,10 @@ describe("worker turn launcher", () => {
   );
 
   it("launches the active worker with projected history and releases its claim", async () => {
+    const initialized = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {
+      timeoutMs: 10_000,
+    });
+    expect(initialized.code).toBe(0);
     seedActivePlacement();
     const manager = SessionManager.open(sessionFile);
     const earlierRequestId = manager.appendMessage(
@@ -496,6 +502,16 @@ describe("worker turn launcher", () => {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       remoteSocketPath: "/worker/gateway.sock",
+      quiesceWorkspace: vi.fn(async () => ({
+        assertActive: vi.fn(async () => {}),
+        resume: vi.fn(async () => {
+          expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
+            owner: "worker",
+            runId: "run-worker-turn",
+          });
+          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+        }),
+      })),
       runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
         expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
           owner: "worker",
@@ -526,6 +542,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-worker-turn",
           transcriptSeq: 1,
+          workspaceResultPending: true,
         });
         return {
           stdout: JSON.stringify({
@@ -542,6 +559,20 @@ describe("worker turn launcher", () => {
       }),
       syncWorkspace: vi.fn(async () => {
         throw new Error("unexpected workspace sync");
+      }),
+      reconcileWorkspace: vi.fn(async (request) => {
+        expect(request.stagedResult).toBeDefined();
+        request.stagedResult!.record(request.stagedResult!.ref);
+        expect(placements.listPendingWorkspaceResults()).toMatchObject([
+          { stagedResultRef: request.stagedResult!.ref, workspaceAcceptedAtMs: null },
+        ]);
+        request.journal.commit(MANIFEST_REF);
+        return {
+          manifestRef: MANIFEST_REF,
+          changed: false,
+          verifyStable: async () => {},
+          verifyLocalStable: async () => {},
+        };
       }),
       stop: vi.fn(async () => {}),
     };
@@ -630,6 +661,10 @@ describe("worker turn launcher", () => {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       remoteSocketPath: "/worker/gateway.sock",
+      quiesceWorkspace: vi.fn(async () => ({
+        assertActive: vi.fn(async () => {}),
+        resume: vi.fn(async () => {}),
+      })),
       runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
         descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
         const completed = SessionManager.open(sessionFile);
@@ -645,6 +680,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-persisted-user",
           transcriptSeq: 1,
+          workspaceResultPending: true,
         });
         return {
           stdout: JSON.stringify({
@@ -661,6 +697,15 @@ describe("worker turn launcher", () => {
       }),
       syncWorkspace: vi.fn(async () => {
         throw new Error("unexpected workspace sync");
+      }),
+      reconcileWorkspace: vi.fn(async (request) => {
+        request.journal.commit(MANIFEST_REF);
+        return {
+          manifestRef: MANIFEST_REF,
+          changed: false,
+          verifyStable: async () => {},
+          verifyLocalStable: async () => {},
+        };
       }),
       stop: vi.fn(async () => {}),
     };
@@ -736,6 +781,10 @@ describe("worker turn launcher", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
         runWorkspaceCommand: vi.fn(async (): Promise<SpawnResult> => {
           const completed = SessionManager.open(sessionFile);
           completed.appendMessage(
@@ -790,6 +839,7 @@ describe("worker turn launcher", () => {
             ownerEpoch: OWNER_EPOCH,
             runId: "run-worker-usage",
             transcriptSeq: 1,
+            workspaceResultPending: true,
           });
           return {
             stdout: JSON.stringify({
@@ -806,6 +856,15 @@ describe("worker turn launcher", () => {
         }),
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
+        }),
+        reconcileWorkspace: vi.fn(async (request) => {
+          request.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: async () => {},
+            verifyLocalStable: async () => {},
+          };
         }),
         stop: vi.fn(async () => {}),
       })),
@@ -891,6 +950,157 @@ describe("worker turn launcher", () => {
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
+  it("preserves a terminal workspace result when the worker child later exits nonzero", async () => {
+    seedActivePlacement();
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const runWorkspaceCommand = vi.fn(async (): Promise<SpawnResult> => {
+      createWorkerSessionPlacementGate(placements).updateAckCursors({
+        sessionId: SESSION_ID,
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        runId: "run-terminal-child-failure",
+        liveSeq: 1,
+        workspaceResultPending: true,
+      });
+      return {
+        stdout: "",
+        stderr: "child cleanup failed",
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+    const environments: WorkerTurnEnvironmentService = {
+      get: vi.fn(() => attachedEnvironment()),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery: vi.fn(() => true),
+      startTunnel: vi.fn(async () => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(),
+        runWorkspaceCommand,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      })),
+      stopTunnel: vi.fn(async () => {}),
+      destroy,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-terminal-child-failure",
+        },
+        turn("run-terminal-child-failure"),
+        async () => ({ meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow("child cleanup failed");
+
+    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(placements.listPendingWorkspaceResults()).toMatchObject([
+      {
+        sessionId: SESSION_ID,
+        runId: "run-terminal-child-failure",
+        gatewayInstanceId: placements.workspaceResultInstanceId(),
+        recoveryRequestedAtMs: expect.any(Number),
+      },
+    ]);
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "active",
+      turnClaim: { owner: "worker", runId: "run-terminal-child-failure" },
+    });
+  });
+
+  it("preserves an unresolved rollback journal when pre-launch recovery conflicts", async () => {
+    seedActivePlacement();
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement for journal recovery");
+    }
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    const basePack = Buffer.from("conflicted journal snapshot");
+    placements.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "e".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"f".repeat(64)}`,
+      baseEntries: [
+        {
+          path: "blocked.txt",
+          type: "file",
+          mode: 0o644,
+          size: 5,
+          sha256: createHash("sha256").update("base\n").digest("hex"),
+        },
+      ],
+      appliedEntries: [
+        {
+          path: "blocked.txt",
+          type: "file",
+          mode: 0o644,
+          size: 7,
+          sha256: createHash("sha256").update("worker\n").digest("hex"),
+        },
+      ],
+      baseTree: "d".repeat(40),
+      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+      basePack,
+    });
+    await fs.writeFile(path.join(root, "blocked.txt"), "local\n");
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+    };
+    const enteredWorkspaceQueue = createDeferred();
+    const releaseWorkspaceQueue = createDeferred();
+    const workspaceOperations: NonNullable<WorkerTurnLauncherOptions["workspaceOperations"]> = {
+      async run(environmentId, operation) {
+        expect(environmentId).toBe(ENVIRONMENT_ID);
+        enteredWorkspaceQueue.resolve();
+        await releaseWorkspaceQueue.promise;
+        return await operation();
+      },
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      workspaceOperations,
+    });
+
+    const attempt = provider.executeTurn(
+      {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        runId: "run-blocked-journal",
+      },
+      turn("run-blocked-journal"),
+      async () => ({ meta: { durationMs: 1 } }),
+    );
+    await enteredWorkspaceQueue.promise;
+    expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+    releaseWorkspaceQueue.resolve();
+    await expect(attempt).rejects.toThrow("workspace recovery could not complete");
+
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    expect(placements.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+    expect(environments.destroy).not.toHaveBeenCalled();
+  });
+
   it("fails placement and tears down after an ambiguous remote launch failure", async () => {
     seedActivePlacement();
     const teardownStates: string[] = [];
@@ -907,7 +1117,7 @@ describe("worker turn launcher", () => {
     const stopTunnel = vi.fn(async () => {
       const placement = placements.get(SESSION_ID);
       teardownStates.push(`stop:${placement?.state ?? "missing"}`);
-      expect(placement).toMatchObject({ state: "draining", turnClaim: { owner: "worker" } });
+      expect(placement).toMatchObject({ state: "draining", turnClaim: null });
     });
     const destroy = vi.fn(async () => {
       teardownStates.push(`destroy:${placements.get(SESSION_ID)?.state ?? "missing"}`);
@@ -921,11 +1131,24 @@ describe("worker turn launcher", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
         runWorkspaceCommand: vi.fn(async () => {
           throw new Error("remote launch failed");
         }),
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
+        }),
+        reconcileWorkspace: vi.fn(async (request) => {
+          request.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: async () => {},
+            verifyLocalStable: async () => {},
+          };
         }),
         stop: vi.fn(async () => {}),
       })),
@@ -997,6 +1220,12 @@ describe("worker turn launcher", () => {
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
         }),
+        quiesceWorkspace: vi.fn(async () => {
+          throw new Error("unexpected workspace quiescence");
+        }),
+        reconcileWorkspace: vi.fn(async () => {
+          throw new Error("unexpected workspace reconciliation");
+        }),
         stop: vi.fn(async () => {}),
       })),
       stopTunnel,
@@ -1056,9 +1285,22 @@ describe("worker turn launcher", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
         runWorkspaceCommand,
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
+        }),
+        reconcileWorkspace: vi.fn(async (request) => {
+          request.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: async () => {},
+            verifyLocalStable: async () => {},
+          };
         }),
         stop: vi.fn(async () => {}),
       })),
@@ -1097,7 +1339,20 @@ describe("worker turn launcher", () => {
       ownerEpoch: OWNER_EPOCH,
       runId: "run-overlap",
       transcriptSeq: 1,
+      workspaceResultPending: true,
     });
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement before drain race");
+    }
+    expect(() =>
+      placements.startDrain({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      }),
+    ).toThrow("pending cloud workspace result");
     commandFinished.resolve({
       stdout: JSON.stringify({
         status: "completed",
@@ -1111,7 +1366,17 @@ describe("worker turn launcher", () => {
       termination: "exit",
     });
     await expect(first).resolves.toMatchObject({ payloads: [{ text: "Only worker reply" }] });
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    const completedPlacement = placements.get(SESSION_ID);
+    if (completedPlacement?.state !== "active") {
+      throw new Error("expected active placement after worker completion");
+    }
+    placements.startDrain({
+      sessionId: completedPlacement.sessionId,
+      environmentId: completedPlacement.environmentId,
+      ownerEpoch: completedPlacement.activeOwnerEpoch,
+      expectedGeneration: completedPlacement.generation,
+    });
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
   });
 
   it("keeps an active placement after an acknowledged turn failure and admits the next turn", async () => {
@@ -1128,6 +1393,10 @@ describe("worker turn launcher", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
         runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
           launchCount += 1;
           const descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
@@ -1155,6 +1424,7 @@ describe("worker turn launcher", () => {
             ownerEpoch: OWNER_EPOCH,
             runId: "run-model-recovered",
             transcriptSeq: 1,
+            workspaceResultPending: true,
           });
           return {
             stdout: JSON.stringify({
@@ -1171,6 +1441,15 @@ describe("worker turn launcher", () => {
         }),
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
+        }),
+        reconcileWorkspace: vi.fn(async (request) => {
+          request.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: async () => {},
+            verifyLocalStable: async () => {},
+          };
         }),
         stop: vi.fn(async () => {}),
       })),
@@ -1247,6 +1526,7 @@ describe("worker turn launcher", () => {
         ownerEpoch: OWNER_EPOCH,
         runId,
         transcriptSeq: 1,
+        workspaceResultPending: true,
       });
       return {
         stdout: JSON.stringify({
@@ -1269,9 +1549,22 @@ describe("worker turn launcher", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
         runWorkspaceCommand,
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
+        }),
+        reconcileWorkspace: vi.fn(async (request) => {
+          request.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: async () => {},
+            verifyLocalStable: async () => {},
+          };
         }),
         stop: vi.fn(async () => {}),
       })),

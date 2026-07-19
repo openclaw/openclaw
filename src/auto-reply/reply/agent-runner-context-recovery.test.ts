@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import {
-  buildContextOverflowRecoveryText,
-  computeContextAwareReserveTokensFloor,
-} from "./agent-runner-context-recovery.js";
+import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 
 function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
   return {
@@ -18,45 +15,33 @@ function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig
   };
 }
 
-describe("computeContextAwareReserveTokensFloor", () => {
-  it("returns 100000 for 1M context windows", () => {
-    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
-  });
-
-  it("returns 50000 for 200k context windows", () => {
-    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
-  });
-
-  it("returns 35000 for 100k context windows", () => {
-    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
-  });
-
-  it("returns 20000 for context windows below 100k", () => {
-    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
-    expect(computeContextAwareReserveTokensFloor(32_768)).toBe(20_000);
-    expect(computeContextAwareReserveTokensFloor(50_000)).toBe(20_000);
-  });
-
-  it("returns 20000 for undefined context window", () => {
-    expect(computeContextAwareReserveTokensFloor(undefined)).toBe(20_000);
-  });
-
-  it("returns 20000 for non-positive context window", () => {
-    expect(computeContextAwareReserveTokensFloor(0)).toBe(20_000);
-    expect(computeContextAwareReserveTokensFloor(-1)).toBe(20_000);
-  });
-
-  it("returns correct tiers at exact boundaries", () => {
-    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
-    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
-    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
-    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
-    expect(computeContextAwareReserveTokensFloor(199_999)).toBe(35_000);
-    expect(computeContextAwareReserveTokensFloor(999_999)).toBe(50_000);
-  });
-});
-
 describe("buildContextOverflowRecoveryText", () => {
+  it.each([
+    [99_999, "20000"],
+    [100_000, "35000"],
+    [199_999, "35000"],
+    [200_000, "50000"],
+    [999_999, "50000"],
+    [1_000_000, "100000"],
+  ])("selects the reserve floor for a %i-token model", (contextTokens, expectedFloor) => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            test: {
+              baseUrl: "https://provider.test",
+              models: [makeTestModel("model", contextTokens)],
+            },
+          },
+        },
+      },
+      primaryProvider: "test",
+      primaryModel: "model",
+    });
+
+    expect(text).toContain(`reserveTokensFloor\` to ${expectedFloor}`);
+  });
+
   it("keeps the generic compaction-buffer hint without heartbeat model evidence", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {},

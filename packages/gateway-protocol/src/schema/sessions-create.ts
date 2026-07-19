@@ -3,18 +3,25 @@ import { closedObject } from "./closed-object.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
-/** Creates or adopts a session with optional model, label, and parent linkage. */
+/** Creates or adopts a session with optional model, thinking, label, and parent linkage. */
 export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
+  thinkingLevel: Type.Optional(NonEmptyString),
   catalogId: Type.Optional(NonEmptyString),
   parentSessionKey: Type.Optional(NonEmptyString),
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
+  succeedsParent: Type.Optional(
+    Type.Boolean({
+      description:
+        "When sessions.create creates a distinct child, whether that child succeeds its parent and emits the parent's terminal session_end. Requires parentSessionKey and emitCommandHooks. False keeps the parent active; omission preserves legacy behavior.",
+    }),
+  ),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),

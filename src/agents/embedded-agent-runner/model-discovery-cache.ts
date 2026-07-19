@@ -142,7 +142,10 @@ function discoverFreshAgentStores(
   options: Pick<DiscoverCachedAgentStoresOptions, "config" | "workspaceDir">,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
 ): DiscoveryStores {
-  const authStorage = discoverAuthStorage(agentDir);
+  const authStorage = discoverAuthStorage(agentDir, {
+    ...(options.config ? { config: options.config } : {}),
+    ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+  });
   const modelRegistry = discoverModels(authStorage, agentDir, {
     ...(options.config ? { config: options.config } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
@@ -198,6 +201,11 @@ export function discoverCachedAgentStores(
 }
 
 /** Clears the process-local discovery cache between tests that mutate model/auth fixtures. */
-export function resetModelDiscoveryCacheForTest(): void {
+function resetModelDiscoveryCacheForTest(): void {
   DISCOVERY_STORE_CACHE.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelDiscoveryCacheTestApi")] =
+    { resetModelDiscoveryCacheForTest };
 }

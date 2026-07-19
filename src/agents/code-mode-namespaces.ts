@@ -285,13 +285,20 @@ export function registerCodeModeNamespaceForPlugin(
 }
 
 /** Lists registered namespaces in deterministic id order. */
-export function listCodeModeNamespaces(): RegisteredCodeModeNamespace[] {
+function listCodeModeNamespaces(): RegisteredCodeModeNamespace[] {
   return [...registryState.registrations.values()].toSorted((a, b) => a.id.localeCompare(b.id));
 }
 
 /** Clears all namespace registrations for isolated tests. */
-export function clearCodeModeNamespacesForTest(): void {
+function clearCodeModeNamespacesForTest(): void {
   registryState.registrations.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codeModeNamespacesTestApi")] = {
+    clearCodeModeNamespacesForTest,
+    listCodeModeNamespaces,
+  };
 }
 
 /** Clears namespace registrations owned by one plugin. */

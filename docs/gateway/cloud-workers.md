@@ -96,7 +96,21 @@ openclaw gateway call sessions.dispatch \
 
 `sessions.dispatch` closes local turn admission, drains active work, provisions the lease, runs setup, bootstraps OpenClaw, syncs the workspace, and returns once the placement reaches `active` worker ownership. Budget several minutes for the first dispatch; leases and installs are cached where the provider supports it. After that, talk to the session as usual — turns route to the worker automatically.
 
-Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. Dispatch is one-way in v1: there is no pull-back RPC yet. A failed worker turn fails that turn and keeps the active placement available for a retry; lifecycle failures instead move the placement to an error or reclaimed state and preserve their diagnostic tail.
+Completed worker turns reconcile eligible, size-bounded workspace files back into the session's managed worktree before the turn claim is released. The terminal worker event creates a durable pending-result fence before it is acknowledged, so Gateway restart recovery pulls the remote workspace back before stale-turn cleanup can destroy its owner. Reconciliation authenticates the worker manifest and stops on local divergence instead of overwriting either side. Before changing files, the Gateway stores a bounded rollback journal in its SQLite state database; a retry recovers that journal after an interrupted Gateway process. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. Remote commit objects are not retained; the resulting file changes remain in the managed worktree for normal review and commit.
+
+When the work is complete and no turn is running, open the session menu and choose **Stop cloud worker…**. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
+
+For a broken or runaway attached worker, an operator can call `environments.destroy` with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment.
+
+The equivalent administrative RPC is:
+
+```bash
+openclaw gateway call sessions.reclaim \
+  --timeout 600000 \
+  --params '{"key":"agent:main:big-refactor"}'
+```
+
+Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. A failed model turn keeps the active placement available for a retry. If inbound workspace reconciliation fails, the worker also stays active so the operator can resolve the local conflict and retry without losing the remote result; lifecycle failures instead move the placement to an error or reclaimed state and preserve their diagnostic tail.
 
 ## Security model
 

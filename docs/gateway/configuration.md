@@ -151,8 +151,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`; `provider/*` entries filter `/model`, `/models`, and model pickers to selected providers while still using dynamic model discovery.
-    - Use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add allowlist entries without removing existing models. Plain replacements that would remove entries are rejected unless you pass `--replace`.
+    - `agents.defaults.models` stores aliases and per-model settings; adding an entry never restricts `/model` or `--model` overrides.
+    - `agents.defaults.modelPolicy.allow` is the explicit allowlist for overrides and model pickers. It accepts exact refs and `provider/*` wildcards; omit it or use `[]` to allow any model.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
@@ -611,7 +611,8 @@ subsystem references.
 
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
-rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
+rate-limited to 30 requests per 60 seconds, per method, per
+`deviceId+clientIp`; see [Rate limiting](/gateway/security/rate-limiting). Restart
 requests coalesce and then enforce a 30-second cooldown between restart cycles.
 `update.status` is read-only but admin-scoped because the restart sentinel can
 include update step summaries and command output tails.

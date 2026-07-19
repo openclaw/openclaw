@@ -3,10 +3,12 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import type { ApiRegistry } from "@openclaw/ai";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -101,6 +103,7 @@ import {
   selectAgentHarnessForPreparedModelProviders,
 } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
+import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
@@ -156,8 +159,8 @@ import {
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { detectRuntimeShell } from "../shell-utils.js";
-import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
@@ -185,6 +188,7 @@ import {
 } from "./compaction-hooks.js";
 import {
   resolveCompactionHarnessRuntime,
+  resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
@@ -255,12 +259,14 @@ function resolveCompactionProviderStream(params: {
   config?: OpenClawConfig;
   agentDir: string;
   effectiveWorkspace: string;
+  apiRegistry: ApiRegistry;
 }) {
   return registerProviderStreamForModel({
     model: params.effectiveModel,
     cfg: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.effectiveWorkspace,
+    apiRegistry: params.apiRegistry,
   });
 }
 
@@ -506,22 +512,12 @@ export async function compactEmbeddedAgentSessionDirect(
           provider === primaryProvider ||
           provider === requestedPrimaryProvider;
         const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-        const candidateThinkLevel = resolveCandidateThinkingLevel({
-          cfg: params.config,
-          provider,
-          modelId: model,
-          level: params.thinkLevel,
-          agentId: fallbackAgentId,
-          sessionKey: fallbackSessionKey,
-          agentRuntime: params.agentHarnessId,
-        });
         return await compactEmbeddedAgentSessionDirectOnce({
           ...params,
           provider,
           model,
           authProfileId,
           authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
-          thinkLevel: candidateThinkLevel,
           // The primary attempt retains its already prepared atomic plan. An
           // actual fallback may change route/auth class and must rebuild it.
           runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
@@ -643,7 +639,15 @@ async function compactEmbeddedAgentSessionDirectOnce(
     agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
     workspaceDir: resolvedWorkspace,
   });
-  let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
+  let thinkLevel = resolveEmbeddedCompactionThinkingLevel({
+    config: params.config,
+    provider,
+    modelId,
+    inheritedLevel: params.thinkLevel,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentRuntime: selectedHarnessRuntime,
+  });
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);
@@ -1319,6 +1323,14 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
     const promptContribution =
       runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
+    const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
+      enabled: promptMode === "full",
+      toolNames: effectiveTools.map((tool) => tool.name),
+      citationsMode: params.config?.memory?.citations,
+      agentId: runtimeInfo.agentId,
+      agentSessionKey: runtimeInfo.sessionKey,
+      sandboxed: sandboxInfo?.enabled === true,
+    });
     const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt = buildEmbeddedSystemPrompt({
         config: params.config,
@@ -1353,6 +1365,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         userTime,
         userTimeFormat,
         contextFiles,
+        preparedMemoryPrompt,
         promptContribution,
         nativeCommandGuidanceLines,
       });
@@ -1376,14 +1389,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      ...resolveSessionWriteLockOptions(params.config, {
-        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-          timeoutMs: compactionTimeoutMs,
+    const sessionLock =
+      (await acquireOwnedSessionTranscriptWriteLock({
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+      })) ??
+      (await acquireSessionWriteLock({
+        sessionFile: params.sessionFile,
+        ...resolveSessionWriteLockOptions(params.config, {
+          maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+            timeoutMs: compactionTimeoutMs,
+          }),
         }),
-      }),
-    });
+      }));
     try {
       if (!isSqliteSessionTranscript) {
         await repairSessionFileIfNeeded({
@@ -1485,6 +1503,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         config: params.config,
         agentDir,
         effectiveWorkspace,
+        apiRegistry: getModelRegistryRuntime(modelRegistry).apiRegistry,
       });
       while (true) {
         // Rebuild the compaction session on retry so provider wrappers, payload
@@ -1513,6 +1532,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           // through the same transport/payload shaping stack as normal turns.
           await prepareCompactionSessionAgent({
             session,
+            llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
             providerStreamFn,
             sessionId: params.sessionId,
             signal: runAbortController.signal,

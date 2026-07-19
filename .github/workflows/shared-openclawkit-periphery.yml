@@ -72,7 +72,7 @@ jobs:
     name: Scan shared kit from iOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -108,8 +108,12 @@ jobs:
       - name: Install iOS scan tooling
         run: |
           brew update
-          brew install xcodegen periphery
+          brew install periphery
           swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          # Homebrew's xcodegen bottle can arrive corrupted on runner images;
+          # use the repo's pinned, checksummed release installer like ci.yml.
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          "$swift_tools_dir/xcodegen" --version
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
           "$swift_tools_dir/swiftformat" --version
@@ -160,7 +164,7 @@ jobs:
     name: Scan shared kit from macOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:
       - name: Checkout

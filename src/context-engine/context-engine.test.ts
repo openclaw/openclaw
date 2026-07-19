@@ -5,13 +5,18 @@ import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearMemoryPluginState,
+  registerMemoryPromptPreparation,
   registerMemoryPromptSection,
 } from "../plugins/memory-state.test-fixtures.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
-import { buildMemorySystemPromptAddition, delegateCompactionToRuntime } from "./delegate.js";
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+  prepareMemorySystemPromptAddition,
+} from "./delegate.js";
 import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
@@ -22,7 +27,6 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "./registry.js";
-import type { ContextEngineFactory, ContextEngineFactoryContext } from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 import type {
   ContextEngine,
@@ -34,6 +38,9 @@ import type {
   BootstrapResult,
   IngestResult,
 } from "./types.js";
+
+type ContextEngineFactory = Parameters<typeof registerContextEngine>[1];
+type ContextEngineFactoryContext = Parameters<ContextEngineFactory>[0];
 
 const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
   compactEmbeddedAgentSessionDirectMock: vi.fn(),
@@ -731,6 +738,20 @@ describe("Engine contract tests", () => {
         availableTools: new Set(["memory_search"]),
       }),
     ).toBeUndefined();
+  });
+
+  it("prepares async memory state before context-engine prompt rendering", async () => {
+    const prepare = vi.fn(async () => ["## Prepared Memory", "loaded from sqlite", ""]);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    await expect(
+      prepareMemorySystemPromptAddition({
+        availableTools: new Set(["wiki_search"]),
+        agentId: "main",
+        agentSessionKey: "agent:main:main",
+      }),
+    ).resolves.toBe("## Prepared Memory\nloaded from sqlite");
+    expect(prepare).toHaveBeenCalledTimes(1);
   });
 });
 

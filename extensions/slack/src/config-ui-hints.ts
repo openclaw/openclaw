@@ -11,9 +11,13 @@ export const slackChannelConfigUiHints = {
     label: "Slack Enterprise Grid Org Install",
     help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
+  identity: {
+    label: "Slack Identity",
+    help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
-    dmPolicy: { channelKey: "slack", includeLegacyNestedPolicy: true },
+    dmPolicy: { channelKey: "slack" },
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Slack channel IDs",
@@ -21,6 +25,7 @@ export const slackChannelConfigUiHints = {
       denyNote: "Native @mentions still trigger.",
     },
     nativeCommands: true,
+    implicitMentions: true,
   }),
   allowBots: {
     label: "Slack Allow Bot Messages",
@@ -101,6 +106,18 @@ export const slackChannelConfigUiHints = {
   execApprovals: {
     label: "Slack Exec Approvals",
     help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
+  },
+  presenceEvents: {
+    label: "Slack Presence Events",
+    help: 'Poll observed human participants and wake the routed agent on away-to-active transitions. Default: "off".',
+  },
+  "presenceEvents.mode": {
+    label: "Slack Presence Event Mode",
+    help: '"off" disables polling; "auto" covers DMs, MPIMs, and recent threads with up to 8 observed people; "on" also covers larger threads and top-level channels.',
+  },
+  "channels.*.presenceEvents.mode": {
+    label: "Slack Channel Presence Event Mode",
+    help: 'Override presence events for one Slack channel. Use "on" to include large threads or top-level channel sessions.',
   },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
@@ -197,9 +214,5 @@ export const slackChannelConfigUiHints = {
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
-  },
-  "thread.requireExplicitMention": {
-    label: "Slack Thread Require Explicit Mention",
-    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

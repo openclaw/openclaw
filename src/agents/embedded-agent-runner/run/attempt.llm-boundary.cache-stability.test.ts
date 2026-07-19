@@ -29,9 +29,9 @@ import type { Context, Model } from "../../../llm/types.js";
 import {
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
-  persistUserTurnTranscript,
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
+import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,

@@ -43,6 +43,7 @@ import {
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -295,7 +296,7 @@ async function forwardFollowupProgressEvent(params: {
       phase: readStringValue(evt.data.phase),
       title: readStringValue(evt.data.title),
       explanation: readStringValue(evt.data.explanation),
-      steps: filterStringArray(evt.data.steps),
+      steps: normalizeAgentPlanSteps(evt.data.steps),
       source: readStringValue(evt.data.source),
     });
   }
@@ -1186,6 +1187,7 @@ export function createFollowupRunner(params: {
                       onReasoningText: createCliReasoningStreamBridge(
                         progressOpts?.onReasoningStream,
                       ),
+                      onPlanUpdate: progressOpts?.onPlanUpdate,
                       onReasoningProgress: async (payload) => {
                         await progressOpts?.onReasoningProgress?.(payload);
                       },
@@ -2007,7 +2009,12 @@ export function createFollowupRunner(params: {
             getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
         );
         if (suppressionDeliverablePayloads.length > 0) {
-          await sendFollowupPayloads(
+          // Marked runtime output bypasses source-reply suppression, not the
+          // admission-time send policy or ambient room-event silence.
+          if (isRoomEventFollowup()) {
+            return;
+          }
+          await sendRunPayloads(
             suppressionDeliverablePayloads,
             effectiveQueued,
             {

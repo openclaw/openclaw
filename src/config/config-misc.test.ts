@@ -57,6 +57,30 @@ describe("boolean config validation", () => {
     const result = OpenClawSchema.safeParse(config);
     expect(result.success).toBe(false);
   });
+
+  it.each([
+    ["root", true, "mcp.servers.example.disabled", "enabled: false"],
+    ["root", false, "mcp.servers.example.disabled", "enabled: true"],
+    ["node-host", true, "nodeHost.mcp.servers.example.disabled", "enabled: false"],
+  ])(
+    'rejects %s MCP server "disabled: %s" with the inverse canonical value',
+    (scope, disabled, path, replacement) => {
+      const server = { command: "example-mcp", disabled };
+      const config =
+        scope === "root"
+          ? { mcp: { servers: { example: server } } }
+          : { nodeHost: { mcp: { servers: { example: server } } } };
+      const result = validateConfigObjectRaw(config);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected disabled MCP server config to fail validation");
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path, message: expect.stringContaining(replacement) }),
+      );
+    },
+  );
 });
 
 describe("agent timeoutSeconds config", () => {
@@ -281,29 +305,6 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
-describe("legacy Canvas host config", () => {
-  it("keeps root canvasHost valid so doctor can migrate it", () => {
-    const result = validateConfigObjectRaw({
-      canvasHost: {
-        enabled: false,
-        root: "~/canvas",
-        port: 18790,
-        liveReload: false,
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect((result.config as { canvasHost?: unknown }).canvasHost).toEqual({
-        enabled: false,
-        root: "~/canvas",
-        port: 18790,
-        liveReload: false,
-      });
-    }
-  });
-});
-
 describe("accessGroups config", () => {
   it("accepts Discord channel audience access groups", () => {
     const result = OpenClawSchema.safeParse({
@@ -518,32 +519,6 @@ describe("ui.seamColor", () => {
   it("rejects invalid hex length", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
     expect(res.ok).toBe(false);
-  });
-});
-
-describe("tui.footer.showRemoteHost", () => {
-  it("accepts the TUI remote-host footer toggle", () => {
-    const result = OpenClawSchema.safeParse({
-      tui: {
-        footer: {
-          showRemoteHost: true,
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects unknown TUI footer keys", () => {
-    const result = OpenClawSchema.safeParse({
-      tui: {
-        footer: {
-          showLocalHost: true,
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
   });
 });
 
@@ -1123,22 +1098,9 @@ describe("config identity/materialization regressions", () => {
 });
 
 describe("cron webhook schema", () => {
-  it("accepts cron.webhookToken and legacy cron.webhook", () => {
-    const res = OpenClawSchema.safeParse({
-      cron: {
-        enabled: true,
-        webhook: "https://example.invalid/legacy-cron-webhook",
-        webhookToken: "secret-token",
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
   it("accepts cron.webhookToken SecretRef values", () => {
     const res = OpenClawSchema.safeParse({
       cron: {
-        webhook: "https://example.invalid/legacy-cron-webhook",
         webhookToken: {
           source: "env",
           provider: "default",
@@ -1148,16 +1110,6 @@ describe("cron webhook schema", () => {
     });
 
     expect(res.success).toBe(true);
-  });
-
-  it("rejects non-http cron.webhook URLs", () => {
-    const res = OpenClawSchema.safeParse({
-      cron: {
-        webhook: "ftp://example.invalid/legacy-cron-webhook",
-      },
-    });
-
-    expect(res.success).toBe(false);
   });
 
   it("accepts cron.retry config", () => {

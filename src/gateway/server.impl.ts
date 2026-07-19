@@ -8,6 +8,8 @@ import {
 } from "../agents/embedded-agent-runner/run-state.js";
 import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -121,6 +123,7 @@ import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
+import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
@@ -573,6 +576,48 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  const [
+    {
+      OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+      OpenClawDatabaseSchemaPreflightError,
+      preflightOpenClawDatabaseSchemas,
+    },
+    agentDatabase,
+    stateDatabase,
+  ] = await Promise.all([
+    import("../state/openclaw-database-preflight.js"),
+    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-state-db.js"),
+  ]);
+  const databaseSchemas = preflightOpenClawDatabaseSchemas({
+    env: process.env,
+    supportedVersions: {
+      state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
+      agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
+    },
+  });
+  if (databaseSchemas.incompatible.length > 0) {
+    for (const database of databaseSchemas.incompatible) {
+      log.error("database schema preflight rejected newer schema", {
+        kind: database.kind,
+        path: database.path,
+        ...(database.agentId ? { agentId: database.agentId } : {}),
+        foundVersion: database.foundVersion,
+        supportedVersion: database.supportedVersion,
+        writerAppVersion: database.writerAppVersion ?? "unknown",
+        docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+      });
+    }
+    throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
+  }
+  for (const database of databaseSchemas.indeterminate) {
+    log.warn("database schema preflight could not inspect database; continuing to real open", {
+      kind: database.kind,
+      path: database.path,
+      reason: database.reason,
+      docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+    });
+  }
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
@@ -948,8 +993,9 @@ export async function startGatewayServer(
         })
       : undefined;
   // Without configured profiles, existing placements still reconcile but new dispatches stay off.
+  const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
-    ? workerPlacementRuntime?.dispatchService
+    ? workerPlacementControlAvailable
     : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -969,7 +1015,9 @@ export async function startGatewayServer(
   };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
-      (method) => workerPlacementDispatchAvailable || method !== "sessions.dispatch",
+      (method) =>
+        (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -1083,6 +1131,10 @@ export async function startGatewayServer(
   const startupAccountStartsReady = new Promise<void>((resolve) => {
     releaseStartupAccountStarts = resolve;
   });
+  let gatewayInstanceRuntime: GatewayInstanceRuntime | undefined;
+  // Internal principals belong to this server generation and become usable only after bind.
+  // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
+  let gatewayInstanceDispatchReady = false;
   const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
@@ -1097,6 +1149,7 @@ export async function startGatewayServer(
     getPluginHttpRouteRegistry: () => pluginRegistry,
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
+    getNativeApprovalRuntime: () => gatewayInstanceRuntime?.nativeApprovals,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
@@ -1141,11 +1194,14 @@ export async function startGatewayServer(
     chatAbortControllers,
     chatQueuedTurns,
     toolEventRecipients,
+    sessionEventSubscribers,
+    sessionMessageSubscribers,
     getWorkerIngressEndpoint,
     getMcpAppSandboxPort,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
+      getRuntimeConfig,
       bindHost,
       port,
       controlUiEnabled,
@@ -1183,8 +1239,6 @@ export async function startGatewayServer(
   const {
     nodeRegistry,
     nodePresenceTimers,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
     nodeSubscribe,
@@ -1194,6 +1248,8 @@ export async function startGatewayServer(
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({
     broadcast,
+    sessionEventSubscribers,
+    sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
@@ -1296,6 +1352,8 @@ export async function startGatewayServer(
   };
   const markClosePreludeStarted = () => {
     closePreludeStarted = true;
+    gatewayInstanceDispatchReady = false;
+    gatewayInstanceRuntime?.close();
     cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
     retainedPluginCleanupHandle?.stop();
@@ -1556,7 +1614,9 @@ export async function startGatewayServer(
 
     const {
       execApprovalManager,
+      cancelRunBoundApprovals,
       forwardPluginApprovalRequest,
+      pluginApprovalIosPushDelivery,
       pluginApprovalManager,
       systemAgentApprovalManager,
       extraHandlers,
@@ -1621,7 +1681,8 @@ export async function startGatewayServer(
           (workerEnvironmentService ||
             (descriptor.name !== "environments.create" &&
               descriptor.name !== "environments.destroy")) &&
-          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch"),
+          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+          (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
       );
       return createGatewayMethodRegistry([
         ...coreDescriptors,
@@ -1836,7 +1897,9 @@ export async function startGatewayServer(
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
+          cancelRunBoundApprovals,
           forwardPluginApprovalRequest,
+          pluginApprovalIosPushDelivery,
           pluginApprovalManager,
           systemAgentApprovalManager,
           listSessionPendingApprovals: approvalSessionEvents.replay,
@@ -1873,8 +1936,8 @@ export async function startGatewayServer(
           ...(workerPlacementRuntime
             ? { workerSessionPlacementService: workerPlacementRuntime.placements }
             : {}),
-          ...(workerPlacementDispatchAvailable
-            ? { workerPlacementDispatchService: workerPlacementDispatchAvailable }
+          ...(workerPlacementControlAvailable
+            ? { workerPlacementDispatchService: workerPlacementControlAvailable }
             : {}),
           terminalSessions,
           agentRunSeq,
@@ -1882,6 +1945,7 @@ export async function startGatewayServer(
           chatQueuedTurns,
           chatAbortedRuns: chatRunState.abortedRuns,
           chatRunBuffers: chatRunState.buffers,
+          chatRunPlanSnapshots: chatRunState.planSnapshots,
           chatDeltaSentAt: chatRunState.deltaSentAt,
           chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
           chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
@@ -1919,6 +1983,16 @@ export async function startGatewayServer(
       },
     );
     currentPluginRegistryGatewayContext = gatewayRequestContext;
+    const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
+    const gatewayInstanceRuntimeLocal = createGatewayInstanceRuntime({
+      getContext: () => gatewayRequestContext,
+      getMethodRegistry: () => attachedGatewayMethodRegistry,
+      isDispatchAvailable: () => gatewayInstanceDispatchReady && !closePreludeStarted,
+      logError: (message) => log.error(message),
+    });
+    gatewayInstanceRuntime = gatewayInstanceRuntimeLocal;
+    gatewayRequestContext.approvalEvents = gatewayInstanceRuntimeLocal.approvalEvents;
+    gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntimeLocal.recovery;
 
     const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
       () => gatewayRequestContext,
@@ -1968,7 +2042,11 @@ export async function startGatewayServer(
         port,
         gatewayHost: bindHost ?? undefined,
         pluginSurfaceScheme,
-        getPluginNodeCapabilities: () => listPluginNodeCapabilities(pluginRegistry),
+        getPluginNodeCapabilities: () =>
+          withCoreCanvasNodeCapability(
+            listPluginNodeCapabilities(pluginRegistry),
+            isCoreCanvasHostEnabled(getRuntimeConfig()),
+          ),
         resolvedAuth,
         getResolvedAuth,
         getRequiredSharedGatewaySessionGeneration: () =>
@@ -1991,6 +2069,7 @@ export async function startGatewayServer(
       }),
     );
     await startupTrace.measure("http.listen", () => startListening());
+    gatewayInstanceDispatchReady = true;
     startupTrace.mark("http.bound");
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     let postAttachRuntimeReturned = false;
@@ -2060,6 +2139,7 @@ export async function startGatewayServer(
             defaultWorkspaceDir,
             deps,
             startChannels,
+            recoveryRuntime: gatewayInstanceRuntimeLocal.recovery,
             logHooks,
             logChannels,
             unavailableGatewayMethods,
@@ -2151,6 +2231,13 @@ export async function startGatewayServer(
       log.info("gateway ready");
     }
     finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
+    if (!minimalTestGateway) {
+      const { startOpenClawDatabaseIntegrityVerifier } =
+        await import("../state/openclaw-database-verify.js");
+      runtimeState.gatewayLifetimeSidecars.push(
+        startOpenClawDatabaseIntegrityVerifier({ env: process.env }),
+      );
+    }
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
@@ -2159,6 +2246,12 @@ export async function startGatewayServer(
       minimalTestGateway,
       initialConfig: cfgAtStart,
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
+      initialSnapshotRawHash: startupLastGoodSnapshot.exists
+        ? (startupLastGoodSnapshot.hash ?? null)
+        : null,
+      initialAuthoredConfig: startupLastGoodSnapshot.parsed,
+      initialSnapshotValid: startupLastGoodSnapshot.valid,
+      initialSnapshotIssues: startupLastGoodSnapshot.issues,
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshotForRuntimeTransaction,

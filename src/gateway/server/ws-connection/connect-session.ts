@@ -1,7 +1,6 @@
 // Gateway WebSocket connect finalization attaches node/session state and sends hello-ok.
-import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -10,13 +9,15 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { resolveStateDir } from "../../../config/paths.js";
-import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
+import { loadNodeHostConfig } from "../../../node-host/config.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
-import { isEphemeralGatewayClient } from "../../../utils/message-channel.js";
+import {
+  isBrowserCopilotClient,
+  isEphemeralGatewayClient,
+} from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
@@ -49,22 +50,13 @@ function isReleasedVersion(version: string): boolean {
 }
 
 /**
- * Lazily resolve the local node host's nodeId from ~/.openclaw/node.json.
+ * Lazily resolve the local node host's nodeId from canonical shared SQLite state.
  * Process-stable: only changes on `openclaw node install`, which requires restart.
  */
-let cachedLocalNodeId: string | null | undefined;
-function resolveLocalNodeId(): string | null {
-  if (cachedLocalNodeId !== undefined) {
-    return cachedLocalNodeId;
-  }
-  try {
-    const raw = fs.readFileSync(path.join(resolveStateDir(), "node.json"), "utf8");
-    const parsed = JSON.parse(raw) as { nodeId?: string };
-    cachedLocalNodeId = typeof parsed.nodeId === "string" ? parsed.nodeId.trim() || null : null;
-  } catch {
-    cachedLocalNodeId = null;
-  }
-  return cachedLocalNodeId;
+let cachedLocalNodeId: Promise<string | null> | undefined;
+async function resolveLocalNodeId(): Promise<string | null> {
+  cachedLocalNodeId ??= loadNodeHostConfig().then((config) => config?.nodeId ?? null);
+  return await cachedLocalNodeId;
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
@@ -114,6 +106,7 @@ export async function attachAuthenticatedGatewayConnect(
     role,
     scopes,
     device,
+    authResult,
     authMethod,
     pairingLocality,
     sessionUsesSharedGatewayAuth,
@@ -129,6 +122,7 @@ export async function attachAuthenticatedGatewayConnect(
   const clientId = connectParams.client.id;
   const instanceId = connectParams.client.instanceId;
   const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
+  const authenticatedUserId = normalizeOptionalString(authResult.user);
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -225,9 +219,13 @@ export async function attachAuthenticatedGatewayConnect(
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
+    pairedClientId: isBrowserCopilotClient(connectParams.client)
+      ? connectParams.client.id
+      : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
+    ...(authenticatedUserId ? { authenticatedUserId } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -247,11 +245,11 @@ export async function attachAuthenticatedGatewayConnect(
 
   // Version mismatch: kick the local node host so the OS supervisor restarts it.
   // Only applies when the connecting node is the same-install local node (verified by
-  // matching instanceId against ~/.openclaw/node.json nodeId). SSH-tunneled remote
+  // matching instanceId against the local node-host config row). SSH-tunneled remote
   // nodes also appear as loopback but have different instanceIds, so they are exempt.
   // Placed before setClient/presence to avoid phantom online state on rejection.
   if (role === "node" && isLocalClient) {
-    const localNodeId = resolveLocalNodeId();
+    const localNodeId = await resolveLocalNodeId();
     const clientInstanceId = connectParams.client.instanceId?.trim();
     if (localNodeId && clientInstanceId && clientInstanceId === localNodeId) {
       const gatewayVersion = resolveRuntimeServiceVersion(process.env);
@@ -301,6 +299,12 @@ export async function attachAuthenticatedGatewayConnect(
     auth: authMethod,
   });
 
+  if (authenticatedUserId) {
+    logWsControl.info(
+      `authenticated user connected conn=${connId} user=${formatForLog(authenticatedUserId)}`,
+    );
+  }
+
   if (isWebchatConnect(connectParams)) {
     logWsControl.info(
       `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
@@ -320,6 +324,9 @@ export async function attachAuthenticatedGatewayConnect(
       roles: [role],
       scopes,
       instanceId: device?.id ?? instanceId,
+      ...(authenticatedUserId
+        ? { user: { id: authenticatedUserId, email: authenticatedUserId } }
+        : {}),
       reason: "connect",
     });
     incrementPresenceVersion();
@@ -329,23 +336,6 @@ export async function attachAuthenticatedGatewayConnect(
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
     });
-    const instanceIdRaw = connectParams.client.instanceId;
-    const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
-    const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-    if (instanceIdLocal) {
-      nodeIdsForPairing.add(instanceIdLocal);
-    }
-    for (const nodeId of nodeIdsForPairing) {
-      runDetachedConnectWork(
-        async () => {
-          await updatePairedNodeMetadata(nodeId, {
-            lastConnectedAtMs: nodeSession.connectedAtMs,
-          });
-        },
-        (err) =>
-          logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
-      );
-    }
     recordRemoteNodeInfo({
       nodeId: nodeSession.nodeId,
       connId: nodeSession.connId,

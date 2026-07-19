@@ -11,7 +11,7 @@ import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patc
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
-import { testing as sessionsResolutionTesting } from "./sessions-resolution.js";
+import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
 describe("sessions tool", () => {
@@ -367,6 +367,23 @@ describe("sessions tool", () => {
       tool.execute("set-invalid", { action: "group_set", names: ["Now", null] }),
     ).rejects.toThrow("names[1] required");
     expect(callGateway).toHaveBeenCalledTimes(4);
+  });
+
+  it("patches and clears a sidebar icon", async () => {
+    const callGateway = vi.fn(async () => ({ ok: true }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    await tool.execute("patch-icon", { action: "patch", icon: "  name:lobster  " });
+    await tool.execute("clear-icon", { action: "patch", icon: "" });
+
+    expect(callGateway.mock.calls).toEqual([
+      ["sessions.patch", { key: "agent:main:main", icon: "name:lobster" }],
+      ["sessions.patch", { key: "agent:main:main", icon: null }],
+    ]);
   });
 
   it("rejects an empty patch", async () => {

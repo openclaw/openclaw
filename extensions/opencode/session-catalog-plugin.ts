@@ -16,7 +16,6 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   OPENCODE_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
   OPENCODE_NODE_INVOKE_TIMEOUT_MS as NODE_TIMEOUT_MS,
@@ -32,21 +31,13 @@ import {
   openOpenCodeCatalogTerminal,
 } from "./session-catalog-terminal.js";
 import {
+  isExactOpenCodeSessionCursor,
   listLocalOpenCodeSessionPage,
-  optionalOpenCodeString,
   readLocalOpenCodeTranscriptPage,
   type OpenCodeSessionPage,
 } from "./session-catalog.js";
 
-export {
-  OPENCODE_SESSIONS_LIST_COMMAND,
-  OPENCODE_SESSION_READ_COMMAND,
-  OPENCODE_TERMINAL_RESUME_COMMAND,
-} from "./session-catalog-shared.js";
-
 const MAX_HOSTS = 100;
-const MAX_CURSOR_LENGTH = 128;
-const MAX_SEARCH_LENGTH = 500;
 const TRANSCRIPT_ITEM_TYPES = new Set([
   "userMessage",
   "agentMessage",
@@ -149,7 +140,7 @@ function fullConfigCatalogEnabled(config: unknown): boolean {
   return entry.config.sessionCatalog.enabled !== false;
 }
 
-export function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
+function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
   return (
     !isRecord(pluginConfig) ||
     !isRecord(pluginConfig.sessionCatalog) ||
@@ -157,7 +148,7 @@ export function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean 
   );
 }
 
-export function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
   const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
     fullConfigCatalogEnabled(config) && executableOnPath("opencode", env);
   return [
@@ -181,7 +172,7 @@ export function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostC
   ];
 }
 
-export function createOpenCodeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
+function createOpenCodeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
     {
       commands: [
@@ -239,15 +230,17 @@ async function listOpenCodeNodeHost(
     };
   }
   try {
+    const cursor = query.cursors?.[hostId];
+    if (cursor !== undefined && !isExactOpenCodeSessionCursor(cursor)) {
+      throw new Error("cursor is invalid");
+    }
     const raw = await runtime.nodes.invoke({
       nodeId: node.nodeId,
       command: OPENCODE_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim()
-          ? { searchTerm: truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) }
-          : {}),
-        ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
       scopes: ["operator.write"],
@@ -283,11 +276,11 @@ function parseNodeSessionPage(value: unknown): OpenCodeSessionPage {
     throw new Error("OpenCode node returned an invalid session page");
   }
   const sessions = value.sessions;
-  const nextCursor = optionalOpenCodeString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactOpenCodeSessionCursor(nextCursor)) {
     throw new Error("OpenCode node returned an invalid cursor");
   }
-  return { sessions, ...(nextCursor ? { nextCursor } : {}) };
+  return { sessions, ...(nextCursor !== undefined ? { nextCursor } : {}) };
 }
 
 function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCatalogReadResult {
@@ -300,15 +293,15 @@ function parseNodeTranscriptPage(value: unknown, threadId: string): SessionsCata
   ) {
     throw new Error("OpenCode node returned an invalid transcript page");
   }
-  const nextCursor = optionalOpenCodeString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (value.nextCursor !== undefined && !nextCursor) {
+  const nextCursor = value.nextCursor;
+  if (nextCursor !== undefined && !isExactOpenCodeSessionCursor(nextCursor)) {
     throw new Error("OpenCode node returned an invalid cursor");
   }
   return {
     hostId: LOCAL_HOST_ID,
     threadId,
     items: value.items,
-    ...(nextCursor ? { nextCursor } : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
 
@@ -317,9 +310,6 @@ async function listOpenCodeHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search
-    ? truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) || undefined
-    : undefined;
   const hosts: SessionCatalogHost[] = [];
   if (
     (!requested || requested.has(LOCAL_HOST_ID)) &&
@@ -337,7 +327,7 @@ async function listOpenCodeHosts(
         connected: true,
         ...(await listLocalOpenCodeSessionPage({
           limit: query.limitPerHost,
-          ...(searchTerm ? { searchTerm } : {}),
+          ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) => setTerminalCapability(page, true))),
       });
@@ -376,11 +366,15 @@ async function readOpenCodeTranscript(
   runtime: PluginRuntime,
   request: Parameters<SessionCatalogProvider["read"]>[0],
 ): Promise<SessionsCatalogReadResult> {
+  const cursor = request.cursor;
+  if (cursor !== undefined && !isExactOpenCodeSessionCursor(cursor)) {
+    throw new Error("cursor is invalid");
+  }
   if (request.hostId === LOCAL_HOST_ID) {
     return await readLocalOpenCodeTranscriptPage({
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     });
   }
   if (!request.hostId.startsWith("node:")) {
@@ -402,7 +396,7 @@ async function readOpenCodeTranscript(
     params: {
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
-      ...(request.cursor ? { cursor: request.cursor } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     },
     timeoutMs: NODE_TIMEOUT_MS,
     scopes: ["operator.write"],
