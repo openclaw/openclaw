@@ -500,16 +500,16 @@ function stripHistoricalInboundMetadataFromUserMessages(
     // keeps such messages byte-stable across current↔historical (the envelope is
     // present in both forms) and avoids double-stamping.
     const transformText = (raw: string): string => {
-      raw = injectMediaText && !raw.trim() ? MEDIA_ONLY_USER_TEXT : raw;
-      const { body, envelope } = splitLeadingTimestampEnvelope(raw);
-      if (envelope || raw.includes(BOUNDARY_CRON_TIME_MARKER)) {
+      const sourceText = injectMediaText && !raw.trim() ? MEDIA_ONLY_USER_TEXT : raw;
+      const { body, envelope } = splitLeadingTimestampEnvelope(sourceText);
+      if (envelope || sourceText.includes(BOUNDARY_CRON_TIME_MARKER)) {
         if (isActive) {
-          return raw;
+          return sourceText;
         }
         // Strip metadata from the body but re-attach the original envelope.
         return `${envelope}${stripInboundMetadata(body)}`;
       }
-      const stripped = isActive ? raw : stripInboundMetadata(raw);
+      const stripped = isActive ? sourceText : stripInboundMetadata(sourceText);
       return stampUserTextWithMessageTimestamp(
         stripped,
         messageTimestamp,

@@ -249,11 +249,11 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const [normalizedPersisted] = normalizeMessagesForLlmBoundary(
       [persisted] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
-    );
+    ) as unknown as Array<{ content?: unknown }>;
     const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
       [legacy] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
-    );
+    ) as unknown as Array<{ content?: unknown }>;
     const expectedText = `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${MEDIA_ONLY_USER_TEXT}`;
 
     expect(normalizedPersisted).toEqual(normalizedLegacy);
@@ -268,7 +268,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
         },
       ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
-    );
+    ) as unknown as Array<{ content?: unknown }>;
     expect(normalizedArray?.content).toEqual([{ type: "text", text: expectedText }, image]);
   });
 
