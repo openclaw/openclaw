@@ -19,6 +19,7 @@ import {
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -1173,7 +1174,7 @@ describe("installed plugin index", () => {
     }
     fs.closeSync(fd);
     const expectedHash = fullHash.digest("hex");
-    const diagnostics = [];
+    const diagnostics: PluginDiagnostic[] = [];
     const hash = safeHashFile({ filePath, pluginId: "test-plugin", diagnostics, required: true });
     expect(hash).toBe(expectedHash);
     expect(diagnostics).toStrictEqual([]);
