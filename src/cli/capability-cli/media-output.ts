@@ -51,13 +51,55 @@ export async function writeOutputAsset(params: {
   };
 }
 
+// Cap individual CLI input files at 100 MiB — media and document files
+// passed via --file to openclaw capability commands.
+const MAX_CLI_INPUT_FILE_BYTES = 100 * 1024 * 1024;
+// Aggregate budget for a single --file invocation to prevent OOM when
+// multiple permitted inputs are provided together.
+const MAX_TOTAL_CLI_INPUT_FILE_BYTES = 500 * 1024 * 1024;
+
+/** Read a user-supplied input file with a size pre-check to prevent OOM. */
+async function readCliInputFileSafely(
+  filePath: string,
+  budget: { remaining: number },
+): Promise<Buffer> {
+  const resolvedPath = path.resolve(filePath);
+  const handle = await fs.open(resolvedPath, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${resolvedPath}`);
+    }
+    if (stat.size > MAX_CLI_INPUT_FILE_BYTES) {
+      throw new Error(
+        `file too large: ${resolvedPath} is ${stat.size} bytes (max ${MAX_CLI_INPUT_FILE_BYTES})`,
+      );
+    }
+    if (stat.size > budget.remaining) {
+      throw new Error(
+        `file too large: ${resolvedPath} is ${stat.size} bytes (max remaining total budget ${budget.remaining})`,
+      );
+    }
+    budget.remaining -= stat.size;
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readInputFiles(
   files: string[],
 ): Promise<Array<{ path: string; buffer: Buffer }>> {
-  return await Promise.all(
-    files.map(async (filePath) => ({
-      path: path.resolve(filePath),
-      buffer: await fs.readFile(path.resolve(filePath)),
-    })),
-  );
+  // Process files sequentially with an aggregate byte budget so one command
+  // invocation cannot allocate more than MAX_TOTAL_CLI_INPUT_FILE_BYTES.
+  const budget = { remaining: MAX_TOTAL_CLI_INPUT_FILE_BYTES };
+  const result: Array<{ path: string; buffer: Buffer }> = [];
+  for (const filePath of files) {
+    const resolvedPath = path.resolve(filePath);
+    result.push({
+      path: resolvedPath,
+      buffer: await readCliInputFileSafely(resolvedPath, budget),
+    });
+  }
+  return result;
 }
