@@ -1,6 +1,9 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import {
+  addSafeTimeoutDelayGraceMs,
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+} from "../../packages/gateway-client/src/timeouts.js";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
@@ -259,6 +262,7 @@ function runStandaloneMcpAppHost(config: {
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
+    operationTimeoutMs: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -270,6 +274,7 @@ function runStandaloneMcpAppHost(config: {
   let requestId = 0;
   let sandboxOrigin: string | undefined;
   let teardownId: JsonRpcId | undefined;
+  let operationTimeoutMs = config.requestTimeoutMs;
   const pendingRequests = new Set<AbortController>();
 
   const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -326,13 +331,14 @@ function runStandaloneMcpAppHost(config: {
   const withViewResponse = async <T>(
     init: RequestInit,
     consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    timeoutMs = config.requestTimeoutMs,
   ): Promise<T> => {
     // Standalone HTTP bypasses GatewayBrowserClient, so mirror its request
     // watchdog through body consumption and retain page-lifecycle ownership.
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(new Error("MCP App request timed out")),
-      config.requestTimeoutMs,
+      timeoutMs,
     );
     pendingRequests.add(controller);
     try {
@@ -369,6 +375,7 @@ function runStandaloneMcpAppHost(config: {
           return undefined;
         })) as { ok?: boolean; result?: unknown; error?: string } | undefined,
       }),
+      operationTimeoutMs,
     );
     if (response.status === 401) {
       fail("MCP App ticket was rejected");
@@ -543,6 +550,7 @@ function runStandaloneMcpAppHost(config: {
   )
     .then((view) => {
       payload = view;
+      operationTimeoutMs = view.operationTimeoutMs;
       installOperationHandlers(view);
       const sandboxUrl = resolveSandboxUrl(view);
       sandboxOrigin = sandboxUrl.origin;
@@ -701,6 +709,15 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
+      const serverRequestTimeoutMs =
+        runtime.peekCatalog()?.servers[view.serverName]?.requestTimeoutMs ??
+        DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
+      // The browser watchdog also covers HTTP and body parsing, so it must
+      // outlive the inner MCP deadline rather than race it at the same instant.
+      const operationTimeoutMs = addSafeTimeoutDelayGraceMs(
+        serverRequestTimeoutMs,
+        DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+      );
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -718,6 +735,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
+              operationTimeoutMs,
             }),
       );
       return true;
