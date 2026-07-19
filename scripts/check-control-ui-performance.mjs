@@ -13,9 +13,11 @@ export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
   startupJsGzipBytes: 310 * KIB,
-  startupCssGzipBytes: 38 * KIB,
+  // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
+  // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
+  startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 42 * KIB,
+  largestCssGzipBytes: 45 * KIB,
 });
 
 function controlUiAssetPathFromUrl(value) {

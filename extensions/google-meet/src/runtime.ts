@@ -207,7 +207,7 @@ export class GoogleMeetRuntime {
       refreshBrowserHealth: async (session, options) =>
         await this.#refreshBrowserHealth(session, options),
       refreshStatus: async (session) => await this.#refreshStatus(session),
-      refreshReusableSession: async (session) => {
+      refreshReusableSession: async (session, _request, _resolved) => {
         if (session.transport === "twilio") {
           await this.#refreshTwilioVoiceCallStatus(session);
         }

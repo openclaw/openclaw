@@ -85,6 +85,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
@@ -583,6 +584,7 @@ fun ChatScreen(
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onResolveQuestion = viewModel::resolveChatQuestion,
+      onSkipQuestion = viewModel::skipChatQuestion,
       onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
       onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
       speechState = messageSpeechState,
@@ -1044,6 +1046,7 @@ private fun ChatMessageList(
   onRetryOutbox: (String) -> Unit,
   onDeleteOutbox: (String) -> Unit,
   onResolveQuestion: (String, Map<String, List<String>>) -> Unit,
+  onSkipQuestion: (String) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
@@ -1117,7 +1120,7 @@ private fun ChatMessageList(
             )
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
           is ChatTimelineItem.QuestionPrompt ->
-            ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion)
+            ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
           is ChatTimelineItem.StreamingAssistant ->
             ChatBubble(
               messageId = null,
@@ -1138,7 +1141,7 @@ private fun ChatMessageList(
 
     if (timeline.items.isEmpty()) {
       if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
-        ClawLoadingState(title = nativeString("Loading session"), modifier = Modifier.align(Alignment.Center))
+        ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
       } else {
         EmptyChatHint(
           healthOk = healthOk,
@@ -1150,22 +1153,32 @@ private fun ChatMessageList(
     }
 
     if (readerScroll.showJumpToLatest) {
+      // Compact icon-only affordance; parity with the iOS/macOS chat reader circle.
+      // The clickable outer surface stays unsized so Material's 48dp minimum
+      // interactive size applies; the 36dp inner circle is visual only.
       Surface(
         onClick = readerScroll.jumpToLatest,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
-        shape = RoundedCornerShape(999.dp),
-        color = ClawTheme.colors.surfaceRaised,
-        contentColor = ClawTheme.colors.text,
-        shadowElevation = 6.dp,
-        border = BorderStroke(1.dp, ClawTheme.colors.border),
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
+        shape = CircleShape,
+        color = Color.Transparent,
       ) {
-        Row(
-          modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
-          Text(text = nativeString("Jump to latest"), style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold))
+        Box(contentAlignment = Alignment.Center) {
+          Surface(
+            modifier = Modifier.size(36.dp),
+            shape = CircleShape,
+            color = ClawTheme.colors.surfaceRaised,
+            contentColor = ClawTheme.colors.text,
+            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, ClawTheme.colors.border),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.ArrowDownward,
+                contentDescription = nativeString("Jump to latest"),
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          }
         }
       }
     }
@@ -1283,8 +1296,8 @@ internal val starterPrompts =
     StarterPrompt(
       mark = "1",
       title = nativeText("Catch me up"),
-      subtitle = nativeText("Summarize recent sessions and next steps."),
-      message = nativeText("Catch me up on my recent OpenClaw sessions and suggest next steps."),
+      subtitle = nativeText("Summarize recent threads and next steps."),
+      message = nativeText("Catch me up on my recent OpenClaw threads and suggest next steps."),
     ),
     StarterPrompt(
       mark = "2",

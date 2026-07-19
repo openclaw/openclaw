@@ -574,6 +574,7 @@ export async function executeSetDefaultModel(
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
+          auditOrigin: "system-agent",
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectRoute(sourceConfig);
             if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {

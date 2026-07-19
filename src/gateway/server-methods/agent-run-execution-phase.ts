@@ -187,6 +187,9 @@ export function startAgentRunExecution(params: {
                 text: params.effectiveTranscriptInputText,
                 timestamp: Date.now(),
                 idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
+                ...(params.client?.authenticatedUserId
+                  ? { sender: { id: params.client.authenticatedUserId } }
+                  : {}),
                 ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
               },
               target: () => {

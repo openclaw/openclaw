@@ -2,17 +2,22 @@ import { consume } from "@lit/context";
 import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { icons } from "../../components/icons.ts";
 import "../../components/option-card.ts";
-import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
+import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/chat/grouped.css";
+import "../../styles/chat/layout.css";
+import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
+import { renderChatAvatar } from "../chat/chat-avatar.ts";
+import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { classifyCustodianEventNudge, type CustodianEventNudge } from "./event-nudge.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
@@ -22,8 +27,21 @@ type CustodianMessage = {
   id: number;
   role: "assistant" | "user";
   text: string;
+  at: number;
   question: CustodianStructuredQuestion | null;
 };
+
+function toMessageGroup(message: CustodianMessage): MessageGroup {
+  const key = `msg-${message.id}`;
+  return {
+    kind: "group",
+    key,
+    role: message.role,
+    messages: [{ message: { role: message.role, content: message.text }, key }],
+    timestamp: message.at,
+    isStreaming: false,
+  };
+}
 
 function createSessionId(): string {
   if (typeof crypto.randomUUID === "function") {
@@ -193,6 +211,7 @@ export class CustodianPage extends OpenClawLightDomElement {
         id: this.nextMessageId++,
         role: "assistant",
         text: reply,
+        at: Date.now(),
         question,
       },
     ];
@@ -259,7 +278,13 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.retireQuestions();
     this.messages = [
       ...this.messages,
-      { id: this.nextMessageId++, role: "user", text: displayText, question: null },
+      {
+        id: this.nextMessageId++,
+        role: "user",
+        text: displayText,
+        at: Date.now(),
+        question: null,
+      },
     ];
     this.input = "";
     void this.requestReply(client, {
@@ -399,16 +424,15 @@ export class CustodianPage extends OpenClawLightDomElement {
             const showQuestion =
               message.question !== null && !this.dismissedQuestions.has(questionKey);
             return html`
-              <article class=${`custodian__message custodian__message--${message.role}`}>
-                ${message.text
-                  ? html`<div class="custodian__message-text chat-text">
-                      ${message.role === "assistant"
-                        ? unsafeHTML(toSanitizedMarkdownHtml(message.text))
-                        : message.text}
-                    </div>`
-                  : nothing}
-                ${showQuestion
-                  ? html`<openclaw-option-card
+              ${renderMessageGroup(toMessageGroup(message), {
+                showReasoning: false,
+                showToolCalls: false,
+                assistantName: t("custodian.title"),
+                assistantAvatar: "OC",
+              })}
+              ${showQuestion
+                ? html`<div class="custodian__option-card">
+                    <openclaw-option-card
                       .props=${{
                         header: message.question!.header,
                         question: message.question!.question,
@@ -425,15 +449,18 @@ export class CustodianPage extends OpenClawLightDomElement {
                         onSelect: (label: string) => this.answerQuestion(message, label),
                         onSkip: () => this.dismissQuestion(message),
                       }}
-                    ></openclaw-option-card>`
-                  : nothing}
-              </article>
+                    ></openclaw-option-card>
+                  </div>`
+                : nothing}
             `;
           })}
           ${this.sending
-            ? html`<div class="custodian__thinking" role="status">
-                <span></span><span></span><span></span>
-                <span class="sr-only">${t("custodian.thinking")}</span>
+            ? html`<div class="chat-group assistant custodian__thinking-row" role="status">
+                ${renderChatAvatar("assistant", { name: t("custodian.title"), avatar: "OC" })}
+                <div class="chat-group-messages custodian__thinking">
+                  <span></span><span></span><span></span>
+                  <span class="sr-only">${t("custodian.thinking")}</span>
+                </div>
               </div>`
             : nothing}
           ${this.error
@@ -448,40 +475,51 @@ export class CustodianPage extends OpenClawLightDomElement {
             : nothing}
         </div>
 
-        <div class="custodian__composer">
-          ${this.sensitive
-            ? html`<input
-                type="password"
-                .value=${this.input}
-                autocomplete="off"
-                placeholder=${t("custodian.sensitivePlaceholder")}
-                aria-label=${t("custodian.sensitivePlaceholder")}
-                ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
-                @input=${(event: Event) => (this.input = (event.target as HTMLInputElement).value)}
-                @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
-              />`
-            : html`<textarea
-                rows="1"
-                .value=${this.input}
-                autocomplete="on"
-                placeholder=${t("custodian.placeholder")}
-                aria-label=${t("custodian.placeholder")}
-                ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
-                @input=${(event: Event) =>
-                  (this.input = (event.target as HTMLTextAreaElement).value)}
-                @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
-              ></textarea>`}
-          <button
-            class="btn primary"
-            type="button"
-            ?disabled=${!this.input.trim() ||
-            !this.activeClient ||
-            !this.chatAvailable ||
-            this.sending}
-            @click=${() => this.send()}
-          >
-            ${t("custodian.send")}
-          </button>
+        <div class="agent-chat__composer-shell">
+          <div class="agent-chat__input">
+            <div class="agent-chat__composer-input-row">
+              <div class="agent-chat__composer-combobox">
+                ${this.sensitive
+                  ? html`<input
+                      type="password"
+                      .value=${this.input}
+                      autocomplete="off"
+                      placeholder=${t("custodian.sensitivePlaceholder")}
+                      aria-label=${t("custodian.sensitivePlaceholder")}
+                      ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
+                      @input=${(event: Event) =>
+                        (this.input = (event.target as HTMLInputElement).value)}
+                      @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
+                    />`
+                  : html`<textarea
+                      rows="1"
+                      .value=${this.input}
+                      autocomplete="on"
+                      placeholder=${t("custodian.placeholder")}
+                      aria-label=${t("custodian.placeholder")}
+                      ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
+                      @input=${(event: Event) =>
+                        (this.input = (event.target as HTMLTextAreaElement).value)}
+                      @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
+                    ></textarea>`}
+              </div>
+              <div class="agent-chat__composer-actions">
+                <button
+                  class="chat-send-btn"
+                  type="button"
+                  aria-label=${t("custodian.send")}
+                  ?disabled=${!this.input.trim() ||
+                  !this.activeClient ||
+                  !this.chatAvailable ||
+                  this.sending}
+                  @click=${() => this.send()}
+                >
+                  ${icons.arrowUp}
+                  <span class="agent-chat__control-label">${t("custodian.send")}</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     `;
