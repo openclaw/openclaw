@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
     readClawStatus: vi.fn(),
     buildClawRemovePlan: vi.fn(),
     applyClawRemovePlan: vi.fn(),
+    exportClawAgent: vi.fn(),
   };
 });
 
@@ -58,6 +59,11 @@ vi.mock("../claws/lifecycle-state.js", async () => ({
   readClawStatus: mocks.readClawStatus,
   buildClawRemovePlan: mocks.buildClawRemovePlan,
   applyClawRemovePlan: mocks.applyClawRemovePlan,
+}));
+
+vi.mock("../claws/export.js", async () => ({
+  ...(await vi.importActual<typeof import("../claws/export.js")>("../claws/export.js")),
+  exportClawAgent: mocks.exportClawAgent,
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
@@ -185,6 +191,22 @@ describe("claws cli", () => {
       packages: [],
       packageRefsReleased: 1,
     });
+    mocks.exportClawAgent.mockReset();
+    mocks.exportClawAgent.mockResolvedValue({
+      schemaVersion: "openclaw.clawExportResult.v1",
+      stability: "experimental",
+      agentId: "demo-agent",
+      outputDirectory: "/tmp/exported",
+      manifest: {
+        schemaVersion: 1,
+        agent: { id: "demo-agent" },
+        workspace: { bootstrapFiles: {}, files: [] },
+        packages: [],
+        mcpServers: {},
+        cronJobs: [],
+      },
+      filesWritten: ["package.json", "openclaw.claw.json"],
+    });
   });
 
   afterEach(() => {
@@ -210,6 +232,7 @@ describe("claws cli", () => {
       "add",
       "status",
       "remove",
+      "export",
     ]);
   });
 
@@ -656,6 +679,19 @@ describe("claws cli", () => {
     expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       error: { code: "consent_required" },
+    });
+  });
+
+  it("exports one installed agent to a new package directory", async () => {
+    await runCli(["claws", "export", "demo-agent", "--out", "/tmp/exported", "--json"]);
+
+    expect(mocks.exportClawAgent).toHaveBeenCalledWith("demo-agent", "/tmp/exported", {
+      config: {},
+    });
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawExportResult.v1",
+      stability: "experimental",
+      agentId: "demo-agent",
     });
   });
 });
