@@ -26,7 +26,9 @@ const tempDirs: string[] = [];
 type ExecOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  killSignal?: string;
   stdio?: unknown;
+  timeout?: number;
 };
 
 afterEach(() => {
@@ -99,7 +101,12 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
       process.execPath,
       ["scripts/check-plugin-npm-runtime-builds.mjs", "--package", "extensions/demo-plugin"],
     ]);
-    expect(callOptions(0)).toMatchObject({ cwd: repoDir, stdio: "inherit" });
+    expect(callOptions(0)).toMatchObject({
+      cwd: repoDir,
+      killSignal: "SIGKILL",
+      stdio: "inherit",
+      timeout: 600_000,
+    });
 
     expect(execFileSyncMock.mock.calls[1]?.slice(0, 2)).toEqual([
       "bash",
@@ -108,7 +115,9 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
     expect(callOptions(1)).toMatchObject({
       cwd: repoDir,
       env: { OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0" },
+      killSignal: "SIGKILL",
       stdio: ["inherit", "ignore", "inherit"],
+      timeout: 600_000,
     });
 
     expect(execFileSyncMock.mock.calls[2]?.slice(0, 2)).toEqual([
@@ -118,8 +127,33 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
     expect(callOptions(2)).toMatchObject({
       cwd: repoDir,
       env: { OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0" },
+      killSignal: "SIGKILL",
       stdio: ["inherit", "ignore", "inherit"],
+      timeout: 600_000,
     });
     expect(callOptions(2).env?.OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR).toContain("clawhub-0");
+  });
+
+  it("identifies the stalled release stage without exposing child details", () => {
+    const repoDir = createDualPublishPluginRepo();
+    execFileSyncMock
+      .mockImplementationOnce(() => "")
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error("spawnSync bash ETIMEDOUT secret-marker"), {
+          code: "ETIMEDOUT",
+        });
+      });
+
+    let thrown: unknown;
+    try {
+      runPluginReleasePretagPackCheck(repoDir);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: "ETIMEDOUT" });
+    expect((thrown as Error).message).toBe(
+      "npm pack for @openclaw/demo-plugin timed out after 600000ms: bash scripts/plugin-npm-publish.sh --pack-dry-run extensions/demo-plugin",
+    );
+    expect((thrown as Error).message).not.toContain("secret-marker");
   });
 });
