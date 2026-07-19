@@ -330,27 +330,6 @@ async function runPreparedChannelTurnCoreInTrace<
   };
 }
 
-type PreparedChannelTurnWithBotLoopProtection<TDispatchResult> =
-  PreparedChannelTurn<TDispatchResult> & {
-    botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
-  };
-
-type PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
-  PreparedChannelTurn<TDispatchResult>,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
-  params: PreparedChannelTurnWithBotLoopProtection<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
-function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
-  params: PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult>,
-): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
-function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
 async function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {

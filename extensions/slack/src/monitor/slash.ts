@@ -791,9 +791,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          // response_url has one shared five-call budget. Plan the whole turn
-          // before its first post so a later payload cannot strand a partial reply.
-          deliver: async (payload) => {
+          // Blocks are live progress and may contain input needed before dispatch can finish.
+          // Buffer the remaining turn so its response_url calls can still be planned together.
+          deliver: async (payload, info) => {
+            if (info.kind === "block") {
+              await deliverSlashPayloads([payload]);
+              return;
+            }
             pendingSlashReplies.push(payload);
           },
           onError: (err, info) => {

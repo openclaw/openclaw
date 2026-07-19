@@ -22,16 +22,22 @@ import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/lo
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
-import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
+import type { ChannelTurnResult } from "./kernel.js";
 import {
   dispatchAssembledChannelTurn,
+  dispatchChannelInboundTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
   runPreparedInboundReply,
   runChannelInboundEvent,
 } from "./kernel.js";
-import type { ChannelTurnResolved, PreparedChannelTurn } from "./types.js";
+import type {
+  AssembledChannelTurn,
+  ChannelTurnPlan,
+  ChannelTurnResolved,
+  PreparedChannelTurn,
+} from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
@@ -222,20 +228,26 @@ describe("channel turn kernel", () => {
     resetLogger();
   });
 
-  it("types optionally guarded prepared turns as drop-capable", () => {
+  it("types every inbound turn entry point as drop-capable", () => {
     type DispatchResult = { queuedFinal: true };
     const guarded = {} as PreparedChannelTurn<DispatchResult>;
     const unguarded = {} as Omit<PreparedChannelTurn<DispatchResult>, "botLoopProtection"> & {
       botLoopProtection?: undefined;
     };
+    const assembled = {} as AssembledChannelTurn;
+    const plan = {} as ChannelTurnPlan;
 
     if (Date.now() < 0) {
       expectTypeOf(runPreparedInboundReply(guarded)).toEqualTypeOf<
         Promise<ChannelTurnResult<DispatchResult>>
       >();
       expectTypeOf(runPreparedInboundReply(unguarded)).toEqualTypeOf<
-        Promise<DispatchedChannelTurnResult<DispatchResult>>
+        Promise<ChannelTurnResult<DispatchResult>>
       >();
+      expectTypeOf(dispatchAssembledChannelTurn(assembled)).toEqualTypeOf<
+        Promise<ChannelTurnResult>
+      >();
+      expectTypeOf(dispatchChannelInboundTurn(plan)).toEqualTypeOf<Promise<ChannelTurnResult>>();
     }
   });
 

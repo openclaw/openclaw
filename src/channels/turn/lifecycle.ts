@@ -15,7 +15,6 @@ import type {
   ChannelEventDeliveryAdapter,
   ChannelTurnResolved,
   ChannelTurnResult,
-  DispatchedChannelTurnResult,
   PreparedChannelTurn,
 } from "./types.js";
 
@@ -130,26 +129,6 @@ function createObserveOnlyDeliveryAdapter(): ChannelEventDeliveryAdapter {
   };
 }
 
-type AssembledChannelTurnWithBotLoopProtection = AssembledChannelTurn & {
-  botLoopProtection: NonNullable<AssembledChannelTurn["botLoopProtection"]>;
-};
-
-type AssembledChannelTurnWithoutBotLoopProtection = Omit<
-  AssembledChannelTurn,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithBotLoopProtection,
-): Promise<ChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurnWithoutBotLoopProtection,
-): Promise<DispatchedChannelTurnResult>;
-export function dispatchAssembledChannelTurn(
-  params: AssembledChannelTurn,
-): Promise<ChannelTurnResult>;
 export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<ChannelTurnResult> {
