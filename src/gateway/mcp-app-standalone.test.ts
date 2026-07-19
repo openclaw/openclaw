@@ -37,6 +37,7 @@ function issueTicket(params: Parameters<typeof createMcpAppStandaloneTicket>[0])
 
 const nowMs = 1_800_000_000_000;
 const secret = Buffer.alloc(32, 7);
+const mcpRequestTimeoutMs = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 2;
 const releaseRuntimeLease = vi.fn();
 const runtime = {
   sessionId: "runtime-session",
@@ -50,6 +51,10 @@ const runtime = {
       { serverName: "demo", toolName: "model-only", uiVisibility: ["model"] },
       { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
     ],
+  })),
+  peekCatalog: vi.fn(() => ({
+    servers: { demo: { requestTimeoutMs: mcpRequestTimeoutMs } },
+    tools: [],
   })),
   callTool: vi.fn(async (serverName: string, toolName: string) => ({
     content: [{ type: "text", text: `${serverName}:${toolName}` }],
@@ -188,6 +193,90 @@ async function launchStandaloneHostWithStalledFetch(stallPhase: "fetch" | "body"
     getRequestSignal: () => requestSignal,
     replaceChildren,
   };
+}
+
+async function launchStandaloneHostWithStalledOperation(operationTimeoutMs: number) {
+  const shell = await request({ url: "/__openclaw__/mcp-app" });
+  const body = String(shell.end.mock.calls[0]?.[0]);
+  const script = body.match(/<script>([\s\S]*)<\/script>/u)?.[1];
+  if (!script) {
+    throw new Error("standalone host script missing");
+  }
+  const listeners = new Map<string, Array<(event?: unknown) => void>>();
+  const frameWindow = { postMessage: vi.fn() };
+  let requestSignal: AbortSignal | undefined;
+  const requestAbortError = () =>
+    requestSignal?.reason instanceof Error ? requestSignal.reason : new Error("request aborted");
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sandboxUrl: "/mcp-app-sandbox",
+        sandboxPort: 18_790,
+        html: "<!doctype html><p>private fixture</p>",
+        toolInput: {},
+        toolResult: {},
+        serverTools: true,
+        operationTimeoutMs,
+      }),
+    } as Response)
+    .mockImplementationOnce((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(requestAbortError()), { once: true });
+      });
+    });
+  runInNewContext(script, {
+    AbortController,
+    URL,
+    addEventListener: (type: string, listener: (event?: unknown) => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+    clearTimeout,
+    document: {
+      createElement: () => ({
+        className: "",
+        contentWindow: frameWindow,
+        referrerPolicy: "",
+        remove: vi.fn(),
+        setAttribute: vi.fn(),
+        src: "",
+        style: { height: "" },
+        textContent: "",
+        title: "",
+      }),
+      getElementById: () => ({ replaceChildren: vi.fn() }),
+    },
+    fetch,
+    innerWidth: 1024,
+    location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
+    matchMedia: () => ({ matches: false }),
+    navigator: { language: "en-US" },
+    setTimeout,
+  });
+  for (let index = 0; index < 12; index += 1) {
+    await Promise.resolve();
+  }
+  const emitMessage = (data: unknown) => {
+    for (const listener of listeners.get("message") ?? []) {
+      listener({ data, origin: "http://127.0.0.1:18790", source: frameWindow });
+    }
+  };
+  emitMessage({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "ui/initialize",
+    params: {
+      protocolVersion: "2026-01-26",
+      appInfo: { name: "test", version: "1.0.0" },
+      appCapabilities: {},
+    },
+  });
+  emitMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+  emitMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "slow" } });
+  return { fetch, getRequestSignal: () => requestSignal };
 }
 
 describe("MCP App standalone host", () => {
@@ -331,6 +420,22 @@ describe("MCP App standalone host", () => {
     expect(host.getRequestSignal()?.aborted).toBe(true);
   });
 
+  it("keeps slow standalone operations within the MCP deadline alive past the gateway default", async () => {
+    vi.useFakeTimers();
+    try {
+      const operationTimeoutMs = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 3;
+      const host = await launchStandaloneHostWithStalledOperation(operationTimeoutMs);
+      expect(host.fetch).toHaveBeenCalledTimes(2);
+      expect(host.getRequestSignal()).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(operationTimeoutMs - DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+      expect(host.getRequestSignal()?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns capabilities only for handlers installed on the live view", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
     const route = "/__openclaw__/mcp-app/view";
@@ -343,6 +448,7 @@ describe("MCP App standalone host", () => {
       sandboxPort: 18_790,
       serverTools: true,
       serverResources: true,
+      operationTimeoutMs: mcpRequestTimeoutMs + DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
     });
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
