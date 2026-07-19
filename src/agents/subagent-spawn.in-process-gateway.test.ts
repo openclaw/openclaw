@@ -13,7 +13,10 @@ import type {
   GatewayRequestOptions,
 } from "../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
-import { clearFallbackGatewayContext } from "../gateway/server-plugins.js";
+import {
+  clearFallbackGatewayContext,
+  type dispatchGatewayMethodInProcess,
+} from "../gateway/server-plugins.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -139,7 +142,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       hostResponded: boolean;
     }> = [];
     subagentSpawnTesting.setDepsForTest({
-      dispatchGatewayMethodInProcess: async (method, params, options) => {
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        params: Record<string, unknown>,
+        options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>,
+      ) => {
         dispatchOptions.push({ method, forceSyntheticClient: options?.forceSyntheticClient });
 
         const externalRespond = vi.fn();
@@ -170,7 +177,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         return {
           runId: params.idempotencyKey as string,
           status: "accepted",
-        };
+        } as T;
       },
     });
     const result = await withPluginRuntimeGatewayRequestScope(
