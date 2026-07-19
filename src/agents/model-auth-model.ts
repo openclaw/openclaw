@@ -33,7 +33,10 @@ import {
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import {
+  resolveSyntheticLocalProviderAuth,
+  type RuntimeProviderAuthLookup,
+} from "./model-auth-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 import {
   attachModelProviderRequestTransport,
@@ -218,6 +221,7 @@ export async function getApiKeyForModel(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
   allowPluginSyntheticAuth?: boolean;
+  runtimeLookup?: RuntimeProviderAuthLookup;
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
@@ -233,6 +237,7 @@ export async function getApiKeyForModel(params: {
     credentialPrecedence: params.credentialPrecedence,
     allowAuthProfileFallback: params.allowAuthProfileFallback,
     allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
+    runtimeLookup: params.runtimeLookup,
     skipSetupProviderFallback: params.skipSetupProviderFallback,
     modelId: params.model.id,
     modelApi: params.model.api,

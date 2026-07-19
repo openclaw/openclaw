@@ -228,6 +228,11 @@ function shouldResolvePluginSyntheticAuth(params: {
   modelApi?: string;
   runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
+  // Prepared lookups that failed to finish discovery must fail closed so gateway
+  // paths stay on env/config auth instead of paying for another plugin resolve.
+  if (params.runtimeLookup?.syntheticAuthProviderRefsComplete === false) {
+    return false;
+  }
   const syntheticAuthProviderRefs = params.runtimeLookup?.syntheticAuthProviderRefs;
   if (!syntheticAuthProviderRefs) {
     return true;
@@ -239,40 +244,6 @@ function shouldResolvePluginSyntheticAuth(params: {
     return false;
   }
   return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
-}
-
-/**
- * True when a provider is confirmed to expose a plugin-owned synthetic-auth hook
- * (e.g. an anthropic-vertex GCP-ADC plugin). Gateway-isolated callers use this to
- * decide whether to keep plugin synthetic auth reachable while stored-profile
- * fallback is off, without paying for plugin discovery on providers that have no
- * such hook. Fails closed: when the plugin ref state is not authoritatively
- * complete, returns false so the resolver stays on its env/config path (matching
- * the pre-decoupling behavior for non-plugin providers like openai).
- */
-export function providerHasPluginSyntheticAuthHook(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  modelApi?: string;
-}): boolean {
-  const refState = resolveRuntimeSyntheticAuthProviderRefState({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-  });
-  if (!refState.complete || refState.refs.length === 0) {
-    return false;
-  }
-  const eligibleRefs = new Set(
-    normalizeUniqueStringEntries(refState.refs.map((ref) => normalizeProviderId(ref))),
-  );
-  return listProviderSyntheticAuthRefs({
-    cfg: params.cfg,
-    provider: params.provider,
-    modelApi: params.modelApi,
-  }).some((ref) => eligibleRefs.has(ref));
 }
 
 /** Fast auth-availability check for runtime provider/model selection. */
@@ -328,9 +299,16 @@ export function hasRuntimeAvailableProviderAuth(params: {
     shouldResolvePluginSyntheticAuth({
       cfg: params.cfg,
       provider,
+      modelApi: params.modelApi,
       runtimeLookup: params.runtimeLookup,
     }) &&
-    resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })
+    resolveSyntheticLocalProviderAuth({
+      cfg: params.cfg,
+      provider,
+      modelApi: params.modelApi,
+      allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
+      runtimeLookup: params.runtimeLookup,
+    })
   ) {
     return true;
   }
@@ -410,11 +388,22 @@ export function resolveSyntheticLocalProviderAuth(params: {
   modelApi?: string;
   secretSentinels?: boolean;
   allowPluginSyntheticAuth?: boolean;
+  runtimeLookup?: RuntimeProviderAuthLookup;
 }): ResolvedProviderAuth | null {
   // Prepared direct attempts may use local no-auth config, but must not widen
-  // back into an unprepared plugin-owned credential source.
-  const syntheticProviderAuth =
-    params.allowPluginSyntheticAuth === false ? {} : resolveProviderSyntheticRuntimeAuth(params);
+  // back into an unprepared plugin-owned credential source. When a prepared
+  // runtime lookup is present, scope plugin synthetic-auth to eligible refs.
+  const allowPluginSyntheticAuth =
+    params.allowPluginSyntheticAuth !== false &&
+    shouldResolvePluginSyntheticAuth({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelApi: params.modelApi,
+      runtimeLookup: params.runtimeLookup,
+    });
+  const syntheticProviderAuth = allowPluginSyntheticAuth
+    ? resolveProviderSyntheticRuntimeAuth(params)
+    : {};
   if (syntheticProviderAuth.auth) {
     return syntheticProviderAuth.auth;
   }

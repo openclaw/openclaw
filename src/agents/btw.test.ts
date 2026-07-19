@@ -128,12 +128,16 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
 
 vi.mock("./model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
+  createRuntimeProviderAuthLookup: () => ({
+    envApiKey: { skipSetupProviderFallback: true },
+    syntheticAuthProviderRefs: [],
+    syntheticAuthProviderRefsComplete: true,
+  }),
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),
-  providerHasPluginSyntheticAuthHook: () => false,
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
   resolveProviderEntryApiKeyProfileReference: (params: unknown) =>
     resolveProviderEntryApiKeyProfileReferenceMock(params),

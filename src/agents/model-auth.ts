@@ -12,6 +12,7 @@ import {
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 
 export {
   ensureAuthProfileStore,
@@ -44,7 +45,6 @@ export {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
   hasSyntheticLocalProviderAuthConfig,
-  providerHasPluginSyntheticAuthHook,
 } from "./model-auth-runtime.js";
 export type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 export {
@@ -75,6 +75,8 @@ export async function resolveApiKeyForProvider(params: {
    *  so existing callers are unchanged; gateway-isolated direct attempts pass
    *  true to preserve plugin synthetic auth without re-opening stored profiles. */
   allowPluginSyntheticAuth?: boolean;
+  /** Prepared env/synthetic-auth lookup reused for eligibility without a parallel API. */
+  runtimeLookup?: RuntimeProviderAuthLookup;
   skipSetupProviderFallback?: boolean;
   modelId?: string;
   modelApi?: string;

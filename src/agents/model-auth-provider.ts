@@ -31,6 +31,7 @@ import {
   assertRuntimeProviderSecretOwnerAvailable,
   resolveManagedSecretRefRuntimeProviderAuth,
   resolveSyntheticLocalProviderAuth,
+  type RuntimeProviderAuthLookup,
 } from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
@@ -92,6 +93,8 @@ export async function resolveApiKeyForProvider(params: {
    *  so existing callers are unchanged; gateway-isolated direct attempts pass
    *  true to preserve plugin synthetic auth without re-opening stored profiles. */
   allowPluginSyntheticAuth?: boolean;
+  /** Prepared env/synthetic-auth lookup reused for eligibility without a parallel API. */
+  runtimeLookup?: RuntimeProviderAuthLookup;
   /** Skip plugin setup fallback when the prepared route already excludes it. */
   skipSetupProviderFallback?: boolean;
   modelId?: string;
@@ -528,8 +531,11 @@ export async function resolveApiKeyForProvider(params: {
     // Plugin synthetic-auth is a provider-owned credential hook, distinct from
     // stored-profile discovery. Keep it available on its own flag so a gateway
     // attempt can disable profile fallback yet still resolve GCP-ADC-style auth.
+    // When callers also pass a prepared runtimeLookup, eligibility is scoped by
+    // shouldResolvePluginSyntheticAuth instead of a separate exported predicate.
     allowPluginSyntheticAuth:
       params.allowPluginSyntheticAuth ?? params.allowAuthProfileFallback !== false,
+    runtimeLookup: params.runtimeLookup,
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
