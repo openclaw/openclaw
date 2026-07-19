@@ -6,7 +6,7 @@ import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
 } from "./package-update-provenance.js";
-import { installClawPackages, type PackageInstallerDeps } from "./packages.js";
+import { installClawPackages } from "./packages.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   readClawPackageRefs,
@@ -14,6 +14,10 @@ import {
 } from "./provenance.js";
 import type { ClawAddPlan, ClawManifest, ClawPackage } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+
+type PackageInstallerDeps = NonNullable<
+  NonNullable<Parameters<typeof installClawPackages>[1]>["deps"]
+>;
 
 export type ClawPackageUpdateExecution = {
   appliedIds: string[];

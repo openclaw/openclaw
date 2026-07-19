@@ -202,7 +202,7 @@ export async function applyClawUpdatePlan(
       "The target Claw cannot be safely materialized for update.",
     );
   }
-  const targetPackages = new Map(
+  const targetPackages = new Map<string, ClawPackage>(
     params.targetManifest.packages.map((pkg) => [`${pkg.kind}:${pkg.ref}`, pkg] as const),
   );
   for (const action of fresh.actions.filter(
