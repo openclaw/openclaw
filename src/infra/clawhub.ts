@@ -764,7 +764,7 @@ async function parseClawHubJsonBody<T>(
       new Error(`ClawHub ${url.pathname} response stalled after ${chunkTimeoutMs}ms`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(buffer)) as T;
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer)) as T;
   } catch (cause) {
     throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
   }
@@ -1336,7 +1336,7 @@ export async function fetchClawHubSkillCard(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 export async function downloadClawHubPackageArchive(params: {
@@ -1947,7 +1947,7 @@ export async function fetchClawHubPromotionsFeed(
     timeoutMs: params.timeoutMs,
     resourceLabel: "promotions feed",
   });
-  const payload = new TextDecoder().decode(buffer);
+  const payload = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(payload);
