@@ -4,7 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
   deriveApprovalBadgeSnapshot,
@@ -42,11 +42,6 @@ import {
   type SidebarSessionMutationScope,
   type SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
-import {
-  type PresenceViewer,
-  projectPresenceViewers,
-  readPresenceEntries,
-} from "./viewer-presence.ts";
 
 /** Gateway-backed session and external-catalog synchronization. */
 export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
@@ -65,8 +60,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   @state() protected sessionCatalogs: SessionCatalog[] = [];
   @state() protected loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   @state() protected sessionMutationError: string | null = null;
-  @state() protected onlinePresenceViewers: readonly PresenceViewer[] = [];
-  @state() protected selfPresenceUserId?: string;
+  @state() protected presencePayload: unknown;
+  @state() protected presenceInstanceId?: string;
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
@@ -104,13 +99,6 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   protected abstract promoteCreatedSession(sessionKey: string): void;
   protected abstract selectedAgentIdForSessions(): string;
 
-  protected presenceViewersForSession(sessionKey: string): readonly PresenceViewer[] {
-    return this.onlinePresenceViewers.filter(
-      (viewer) =>
-        viewer.id !== this.selfPresenceUserId && viewer.watchedSessions.includes(sessionKey),
-    );
-  }
-
   constructor() {
     super();
     this.subscriptions
@@ -137,10 +125,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
               return;
             }
             if (event.event === "presence") {
-              const entries = readPresenceEntries(event.payload);
-              if (entries) {
-                this.updatePresenceViewers(entries);
-              }
+              this.presencePayload = event.payload;
               if (this.sessionCatalogLive.observePresence(event.payload)) {
                 this.requestSessionCatalogRefresh();
               }
@@ -550,13 +535,11 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
+    this.presenceInstanceId = client?.instanceId;
     if (!connected) {
-      this.updatePresenceViewers([] satisfies PresenceEntry[]);
+      this.presencePayload = undefined;
     } else if (clientChanged || connectedStarted) {
-      const initialPresence = readPresenceEntries(gateway.snapshot.hello?.snapshot);
-      if (initialPresence) {
-        this.updatePresenceViewers(initialPresence);
-      }
+      this.presencePayload = gateway.snapshot.hello?.snapshot;
     }
     if (!sourceOrClientChanged) {
       return;
@@ -569,12 +552,6 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogPageDepths.clear();
     this.sessionCatalogRevisions.clear();
-  }
-
-  private updatePresenceViewers(entries: readonly PresenceEntry[]) {
-    const projection = projectPresenceViewers(entries, this.gatewayClient?.instanceId);
-    this.onlinePresenceViewers = projection.users;
-    this.selfPresenceUserId = projection.selfUserId;
   }
 
   private clearSessionCache() {

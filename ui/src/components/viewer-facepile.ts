@@ -1,8 +1,91 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import type { PresenceEntry } from "../api/types.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import type { PresenceViewer } from "./viewer-presence.ts";
 import "./tooltip.ts";
+
+type PresenceViewer = {
+  id: string;
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  watchedSessions: readonly string[];
+};
+
+function normalized(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function firstSorted(values: Iterable<string | null | undefined>): string | undefined {
+  return [...values]
+    .map(normalized)
+    .filter((value): value is string => value !== undefined)
+    .toSorted()[0];
+}
+
+function readPresenceEntries(value: unknown): PresenceEntry[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const presence = (value as { presence?: unknown }).presence;
+  return Array.isArray(presence) ? (presence as PresenceEntry[]) : [];
+}
+
+function projectPresenceViewers(
+  entries: readonly PresenceEntry[],
+  selfInstanceId?: string,
+): { users: readonly PresenceViewer[]; selfUserId?: string } {
+  const grouped = new Map<string, PresenceEntry[]>();
+  let selfUserId: string | undefined;
+  for (const entry of entries) {
+    if (entry.reason === "disconnect" || !entry.user?.id) {
+      continue;
+    }
+    const userId = entry.user.id;
+    const existing = grouped.get(userId);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      grouped.set(userId, [entry]);
+    }
+    if (selfInstanceId && entry.instanceId === selfInstanceId) {
+      selfUserId = userId;
+    }
+  }
+  return {
+    selfUserId,
+    users: [...grouped.entries()]
+      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([id, userEntries]) => ({
+        id,
+        name: firstSorted(userEntries.map((entry) => entry.user?.name)),
+        email: firstSorted(userEntries.map((entry) => entry.user?.email)),
+        avatarUrl: firstSorted(userEntries.map((entry) => entry.user?.avatarUrl)),
+        watchedSessions: [
+          ...new Set(userEntries.flatMap((entry) => entry.watchedSessions ?? [])),
+        ].toSorted(),
+      })),
+  };
+}
+
+let cachedPresencePayload: unknown;
+let cachedSelfInstanceId: string | undefined;
+let cachedPresenceProjection: ReturnType<typeof projectPresenceViewers> | undefined;
+
+function projectPresencePayload(value: unknown, selfInstanceId?: string) {
+  if (
+    cachedPresenceProjection &&
+    cachedPresencePayload === value &&
+    cachedSelfInstanceId === selfInstanceId
+  ) {
+    return cachedPresenceProjection;
+  }
+  cachedPresencePayload = value;
+  cachedSelfInstanceId = selfInstanceId;
+  cachedPresenceProjection = projectPresenceViewers(readPresenceEntries(value), selfInstanceId);
+  return cachedPresenceProjection;
+}
 
 function presenceViewerLabel(user: PresenceViewer): string {
   return user.name ?? user.email ?? user.id;
@@ -30,20 +113,29 @@ function avatarColor(userId: string): string {
 }
 
 class ViewerFacepile extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) users: readonly PresenceViewer[] = [];
+  @property({ attribute: false }) presencePayload: unknown;
+  @property({ attribute: false }) selfInstanceId?: string;
+  @property({ attribute: false }) sessionKey?: string;
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
   @property() variant: "session" | "footer" = "session";
 
   override render() {
-    if (this.users.length === 0) {
+    const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
+    const users = this.sessionKey
+      ? projection.users.filter(
+          (user) =>
+            user.id !== projection.selfUserId && user.watchedSessions.includes(this.sessionKey),
+        )
+      : projection.users;
+    if (users.length === 0) {
       return nothing;
     }
-    const visible = this.users.slice(0, this.maxVisible);
-    const overflow = this.users.slice(this.maxVisible);
+    const visible = users.slice(0, this.maxVisible);
+    const overflow = users.slice(this.maxVisible);
     return html`<span
       class="viewer-facepile viewer-facepile--${this.variant}"
-      data-viewer-count=${this.users.length}
-      aria-label=${this.users.map(presenceViewerLabel).join(", ")}
+      data-viewer-count=${users.length}
+      aria-label=${users.map(presenceViewerLabel).join(", ")}
     >
       ${visible.map((user) => {
         const label = presenceViewerLabel(user);

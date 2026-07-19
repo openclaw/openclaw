@@ -162,7 +162,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
               >`
             : nothing}
           <openclaw-viewer-facepile
-            .users=${this.presenceViewersForSession(session.key)}
+            .presencePayload=${this.presencePayload}
+            .selfInstanceId=${this.presenceInstanceId}
+            .sessionKey=${session.key}
             .maxVisible=${3}
             variant="session"
           ></openclaw-viewer-facepile>
