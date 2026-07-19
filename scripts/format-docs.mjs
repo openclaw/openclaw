@@ -26,7 +26,15 @@ function outputText(value) {
   return "";
 }
 
-function outputTail(value) {
+function decodeUtf8Tail(buffer) {
+  let start = 0;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+    start += 1;
+  }
+  return buffer.subarray(start).toString("utf8");
+}
+
+export function outputTail(value) {
   const text = outputText(value).trim();
   if (!text) {
     return "";
@@ -35,7 +43,7 @@ function outputTail(value) {
   if (bytes.byteLength <= FAILURE_OUTPUT_TAIL_BYTES) {
     return text;
   }
-  return bytes.subarray(bytes.byteLength - FAILURE_OUTPUT_TAIL_BYTES).toString("utf8");
+  return decodeUtf8Tail(bytes.subarray(bytes.byteLength - FAILURE_OUTPUT_TAIL_BYTES));
 }
 
 function commandFailureMessage(label, result, invocation) {
