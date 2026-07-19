@@ -378,9 +378,10 @@ export async function prepareProviderPluginAuthMethod(params: {
     }
     await params.beforePersistentEffect?.();
     for (const profile of result.profiles) {
+      const { profileId, credential } = profile;
       await upsertAuthProfileWithLockOrThrow({
-        profileId: profile.profileId,
-        credential: profile.credential,
+        profileId,
+        credential,
         agentDir,
       });
     }

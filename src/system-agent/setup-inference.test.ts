@@ -5368,17 +5368,15 @@ describe("verifySetupInference", () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "configured-agent");
     const profileId = "openai:default";
-    const originalCredential = {
-      type: "api_key" as const,
-      provider: "openai",
-      key: "test-original-key",
-    };
-    const stagedCredential = {
-      type: "api_key" as const,
-      provider: "openai",
-      key: "test-staged-key",
-    };
-    await upsertAuthProfileWithLock({ profileId, credential: originalCredential, agentDir });
+    await upsertAuthProfileWithLock({
+      profileId,
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "test-original-key",
+      },
+      agentDir,
+    });
     const runEmbeddedAgent = vi.fn(
       async (params: {
         agentDir?: string;
@@ -5386,9 +5384,11 @@ describe("verifySetupInference", () => {
       }) => {
         expect(params.agentDir).toBeDefined();
         expect(params.agentDir).not.toBe(agentDir);
-        expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId]).toEqual(
-          stagedCredential,
-        );
+        expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId]).toEqual({
+          type: "api_key",
+          provider: "openai",
+          key: "test-staged-key",
+        });
         return successfulRun("openai", "gpt-5.5", {
           authProfileId: profileId,
           onSuccessfulAuthBinding: params.onSuccessfulAuthBinding,
@@ -5414,7 +5414,16 @@ describe("verifySetupInference", () => {
             ],
           },
         },
-        authProfiles: [{ profileId, credential: stagedCredential }],
+        authProfiles: [
+          {
+            profileId,
+            credential: {
+              type: "api_key",
+              provider: "openai",
+              key: "test-staged-key",
+            },
+          },
+        ],
         runtime,
         deps: {
           runEmbeddedAgent: runEmbeddedAgent as never,
@@ -5423,7 +5432,11 @@ describe("verifySetupInference", () => {
       });
 
       expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
-      expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual(originalCredential);
+      expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual({
+        type: "api_key",
+        provider: "openai",
+        key: "test-original-key",
+      });
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
