@@ -507,6 +507,9 @@ export function resetChatStateForRouteSession(
   saveChatMessagesForSession(state, previousSessionKey);
   const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
+  if (state.sidebarContent?.kind === "session-discussion") {
+    state.sidebarContent = { ...state.sidebarContent, sessionKey };
+  }
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),

@@ -4116,6 +4116,18 @@ export const en: TranslationMap = {
       statusRenamed: "Renamed",
       statusModified: "Modified",
     },
+    sessionDiscussion: {
+      title: "Discussion",
+      show: "Show discussion",
+      disconnected: "Gateway is disconnected.",
+      loading: "Loading discussion…",
+      open: "Open discussion",
+      opening: "Opening discussion…",
+      opened: "Session discussion",
+      openExternal: "Open discussion in a new tab",
+      frameTitle: "Session discussion",
+      unavailable: "This discussion cannot be embedded.",
+    },
     workspaceFiles: {
       label: "Thread workspace",
       expand: "Expand thread workspace",

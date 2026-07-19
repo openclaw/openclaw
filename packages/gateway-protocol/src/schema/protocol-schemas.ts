@@ -430,6 +430,14 @@ import {
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
 } from "./secrets.js";
+import {
+  SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResultSchema,
+  SessionDiscussionInfoSchema,
+  SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResultSchema,
+  SessionDiscussionStateSchema,
+} from "./session-discussion.js";
 import { SessionPlacementProtocolSchemas } from "./session-placement.js";
 import {
   SessionCatalogCapabilitiesSchema,
@@ -744,6 +752,12 @@ export const ProtocolSchemas = {
   SessionCompactionCheckpoint: SessionCompactionCheckpointSchema,
   SessionOperationEvent: SessionOperationEventSchema,
   ...SessionPlacementProtocolSchemas,
+  SessionDiscussionState: SessionDiscussionStateSchema,
+  SessionDiscussionInfo: SessionDiscussionInfoSchema,
+  SessionDiscussionInfoParams: SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResult: SessionDiscussionInfoResultSchema,
+  SessionDiscussionOpenParams: SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResult: SessionDiscussionOpenResultSchema,
   SessionsCompactionListParams: SessionsCompactionListParamsSchema,
   SessionsCompactionGetParams: SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParams: SessionsCompactionBranchParamsSchema,

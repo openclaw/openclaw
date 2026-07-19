@@ -465,6 +465,12 @@ import {
   SessionsSearchResultSchema,
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
+  SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResultSchema,
+  SessionDiscussionInfoSchema,
+  SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResultSchema,
+  SessionDiscussionStateSchema,
   TaskSuggestionEventSchema,
   TaskSuggestionResolutionSchema,
   TaskSuggestionSchema,
@@ -766,6 +772,10 @@ export const validateSessionsBranchesSwitchParams = lazyCompile(SessionsBranches
 export const validateSessionsRewindParams = lazyCompile(SessionsRewindParamsSchema);
 export const validateSessionsForkParams = lazyCompile(SessionsForkParamsSchema);
 export const validateSessionsUsageParams = lazyCompile(SessionsUsageParamsSchema);
+export const validateSessionDiscussionInfoParams = lazyCompile(SessionDiscussionInfoParamsSchema);
+export const validateSessionDiscussionInfoResult = lazyCompile(SessionDiscussionInfoResultSchema);
+export const validateSessionDiscussionOpenParams = lazyCompile(SessionDiscussionOpenParamsSchema);
+export const validateSessionDiscussionOpenResult = lazyCompile(SessionDiscussionOpenResultSchema);
 export const validateTaskSuggestionsListParams = lazyCompile(TaskSuggestionsListParamsSchema);
 export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCreateParamsSchema);
 export const validateTaskSuggestionsAcceptParams = lazyCompile(TaskSuggestionsAcceptParamsSchema);
@@ -1118,6 +1128,12 @@ export {
   SessionsGroupsMutationResultSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  SessionDiscussionStateSchema,
+  SessionDiscussionInfoSchema,
+  SessionDiscussionInfoParamsSchema,
+  SessionDiscussionInfoResultSchema,
+  SessionDiscussionOpenParamsSchema,
+  SessionDiscussionOpenResultSchema,
   ArtifactSummarySchema,
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
@@ -1605,6 +1621,12 @@ export type {
   SessionDiffFileStatus,
   SessionsDiffParams,
   SessionsDiffResult,
+  SessionDiscussionState,
+  SessionDiscussionInfo,
+  SessionDiscussionInfoParams,
+  SessionDiscussionInfoResult,
+  SessionDiscussionOpenParams,
+  SessionDiscussionOpenResult,
   ArtifactSummary,
   ArtifactsListParams,
   ArtifactsListResult,

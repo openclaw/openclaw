@@ -1,0 +1,188 @@
+import { html, nothing, type TemplateResult } from "lit";
+import { property, state } from "lit/decorators.js";
+import type {
+  SessionDiscussionInfo,
+  SessionDiscussionState,
+} from "../../../../../packages/gateway-protocol/src/index.js";
+import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
+import { t } from "../../../i18n/index.ts";
+import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+
+export type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
+export type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
+export type SessionDiscussionStateListener = (
+  sessionKey: string,
+  discussionState: SessionDiscussionState,
+) => void;
+
+function resolveDiscussionUrl(value: string | undefined): string | null {
+  if (!value?.trim()) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+class SessionDiscussionPanel extends OpenClawLightDomElement {
+  @property() sessionKey = "";
+  @property({ attribute: false }) loadInfo: SessionDiscussionInfoLoader | null = null;
+  @property({ attribute: false }) openDiscussion: SessionDiscussionOpener | null = null;
+  @property({ attribute: false }) onStateChange: SessionDiscussionStateListener | null = null;
+  @property({ type: Boolean }) canOpen = true;
+
+  @state() private info: SessionDiscussionInfo | null = null;
+  @state() private loading = false;
+  @state() private opening = false;
+  @state() private error: string | null = null;
+
+  private requestVersion = 0;
+
+  protected override updated(changed: Map<string, unknown>) {
+    if (changed.has("sessionKey") || changed.has("loadInfo")) {
+      void this.refresh();
+    }
+  }
+
+  private publish(info: SessionDiscussionInfo): void {
+    this.info = info;
+    this.onStateChange?.(this.sessionKey, info.state);
+  }
+
+  private async refresh(): Promise<void> {
+    const loader = this.loadInfo;
+    const sessionKey = this.sessionKey.trim();
+    const version = ++this.requestVersion;
+    this.info = null;
+    this.error = null;
+    this.opening = false;
+    if (!loader || !sessionKey) {
+      this.loading = false;
+      return;
+    }
+    this.loading = true;
+    try {
+      const info = await loader(sessionKey);
+      if (version === this.requestVersion) {
+        this.publish(info);
+      }
+    } catch (error) {
+      if (version === this.requestVersion) {
+        this.error = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (version === this.requestVersion) {
+        this.loading = false;
+      }
+    }
+  }
+
+  private async open(): Promise<void> {
+    const opener = this.openDiscussion;
+    const sessionKey = this.sessionKey.trim();
+    if (!opener || !sessionKey || this.opening) {
+      return;
+    }
+    const version = ++this.requestVersion;
+    this.opening = true;
+    this.error = null;
+    try {
+      const info = await opener(sessionKey);
+      if (version === this.requestVersion) {
+        this.publish(info);
+      }
+    } catch (error) {
+      if (version === this.requestVersion) {
+        this.error = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (version === this.requestVersion) {
+        this.opening = false;
+      }
+    }
+  }
+
+  private renderOpen(info: SessionDiscussionInfo): TemplateResult {
+    const embedUrl = resolveDiscussionUrl(info.embedUrl);
+    const openUrl = resolveDiscussionUrl(info.openUrl);
+    return html`
+      <div class="session-discussion__open">
+        <div class="session-discussion__header">
+          <span>${t("chat.sessionDiscussion.opened")}</span>
+          ${openUrl
+            ? html`
+                <openclaw-tooltip .content=${t("chat.sessionDiscussion.openExternal")}>
+                  <a
+                    class="btn btn--ghost btn--icon session-discussion__external"
+                    href=${openUrl}
+                    target="_blank"
+                    rel="noopener"
+                    aria-label=${t("chat.sessionDiscussion.openExternal")}
+                  >
+                    ${icons.externalLink}
+                  </a>
+                </openclaw-tooltip>
+              `
+            : nothing}
+        </div>
+        ${embedUrl
+          ? html`
+              <iframe
+                class="session-discussion__frame"
+                src=${embedUrl}
+                title=${t("chat.sessionDiscussion.frameTitle")}
+                sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
+              ></iframe>
+            `
+          : html`<div class="session-discussion__empty">
+              ${t("chat.sessionDiscussion.unavailable")}
+            </div>`}
+      </div>
+    `;
+  }
+
+  override render() {
+    if (this.error) {
+      return html`<div class="session-discussion__empty">
+        <div class="callout danger">${this.error}</div>
+      </div>`;
+    }
+    if (this.loading || !this.info) {
+      return html`<div class="session-discussion__empty">
+        ${t("chat.sessionDiscussion.loading")}
+      </div>`;
+    }
+    if (this.info.state === "none") {
+      return nothing;
+    }
+    if (this.info.state === "available") {
+      return html`
+        <div class="session-discussion__empty">
+          <button
+            class="btn primary"
+            type="button"
+            ?disabled=${!this.canOpen || this.opening}
+            @click=${() => void this.open()}
+          >
+            ${this.opening ? t("chat.sessionDiscussion.opening") : t("chat.sessionDiscussion.open")}
+          </button>
+        </div>
+      `;
+    }
+    return this.renderOpen(this.info);
+  }
+}
+
+if (!customElements.get("openclaw-session-discussion")) {
+  customElements.define("openclaw-session-discussion", SessionDiscussionPanel);
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-session-discussion": SessionDiscussionPanel;
+  }
+}

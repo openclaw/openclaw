@@ -78,6 +78,8 @@ describe("method scope resolution", () => {
     ["sessions.catalog.read", ["operator.read"]],
     ["sessions.catalog.continue", ["operator.write"]],
     ["sessions.catalog.archive", ["operator.write"]],
+    ["session.discussion.info", ["operator.read"]],
+    ["session.discussion.open", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],

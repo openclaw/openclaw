@@ -6,6 +6,8 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
+  SessionDiscussionInfo,
+  SessionDiscussionState,
   SessionsCatalogContinueResult,
   SessionsCatalogReadResult,
   SessionsFilesRevealResult,
@@ -53,6 +55,7 @@ import {
 } from "../../components/command-palette-contract.ts";
 import "../../components/modal-dialog.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
+import { icons } from "../../components/icons.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -192,6 +195,7 @@ import {
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
   type DetailFullMessageResult,
+  type SidebarContent,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 import { ChatTranscriptController } from "./components/chat-thread.ts";
@@ -406,6 +410,7 @@ class ChatPane extends OpenClawLightDomElement {
   private swarmBoardSnapshot: BoardSnapshot | null = null;
   private swarmBoardSnapshotBase: BoardSnapshot | null = null;
   private swarmBoardSnapshotRequest = 0;
+  private readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   private headerRenameInitialLabel: string | null = null;
   private headerRenameInitialValue = "";
   private headerRenameSessionKey = "";
@@ -2166,6 +2171,9 @@ class ChatPane extends OpenClawLightDomElement {
       const nextSessionKey = catalogKey
         ? this.sessionKey
         : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
+      if (nextSessionKey) {
+        this.sessionDiscussionStates.delete(nextSessionKey);
+      }
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
       } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
@@ -2332,6 +2340,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.taskSuggestions = [];
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
+      this.sessionDiscussionStates.clear();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
     }
@@ -2660,6 +2669,75 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
+  private renderSessionDiscussionAction() {
+    const state = this.state;
+    const sessionKey = state?.sessionKey.trim() ?? "";
+    if (
+      !state?.connected ||
+      !state.client ||
+      !sessionKey ||
+      this.sessionDiscussionStates.get(sessionKey) === "none" ||
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+    ) {
+      return nothing;
+    }
+    const canOpen =
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.open") === true;
+    const content: SidebarContent = {
+      kind: "session-discussion",
+      sessionKey,
+      canOpen,
+      loadInfo: async (key) => {
+        if (!state.connected || !state.client) {
+          throw new Error(t("chat.sessionDiscussion.disconnected"));
+        }
+        return await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
+          sessionKey: key,
+        });
+      },
+      openDiscussion: async (key) => {
+        if (!state.connected || !state.client) {
+          throw new Error(t("chat.sessionDiscussion.disconnected"));
+        }
+        return await state.client.request<SessionDiscussionInfo>("session.discussion.open", {
+          sessionKey: key,
+        });
+      },
+      onStateChange: (key, discussionState) => {
+        this.sessionDiscussionStates.set(key, discussionState);
+        const current = state.sidebarContent;
+        if (
+          discussionState === "none" &&
+          current?.kind === "session-discussion" &&
+          current.sessionKey === key
+        ) {
+          state.handleCloseSidebar();
+          return;
+        }
+        state.requestUpdate();
+      },
+    };
+    const active =
+      state.sidebarOpen &&
+      state.sidebarContent?.kind === "session-discussion" &&
+      state.sidebarContent.sessionKey === sessionKey;
+    const label = t("chat.sessionDiscussion.show");
+    return html`
+      <openclaw-tooltip .content=${label}>
+        <button
+          class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle"
+          type="button"
+          aria-label=${label}
+          aria-pressed=${String(active)}
+          @click=${() => state.handleOpenSidebar(content)}
+        >
+          ${icons.messageSquare}
+        </button>
+      </openclaw-tooltip>
+    `;
+  }
+
   private renderPaneHeader(
     sessionWorkspace: SessionWorkspaceProps,
     backgroundTasks: BackgroundTasksProps,
@@ -2733,6 +2811,7 @@ class ChatPane extends OpenClawLightDomElement {
         this.state?.connected === true &&
         hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
       terminalAction: renderCatalogTerminalButton(this.state, this.catalogSession),
+      discussionAction: this.renderSessionDiscussionAction(),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),

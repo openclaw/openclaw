@@ -218,7 +218,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolves ask_user choices for channel plugins.
       // +1: ingress-effect-once gives drained channels a narrow durable side-effect guard.
-      332,
+      // +1: session-discussion binds one external discussion provider to sessions.
+      333,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -292,7 +293,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: lifecycle-owned prepared model catalog sync and async readers.
       // Harvest: retired tuning-knob config types -10.
       // Harvest: removed process-global API-provider publication functions -2.
-      8180,
+      // +4: session discussion state, info, provider, and registration contracts.
+      8184,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -342,7 +344,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: outbound echo record/query helpers across channel-outbound and mirrors.
       // +2: lifecycle-owned prepared model catalog sync and async readers.
       // Harvest: removed process-global API-provider publication functions -2.
-      4555,
+      // +1: session discussion provider registration.
+      4556,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
