@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { BoardSnapshotSchema } from "./board.js";
+import { BoardSnapshotSchema, BoardWidgetGrantParamsSchema } from "./board.js";
 
 describe("BoardSnapshotSchema", () => {
   it("accepts optional HTML widget view metadata", () => {
@@ -34,6 +34,26 @@ describe("BoardSnapshotSchema", () => {
       Value.Check(BoardSnapshotSchema, {
         ...snapshot,
         widgets: [{ ...snapshot.widgets[0], declaredSummary: [42] }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("BoardWidgetGrantParamsSchema", () => {
+  it("requires the widget revision being approved", () => {
+    expect(
+      Value.Check(BoardWidgetGrantParamsSchema, {
+        sessionKey: "agent:main:main",
+        name: "status",
+        decision: "granted",
+        revision: 1,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardWidgetGrantParamsSchema, {
+        sessionKey: "agent:main:main",
+        name: "status",
+        decision: "granted",
       }),
     ).toBe(false);
   });

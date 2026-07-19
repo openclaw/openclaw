@@ -292,6 +292,172 @@ public struct BoardSnapshot: Codable, Sendable {
     }
 }
 
+public struct BoardTabCreateOp: Codable, Sendable {
+    public let kind: String
+    public let tabid: String
+    public let title: String
+    public let chatdock: AnyCodable?
+
+    public init(
+        kind: String,
+        tabid: String,
+        title: String,
+        chatdock: AnyCodable? = nil)
+    {
+        self.kind = kind
+        self.tabid = tabid
+        self.title = title
+        self.chatdock = chatdock
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case tabid = "tabId"
+        case title
+        case chatdock = "chatDock"
+    }
+}
+
+public struct BoardTabUpdateOp: Codable, Sendable {
+    public let kind: String
+    public let tabid: String
+    public let title: String?
+    public let chatdock: AnyCodable?
+    public let position: Int?
+
+    public init(
+        kind: String,
+        tabid: String,
+        title: String? = nil,
+        chatdock: AnyCodable? = nil,
+        position: Int? = nil)
+    {
+        self.kind = kind
+        self.tabid = tabid
+        self.title = title
+        self.chatdock = chatdock
+        self.position = position
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case tabid = "tabId"
+        case title
+        case chatdock = "chatDock"
+        case position
+    }
+}
+
+public struct BoardTabDeleteOp: Codable, Sendable {
+    public let kind: String
+    public let tabid: String
+
+    public init(
+        kind: String,
+        tabid: String)
+    {
+        self.kind = kind
+        self.tabid = tabid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case tabid = "tabId"
+    }
+}
+
+public struct BoardTabsReorderOp: Codable, Sendable {
+    public let kind: String
+    public let tabids: [String]
+
+    public init(
+        kind: String,
+        tabids: [String])
+    {
+        self.kind = kind
+        self.tabids = tabids
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case tabids = "tabIds"
+    }
+}
+
+public struct BoardWidgetMoveOp: Codable, Sendable {
+    public let kind: String
+    public let name: String
+    public let tabid: String?
+    public let position: Int?
+    public let after: String?
+
+    public init(
+        kind: String,
+        name: String,
+        tabid: String? = nil,
+        position: Int? = nil,
+        after: String? = nil)
+    {
+        self.kind = kind
+        self.name = name
+        self.tabid = tabid
+        self.position = position
+        self.after = after
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case name
+        case tabid = "tabId"
+        case position
+        case after
+    }
+}
+
+public struct BoardWidgetResizeOp: Codable, Sendable {
+    public let kind: String
+    public let name: String
+    public let sizew: Int
+    public let sizeh: Int
+
+    public init(
+        kind: String,
+        name: String,
+        sizew: Int,
+        sizeh: Int)
+    {
+        self.kind = kind
+        self.name = name
+        self.sizew = sizew
+        self.sizeh = sizeh
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case name
+        case sizew = "sizeW"
+        case sizeh = "sizeH"
+    }
+}
+
+public struct BoardWidgetRemoveOp: Codable, Sendable {
+    public let kind: String
+    public let name: String
+
+    public init(
+        kind: String,
+        name: String)
+    {
+        self.kind = kind
+        self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case name
+    }
+}
+
 public struct BoardMcpAppDescriptor: Codable, Sendable {
     public let servername: String
     public let toolname: String
@@ -319,6 +485,42 @@ public struct BoardMcpAppDescriptor: Codable, Sendable {
         case uiresourceuri = "uiResourceUri"
         case originsessionkey = "originSessionKey"
         case toolcallid = "toolCallId"
+    }
+}
+
+public struct BoardWidgetHtmlContent: Codable, Sendable {
+    public let kind: String
+    public let html: String
+
+    public init(
+        kind: String,
+        html: String)
+    {
+        self.kind = kind
+        self.html = html
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case html
+    }
+}
+
+public struct BoardWidgetMcpAppContent: Codable, Sendable {
+    public let kind: String
+    public let descriptor: BoardMcpAppDescriptor
+
+    public init(
+        kind: String,
+        descriptor: BoardMcpAppDescriptor)
+    {
+        self.kind = kind
+        self.descriptor = descriptor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case descriptor
     }
 }
 
@@ -392,21 +594,25 @@ public struct BoardWidgetGrantParams: Codable, Sendable {
     public let sessionkey: String
     public let name: String
     public let decision: AnyCodable
+    public let revision: Int
 
     public init(
         sessionkey: String,
         name: String,
-        decision: AnyCodable)
+        decision: AnyCodable,
+        revision: Int)
     {
         self.sessionkey = sessionkey
         self.name = name
         self.decision = decision
+        self.revision = revision
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case name
         case decision
+        case revision
     }
 }
 
@@ -451,6 +657,42 @@ public struct BoardChangedEvent: Codable, Sendable {
         case sessionkey = "sessionKey"
         case revision
         case widget
+    }
+}
+
+public struct BoardFocusTabCommand: Codable, Sendable {
+    public let kind: String
+    public let tabid: String
+
+    public init(
+        kind: String,
+        tabid: String)
+    {
+        self.kind = kind
+        self.tabid = tabid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case tabid = "tabId"
+    }
+}
+
+public struct BoardSetChatDockCommand: Codable, Sendable {
+    public let kind: String
+    public let dock: AnyCodable
+
+    public init(
+        kind: String,
+        dock: AnyCodable)
+    {
+        self.kind = kind
+        self.dock = dock
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case dock
     }
 }
 
@@ -14874,6 +15116,114 @@ public struct ShutdownEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case reason
         case restartexpectedms = "restartExpectedMs"
+    }
+}
+
+public enum BoardOp: Codable, Sendable {
+    case tabCreate(BoardTabCreateOp)
+    case tabUpdate(BoardTabUpdateOp)
+    case tabDelete(BoardTabDeleteOp)
+    case tabsReorder(BoardTabsReorderOp)
+    case widgetMove(BoardWidgetMoveOp)
+    case widgetResize(BoardWidgetResizeOp)
+    case widgetRemove(BoardWidgetRemoveOp)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "tab_create": self = try .tabCreate(BoardTabCreateOp(from: decoder))
+        case "tab_update": self = try .tabUpdate(BoardTabUpdateOp(from: decoder))
+        case "tab_delete": self = try .tabDelete(BoardTabDeleteOp(from: decoder))
+        case "tabs_reorder": self = try .tabsReorder(BoardTabsReorderOp(from: decoder))
+        case "widget_move": self = try .widgetMove(BoardWidgetMoveOp(from: decoder))
+        case "widget_resize": self = try .widgetResize(BoardWidgetResizeOp(from: decoder))
+        case "widget_remove": self = try .widgetRemove(BoardWidgetRemoveOp(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown BoardOp discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .tabCreate(let value): try value.encode(to: encoder)
+        case .tabUpdate(let value): try value.encode(to: encoder)
+        case .tabDelete(let value): try value.encode(to: encoder)
+        case .tabsReorder(let value): try value.encode(to: encoder)
+        case .widgetMove(let value): try value.encode(to: encoder)
+        case .widgetResize(let value): try value.encode(to: encoder)
+        case .widgetRemove(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum BoardWidgetContent: Codable, Sendable {
+    case html(BoardWidgetHtmlContent)
+    case mcpApp(BoardWidgetMcpAppContent)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "html": self = try .html(BoardWidgetHtmlContent(from: decoder))
+        case "mcp-app": self = try .mcpApp(BoardWidgetMcpAppContent(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown BoardWidgetContent discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .html(let value): try value.encode(to: encoder)
+        case .mcpApp(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum BoardCommand: Codable, Sendable {
+    case focusTab(BoardFocusTabCommand)
+    case setChatDock(BoardSetChatDockCommand)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "focus_tab": self = try .focusTab(BoardFocusTabCommand(from: decoder))
+        case "set_chat_dock": self = try .setChatDock(BoardSetChatDockCommand(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown BoardCommand discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .focusTab(let value): try value.encode(to: encoder)
+        case .setChatDock(let value): try value.encode(to: encoder)
+        }
     }
 }
 

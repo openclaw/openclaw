@@ -124,15 +124,17 @@ export const BoardMcpAppDescriptorSchema = closedObject({
 });
 export type BoardMcpAppDescriptor = Static<typeof BoardMcpAppDescriptorSchema>;
 
+export const BoardWidgetHtmlContentSchema = closedObject({
+  kind: Type.Literal("html"),
+  html: Type.String({ maxLength: 262_144 }),
+});
+export const BoardWidgetMcpAppContentSchema = closedObject({
+  kind: Type.Literal("mcp-app"),
+  descriptor: BoardMcpAppDescriptorSchema,
+});
 export const BoardWidgetContentSchema = Type.Union([
-  closedObject({
-    kind: Type.Literal("html"),
-    html: Type.String({ maxLength: 262_144 }),
-  }),
-  closedObject({
-    kind: Type.Literal("mcp-app"),
-    descriptor: BoardMcpAppDescriptorSchema,
-  }),
+  BoardWidgetHtmlContentSchema,
+  BoardWidgetMcpAppContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 
@@ -161,6 +163,7 @@ export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   name: BoardWidgetNameSchema,
   decision: Type.Union([Type.Literal("granted"), Type.Literal("rejected")]),
+  revision: Type.Integer({ minimum: 1 }),
 });
 export type BoardWidgetGrantParams = Static<typeof BoardWidgetGrantParamsSchema>;
 
@@ -178,9 +181,17 @@ export const BoardChangedEventSchema = closedObject({
 });
 export type BoardChangedEvent = Static<typeof BoardChangedEventSchema>;
 
+export const BoardFocusTabCommandSchema = closedObject({
+  kind: Type.Literal("focus_tab"),
+  tabId: BoardTabIdSchema,
+});
+export const BoardSetChatDockCommandSchema = closedObject({
+  kind: Type.Literal("set_chat_dock"),
+  dock: BoardChatDockSchema,
+});
 export const BoardCommandSchema = Type.Union([
-  closedObject({ kind: Type.Literal("focus_tab"), tabId: BoardTabIdSchema }),
-  closedObject({ kind: Type.Literal("set_chat_dock"), dock: BoardChatDockSchema }),
+  BoardFocusTabCommandSchema,
+  BoardSetChatDockCommandSchema,
 ]);
 export type BoardCommand = Static<typeof BoardCommandSchema>;
 
