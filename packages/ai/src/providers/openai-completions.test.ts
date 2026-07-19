@@ -299,6 +299,31 @@ describe("OpenAI-compatible completions params", () => {
     expect(result.usage.cost.totalOrigin).toBe("provider-billed");
   });
 
+  it("retains the catalog estimate a provider-billed total replaced", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("ok"),
+      makeFinishChunk("stop", {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: 0.00042,
+      }),
+    ];
+    const pricedModel = {
+      ...model,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    } satisfies Model<"openai-completions">;
+
+    const result = await streamOpenAICompletions(pricedModel, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.usage.cost.total).toBe(0.00042);
+    expect(result.usage.cost.estimatedTotal).toBeCloseTo(0.00002, 10);
+    const { input, output, cacheRead, cacheWrite } = result.usage.cost;
+    expect(input + output + cacheRead + cacheWrite).toBeCloseTo(0.00002, 10);
+  });
+
   it("keeps the catalog estimate for an invalid provider-reported usage cost", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("ok"),

@@ -283,6 +283,11 @@ export interface Usage {
     total: number;
     /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
     totalOrigin?: "provider-billed";
+    /**
+     * Catalog estimate retained when `total` was replaced by a provider-billed number.
+     * Keeps `input + output + cacheRead + cacheWrite` reconcilable after the override.
+     */
+    estimatedTotal?: number;
   };
 }
 

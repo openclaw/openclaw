@@ -505,7 +505,19 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
   // Keep authoritative provider billing provenance through replay repair. Dropping it
   // turns a real zero-dollar total back into a local estimate during later accounting.
   const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;
-  return { input, output, cacheRead, cacheWrite, total, ...(totalOrigin ? { totalOrigin } : {}) };
+  // `estimatedTotal` only exists because a provider-billed total replaced it, so it is
+  // meaningless without that provenance. Keep the pair together rather than replaying a
+  // retained estimate that claims a replacement the record no longer records.
+  const estimatedTotal = totalOrigin ? toFiniteCostNumber(cost.estimatedTotal) : undefined;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    total,
+    ...(totalOrigin ? { totalOrigin } : {}),
+    ...(estimatedTotal === undefined ? {} : { estimatedTotal }),
+  };
 }
 
 function toFiniteCostNumber(value: unknown): number | undefined {

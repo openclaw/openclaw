@@ -1886,23 +1886,34 @@ export function buildOpenAICompletionsParams(
 }
 
 function parseTransportChunkUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & { cost?: unknown },
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
+    cost?: unknown;
+    prompt_tokens_details?: { cache_write_tokens?: number };
+  },
   model: Model,
 ): MutableAssistantOutput["usage"] {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
+  // Follow documented OpenAI/OpenRouter semantics: cached_tokens is cache-read
+  // tokens (hits). OpenAI does not document or emit cache_write_tokens, but
+  // OpenRouter-compatible providers can include it as a separate write count.
+  // OpenRouter's own provider/tests affirm the separate mapping:
+  // https://github.com/OpenRouterTeam/ai-sdk-provider/pull/409
+  // Do not subtract writes from cached_tokens, otherwise spec-compliant
+  // providers are under-reported. Mirrors the plugin-sdk completions provider.
+  const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
-  const input = Math.max(0, promptTokens - cachedTokens);
+  const input = Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
-    cacheWrite: 0,
+    cacheWrite: cacheWriteTokens,
     ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
       ? { reasoningTokens }
       : {}),
-    totalTokens: input + outputTokens + cachedTokens,
+    totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model as never, usage as never);
