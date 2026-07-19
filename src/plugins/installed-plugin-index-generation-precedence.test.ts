@@ -1,9 +1,9 @@
 // Covers loader precedence between a plugin's flat project dir and newer
 // `__openclaw-generation__` dirs when reconciling persisted install records.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -23,12 +23,10 @@ import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const PACKAGE_NAME = "@openclaw/discord";
 const PLUGIN_ID = "discord";
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeStateDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-generation-precedence-"));
-  tempDirs.push(dir);
-  return dir;
+  return tempDirs.make("openclaw-plugin-generation-precedence-");
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -96,9 +94,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 describe("managed npm generation-dir loader precedence", () => {

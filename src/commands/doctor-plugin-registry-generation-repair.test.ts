@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
@@ -22,12 +22,10 @@ import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 
 const PACKAGE_NAME = "@proof/openclaw-generation";
 const PLUGIN_ID = "generation-proof";
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeStateDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-plugin-generation-"));
-  tempDirs.push(dir);
-  return dir;
+  return tempDirs.make("openclaw-doctor-plugin-generation-");
 }
 
 function writeManagedFlat(stateDir: string, version: string): string {
@@ -57,9 +55,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 describe("doctor managed npm generation repair", () => {
