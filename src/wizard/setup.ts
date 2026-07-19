@@ -450,8 +450,13 @@ async function runSetupWizardOnce(
             },
           },
         };
-  const remoteUrl = remoteSeedConfig.gateway?.remote?.url?.trim() ?? "";
-  let remoteProbeAuth = normalizeSecretInputString(remoteSeedConfig.gateway?.remote?.token);
+  const seededRemoteUrl = remoteSeedConfig.gateway?.remote?.url?.trim() ?? "";
+  const remoteOnboard = seededRemoteUrl ? await import("../commands/onboard-remote.js") : null;
+  const remoteUrl =
+    seededRemoteUrl && remoteOnboard?.validateGatewayWebSocketUrl(seededRemoteUrl) === undefined
+      ? seededRemoteUrl
+      : "";
+  let remoteGatewayToken = normalizeSecretInputString(remoteSeedConfig.gateway?.remote?.token);
   try {
     const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
       config: remoteSeedConfig,
@@ -460,7 +465,7 @@ async function runSetupWizardOnce(
       env: process.env,
     });
     if (resolvedRemoteGatewayToken) {
-      remoteProbeAuth = resolvedRemoteGatewayToken;
+      remoteGatewayToken = resolvedRemoteGatewayToken;
     }
   } catch (error) {
     await prompter.note(
@@ -471,14 +476,12 @@ async function runSetupWizardOnce(
       "Gateway auth",
     );
   }
-  const remoteOnboard = remoteUrl ? await import("../commands/onboard-remote.js") : null;
-  const remoteProbe =
-    remoteUrl && remoteOnboard?.validateGatewayWebSocketUrl(remoteUrl) === undefined
-      ? await onboardHelpers.probeGatewayReachable({
-          url: remoteUrl,
-          token: remoteProbeAuth,
-        })
-      : null;
+  const remoteProbe = remoteUrl
+    ? await onboardHelpers.probeGatewayReachable({
+        url: remoteUrl,
+        token: remoteGatewayToken,
+      })
+    : null;
 
   const mode =
     opts.mode ??

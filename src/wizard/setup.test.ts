@@ -125,7 +125,6 @@ const setupChannels = vi.hoisted(() =>
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const validateGatewayWebSocketUrl = vi.hoisted(() => vi.fn(() => undefined));
-const remoteFlagFixture = ["fixture", "value"].join("-");
 
 function providerPluginStub(
   overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
@@ -664,7 +663,7 @@ describe("runSetupWizard", () => {
   });
 
   it("seeds interactive remote setup from command flags", async () => {
-    const remoteToken = remoteFlagFixture;
+    const remoteToken = "REDACTED";
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -773,7 +772,7 @@ describe("runSetupWizard", () => {
   });
 
   it("does not probe an invalid CLI remote URL with its token", async () => {
-    const remoteToken = remoteFlagFixture;
+    const remoteToken = "REDACTED";
     validateGatewayWebSocketUrl.mockReturnValueOnce("Use wss:// for public gateways");
 
     await runSetupWizard(
