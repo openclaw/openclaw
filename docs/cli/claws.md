@@ -185,14 +185,28 @@ Use `--force-referenced` only after reviewing the displayed dependents,
 independent owners, and pre-existing origin. It allows selected cleanup despite
 those conflicts; it does not skip plan-integrity consent.
 
+## Export an installed agent
+
+Export creates a new package directory and fails if the destination exists or
+managed state has drifted:
+
+```bash
+openclaw claws export incident-triage --out ./incident-triage-export --json
+```
+
+The result contains `package.json`, `openclaw.claw.json`, and managed workspace
+sidecars. It is a portable Claw package, not a whole-instance backup: unrelated
+agents, credentials, sessions, and unowned local state are excluded.
+
 ## Command reference
 
-| Command                        | Purpose                                             |
-| ------------------------------ | --------------------------------------------------- |
-| `claws inspect <source>`       | Validate a package directory or JSON manifest.      |
-| `claws add <source>`           | Preview or create one new agent and workspace.      |
-| `claws status [claw-or-agent]` | Report installed state, ownership, and drift.       |
-| `claws remove <claw-or-agent>` | Preview or remove the agent and eligible resources. |
+| Command                             | Purpose                                             |
+| ----------------------------------- | --------------------------------------------------- |
+| `claws inspect <source>`            | Validate a package directory or JSON manifest.      |
+| `claws add <source>`                | Preview or create one new agent and workspace.      |
+| `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
+| `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
+| `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
 
 Use `--json` for experimental machine-readable output.
 
