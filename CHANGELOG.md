@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - **iOS offline chat:** pre-paint recent sessions and canonical transcripts from a protected, bounded per-gateway cache, keep sending disabled offline, and purge cached conversation text when pairing is reset. (#100194)
 - **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
 - **Control UI Talk controls:** keep voice, model, sensitivity, and other realtime defaults in Settings → Communications → Talk, and use the composer microphone caret to select any browser audio input. (#101046)
+- **Control UI dictation:** hold the composer microphone button to stream speech transcription, preview partial text, and insert the final transcript at the cursor without sending.
 - **Control UI session workspace shortcut:** expand or collapse the active Chat pane's session workspace rail with ⇧⌘B without changing the main app sidebar or the separate detail and Canvas preview panel. Thanks @shakkernerd.
 - **Control UI Settings shortcut:** open Settings with ⇧⌘, while leaving the browser-owned ⌘, shortcut unchanged. Thanks @shakkernerd.
 - **Control UI chat layout:** center the transcript on the composer axis, keep assistant and tool output left and user bubbles right within the same readable frame, and preserve custom message-width overrides. (#104474) Thanks @shakkernerd.

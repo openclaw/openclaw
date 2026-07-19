@@ -151,6 +151,15 @@ describe("renderChatComposer controls", () => {
     });
     expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
 
+    const onToggleWithDraft = vi.fn();
+    view = renderComposer({
+      draft: "Keep this text",
+      onToggleRealtimeTalk: onToggleWithDraft,
+    });
+    button(view.container, t("chat.composer.startVoiceInput")).click();
+    expect(onToggleWithDraft).toHaveBeenCalledOnce();
+    expect(button(view.container, t("chat.runControls.sendMessage"))).toBeTruthy();
+
     view = renderComposer({
       canAbort: true,
       draft: "Replace the current run",
@@ -354,7 +363,7 @@ describe("renderChatComposer controls", () => {
     );
   });
 
-  it("sends attachment-only drafts instead of starting voice", () => {
+  it("keeps send and dictation distinct for attachment-only drafts", () => {
     const onSend = vi.fn();
     const onToggleRealtimeTalk = vi.fn();
     const { container } = renderComposer({
@@ -368,7 +377,7 @@ describe("renderChatComposer controls", () => {
     expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
     expect(
       container.querySelector(`button[aria-label="${t("chat.composer.startVoiceInput")}"]`),
-    ).toBeNull();
+    ).not.toBeNull();
   });
 
   it("keeps voice and generation stop controls distinct when both are active", () => {
