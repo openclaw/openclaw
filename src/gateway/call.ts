@@ -91,6 +91,16 @@ type CallGatewayBaseOptions = {
   requiredStoredDeviceAuthScopes?: OperatorScope[];
   requireLocalBackendSharedAuth?: boolean;
   deviceIdentity?: DeviceIdentity | null;
+  /**
+   * Forces device identity to be attached even for BACKEND + GATEWAY_CLIENT
+   * loopback shared-token calls (which normally omit it). Set by internal
+   * callers that negotiate explicit operator scopes against the paired device
+   * token — e.g. subagent lifecycle/announce calls — so the gateway can verify
+   * those scopes. Without it, such calls fail with "missing scope: ...".
+   * See #77807. Does not affect direct-local shared-token calls that don't
+   * opt in.
+   */
+  requireDeviceIdentity?: boolean;
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
@@ -493,6 +503,16 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  // Callers that must verify explicit operator scopes against the paired
+  // device token (e.g. subagent completion announce) opt in via
+  // `requireDeviceIdentity`. Without device identity, those loopback backend
+  // calls fail with "missing scope: operator.write" even when the device has
+  // full scopes. Fixes #77807. This is intentionally narrow: it does not fire
+  // for ordinary scoped backend calls (which keep the direct-local
+  // shared-token contract of omitting device identity).
+  if (params.opts.requireDeviceIdentity === true) {
+    return false;
+  }
   // Inactive ambient credentials must not turn an auth-none CLI call device-less.
   // Omit identity only when the Gateway will actually authenticate the supplied secret.
   const hasSharedSecretAuth =
