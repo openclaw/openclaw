@@ -219,4 +219,33 @@ describe("DefaultResourceLoader", () => {
       consoleError.mockRestore();
     }
   });
+
+  it("does not warn when context file candidates are missing", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const root = tempDirs.make("openclaw-resource-loader-ctx-");
+
+    try {
+      const loader = new DefaultResourceLoader({
+        cwd: root,
+        agentDir: root,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: false,
+      });
+
+      await loader.reload();
+
+      // The ancestor walk probes AGENTS.md/CLAUDE.md candidates in every parent
+      // directory; missing files must be skipped silently, matching the previous
+      // existsSync-gated behavior (no "Could not read" warning spam at startup).
+      const couldNotReadCalls = consoleError.mock.calls.filter((call) =>
+        call.some((arg) => typeof arg === "string" && arg.includes("Could not read")),
+      );
+      expect(couldNotReadCalls).toEqual([]);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });

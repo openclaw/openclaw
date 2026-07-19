@@ -93,8 +93,14 @@ function readTextFileSafely(filePath: string, maxBytes: number): string | undefi
     const buffer = Buffer.alloc(stats.size);
     readSync(fd, buffer, 0, stats.size, 0);
     return buffer.toString("utf-8");
-  } catch {
-    console.error(chalk.yellow(`Warning: Could not read ${filePath}: unable to stat file`));
+  } catch (error) {
+    // Missing candidates are an ordinary absence, not a warning: the ancestor walk
+    // probes all four filenames in every parent directory, so warning on ENOENT
+    // would spam every session startup (existsSync gated this silently before).
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${String(error)}`));
+    }
     return undefined;
   } finally {
     if (fd !== undefined) {
