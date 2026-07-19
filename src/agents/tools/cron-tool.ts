@@ -40,6 +40,7 @@ import {
   canonicalizeCronToolObject,
   hasCronCreateSignal,
   isEmptyRecoveredCronPatch,
+  mergeCronObjectWithFlatParams,
   recoverCronObjectFromFlatParams,
 } from "./cron-tool-canonicalize.js";
 import { capCronJobToolsAllowOnCreate } from "./cron-tool-creator-cap.js";
@@ -86,8 +87,111 @@ const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
-function isMissingOrEmptyObject(value: unknown): boolean {
-  return !value || (isRecord(value) && Object.keys(value).length === 0);
+function normalizeFlatStringArrayArgument(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed ? [trimmed] : [];
+}
+
+function normalizeCronPayloadArrayHints(value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  if (Object.hasOwn(value, "toolsAllow")) {
+    value.toolsAllow = normalizeFlatStringArrayArgument(value.toolsAllow);
+  }
+  if (Object.hasOwn(value, "fallbacks")) {
+    value.fallbacks = normalizeFlatStringArrayArgument(value.fallbacks);
+  }
+}
+
+function recoverCronWriteArguments(params: {
+  next: Record<string, unknown>;
+  action: "add" | "update";
+  nestedName: "job" | "patch";
+}): { recovered: boolean; hadNested: boolean } {
+  const synthetic = recoverCronObjectFromFlatParams(params.next);
+  const nestedRaw = params.next[params.nestedName];
+  const nested = isRecord(nestedRaw) ? canonicalizeCronToolObject(nestedRaw) : undefined;
+  const hadNested = Boolean(nested && Object.keys(nested).length > 0);
+
+  if (hadNested && nested && synthetic.found) {
+    params.next[params.nestedName] = mergeCronObjectWithFlatParams({
+      action: params.action,
+      nestedName: params.nestedName,
+      nested,
+      flat: synthetic.value,
+    });
+  } else if (
+    params.action === "update" &&
+    synthetic.found &&
+    isEmptyRecoveredCronPatch(synthetic.value)
+  ) {
+    delete params.next[params.nestedName];
+  } else if (synthetic.found) {
+    params.next[params.nestedName] = synthetic.value;
+  } else if (nested) {
+    params.next[params.nestedName] = nested;
+  }
+
+  for (const key of synthetic.consumedKeys) {
+    delete params.next[key];
+  }
+  return { recovered: synthetic.found, hadNested };
+}
+
+function prepareCronToolArguments(args: unknown): Record<string, unknown> {
+  const next = isRecord(args) ? { ...args } : {};
+
+  if (next.action === "add") {
+    // The shared flat schema needs nullable update clears. On add, null means
+    // inherit the default, so omit it before synthesizing the create payload.
+    for (const key of ["model", "fallbacks", "toolsAllow"] as const) {
+      if (next[key] === null) {
+        delete next[key];
+      }
+    }
+  }
+
+  if (Object.hasOwn(next, "toolsAllow")) {
+    next.toolsAllow = normalizeFlatStringArrayArgument(next.toolsAllow);
+  }
+  if (Object.hasOwn(next, "fallbacks")) {
+    next.fallbacks = normalizeFlatStringArrayArgument(next.fallbacks);
+  }
+
+  if (isRecord(next.job)) {
+    normalizeCronPayloadArrayHints(next.job.payload);
+  }
+  if (isRecord(next.patch)) {
+    normalizeCronPayloadArrayHints(next.patch.payload);
+  }
+
+  if (next.action === "add") {
+    const recovery = recoverCronWriteArguments({ next, action: "add", nestedName: "job" });
+    if (
+      recovery.recovered &&
+      !recovery.hadNested &&
+      isRecord(next.job) &&
+      !hasCronCreateSignal(next.job)
+    ) {
+      delete next.job;
+    }
+  }
+
+  if (next.action === "update") {
+    const recovery = recoverCronWriteArguments({ next, action: "update", nestedName: "patch" });
+    if (recovery.recovered && !recovery.hadNested && isRecord(next.patch)) {
+      const normalizedPatch = normalizeCronJobPatch(next.patch) ?? next.patch;
+      if (isEmptyRecoveredCronPatch(normalizedPatch)) {
+        delete next.patch;
+      }
+    }
+  }
+
+  return next;
 }
 
 function nullableStringSchema(description: string) {
@@ -381,12 +485,118 @@ function createCronPatchObjectSchema(): TSchema {
   );
 }
 
+// Flat top-level mirror of the most common nested job fields, for models that
+// flatten args instead of nesting them under `job`. Every key here must be a
+// recognised flat key in cron-tool-canonicalize.ts (CRON_FLAT_PAYLOAD_KEYS /
+// CRON_FLAT_SCHEDULE_KEYS); otherwise the canonicalizer silently drops it.
+// cron-tool.schema.test.ts guards that invariant.
+function createCronFlatJobSchemaProperties() {
+  return {
+    name: Type.Optional(
+      Type.String({
+        description: 'Flat job name for action="add" or action="update"',
+      }),
+    ),
+    enabled: Type.Optional(
+      Type.Boolean({
+        description: 'Flat enabled flag for action="add" or action="update"',
+      }),
+    ),
+    sessionTarget: Type.Optional(
+      Type.String({
+        description:
+          'Flat job target for action="add" or action="update": main | isolated | current | session:<id>',
+      }),
+    ),
+    at: Type.Optional(
+      Type.String({
+        description: 'Flat one-shot ISO-8601 time for action="add" or action="update"',
+      }),
+    ),
+    everyMs: optionalPositiveIntegerSchema({
+      description: 'Flat recurring interval ms for action="add" or action="update"',
+    }),
+    expr: Type.Optional(
+      Type.String({
+        description: 'Flat cron expression for action="add" or action="update"',
+      }),
+    ),
+    tz: Type.Optional(
+      Type.String({
+        description: "IANA timezone for a flat cron expression",
+      }),
+    ),
+    message: Type.Optional(
+      Type.String({
+        description:
+          'Flat agentTurn prompt for action="add" or action="update"; implies an agentTurn payload',
+      }),
+    ),
+    anchorMs: optionalNonNegativeIntegerSchema({
+      description: "Flat start anchor ms for a flat everyMs schedule",
+    }),
+    model: Type.Optional(
+      Type.Union([Type.String(), Type.Null()], {
+        description:
+          "Flat agentTurn model override; implies an agentTurn payload, or null to clear on update",
+      }),
+    ),
+    fallbacks: nullableStringArraySchema(
+      "Flat agentTurn fallback models; implies an agentTurn payload, or null to clear on update",
+    ),
+    toolsAllow: nullableStringArraySchema(
+      "Flat agentTurn allowed tool ids; implies an agentTurn payload, or null to clear on update",
+    ),
+    thinking: Type.Optional(
+      Type.String({
+        description: "Flat agentTurn thinking override; implies an agentTurn payload",
+      }),
+    ),
+    timeoutSeconds: optionalFiniteNumberSchema({
+      minimum: 0,
+      description: "Flat agentTurn timeout seconds; implies an agentTurn payload",
+    }),
+    script: Type.Optional(
+      Type.String({
+        description:
+          'Flat headless script payload for action="add" or action="update"; implies a script payload',
+      }),
+    ),
+    toolBudget: optionalPositiveIntegerSchema({
+      description: "Flat maximum tool calls for a script payload",
+    }),
+    pacingMin: Type.Optional(
+      Type.String({
+        description: 'Flat minimum dynamic delay for action="add" or action="update"',
+      }),
+    ),
+    pacingMax: Type.Optional(
+      Type.String({
+        description: 'Flat maximum dynamic delay for action="add" or action="update"',
+      }),
+    ),
+    triggerScript: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 65_536,
+        description: 'Flat trigger script for action="add" or action="update"',
+      }),
+    ),
+    triggerOnce: Type.Optional(
+      Type.Boolean({
+        description: "Flat flag to disable a trigger after its first successful fire",
+      }),
+    ),
+  };
+}
+
 // Flattened schema: runtime validates per-action requirements.
 function createCronToolSchema(): TSchema {
   return Type.Object(
     {
       action: stringEnum(CRON_ACTIONS),
       ...gatewayCallOptionSchemaProperties(),
+      ...createCronFlatJobSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
       job: createCronJobObjectSchema(),
       jobId: Type.Optional(Type.String()),
@@ -397,8 +607,15 @@ function createCronToolSchema(): TSchema {
           description: 'Relative duration for action="next_check" (for example, "15m")',
         }),
       ),
-      text: Type.Optional(Type.String()),
-      mode: optionalStringEnum(CRON_WAKE_MODES),
+      text: Type.Optional(
+        Type.String({
+          description:
+            'Wake event text; for action="add" or action="update", flat systemEvent text implies a systemEvent payload',
+        }),
+      ),
+      mode: optionalStringEnum(CRON_WAKE_MODES, {
+        description: 'Wake timing for action="wake" only; not cron job delivery mode',
+      }),
       runMode: optionalStringEnum(CRON_RUN_MODES, {
         description:
           'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
@@ -730,13 +947,19 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
 
 ACTIONS:
 - status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId
-- add job; update jobId+patch; remove jobId
+- add/update using the flat fields below; nested job/patch remain accepted for compatibility; remove jobId
 - run jobId (due only; runMode="force" now); runs jobId history; next_check in (current paced job only)
 - wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.
 
 ADD JOB:
 { "name":"...", "schedule":{...}, "pacing":{ "min":"15m", "max":"4h" }, "trigger":{ "script":"...", "once":false }, "payload":{...}, "delivery":{...}, "sessionTarget":"main|isolated|current|session:<id>", "enabled":true }
 Required: schedule,payload. enabled default true. trigger only every/cron.
+
+FLAT JOB FIELDS (add/update; prefer when nested object args are unreliable):
+{ "action":"add", "name":"...", "at":"<ISO-8601>"|"everyMs":<ms>|"expr":"<cron>", "tz":"<optional-IANA>", "message":"<agentTurn prompt>"|"text":"<systemEvent text>", "sessionTarget":"main|isolated|current|session:<id>", "enabled":true }
+Exactly one schedule field: at, everyMs, or expr. message => agentTurn; text => systemEvent.
+Script payload: script + optional timeoutSeconds/toolBudget. Dynamic cadence: pacingMin and/or pacingMax. Trigger: triggerScript + optional triggerOnce.
+Use flat fields only when possible. Disjoint flat fields merge with a nested job/patch, but schedule/payload/pacing/trigger groups must not be split across both forms; exact duplicates are accepted and conflicts error.
 
 TARGET/PAYLOAD:
 - main => systemEvent {kind:"systemEvent",text:"..."} or script; systemEvent defaults main.
@@ -765,8 +988,9 @@ DELIVERY top-level: {mode:"none|announce|webhook",channel?,to?,threadId?,bestEff
 
 Restricted isolated runs may only self status/list, current get/runs/remove, and next_check for their own paced job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.`,
     parameters: createCronToolSchema(),
+    prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      const params = prepareCronToolArguments(args);
       const action = readStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
       const parsedGatewayOpts = readGatewayCallOptions(params);
@@ -849,20 +1073,10 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
             );
           }
           case "add": {
-            // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
-            // job properties to the top level alongside `action` instead of nesting
-            // them inside `job`. When `params.job` is missing or empty, reconstruct
-            // a synthetic job object from any recognised top-level job fields.
-            // See: https://github.com/openclaw/openclaw/issues/11310
-            if (isMissingOrEmptyObject(params.job)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
-              // Only use the synthetic job if at least one meaningful field is present
-              // (schedule, payload, message, or text are the minimum signals that the
-              // LLM intended to create a job).
-              if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
-                params.job = synthetic.value;
-              }
-            }
+            // Checked on the raw params as well as the canonical job below:
+            // flat recovery drops command/cwd, so only this pre-recovery check
+            // can reject them loudly instead of silently swallowing them.
+            assertNoCronShellExecution(params);
 
             if (!params.job || typeof params.job !== "object") {
               throw new Error("job required");
@@ -996,16 +1210,10 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
             if (!id) {
               throw new Error("jobId required (id accepted for backward compatibility)");
             }
-
-            // Flat-params recovery for patch
-            let recoveredFlatPatch = false;
-            if (isMissingOrEmptyObject(params.patch)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
-              if (synthetic.found) {
-                params.patch = synthetic.value;
-                recoveredFlatPatch = true;
-              }
-            }
+            // Checked on the raw params as well as the canonical patch below:
+            // flat recovery drops command/cwd, so only this pre-recovery check
+            // can reject them loudly instead of silently swallowing them.
+            assertNoCronShellExecution(params);
 
             if (!params.patch || typeof params.patch !== "object") {
               throw new Error("patch required");
@@ -1023,9 +1231,6 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
               throw new Error("displayName must be a non-empty string or null");
             }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
-            if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
-              throw new Error("patch required");
-            }
             if (callerScope && "agentId" in patch) {
               throw new Error("cron patch agentId cannot be changed by the agent cron tool");
             }

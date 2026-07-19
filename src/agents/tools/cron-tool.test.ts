@@ -95,6 +95,93 @@ describe("cron tool", () => {
     expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
+  it("prepares flat add arguments before schema validation when toolsAllow is scalar and job is malformed", () => {
+    const tool = createTestCronTool();
+    const prepared = tool.prepareArguments?.({
+      action: "add",
+      name: "flatfield-test-DELETEME",
+      enabled: false,
+      expr: "0 */6 * * *",
+      message: "Flat-field test job",
+      model: "openai/gpt-5.4",
+      toolsAllow: "exec",
+      job: "truncated",
+    }) as
+      | {
+          job?: {
+            name?: string;
+            enabled?: boolean;
+            schedule?: { kind?: string; expr?: string };
+            payload?: { kind?: string; message?: string; model?: string; toolsAllow?: string[] };
+          };
+        }
+      | undefined;
+
+    expect(prepared?.job).toEqual({
+      name: "flatfield-test-DELETEME",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 */6 * * *" },
+      payload: {
+        kind: "agentTurn",
+        message: "Flat-field test job",
+        model: "openai/gpt-5.4",
+        toolsAllow: ["exec"],
+      },
+    });
+  });
+
+  it("leaves meaningless recovered updates for execute to reject", async () => {
+    const tool = createTestCronTool();
+    const input = {
+      action: "update",
+      jobId: "job-empty-update",
+      payload: {},
+    };
+    const prepared = tool.prepareArguments?.(input) as { patch?: unknown } | undefined;
+
+    expect(prepared?.patch).toBeUndefined();
+    await expect(tool.execute("call-prepared-empty-update", prepared)).rejects.toThrow(
+      "patch required",
+    );
+    await expect(tool.execute("call-empty-update", input)).rejects.toThrow("patch required");
+    await expect(tool.execute("call-empty-patch-update", { ...input, patch: {} })).rejects.toThrow(
+      "patch required",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the same prepared flat arguments during execution", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    const tool = createTestCronTool();
+    const prepared = tool.prepareArguments?.({
+      action: "update",
+      jobId: "job-prepared-update",
+      enabled: false,
+    });
+
+    await tool.execute("call-prepared-update", prepared);
+
+    expect(expectSingleGatewayCallMethod("cron.update")).toEqual({
+      id: "job-prepared-update",
+      patch: { enabled: false },
+    });
+  });
+
+  it("prepares flat write arguments idempotently", () => {
+    const tool = createTestCronTool();
+    const input = {
+      action: "add",
+      name: "idempotent watcher",
+      everyMs: 60_000,
+      message: "report the change",
+      pacingMin: "15m",
+      triggerScript: "json({ fire: false })",
+    };
+
+    const prepared = tool.prepareArguments?.(input);
+    expect(tool.prepareArguments?.(prepared)).toEqual(prepared);
+  });
+
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
     name: string;
     schedule: { at: string };
@@ -2052,23 +2139,20 @@ describe("cron tool", () => {
     ).rejects.toThrow("job required");
   });
 
-  it("prefers existing non-empty job over flat params", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
+  it("rejects conflicting flat params beside an existing non-empty job", async () => {
     const tool = createTestCronTool();
-    await tool.execute("call-nested-wins", {
-      action: "add",
-      job: {
-        name: "nested-job",
-        schedule: { kind: "at", at: new Date(123).toISOString() },
-        payload: { kind: "systemEvent", text: "from nested" },
-      },
-      name: "flat-name-should-be-ignored",
-    });
-
-    const call = readGatewayCall();
-    expect(call?.params?.name).toBe("nested-job");
-    expect((call?.params?.payload as { text?: string } | undefined)?.text).toBe("from nested");
+    await expect(
+      tool.execute("call-nested-conflict", {
+        action: "add",
+        job: {
+          name: "nested-job",
+          schedule: { kind: "at", at: new Date(123).toISOString() },
+          payload: { kind: "systemEvent", text: "from nested" },
+        },
+        name: "conflicting-flat-name",
+      }),
+    ).rejects.toThrow("cannot mix job.name with conflicting flat name");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("does not infer delivery when mode is none", async () => {
@@ -2702,6 +2786,44 @@ describe("cron tool", () => {
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
       toolsAllow: null,
+    });
+  });
+
+  it("preserves nullable flat update clears for model, fallbacks, and toolsAllow", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-clear-flat-payload", {
+      action: "update",
+      id: "job-clear-flat-payload",
+      model: null,
+      fallbacks: null,
+      toolsAllow: null,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            payload?: {
+              kind?: string;
+              model?: string | null;
+              fallbacks?: string[] | null;
+              toolsAllow?: string[] | null;
+            };
+          };
+        }
+      | undefined;
+    expect(params).toEqual({
+      id: "job-clear-flat-payload",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          model: null,
+          fallbacks: null,
+          toolsAllow: null,
+        },
+      },
     });
   });
 

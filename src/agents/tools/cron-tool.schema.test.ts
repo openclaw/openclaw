@@ -3,6 +3,7 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { recoverCronObjectFromFlatParams } from "./cron-tool-canonicalize.js";
 import { createCronTool } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
@@ -95,6 +96,102 @@ describe("createCronToolSchema", () => {
         "wakeMode",
       ].toSorted(),
     );
+  });
+
+  it("exposes provider-compatible flat add fields for models that cannot nest job objects", () => {
+    expect(propertyAt(schemaRecord, "name")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "enabled")).toMatchObject({ type: "boolean" });
+    expect(propertyAt(schemaRecord, "sessionTarget")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "at")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "everyMs")).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
+    expect(propertyAt(schemaRecord, "expr")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "tz")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "message")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "text")?.description).toMatch(/systemEvent/i);
+    expect(propertyAt(schemaRecord, "mode")?.description).toMatch(/wake.*only/i);
+    expect(propertyAt(schemaRecord, "script")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "toolBudget")).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
+    expect(propertyAt(schemaRecord, "pacingMin")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "pacingMax")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "triggerScript")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "triggerOnce")).toMatchObject({ type: "boolean" });
+  });
+
+  it("exposes flat agentTurn payload fields the runtime already recovers", () => {
+    expect(propertyAt(schemaRecord, "thinking")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "timeoutSeconds")).toMatchObject({
+      type: "number",
+      minimum: 0,
+    });
+    expect(propertyAt(schemaRecord, "anchorMs")).toMatchObject({ type: "integer", minimum: 0 });
+  });
+
+  it("accepts nullable flat update clears for model and tool selection overrides", () => {
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        jobId: "job-1",
+        model: null,
+        fallbacks: null,
+        toolsAllow: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts prepared flat update clears after they are synthesized into patch payload", () => {
+    const tool = createCronTool();
+    const prepared = tool.prepareArguments?.({
+      action: "update",
+      jobId: "job-1",
+      model: null,
+      fallbacks: null,
+      toolsAllow: null,
+    });
+
+    expect(Value.Check(schema, prepared)).toBe(true);
+  });
+
+  // Drift guard: every flat field the schema advertises must be a key the
+  // canonicalizer recovers into the nested job/patch shape. A field that is not
+  // recoverable would be silently dropped, so a model would set it with no
+  // effect. Keys that route the call itself (action, job/patch targeting,
+  // gateway options, wake/run/list options) are the only advertised keys the
+  // canonicalizer may ignore; adding one here needs the same scrutiny.
+  it("only advertises flat fields the canonicalizer can recover", () => {
+    const callRoutingFields = new Set([
+      "action",
+      "contextMessages",
+      "gatewayToken",
+      "gatewayUrl",
+      "id",
+      "includeDisabled",
+      "in",
+      "job",
+      "jobId",
+      "mode",
+      "patch",
+      "runMode",
+      "timeoutMs",
+    ]);
+    const topLevelFields = Object.keys(
+      (schemaRecord["properties"] ?? {}) as Record<string, unknown>,
+    );
+    const flatFields = topLevelFields.filter((field) => !callRoutingFields.has(field));
+    expect(flatFields.length).toBeGreaterThan(0);
+    for (const field of flatFields) {
+      // `found` reflects key recognition before value normalization, so a
+      // placeholder value is enough to prove the key is not dropped.
+      expect({ field, found: recoverCronObjectFromFlatParams({ [field]: true }).found }).toEqual({
+        field,
+        found: true,
+      });
+    }
   });
 
   it("exposes next_check with its relative duration parameter", () => {
@@ -334,6 +431,15 @@ describe("createCronToolSchema", () => {
     expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
     expect(patchProps?.payload?.properties?.model?.type).toBe("string");
     expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
+  });
+
+  it("flat nullable update-clear fields project to plain provider-compatible types", () => {
+    expect(propertyAt(providerSchemaRecord, "model")).toMatchObject({ type: "string" });
+    expect(propertyAt(providerSchemaRecord, "fallbacks")).toMatchObject({ type: "array" });
+    expect(propertyAt(providerSchemaRecord, "toolsAllow")).toMatchObject({ type: "array" });
+    expect(propertyAt(providerSchemaRecord, "model")?.description).toMatch(/null to clear/i);
+    expect(propertyAt(providerSchemaRecord, "fallbacks")?.description).toMatch(/null to clear/i);
+    expect(propertyAt(providerSchemaRecord, "toolsAllow")?.description).toMatch(/null to clear/i);
   });
 
   it("projects nullable cron fields for Gemini models behind OpenAI-compatible providers", () => {

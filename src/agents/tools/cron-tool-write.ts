@@ -16,9 +16,22 @@ export function assertNoCronShellExecution(value: unknown): void {
     );
   }
   const schedule = isRecord(value.schedule) ? value.schedule : undefined;
-  if (schedule?.kind === "on-exit") {
+  // value.kind covers raw flat params before schedule recovery.
+  if (schedule?.kind === "on-exit" || value.kind === "on-exit") {
     throw new Error(
       "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
+  // command/cwd are intentionally not recovered by the model-facing
+  // canonicalizer. Reject them before recovery so they cannot be dropped.
+  if (
+    value.command !== undefined ||
+    value.cwd !== undefined ||
+    schedule?.command !== undefined ||
+    schedule?.cwd !== undefined
+  ) {
+    throw new Error(
+      "cron command/cwd fields cannot be set through the agent cron tool; use the CLI or Gateway API.",
     );
   }
 }
