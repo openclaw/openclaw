@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { SidebarSessionNarrationController } from "./app-sidebar-session-narration.ts";
@@ -60,6 +60,12 @@ describe("SidebarSessionNarrationController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
+  });
+
+  afterEach(() => {
+    // isolate:false shares the worker clock: a leaked fake timer deterministically
+    // times out unrelated later files (seen: chat-background-tasks 60s hangs).
+    vi.useRealTimers();
   });
 
   it("publishes assistant commentary and throttles a newer tool signal", async () => {
