@@ -49,6 +49,14 @@ async function installedFixture(
         ...(options.extraWorkspaceFiles ?? []).map((path) => ({ source: `source/${path}`, path })),
       ],
     },
+    cronJobs: [
+      {
+        id: "daily-report",
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
+        session: "isolated",
+        message: "Prepare report",
+      },
+    ],
   });
   if (!parsed.ok) {
     throw new Error(JSON.stringify(parsed.diagnostics));
@@ -75,6 +83,7 @@ async function installedFixture(
     commitConfig: async (transform) => {
       config = transform(config);
     },
+    cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
   });
   if (options.withPackage) {
     persistClawPackageRef(
@@ -143,7 +152,14 @@ describe("exportClawAgent", () => {
           },
         ],
         mcpServers: {},
-        cronJobs: [],
+        cronJobs: [
+          {
+            id: "daily-report",
+            schedule: { cron: "0 9 * * *", timezone: "UTC" },
+            session: "isolated",
+            message: "Prepare report",
+          },
+        ],
       },
     });
     const packageJson = JSON.parse(await readFile(join(out, "package.json"), "utf8"));
