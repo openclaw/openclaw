@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
-import { sendLineReplyChunks } from "./reply-chunks.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
 type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps"];
@@ -42,12 +41,6 @@ describe("deliverLineAutoReply", () => {
 
   function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
     const replyMessageLine = vi.fn(async () => ({}));
-    const pushMessageLine = vi.fn(async () => ({}));
-    const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
-    const createTextMessageWithQuickReplies = vi.fn((text: string) => ({
-      type: "text" as const,
-      text,
-    }));
     const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
     const buildMediaMessage: LineAutoReplyDeps["buildMediaMessage"] = vi.fn(
       async (mediaUrl, options) => {
@@ -83,11 +76,7 @@ describe("deliverLineAutoReply", () => {
       buildTemplateMessageFromPayload: () => null,
       processLineMessage: (text) => ({ text, flexMessages: [] }),
       chunkMarkdownText: (text) => [text],
-      sendLineReplyChunks,
       replyMessageLine,
-      pushMessageLine,
-      pushTextMessageWithQuickReplies,
-      createTextMessageWithQuickReplies,
       createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
       pushMessagesLine,
       createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
@@ -99,9 +88,6 @@ describe("deliverLineAutoReply", () => {
     return {
       deps,
       replyMessageLine,
-      pushMessageLine,
-      pushTextMessageWithQuickReplies,
-      createTextMessageWithQuickReplies,
       createQuickReplyItems,
       buildMediaMessage,
       pushMessagesLine,
@@ -268,9 +254,7 @@ describe("deliverLineAutoReply", () => {
 
   it("suppresses an internal-only auto-reply without consuming the reply token", async () => {
     const processLineMessage = vi.fn((text: string) => ({ text, flexMessages: [] }));
-    const { deps, replyMessageLine, pushMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage,
-    });
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({ processLineMessage });
 
     const result = await deliverLineAutoReply({
       ...baseDeliveryParams,
@@ -281,7 +265,6 @@ describe("deliverLineAutoReply", () => {
 
     expect(processLineMessage).not.toHaveBeenCalled();
     expect(replyMessageLine).not.toHaveBeenCalled();
-    expect(pushMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();
     expect(result).toEqual({
       status: "delivered",
@@ -314,32 +297,35 @@ describe("deliverLineAutoReply", () => {
     expect(result.visibleReplySent).toBe(true);
   });
 
-  it("tags a later chunk failure after the reply batch without replaying delivered text", async () => {
+  it("adopts the reply token after a later batch fails without replaying delivered text", async () => {
     const pushError = new Error("later push failed");
-    const pushMessageLine = vi.fn(async () => {
+    const pushMessagesLine = vi.fn(async () => {
       throw pushError;
     });
     const { deps, replyMessageLine } = createDeps({
       chunkMarkdownText: () => ["1", "2", "3", "4", "5", "6"],
-      pushMessageLine: pushMessageLine as LineAutoReplyDeps["pushMessageLine"],
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
-    await expect(
-      deliverLineAutoReply({
-        ...baseDeliveryParams,
-        payload: { text: "six chunks" },
-        lineData: {},
-        deps,
-      }),
-    ).rejects.toMatchObject({
-      message: "later push failed",
-      sentBeforeError: true,
-      visibleReplySent: true,
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "six chunks" },
+      lineData: {},
+      deps,
     });
 
+    expect(result).toMatchObject({
+      status: "partial",
+      replyTokenUsed: true,
+      error: {
+        message: "later push failed",
+        sentBeforeError: true,
+        visibleReplySent: true,
+      },
+    });
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
-    expect(pushMessageLine).toHaveBeenCalledTimes(1);
-    expect(pushMessageLine).toHaveBeenCalledWith("line:user:1", "6", {
+    expect(pushMessagesLine).toHaveBeenCalledTimes(1);
+    expect(pushMessagesLine).toHaveBeenCalledWith("line:user:1", [{ type: "text", text: "6" }], {
       cfg: LINE_TEST_CFG,
       accountId: "acc",
     });
@@ -378,7 +364,6 @@ describe("deliverLineAutoReply", () => {
     const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
-      sendLineReplyChunks: vi.fn(async () => ({ replyTokenUsed: false })),
     });
 
     const result = await deliverLineAutoReply({
@@ -442,18 +427,10 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("uses fallback text for quick-reply-only payloads", async () => {
-    const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
-      type: "text" as const,
-      text,
-      quickReply: { items: ["A", "B"] },
-    }));
     const lineData = {
       quickReplies: ["A", "B"],
     };
-    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
-      createTextMessageWithQuickReplies:
-        createTextMessageWithQuickReplies as LineAutoReplyDeps["createTextMessageWithQuickReplies"],
-    });
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps();
 
     const result = await deliverLineAutoReply({
       ...baseDeliveryParams,
@@ -813,7 +790,7 @@ describe("deliverLineAutoReply", () => {
         deps,
       }),
     ).rejects.toMatchObject({
-      message: "LINE rich or media message send failed",
+      message: "LINE message send failed",
       cause: failure,
     });
   });
