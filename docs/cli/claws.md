@@ -118,6 +118,25 @@ changing the behavior of ordinary cron commands. Removal rereads the live job
 through the Gateway and preserves it when its owned definition changed after
 planning.
 
+MCP declarations use the existing `mcp.servers` configuration model:
+
+```json
+{
+  "mcpServers": {
+    "statuspage": {
+      "command": "npx",
+      "args": ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      "env": { "STATUSPAGE_TOKEN": "${STATUSPAGE_TOKEN}" }
+    }
+  }
+}
+```
+
+Environment references remain references; Claws do not embed resolved secret
+values. A collision-free declaration becomes managed, while an exact existing
+or shared declaration is referenced. Preview, provenance, status, export, and
+removal follow the same ownership policy as other Claw resources.
+
 ## Inspect and preview
 
 Validate the source without planning local changes:
@@ -160,8 +179,8 @@ openclaw claws status
 openclaw claws status incident-triage --json
 ```
 
-`status` compares the installed agent and its recorded workspace, package, and
-cron provenance with current state. It reports incomplete installs, missing
+`status` compares the installed agent and its recorded workspace, package, MCP,
+and cron provenance with current state. It reports incomplete installs, missing
 resources, and drift without changing local state.
 
 Claw provenance distinguishes two relationships:
@@ -238,3 +257,4 @@ Use `--json` for experimental machine-readable output.
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)
 - [Cron jobs](/automation/cron-jobs)
+- [MCP configuration](/gateway/configuration-reference#mcp)
