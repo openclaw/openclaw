@@ -13,6 +13,7 @@ import { resolveSimpleCompletionModelResolverWorkspace } from "../../agents/simp
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -188,12 +189,12 @@ function setup(entry: SessionEntry = sessionEntry) {
       modelParams.modelResolver,
     );
     await modelParams.modelResolver?.(PROVIDER, MODEL, modelParams.agentDir, modelParams.cfg, {});
+    const apiRegistry = {};
     return {
-      model: logicalModel,
-      modelRegistry: {
-        apiRegistry: {},
-        llmRuntime: { streamSimple: fallbackStream },
-      } as never,
+      model: bindModelLlmRuntime(logicalModel, {
+        registry: apiRegistry,
+        streamSimple: fallbackStream,
+      } as never),
       auth: {
         apiKey: AUTH_MARKER,
         profileId: PROFILE,

@@ -1145,7 +1145,7 @@ export async function runBtwSideQuestion(
     }
   }
   runtimeModel = applySecretRefHeaderSentinels(runtimeModel, params.cfg);
-  const modelRegistryRuntime = getModelRegistryRuntime(runtime.modelRegistry);
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
 
   // Use the provider's own stream fn so providers like Ollama (which build
   // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct

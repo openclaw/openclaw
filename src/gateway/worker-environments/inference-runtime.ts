@@ -38,7 +38,6 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { resolveProviderModelRouteAuthRequirement } from "../../agents/provider-model-route-auth.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import { getModelRegistryRuntime } from "../../agents/sessions/model-registry-runtime.js";
 import {
   prepareSimpleCompletionModel,
   type PreparedSimpleCompletionModel,
@@ -55,13 +54,13 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
   Model,
   SimpleStreamOptions,
-  StreamFn,
   Tool,
   Usage,
 } from "../../llm/types.js";
@@ -633,6 +632,10 @@ export function createWorkerInferenceExecutor(
       model: approved.model,
     };
     const logicalModel = approved.prepared.model;
+    const llmRuntime = getModelLlmRuntime(logicalModel);
+    if (!llmRuntime) {
+      throw new Error("Prepared worker model has no lifecycle runtime owner");
+    }
     const providerModel =
       logicalModel.provider === "openai" && logicalModel.api === "openai-chatgpt-responses"
         ? {
@@ -647,11 +650,10 @@ export function createWorkerInferenceExecutor(
       workspaceDir: approved.workspaceDir,
     });
     const authValue = approved.prepared.auth.apiKey;
-    const modelRegistryRuntime = getModelRegistryRuntime(approved.prepared.modelRegistry);
     const streamAgent = {
       streamFn: dependencies.resolveStream({
-        llmRuntime: modelRegistryRuntime.llmRuntime,
-        currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
+        llmRuntime,
+        currentStreamFn: llmRuntime.streamSimple,
         ...(providerStream ? { providerStreamFn: providerStream } : {}),
         sessionId: request.sessionId,
         signal,

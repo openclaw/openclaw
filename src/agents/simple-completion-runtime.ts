@@ -52,7 +52,6 @@ import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js"
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
-import type { ModelRegistry } from "./sessions/model-registry.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
@@ -79,7 +78,6 @@ export type PreparedSimpleCompletionModel =
   | {
       model: Model;
       auth: ResolvedProviderAuth;
-      modelRegistry: ModelRegistry;
       /** Non-reversible owner proof captured from the same auth snapshot. */
       sourceAuthFingerprint?: string;
     }
@@ -461,7 +459,6 @@ export async function prepareSimpleCompletionModel(params: {
       modelRuntime.llmRuntime,
     ),
     auth: resolvedAuth,
-    modelRegistry: resolved.modelRegistry,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };
 }
