@@ -43,9 +43,7 @@ describe("exec approvals sync lock", () => {
     const { statePath, lockPath } = setupStateDir();
     const file = normalizeExecApprovals({
       version: 1,
-      entries: [],
-      host: "gateway",
-      security: "deny",
+      defaults: { security: "deny" },
     });
     saveExecApprovals(file);
     expect(fs.existsSync(lockPath)).toBe(false);
@@ -68,9 +66,7 @@ describe("exec approvals sync lock", () => {
     });
     const file = normalizeExecApprovals({
       version: 1,
-      entries: [],
-      host: "gateway",
-      security: "deny",
+      defaults: { security: "deny" },
     });
     saveExecApprovals(file);
     closeSpy.mockRestore();
@@ -95,9 +91,7 @@ describe("exec approvals async lock", () => {
     const { statePath, lockPath } = setupStateDir();
     const file = normalizeExecApprovals({
       version: 1,
-      entries: [],
-      host: "gateway",
-      security: "deny",
+      defaults: { security: "deny" },
     });
     await updateExecApprovals({ update: () => file });
     expect(fs.existsSync(lockPath)).toBe(false);
@@ -120,9 +114,7 @@ describe("exec approvals async lock", () => {
     });
     const file = normalizeExecApprovals({
       version: 1,
-      entries: [],
-      host: "gateway",
-      security: "deny",
+      defaults: { security: "deny" },
     });
     await updateExecApprovals({ update: () => file });
     closeSpy.mockRestore();
@@ -140,9 +132,7 @@ describe("exec approvals async lock", () => {
     const { statePath, lockPath } = setupStateDir();
     const file = normalizeExecApprovals({
       version: 1,
-      entries: [],
-      host: "gateway",
-      security: "deny",
+      defaults: { security: "deny" },
     });
     saveExecApprovals(file);
     await updateExecApprovals({ update: () => file });
@@ -167,10 +157,8 @@ describe("exec approvals async lock", () => {
     const { statePath } = setupStateDir();
     const before = normalizeExecApprovals({
       version: 1,
-      entries: [],
-      host: "gateway",
-      security: "allowlist",
-      agents: { "*": { allowlist: [{ id: "1", pattern: "ls", source: "manual" }] } },
+      defaults: { security: "allowlist" },
+      agents: { "*": { allowlist: [{ id: "1", pattern: "ls", source: "allow-always" }] } },
     });
     saveExecApprovals(before);
 
