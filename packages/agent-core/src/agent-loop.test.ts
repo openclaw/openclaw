@@ -12,13 +12,16 @@ import {
   type Message,
   type Model,
 } from "./llm.js";
+import {
+  getAgentToolExecutionContext,
+  type AgentToolExecutionContext,
+} from "./tool-execution-context.js";
 import type {
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
   AgentMessage,
   AgentTool,
-  AgentToolExecutionContext,
   AgentToolResult,
   StreamFn,
 } from "./types.js";
@@ -619,9 +622,6 @@ describe("runAgentLoop deferred tool hydration", () => {
       { query: "penguin" },
       undefined,
       expect.any(Function),
-      expect.objectContaining({
-        toolCall: expect.objectContaining({ id: "call-hidden", name: "hidden_search" }),
-      }),
     );
     expect(contexts.map((context) => context.tools?.map((tool) => tool.name) ?? [])).toEqual([
       [],
@@ -990,7 +990,8 @@ describe("agentLoop tool termination", () => {
     const persistedAssistantMessages: AssistantMessage[] = [];
     const execTool: AgentTool = {
       ...makeTool("exec", []),
-      execute: async (_toolCallId, _args, _signal, _onUpdate, executionContext) => {
+      execute: async () => {
+        const executionContext = getAgentToolExecutionContext();
         if (executionContext) {
           executionContexts.push(executionContext);
         }
@@ -1003,7 +1004,11 @@ describe("agentLoop tool termination", () => {
       queueMicrotask(() => {
         const message =
           turn === 1 ? assistantMessage : makeAssistantMessage([{ type: "text", text: "done" }]);
-        stream.push({ type: "done", reason: message.stopReason, message });
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
         stream.end();
       });
       return stream;

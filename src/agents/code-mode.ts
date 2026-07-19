@@ -14,6 +14,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
+import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
@@ -35,7 +36,7 @@ import {
   type CodeModeNamespaceRuntime,
   type SerializedCodeModeNamespaceValue,
 } from "./code-mode-namespaces.js";
-import type { AgentToolExecutionContext, AgentToolUpdateCallback } from "./runtime/index.js";
+import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { stableStringify } from "./stable-stringify.js";
@@ -2215,9 +2216,9 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       args: unknown,
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
-      executionContext?: AgentToolExecutionContext,
     ) => {
       const input = readCode(args);
+      const executionContext = getAgentToolExecutionContext();
       return jsonResult(
         normalizeCodeModeTimeoutResult(
           await runExec({

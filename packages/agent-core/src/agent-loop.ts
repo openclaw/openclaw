@@ -14,6 +14,10 @@ import { uuidv7 } from "./harness/session/uuid.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
+  type AgentToolExecutionContext,
+  runWithAgentToolExecutionContext,
+} from "./tool-execution-context.js";
+import {
   appendInterruptedTurnMessage,
   createFailureMessage,
   createInterruptedTurnMessage,
@@ -27,7 +31,6 @@ import type {
   AgentMessage,
   AgentTool,
   AgentToolCall,
-  AgentToolExecutionContext,
   AgentToolResult,
   StreamFn,
 } from "./types.js";
@@ -1022,30 +1025,31 @@ async function executePreparedToolCall(
   let acceptingUpdates = true;
 
   try {
-    const result = await prepared.tool.execute(
-      prepared.toolCall.id,
-      prepared.args as never,
-      signal,
-      (partialResult) => {
-        if (!acceptingUpdates) {
-          return;
-        }
-        updateEvents.push(
-          Promise.resolve(
-            emit({
-              type: "tool_execution_update",
-              toolCallId: prepared.toolCall.id,
-              toolName: prepared.toolCall.name,
-              args: prepared.toolCall.arguments,
-              partialResult,
-              ...(prepared.tool.hideFromChannelProgress === true
-                ? { hideFromChannelProgress: true }
-                : {}),
-            }),
-          ),
-        );
-      },
-      executionContext,
+    const result = await runWithAgentToolExecutionContext(executionContext, () =>
+      prepared.tool.execute(
+        prepared.toolCall.id,
+        prepared.args as never,
+        signal,
+        (partialResult) => {
+          if (!acceptingUpdates) {
+            return;
+          }
+          updateEvents.push(
+            Promise.resolve(
+              emit({
+                type: "tool_execution_update",
+                toolCallId: prepared.toolCall.id,
+                toolName: prepared.toolCall.name,
+                args: prepared.toolCall.arguments,
+                partialResult,
+                ...(prepared.tool.hideFromChannelProgress === true
+                  ? { hideFromChannelProgress: true }
+                  : {}),
+              }),
+            ),
+          );
+        },
+      ),
     );
     acceptingUpdates = false;
     await Promise.all(updateEvents);

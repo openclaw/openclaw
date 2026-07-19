@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
@@ -1930,21 +1931,13 @@ describe("Code Mode", () => {
       }) as never;
 
     const first = resultDetails(
-      await execTool.execute(
-        "reused-call-id",
-        input,
-        undefined,
-        undefined,
-        executionContext("response-turn-1"),
+      await runWithAgentToolExecutionContext(executionContext("response-turn-1"), () =>
+        execTool.execute("reused-call-id", input),
       ),
     );
     const second = resultDetails(
-      await execTool.execute(
-        "reused-call-id",
-        input,
-        undefined,
-        undefined,
-        executionContext("response-turn-2"),
+      await runWithAgentToolExecutionContext(executionContext("response-turn-2"), () =>
+        execTool.execute("reused-call-id", input),
       ),
     );
 

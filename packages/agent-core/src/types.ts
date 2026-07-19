@@ -45,14 +45,6 @@ export type QueueMode = "all" | "one-at-a-time";
 /** A single tool call content block emitted by an assistant message. */
 export type AgentToolCall = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 
-/** Stable assistant-turn context for one concrete tool invocation. */
-export interface AgentToolExecutionContext {
-  /** The assistant message that requested the tool call. */
-  assistantMessage: AssistantMessage;
-  /** The raw tool call block from `assistantMessage.content`. */
-  toolCall: AgentToolCall;
-}
-
 /**
  * Result returned from `beforeToolCall`.
  *
@@ -485,7 +477,6 @@ export interface AgentTool<
     params: Static<TParameters>,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback<TDetails>,
-    executionContext?: AgentToolExecutionContext,
   ) => Promise<AgentToolResult<TDetails>>;
   /**
    * Per-tool execution mode override.
