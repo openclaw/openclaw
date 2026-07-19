@@ -208,6 +208,17 @@ describe("MCP App UI resources", () => {
     },
   );
 
+  it("rejects CSP metadata with invalid UTF-8 instead of silently narrowing it", () => {
+    const value = Buffer.concat([
+      Buffer.from('{"connectDomains":["https://api.example.com","https://cdn-'),
+      Buffer.from([0xff]),
+      Buffer.from('.example.com"]}'),
+    ]).toString("base64url");
+    // A forgiving decode would drop the corrupted domain and accept the rest of
+    // the policy, violating the malformed-input-must-throw contract.
+    expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
+  });
+
   it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
     expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');
