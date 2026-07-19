@@ -261,6 +261,11 @@ public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashabl
 
     public let name: String
     public let position: Int
+
+    public init(name: String, position: Int) {
+        self.name = name
+        self.position = position
+    }
 }
 
 public struct OpenClawChatSessionGroupsResponse: Codable, Sendable, Equatable {

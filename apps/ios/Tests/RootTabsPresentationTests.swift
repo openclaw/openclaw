@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawProtocol
 import SwiftUI
 import Testing
 import UIKit
@@ -77,6 +78,18 @@ struct RootTabsPresentationTests {
         #expect(!complete.isPartial)
         #expect(unknown.total == nil)
         #expect(unknown.isPartial)
+    }
+
+    @Test func `failed cron attention ignores disabled jobs`() {
+        #expect(RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "error")))
+        #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: false, status: "error")))
+        #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "ok")))
+    }
+
+    @Test func `recent session cap is disabled while search is active`() {
+        #expect(RootSidebar.recentSessionCap(searchText: "") == 20)
+        #expect(RootSidebar.recentSessionCap(searchText: "  \n") == 20)
+        #expect(RootSidebar.recentSessionCap(searchText: "deploy") == nil)
     }
 
     @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
@@ -756,5 +769,20 @@ struct RootTabsPresentationTests {
             contextTokens: contextTokens,
             archived: archived,
             worktree: worktree)
+    }
+
+    private static func cronJob(enabled: Bool, status: String) -> CronJob {
+        CronJob(
+            id: "sidebar-test",
+            name: "Sidebar test",
+            enabled: enabled,
+            createdatms: 1,
+            updatedatms: 1,
+            schedule: AnyCodable(["kind": AnyCodable("every")]),
+            sessiontarget: AnyCodable("isolated"),
+            wakemode: AnyCodable("now"),
+            payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
+            state: [:],
+            lastrunstatus: AnyCodable(status))
     }
 }

@@ -159,7 +159,7 @@ struct SettingsProTab: View {
         }
         .toolbar {
             if let headerSidebarAction {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     OpenClawSidebarRevealButton(action: headerSidebarAction)
                 }
             }

@@ -145,7 +145,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("private var homeRow: some View"))
         #expect(source.contains("RootTabs.pinnedSidebarPages(from: self.pinnedPagesStorage)"))
         #expect(source.contains("struct RootSidebarPagesEditor: View"))
-                        #expect(source.contains("private var gatewayStatusTitle: String"))
+        #expect(source.contains("private var gatewayStatusTitle: String"))
         #expect(source.contains("private var gatewayStatusColor: Color"))
         #expect(source.contains("private var sessionsSection: some View"))
         #expect(source.contains("private var pagesSection: some View"))
@@ -193,6 +193,71 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("case .cancelled:\n            return"))
         #expect(rosterCommit.lowerBound < dashboardWait.lowerBound)
         #expect(source.contains("allowCachedFallback: false"))
+    }
+
+    @Test func `sidebar refresh owner tracks sessions and periodically refreshes attention`() throws {
+        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let refreshTask = try Self.extract(
+            source,
+            from: "private var sidebarSplitContent: some View",
+            to: "private var sidebarRefreshID: String")
+        let refreshID = try Self.extract(
+            source,
+            from: "private var sidebarRefreshID: String",
+            to: "private func sidebarNavigationSplitContent(")
+
+        #expect(refreshTask.contains(".task(id: self.sidebarRefreshID)"))
+        #expect(refreshTask.contains("try? await Task.sleep(for: .seconds(600))"))
+        #expect(refreshTask.contains("while !Task.isCancelled"))
+        #expect(refreshTask.contains("guard !Task.isCancelled else { return }"))
+        #expect(refreshID.contains("self.appModel.chatViewModelIdentityID"))
+        #expect(refreshID.contains("self.appModel.chatSessionKey"))
+        #expect(refreshID.contains("self.scenePhase == .active"))
+    }
+
+    @Test func `sidebar dashboard keeps per field last known good values and drains cron pages`() throws {
+        let source = try String(contentsOf: Self.rootSidebarModelSourceURL(), encoding: .utf8)
+        let dashboardCommit = try Self.extract(
+            source,
+            from: "let loadedDashboard = await dashboard",
+            to: "func refreshSessions(appModel: NodeAppModel) async {")
+        let cronLoad = try Self.extract(
+            source,
+            from: "private func loadCronJobs(appModel: NodeAppModel) async -> [CronJob]? {",
+            to: "private func request<T: Decodable>(")
+
+        #expect(dashboardCommit.contains("if let usage = loadedDashboard.usage"))
+        #expect(dashboardCommit.contains("if let cronJobs = loadedDashboard.cronJobs"))
+        #expect(cronLoad.contains("let pageLimit = 5"))
+        #expect(cronLoad.contains("let jobLimit = 1000"))
+        #expect(cronLoad.contains("cronJobsSnapshotIdentity"))
+        #expect(cronLoad.contains("nextCronJobsListOffset"))
+        #expect(source.contains("return job.enabled &&"))
+    }
+
+    @Test func `sidebar session selections use resolved keys groups and eligibility`() throws {
+        let source = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.commandCenterSupportSourceURL(), encoding: .utf8)
+        let commandCenterSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
+        let defaultSession = try Self.extract(
+            commandCenterSource,
+            from: "private var effectiveDefaultChatSessionEntry: OpenClawChatSessionEntry?",
+            to: "private var effectiveRecentChatSessions:")
+
+        #expect(source.contains("private var resolvedSelectedSessionKey: String"))
+        #expect(source.contains("private var resolvedMainSessionKey: String"))
+        #expect(source.contains("groups: self.sessionGroups"))
+        #expect(source.contains("let isSelected = session.key == selectedSessionKey"))
+        #expect(source.contains("self.appModel.openChat(sessionKey: mainKey"))
+        #expect(source.contains("self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey)"))
+        #expect(source.contains("canArchive: ChatSessionSidebarModel.canArchiveSession("))
+        #expect(source.contains("canDelete: ChatSessionSidebarModel.canDeleteSession("))
+        #expect(actionsSource.contains("if self.canArchive"))
+        #expect(actionsSource.contains("if self.canDelete"))
+        #expect(source.contains("private func selectSidebarDestination("))
+        #expect(source.contains("self.isSearchFocused = false"))
+        #expect(defaultSession.contains("ChatSessionSidebarModel.selectedSessionKey("))
+        #expect(defaultSession.contains("sessions.first { $0.key == mainKey }"))
     }
 
     @Test func `sidebar routes use destination headers instead of repeated product branding`() throws {
@@ -404,7 +469,7 @@ struct RootTabsSourceGuardTests {
         let overviewSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
         let agentOverviewSource = try String(contentsOf: Self.agentProTabOverviewSourceURL(), encoding: .utf8)
-        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let settingsSource = try String(contentsOf: Self.settingsProTabSourceURL(), encoding: .utf8)
 
         #expect(componentsSource.contains("struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View"))
         #expect(componentsSource.contains("ViewThatFits(in: .horizontal)"))
@@ -425,7 +490,8 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerSidebarAction)"))
         #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
-        #expect(settingsSource.contains("ToolbarItem(placement: .topBarTrailing)"))
+        #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
+        #expect(!settingsSource.contains("ToolbarItem(placement: .topBarTrailing)"))
     }
 
     @Test func `chat keeps layered canvas behind soft native scroll edges`() throws {

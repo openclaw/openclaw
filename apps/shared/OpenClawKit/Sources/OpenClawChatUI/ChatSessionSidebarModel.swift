@@ -31,6 +31,8 @@ public enum ChatSessionSidebarModel {
         return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
+    /// `excludesMainSession` is for sidebars with a dedicated Home row (iOS);
+    /// the macOS sidebar keeps the main session inside its sections.
     @MainActor
     public static func sections(
         sessions: [OpenClawChatSessionEntry],
@@ -38,6 +40,7 @@ public enum ChatSessionSidebarModel {
         mainSessionKey: String = "main",
         activeAgentID: String? = nil,
         groups: [OpenClawChatSessionGroup] = [],
+        excludesMainSession: Bool = false,
         query: String) -> [Section]
     {
         let visible = self.visibleSessions(
@@ -45,6 +48,7 @@ public enum ChatSessionSidebarModel {
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
+            excludesMainSession: excludesMainSession,
             query: query)
         // Pin state owns first placement. Group sections then preserve the
         // same tree builder, so grouped parent/child rosters still nest.
@@ -210,6 +214,14 @@ public enum ChatSessionSidebarModel {
             status != "running"
     }
 
+    static func isSessionInActiveAgentScope(key: String, activeAgentID: String?) -> Bool {
+        let normalizedAgent = activeAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard !normalizedAgent.isEmpty else { return true }
+        let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].lowercased() == "agent" else { return true }
+        return parts[1].lowercased() == normalizedAgent
+    }
+
     @MainActor
     public static func selectedSessionKey(
         sessions: [OpenClawChatSessionEntry],
@@ -266,24 +278,44 @@ public enum ChatSessionSidebarModel {
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
+        excludesMainSession: Bool,
         query: String) -> [OpenClawChatSessionEntry]
     {
+        let scopedSessions = sessions.filter {
+            self.isSessionInActiveAgentScope(key: $0.key, activeAgentID: activeAgentID)
+        }
         let selectedSessionKey = self.selectedSessionKey(
-            sessions: sessions,
+            sessions: scopedSessions,
             currentSessionKey: currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID)
+        let resolvedMainSessionKey = self.selectedSessionKey(
+            sessions: scopedSessions,
+            currentSessionKey: "main",
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID)
         let normalizedCurrent = currentSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let selectedIsResolvedAlias = (normalizedCurrent == "main" || normalizedCurrent == "global") &&
             selectedSessionKey.lowercased() != normalizedCurrent
-        var entries = sessions.filter { entry in
+        let selectedIsMain = normalizedCurrent == "main" ||
+            selectedSessionKey.caseInsensitiveCompare(resolvedMainSessionKey) == .orderedSame
+        var entries = scopedSessions.filter { entry in
+            if excludesMainSession,
+               entry.key.caseInsensitiveCompare(resolvedMainSessionKey) == .orderedSame
+            {
+                // Home owns the main row. Removing it before tree construction
+                // naturally promotes any retained child rows to section roots.
+                return false
+            }
             if selectedIsResolvedAlias, entry.key.lowercased() == normalizedCurrent {
                 return false
             }
             return entry.key == selectedSessionKey ||
                 (!self.isHiddenInternalSession(entry.key) && entry.archived != true)
         }
-        if !entries.contains(where: { $0.key == selectedSessionKey }),
+        if !(excludesMainSession && selectedIsMain),
+           !entries.contains(where: { $0.key == selectedSessionKey }),
+           self.isSessionInActiveAgentScope(key: selectedSessionKey, activeAgentID: activeAgentID),
            !currentSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             // Sessions can lag behind a fresh switch/new-session; keep the

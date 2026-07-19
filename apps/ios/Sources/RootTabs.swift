@@ -136,13 +136,26 @@ struct RootTabs: View {
             .onChange(of: proxy.size) { _, size in
                 self.updateSidebarLayout(containerSize: size, force: false)
             }
-            // Single refresh owner: identity changes and scene activation both
-            // land here; RootSidebar renders the model without fetching.
-            .task(id: "\(self.appModel.chatViewModelIdentityID):\(self.scenePhase == .active)") {
+            // Single refresh owner: identity/session changes, scene activation,
+            // and the periodic attention refresh all land here.
+            .task(id: self.sidebarRefreshID) {
                 guard self.scenePhase == .active else { return }
                 await self.sidebarModel.refresh(appModel: self.appModel)
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(600))
+                    guard !Task.isCancelled else { return }
+                    await self.sidebarModel.refresh(appModel: self.appModel)
+                }
             }
         }
+    }
+
+    private var sidebarRefreshID: String {
+        [
+            self.appModel.chatViewModelIdentityID,
+            self.appModel.chatSessionKey,
+            self.scenePhase == .active ? "active" : "inactive",
+        ].joined(separator: ":")
     }
 
     private func sidebarNavigationSplitContent(sidebarWidth: CGFloat) -> some View {

@@ -74,13 +74,16 @@ final class RootSidebarModel {
         query: String,
         currentSessionKey: String,
         mainSessionKey: String,
-        activeAgentID: String?) -> [ChatSessionSidebarModel.Section]
+        activeAgentID: String?,
+        groups: [OpenClawChatSessionGroup]) -> [ChatSessionSidebarModel.Section]
     {
         ChatSessionSidebarModel.sections(
             sessions: self.sessions,
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
+            groups: groups,
+            excludesMainSession: true,
             query: query)
     }
 
@@ -115,8 +118,12 @@ final class RootSidebarModel {
 
         let loadedDashboard = await dashboard
         guard !Task.isCancelled, dashboardGeneration == self.dashboardGeneration else { return }
-        self.usage = loadedDashboard.usage
-        self.cronJobs = loadedDashboard.cronJobs
+        if let usage = loadedDashboard.usage {
+            self.usage = usage
+        }
+        if let cronJobs = loadedDashboard.cronJobs {
+            self.cronJobs = cronJobs
+        }
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
@@ -170,21 +177,62 @@ final class RootSidebarModel {
 
     private func loadDashboard(appModel: NodeAppModel) async -> DashboardSnapshot {
         guard appModel.isOperatorGatewayConnected else {
-            return DashboardSnapshot(usage: nil, cronJobs: [])
+            return DashboardSnapshot(usage: nil, cronJobs: nil)
         }
         async let usage = self.request(
             CostUsageSummaryLite.self,
             appModel: appModel,
             method: "usage.cost",
             paramsJSON: "{\"days\":31}")
-        async let cron = self.request(
-            CronJobsListLite.self,
-            appModel: appModel,
-            method: "cron.list",
-            paramsJSON: "{\"includeDisabled\":true,\"limit\":200,\"offset\":0,\"sortBy\":\"name\",\"sortDir\":\"asc\"}")
+        async let cronJobs = self.loadCronJobs(appModel: appModel)
         let loadedUsage = await usage
-        let loadedCron = await cron
-        return DashboardSnapshot(usage: loadedUsage, cronJobs: loadedCron?.jobs ?? [])
+        let loadedCronJobs = await cronJobs
+        return DashboardSnapshot(usage: loadedUsage, cronJobs: loadedCronJobs)
+    }
+
+    private func loadCronJobs(appModel: NodeAppModel) async -> [CronJob]? {
+        let pageLimit = 5
+        let jobLimit = 1000
+        var jobs: [CronJob] = []
+        var seenJobIDs: Set<String> = []
+        var expectedIdentity: CronJobsSnapshotIdentity?
+        var offset = 0
+        for _ in 0..<pageLimit {
+            let paramsJSON = "{\"includeDisabled\":true,\"limit\":200,\"offset\":\(offset)," +
+                "\"sortBy\":\"name\",\"sortDir\":\"asc\"}"
+            let page = await self.request(
+                CronJobsListLite.self,
+                appModel: appModel,
+                method: "cron.list",
+                paramsJSON: paramsJSON)
+            guard let page,
+                  let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit)
+            else { return nil }
+            if let expectedIdentity, identity != expectedIdentity {
+                return nil
+            }
+            expectedIdentity = identity
+            let pageJobIDs = Set(page.jobs.map(\.id))
+            guard pageJobIDs.count == page.jobs.count,
+                  seenJobIDs.isDisjoint(with: pageJobIDs)
+            else { return nil }
+            seenJobIDs.formUnion(pageJobIDs)
+            jobs.append(contentsOf: page.jobs)
+            guard jobs.count <= jobLimit else { return nil }
+            if let total = identity.total {
+                guard total >= jobs.count else { return nil }
+                if jobs.count == total {
+                    guard !page.hasMore else { return nil }
+                    return jobs
+                }
+            }
+            guard page.hasMore else { return jobs }
+            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
+                  nextOffset <= jobLimit
+            else { return nil }
+            offset = nextOffset
+        }
+        return nil
     }
 
     private func request<T: Decodable>(
@@ -204,15 +252,15 @@ final class RootSidebarModel {
         }
     }
 
-    private static func isFailedCronJob(_ job: CronJob) -> Bool {
+    static func isFailedCronJob(_ job: CronJob) -> Bool {
         let status = (job.lastrunstatus?.value as? String)?.lowercased()
         // This failure vocabulary mirrors the web sidebar-attention contract in ui/src/components/sidebar-attention.ts.
-        return ["error", "failed", "timeout", "timed_out"].contains(status)
+        return job.enabled && ["error", "failed", "timeout", "timed_out"].contains(status)
     }
 
     private struct DashboardSnapshot {
         let usage: CostUsageSummaryLite?
-        let cronJobs: [CronJob]
+        let cronJobs: [CronJob]?
     }
 
     private enum RosterLoadResult {

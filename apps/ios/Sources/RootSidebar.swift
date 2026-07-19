@@ -45,7 +45,7 @@ struct RootSidebar: View {
                 pinnedPages: self.pinnedPages,
                 onSelect: { destination in
                     self.showsPagesEditor = false
-                    self.selectDestination(destination)
+                    self.selectSidebarDestination(destination)
                 },
                 onTogglePin: self.togglePinnedPage)
         }
@@ -99,11 +99,11 @@ struct RootSidebar: View {
                 systemName: "gearshape",
                 label: String(localized: "Settings"))
             {
-                self.selectDestination(.settings)
+                self.selectSidebarDestination(.settings)
             }
 
             if self.isDrawerLayout {
-                Button(action: self.hideSidebar) {
+                Button(action: self.dismissSidebar) {
                     Image(systemName: "xmark")
                         .font(OpenClawType.subheadSemiBold)
                         .frame(width: 40, height: 44)
@@ -340,6 +340,7 @@ struct RootSidebar: View {
     @ViewBuilder
     private var sessionsSection: some View {
         let sections = self.visibleSessionSections
+        let selectedSessionKey = self.resolvedSelectedSessionKey
         VStack(alignment: .leading, spacing: 6) {
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
@@ -377,13 +378,13 @@ struct RootSidebar: View {
                         self.sectionTitle(title)
                     }
                     ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node)
+                        self.sessionButton(node, selectedSessionKey: selectedSessionKey)
                     }
                 }
             }
 
             Button {
-                self.selectDestination(.sessions)
+                self.selectSidebarDestination(.sessions)
             } label: {
                 Label {
                     Text(String(localized: "All Sessions…"))
@@ -428,10 +429,13 @@ struct RootSidebar: View {
     /// Fixed first Pages row like the web "Home": opens the agent's chat and
     /// carries the main session's run/unread state.
     private var homeRow: some View {
-        let isSelected = self.selectedDestination == .chat
+        let mainKey = self.resolvedMainSessionKey
+        let isSelected = self.selectedDestination == .chat &&
+            self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey) == .orderedSame
         let mainSession = self.mainSessionEntry
         return Button {
-            self.selectDestination(.chat)
+            self.appModel.openChat(sessionKey: mainKey, unread: mainSession?.unread == true)
+            self.selectSidebarDestination(.chat)
         } label: {
             HStack(spacing: 9) {
                 Image(systemName: "house")
@@ -470,7 +474,7 @@ struct RootSidebar: View {
             self.separator
             HStack(spacing: 4) {
                 Button {
-                    self.selectDestination(.gateway)
+                    self.selectSidebarDestination(.gateway)
                 } label: {
                     HStack(spacing: 9) {
                         // The agent card owns the healthy status; like the web
@@ -504,12 +508,23 @@ struct RootSidebar: View {
     /// Alias-aware main lookup: rosters may return namespaced keys
     /// ("agent:<id>:main"), so raw comparison would drop Home's badges.
     private var mainSessionEntry: OpenClawChatSessionEntry? {
-        let mainKey = ChatSessionSidebarModel.selectedSessionKey(
+        self.model.sessions.first { $0.key == self.resolvedMainSessionKey }
+    }
+
+    private var resolvedMainSessionKey: String {
+        ChatSessionSidebarModel.selectedSessionKey(
             sessions: self.model.sessions,
             currentSessionKey: "main",
             mainSessionKey: self.appModel.defaultChatSessionKey,
             activeAgentID: self.appModel.chatAgentId)
-        return self.model.sessions.first { $0.key == mainKey }
+    }
+
+    private var resolvedSelectedSessionKey: String {
+        ChatSessionSidebarModel.selectedSessionKey(
+            sessions: self.model.sessions,
+            currentSessionKey: self.appModel.chatSessionKey,
+            mainSessionKey: self.appModel.defaultChatSessionKey,
+            activeAgentID: self.appModel.chatAgentId)
     }
 
     private var visibleSessionSections: [ChatSessionSidebarModel.Section] {
@@ -517,11 +532,18 @@ struct RootSidebar: View {
             query: self.searchText,
             currentSessionKey: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.defaultChatSessionKey,
-            activeAgentID: self.appModel.chatAgentId)
+            activeAgentID: self.appModel.chatAgentId,
+            groups: self.sessionGroups)
     }
 
     private var sessionCategories: [String] {
         CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
+    }
+
+    private var sessionGroups: [OpenClawChatSessionGroup] {
+        self.sessionCategories.enumerated().map { offset, name in
+            OpenClawChatSessionGroup(name: name, position: offset)
+        }
     }
 
     private func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {
@@ -530,15 +552,25 @@ struct RootSidebar: View {
 
     private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Node] {
         let nodes = self.flattened(section.nodes)
-        return section.id == "recent" ? Array(nodes.prefix(20)) : nodes
+        guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
+            return nodes
+        }
+        return Array(nodes.prefix(limit))
     }
 
-    private func sessionButton(_ node: ChatSessionSidebarModel.Node) -> some View {
+    static func recentSessionCap(searchText: String) -> Int? {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 20 : nil
+    }
+
+    private func sessionButton(
+        _ node: ChatSessionSidebarModel.Node,
+        selectedSessionKey: String) -> some View
+    {
         let session = node.session
-        let isSelected = session.key == self.appModel.chatSessionKey
+        let isSelected = session.key == selectedSessionKey
         return Button {
             self.appModel.openChat(sessionKey: session.key, unread: session.unread == true)
-            self.selectDestination(.chat)
+            self.selectSidebarDestination(.chat)
         } label: {
             HStack(spacing: 9) {
                 ZStack {
@@ -603,6 +635,12 @@ struct RootSidebar: View {
             session: session,
             categories: self.sessionCategories,
             isEnabled: self.appModel.isOperatorGatewayConnected,
+            canArchive: ChatSessionSidebarModel.canArchiveSession(
+                session,
+                mainSessionKey: self.resolvedMainSessionKey),
+            canDelete: ChatSessionSidebarModel.canDeleteSession(
+                key: session.key,
+                mainSessionKey: self.resolvedMainSessionKey),
             actions: CommandSessionActions(
                 rename: { self.patchSession(session, label: .some($0)) },
                 moveToGroup: { self.patchSession(session, category: .some($0)) },
@@ -618,7 +656,7 @@ struct RootSidebar: View {
         let isSelected = destination == self.selectedDestination
         let badgeCount = self.badgeCount(for: destination)
         return Button {
-            self.selectDestination(destination)
+            self.selectSidebarDestination(destination)
         } label: {
             HStack(spacing: 0) {
                 Label {
@@ -667,7 +705,7 @@ struct RootSidebar: View {
             Spacer(minLength: 4)
             Button {
                 self.appModel.requestNewChat()
-                self.selectDestination(.chat)
+                self.selectSidebarDestination(.chat)
             } label: {
                 Image(systemName: "plus.bubble")
                     .font(OpenClawType.captionSemiBold)
@@ -777,12 +815,22 @@ struct RootSidebar: View {
             do {
                 let key = try await self.appModel.makeChatTransport().forkSession(parentKey: session.key)
                 self.appModel.openChat(sessionKey: key)
-                self.selectDestination(.chat)
+                self.selectSidebarDestination(.chat)
                 await self.model.refreshSessions(appModel: self.appModel)
             } catch {
                 self.model.reportSessionError(error)
             }
         }
+    }
+
+    private func selectSidebarDestination(_ destination: RootTabs.SidebarDestination) {
+        self.isSearchFocused = false
+        self.selectDestination(destination)
+    }
+
+    private func dismissSidebar() {
+        self.isSearchFocused = false
+        self.hideSidebar()
     }
 }
 

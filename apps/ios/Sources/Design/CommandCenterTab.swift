@@ -573,8 +573,13 @@ struct CommandCenterTab: View {
     }
 
     private var effectiveDefaultChatSessionEntry: OpenClawChatSessionEntry? {
-        self.dashboardModel?.sessions.first { $0.key == self.appModel.defaultChatSessionKey }
-            ?? self.defaultChatSessionEntry
+        guard let sessions = self.dashboardModel?.sessions else { return self.defaultChatSessionEntry }
+        let mainKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: "main",
+            mainSessionKey: self.appModel.defaultChatSessionKey,
+            activeAgentID: self.appModel.chatAgentId)
+        return sessions.first { $0.key == mainKey } ?? self.defaultChatSessionEntry
     }
 
     private var effectiveRecentChatSessions: [OpenClawChatSessionEntry] {

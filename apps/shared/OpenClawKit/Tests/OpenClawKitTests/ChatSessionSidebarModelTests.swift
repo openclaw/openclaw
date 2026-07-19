@@ -134,6 +134,8 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "main",
             query: "")
 
+        // Default (macOS) sections keep the main row; only Home-row sidebars
+        // opt into excludesMainSession.
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["main"])
     }
 
@@ -153,14 +155,62 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "main",
             mainSessionKey: "agent:default:main",
             activeAgentID: "default",
+            excludesMainSession: true,
             query: "")
 
-        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:default:main"])
+        #expect(sections.flatMap(\.nodes).isEmpty)
         #expect(ChatSessionSidebarModel.selectedSessionKey(
             sessions: sessions,
             currentSessionKey: "main",
             mainSessionKey: "agent:default:main",
             activeAgentID: "default") == "agent:default:main")
+    }
+
+    @Test func `agent scope keeps active agent and unprefixed sessions`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "agent:ops:main", updatedAt: 400),
+                self.entry(key: "agent:ops:deploy", updatedAt: 300),
+                self.entry(key: "agent:other:private", updatedAt: 200),
+                self.entry(key: "global-tool", updatedAt: 100),
+            ],
+            currentSessionKey: "main",
+            mainSessionKey: "agent:ops:main",
+            activeAgentID: "ops",
+            excludesMainSession: true,
+            query: "")
+
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:ops:deploy", "global-tool"])
+        #expect(ChatSessionSidebarModel.isSessionInActiveAgentScope(
+            key: "agent:OPS:deploy",
+            activeAgentID: "ops"))
+        #expect(!ChatSessionSidebarModel.isSessionInActiveAgentScope(
+            key: "agent:other:private",
+            activeAgentID: "ops"))
+        #expect(ChatSessionSidebarModel.isSessionInActiveAgentScope(
+            key: "global-tool",
+            activeAgentID: "ops"))
+    }
+
+    @Test func `main row is excluded while its children are promoted`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(
+                    key: "agent:ops:main",
+                    updatedAt: 300,
+                    childSessions: ["agent:ops:child"]),
+                self.entry(
+                    key: "agent:ops:child",
+                    updatedAt: 200,
+                    parentSessionKey: "agent:ops:main"),
+            ],
+            currentSessionKey: "main",
+            mainSessionKey: "agent:ops:main",
+            activeAgentID: "ops",
+            excludesMainSession: true,
+            query: "")
+
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:ops:child"])
     }
 
     @Test func `global aliases select their agent wrapped row`() {
