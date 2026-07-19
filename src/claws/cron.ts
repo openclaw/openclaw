@@ -8,7 +8,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan, ClawCronJob } from "./types.js";
 
-const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
+export const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
 
 export type PersistedClawCronRef = {
   schemaVersion: typeof CLAW_CRON_REF_SCHEMA_VERSION;
@@ -167,7 +167,7 @@ function updateRef(
   return updated;
 }
 
-function schedulerJobFromResult(value: unknown): { id: string } | undefined {
+export function clawCronSchedulerJobFromResult(value: unknown): { id: string } | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -313,7 +313,7 @@ export async function installClawCronJobs(
           pending.declarationKey,
         );
       }
-      result ??= schedulerJobFromResult(
+      result ??= clawCronSchedulerJobFromResult(
         await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, pending)),
       );
       if (!result) {
@@ -388,4 +388,42 @@ export function markClawCronRefRemoved(
     (candidate) => candidate.manifestId === manifestId,
   );
   return ref ? updateRef(ref, { status: "removed" }, options) : undefined;
+}
+
+export function upsertClawCronRef(
+  ref: PersistedClawCronRef,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db /* sqlite-allow-raw: Claw cron lifecycle provenance write. */
+      .prepare(
+        `INSERT INTO claw_cron_refs (
+         agent_id, manifest_id, schema_version, declaration_key, scheduler_job_id,
+         status, job_json, error, created_at_ms, updated_at_ms
+       ) VALUES (
+         @agent_id, @manifest_id, @schema_version, @declaration_key, @scheduler_job_id,
+         @status, @job_json, @error, @created_at_ms, @updated_at_ms
+       )
+       ON CONFLICT(agent_id, manifest_id) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         declaration_key = excluded.declaration_key,
+         scheduler_job_id = excluded.scheduler_job_id,
+         status = excluded.status,
+         job_json = excluded.job_json,
+         error = excluded.error,
+         updated_at_ms = excluded.updated_at_ms`,
+      )
+      .run({
+        agent_id: ref.agentId,
+        manifest_id: ref.manifestId,
+        schema_version: ref.schemaVersion,
+        declaration_key: ref.declarationKey,
+        scheduler_job_id: ref.schedulerJobId ?? null,
+        status: ref.status,
+        job_json: JSON.stringify(ref.job),
+        error: ref.error ?? null,
+        created_at_ms: ref.createdAtMs,
+        updated_at_ms: ref.updatedAtMs,
+      });
+  }, options);
 }
