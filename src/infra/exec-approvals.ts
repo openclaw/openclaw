@@ -1119,6 +1119,13 @@ const HELD_EXEC_APPROVALS_LOCKS = resolveGlobalMap<
   { lock: ExecApprovalsSyncLock; depth: number }
 >(Symbol.for("openclaw.heldExecApprovalsLocks"));
 
+/**
+ * @public Only consumed by src/infra/exec-approvals-sync-lock.test.ts, which
+ * runs under test/vitest/vitest.infra.config.ts. That config's test.include
+ * is computed at runtime (createScopedVitestConfig), and Knip's production
+ * scan doesn't discover its entries, so real test-only usage here would
+ * otherwise be misreported as an unused export.
+ */
 export function resetExecApprovalsSyncLockStateForTest(): void {
   for (const key of HELD_EXEC_APPROVALS_LOCKS.keys()) {
     HELD_EXEC_APPROVALS_LOCKS.delete(key);
