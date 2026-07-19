@@ -39,6 +39,8 @@ function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promi
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
+        // Tool settlements pass through untouched, including non-Error rejections.
+        // oxlint-disable-next-line typescript/prefer-promise-reject-errors
         reject(error);
       },
     );

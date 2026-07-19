@@ -158,6 +158,8 @@ describe("wrapToolWithAbortSignal", () => {
     const runAbort = new AbortController();
     const toolRejection = "tool rejected with a string";
     const execute = vi.fn(async () => {
+      // Intentional non-Error rejection to prove pass-through semantics.
+      // oxlint-disable-next-line typescript/only-throw-error
       throw toolRejection;
     });
     const wrapped = wrapToolWithAbortSignal(
