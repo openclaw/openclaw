@@ -41,6 +41,25 @@ Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.
 
+### Update retention boundary
+
+An owned launchd/systemd Gateway installed through the local-prefix npm
+installer retains one launchable previous package before mutation after
+verifying installer provenance, ownership, and write permissions. Automatic
+rollback is not enabled: package lifecycle/Doctor migrations currently commit
+before restart confirmation, and restoring only the old package could run it
+against newer state. State snapshot/restore and deferred migration commit must
+land before package swapping is safe.
+
+Resident old/new Gateway handover and its exclusive channel pause/resume and
+delivery/human confirmation tiers are also not enabled. Ordinary npm-global,
+pnpm, Git, Windows, unowned service layouts, and unverifiable lookalike prefixes
+do not get retention or swapping. If startup fails after migration, restore
+compatible state before running an older version; otherwise repair or update
+forward with the current version. Set
+`OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to bypass
+retention; there is no config surface.
+
 ## How interrupted work is detected
 
 Three complementary mechanisms mark sessions whose turn did not finish:

@@ -174,6 +174,36 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
+For a restart-enabled update of an owned macOS launchd or Linux systemd Gateway,
+OpenClaw retains one launch-verified previous package only for the npm layout
+created by the local-prefix `install-cli.sh` installer
+(`<prefix>/tools/node/...`). It verifies the generated installer wrapper, real
+package paths, process ownership, and write permissions before retention. A
+later update replaces the one retained copy.
+
+Automatic package rollback is not enabled. The current update pipeline runs
+package lifecycle scripts and post-install Doctor before the replacement
+Gateway is confirmed. Restoring only the old package after a committed data
+migration could run old code against new state. State snapshot/restore and
+deferred migration commit are therefore required before automatic rollback can
+be enabled.
+
+Resident old/new Gateway handover, exclusive channel pause/resume, delivery
+acknowledgement, and human reply confirmation are also not enabled. The updater
+must first keep the old Gateway resident without mutating its live package tree
+and commit migrations only after confirmation. Startup remains fail-closed.
+
+Ordinary npm-global installs, pnpm globals, Git checkouts, Windows services,
+unowned services, and lookalike prefixes without verifiable installer
+provenance do not get retention or package swapping. The updater preserves
+their existing update behavior and warns that an older version must not run
+against migrated state without restoring a compatible snapshot. Shared or
+root-owned global package parents cannot be replaced safely by the service
+account.
+
+Set `OPENCLAW_UPDATE_NO_ROLLBACK=1` in the managed service environment to
+bypass previous-package retention. There is no config option.
+
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
 CLI Node can and the service is proven to belong to the package being updated,

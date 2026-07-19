@@ -29,6 +29,10 @@ import {
   resolveUpdateDoctorExecutionPolicy,
   type UpdateRunResult,
 } from "../../infra/update-runner.js";
+import {
+  formatUpdateSwapCoverageWarning,
+  resolveUpdateSwapCoverage,
+} from "../../infra/update-swap-coverage.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -94,6 +98,32 @@ export async function runPackageInstallUpdate(params: {
     });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
+  const coverage = pkgRoot
+    ? await resolveUpdateSwapCoverage({ packageRoot: pkgRoot, manager: installTarget.manager })
+    : await resolveUpdateSwapCoverage({ packageRoot: params.root, manager: "unknown" });
+  const rollbackEnv = params.managedServiceEnv ?? installEnv ?? process.env;
+  const retainPreviousPackage =
+    coverage.protection === "retention-only" &&
+    params.allowGatewayServiceRepair &&
+    params.allowGatewayActivation &&
+    rollbackEnv.OPENCLAW_UPDATE_NO_ROLLBACK !== "1";
+  const coverageWarning = formatUpdateSwapCoverageWarning(coverage);
+  if (coverageWarning) {
+    defaultRuntime.error(`Warning: ${coverageWarning}`);
+  } else if (rollbackEnv.OPENCLAW_UPDATE_NO_ROLLBACK !== "1") {
+    if (retainPreviousPackage) {
+      defaultRuntime.error(
+        "Warning: OpenClaw will retain one launchable previous package, but automatic rollback is not enabled. If startup fails after migration, restore compatible state before running an older version; otherwise repair or update forward with the current version.",
+      );
+    } else {
+      const reason = !params.allowGatewayServiceRepair
+        ? "the Gateway service is not owned by this install"
+        : "the Gateway service was not stopped for this update";
+      defaultRuntime.error(
+        `Warning: Previous-package retention is unavailable because ${reason}. If startup fails after migration, restore compatible state before running an older version; otherwise repair or update forward with the current version.`,
+      );
+    }
+  }
   if (pkgRoot) {
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
@@ -120,6 +150,10 @@ export async function runPackageInstallUpdate(params: {
     packageRoot: pkgRoot,
     runCommand,
     timeoutMs: params.timeoutMs,
+    retentionNodePath:
+      retainPreviousPackage && coverage.protection === "retention-only"
+        ? coverage.nodePath
+        : undefined,
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>
       runUpdateStep({

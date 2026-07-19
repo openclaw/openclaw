@@ -32,6 +32,7 @@ import {
   type NpmGlobalPrefixLayout,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import { retainCurrentPackageForUpdate } from "./update-retention.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
@@ -831,6 +832,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
+  retentionNodePath?: string;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
@@ -842,6 +844,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   let packedInstallDir: string | null = null;
 
   try {
+    const steps: PackageUpdateStepResult[] = [];
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
       installTarget: params.installTarget,
       packageName: params.packageName,
@@ -856,6 +859,28 @@ export async function runGlobalPackageUpdateSteps(params: {
         afterVersion: null,
         failedStep: pnpmPreflight.failedStep,
       };
+    }
+    const currentPackageRoot = params.packageRoot ?? params.installTarget.packageRoot;
+    if (currentPackageRoot && params.retentionNodePath) {
+      const previousVersion = await readPackageVersionIfPresent(currentPackageRoot);
+      const retained = await retainCurrentPackageForUpdate({
+        packageRoot: currentPackageRoot,
+        globalRoot: params.installTarget.globalRoot,
+        expectedVersion: previousVersion,
+        runCommand: params.runCommand,
+        nodePath: params.retentionNodePath,
+        timeoutMs: params.timeoutMs,
+        env: params.env,
+      });
+      steps.push(retained.step);
+      if (!retained.retainedRoot) {
+        return {
+          steps,
+          verifiedPackageRoot: currentPackageRoot,
+          afterVersion: null,
+          failedStep: retained.step,
+        };
+      }
     }
     // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
     // already verifies its reported bin is on PATH, so no PATH rewrite is needed.
@@ -878,15 +903,15 @@ export async function runGlobalPackageUpdateSteps(params: {
     );
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {
+      steps.push(preparedInstall.failedStep);
       return {
-        steps: [preparedInstall.failedStep],
+        steps,
         verifiedPackageRoot: params.packageRoot ?? null,
         afterVersion: null,
         failedStep: preparedInstall.failedStep,
       };
     }
 
-    const steps: PackageUpdateStepResult[] = [];
     const installCommandTarget = stagedInstall?.installTarget ?? resolvedInstallTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
