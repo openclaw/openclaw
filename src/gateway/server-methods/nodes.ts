@@ -1092,10 +1092,19 @@ export async function maybeSendNodeWakeNudge(
 
 export async function waitForNodeReconnect(params: {
   nodeId: string;
-  context: { nodeRegistry: { get: (nodeId: string) => NodeSession | undefined } };
+  context: {
+    nodeRegistry: {
+      get: (nodeId: string) => NodeSession | undefined;
+      getForPairingGeneration: (
+        nodeId: string,
+        pairingGeneration: string,
+      ) => NodeSession | undefined;
+    };
+  };
   timeoutMs?: number;
   pollMs?: number;
   lifecycle?: NodeWakeLifecycle;
+  pairingGeneration?: string;
 }): Promise<boolean> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 250);
   const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
@@ -1105,7 +1114,13 @@ export async function waitForNodeReconnect(params: {
     if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
       return false;
     }
-    if (resolveDispatchableNodeSession(params.context.nodeRegistry.get(params.nodeId))) {
+    const session = params.pairingGeneration
+      ? params.context.nodeRegistry.getForPairingGeneration(
+          params.nodeId,
+          params.pairingGeneration,
+        )
+      : params.context.nodeRegistry.get(params.nodeId);
+    if (resolveDispatchableNodeSession(session)) {
       return true;
     }
     await delayMs(pollMs);
@@ -1113,7 +1128,10 @@ export async function waitForNodeReconnect(params: {
   if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
     return false;
   }
-  return Boolean(resolveDispatchableNodeSession(params.context.nodeRegistry.get(params.nodeId)));
+  const session = params.pairingGeneration
+    ? params.context.nodeRegistry.getForPairingGeneration(params.nodeId, params.pairingGeneration)
+    : params.context.nodeRegistry.get(params.nodeId);
+  return Boolean(resolveDispatchableNodeSession(session));
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
@@ -1507,6 +1525,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respondPairingChanged(respond);
         return;
       }
+      const session = context.nodeRegistry.getForPairingGeneration(
+        trimmedNodeId,
+        generation.key,
+      );
+      if (!session || session.connId !== client?.connId) {
+        respondPairingChanged(respond);
+        return;
+      }
       const pending = resolveAllowedPendingNodeActions({
         nodeId: trimmedNodeId,
         pairingGeneration: generation.key,
@@ -1532,7 +1558,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.pending.ack": async ({ params, respond, client }) => {
+  "node.pending.ack": async ({ params, respond, client, context }) => {
     if (!validateNodePendingAckParams(params)) {
       respondInvalidParams({
         respond,
@@ -1550,6 +1576,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const generation = await captureNodePairingGeneration(trimmedNodeId);
       if (!generation) {
+        respondPairingChanged(respond);
+        return;
+      }
+      const session = context.nodeRegistry.getForPairingGeneration(
+        trimmedNodeId,
+        generation.key,
+      );
+      if (!session || session.connId !== client?.connId) {
         respondPairingChanged(respond);
         return;
       }
@@ -1657,7 +1691,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
         };
 
         const cfg = context.getRuntimeConfig();
-        let nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+        let nodeSession = resolveDispatchableNodeSession(
+          context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
+        );
         if (!nodeSession) {
           const wakeReqId = req.id;
           const wakeFlowStartedAtMs = Date.now();
@@ -1684,6 +1720,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
               context,
               timeoutMs: waitTimeoutMs,
               lifecycle: wakeLifecycle,
+              pairingGeneration: generation.key,
             });
             const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
             context.logGateway.info(
@@ -1694,7 +1731,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
           if (!(await continuePairingWork())) {
             return;
           }
-          nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+          nodeSession = resolveDispatchableNodeSession(
+            context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
+          );
           if (!nodeSession && wake.available) {
             const retryWake = await maybeWakeNodeWithApns(nodeId, {
               force: true,
@@ -1716,6 +1755,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
                 context,
                 timeoutMs: waitTimeoutMs,
                 lifecycle: wakeLifecycle,
+                pairingGeneration: generation.key,
               });
               const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
               context.logGateway.info(
@@ -1726,7 +1766,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
             if (!(await continuePairingWork())) {
               return;
             }
-            nodeSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+            nodeSession = resolveDispatchableNodeSession(
+              context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
+            );
           }
           if (!nodeSession) {
             const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
@@ -1870,7 +1912,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const dispatchSession = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+        const dispatchSession = resolveDispatchableNodeSession(
+          context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
+        );
         if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
           respond(
             false,
@@ -1912,6 +1956,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         const res = await context.nodeRegistry.invoke({
           nodeId,
           expectedConnId: nodeSession.connId,
+          expectedPairingGeneration: generation.key,
           command,
           params: forwardedParams.params,
           timeoutMs: p.timeoutMs,
@@ -2086,14 +2131,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
             if (!apnsGeneration || !client?.connId) {
               return false;
             }
-            const before = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+            const before = resolveDispatchableNodeSession(
+              context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key),
+            );
             if (!before || before.connId !== client.connId) {
               return false;
             }
             if (!(await isNodePairingGenerationCurrent(apnsGeneration))) {
               return false;
             }
-            const after = resolveDispatchableNodeSession(context.nodeRegistry.get(nodeId));
+            const after = resolveDispatchableNodeSession(
+              context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key),
+            );
             return after?.connId === client.connId;
           },
         },

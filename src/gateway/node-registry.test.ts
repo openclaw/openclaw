@@ -237,6 +237,30 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
+  it("rejects lookup and dispatch through a prior pairing-generation session", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    const client = makeClient("conn-old-generation", "node-generation", frames);
+    registry.register(client, { pairingGeneration: "generation-a" });
+
+    expect(
+      registry.getForPairingGeneration("node-generation", "generation-b"),
+    ).toBeUndefined();
+    expect(client.invalidated).toBe(true);
+    expect(client.invalidatedReason).toBe("node-pairing-generation-changed");
+    await expect(
+      registry.invoke({
+        nodeId: "node-generation",
+        expectedPairingGeneration: "generation-b",
+        command: "system.run",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PAIRING_CHANGED" },
+    });
+    expect(frames).toEqual([]);
+  });
+
   it("routes ordered input to the pending invoke connection and rejects unknown invokes", async () => {
     const registry = new NodeRegistry();
     const frames = registerNode(registry);

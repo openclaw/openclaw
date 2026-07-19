@@ -23,6 +23,7 @@ import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { captureAuthenticatedNodePairingGeneration } from "../../server-methods/node-pairing-generation.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -108,6 +109,8 @@ export async function attachAuthenticatedGatewayConnect(
     role,
     scopes,
     device,
+    devicePublicKey,
+    deviceToken,
     authResult,
     authMethod,
     pairingLocality,
@@ -116,6 +119,33 @@ export async function attachAuthenticatedGatewayConnect(
   } = state;
   if (!(await prepareGatewayNodeConnect(context, state))) {
     return;
+  }
+
+  let nodePairingGeneration: string | undefined;
+  if (role === "node") {
+    const authenticatedNodeToken =
+      authMethod === "device-token"
+        ? normalizeOptionalString(connectParams.auth?.deviceToken ?? connectParams.auth?.token)
+        : deviceToken?.token;
+    const generation =
+      device && devicePublicKey && authenticatedNodeToken
+        ? await captureAuthenticatedNodePairingGeneration({
+            nodeId: device.id,
+            publicKey: devicePublicKey,
+            token: authenticatedNodeToken,
+          })
+        : null;
+    if (!generation) {
+      const message = "node pairing changed during connect";
+      markHandshakeFailure("node-pairing-generation-changed", {
+        ...(device?.id ? { deviceId: device.id } : {}),
+      });
+      sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+      await releasePendingNodePairingCleanup();
+      close(1008, truncateCloseReason(message));
+      return;
+    }
+    nodePairingGeneration = generation.key;
   }
 
   // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
@@ -379,6 +409,7 @@ export async function attachAuthenticatedGatewayConnect(
     const requestContext = buildRequestContext();
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
+      pairingGeneration: nodePairingGeneration,
     });
     recordRemoteNodeInfo({
       nodeId: nodeSession.nodeId,

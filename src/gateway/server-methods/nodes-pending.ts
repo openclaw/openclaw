@@ -137,7 +137,11 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
           pairingGeneration: generation.key,
         });
         let wakeTriggered = false;
-        if (p.wake !== false && !queued.deduped && !context.nodeRegistry.get(nodeId)) {
+        if (
+          p.wake !== false &&
+          !queued.deduped &&
+          !context.nodeRegistry.getForPairingGeneration(nodeId, generation.key)
+        ) {
           const wakeReqId = queued.item.id;
           context.logGateway.info(
             `node pending wake start node=${nodeId} req=${wakeReqId} type=${queued.item.type}`,
@@ -164,6 +168,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
               context,
               timeoutMs: NODE_WAKE_RECONNECT_WAIT_MS,
               lifecycle: wakeLifecycle,
+              pairingGeneration: generation.key,
             });
             context.logGateway.info(
               `node pending wake stage=wait1 node=${nodeId} req=${wakeReqId} ` +
@@ -176,7 +181,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
               generation,
               lifecycle: wakeLifecycle,
             })) &&
-            !context.nodeRegistry.get(nodeId) &&
+            !context.nodeRegistry.getForPairingGeneration(nodeId, generation.key) &&
             wake.available
           ) {
             // A forced retry is only useful after the first wake was deliverable
@@ -200,6 +205,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
                 context,
                 timeoutMs: NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
                 lifecycle: wakeLifecycle,
+                pairingGeneration: generation.key,
               });
               context.logGateway.info(
                 `node pending wake stage=wait2 node=${nodeId} req=${wakeReqId} ` +
@@ -213,7 +219,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
               generation,
               lifecycle: wakeLifecycle,
             })) &&
-            !context.nodeRegistry.get(nodeId)
+            !context.nodeRegistry.getForPairingGeneration(nodeId, generation.key)
           ) {
             const nudge = await maybeSendNodeWakeNudge(nodeId, {
               cfg,

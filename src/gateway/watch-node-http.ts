@@ -68,6 +68,7 @@ import type {
   SerializedEventPayload,
 } from "./node-registry.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
+import { captureAuthenticatedNodePairingGeneration } from "./server-methods/node-pairing-generation.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { resolveConnectAuthDecision } from "./server/ws-connection/auth-context.js";
 import { resolveDeviceSignaturePayloadVersion } from "./server/ws-connection/handshake-auth-helpers.js";
@@ -801,6 +802,16 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         sendUnauthorized(res);
         return;
       }
+      const nodePairingGeneration = await captureAuthenticatedNodePairingGeneration({
+        nodeId: derivedDeviceId,
+        publicKey,
+        token: issuedDeviceToken,
+        baseDir: options.pairingBaseDir,
+      });
+      if (!nodePairingGeneration) {
+        sendUnauthorized(res);
+        return;
+      }
       if (closed || responseLifecycle.isAborted()) {
         if (revokedBootstrapTokenRecord) {
           await restoreDeviceBootstrapToken({
@@ -846,7 +857,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         };
         const nodeSession = options.nodeRegistry.registerTransport(
           client,
-          { remoteIp: clientIp },
+          { remoteIp: clientIp, pairingGeneration: nodePairingGeneration.key },
           createTransport(session),
         );
         sessionsByToken.set(session.token, session);

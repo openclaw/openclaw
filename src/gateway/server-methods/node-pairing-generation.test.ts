@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PairedDevice } from "../../infra/device-pairing.js";
 import {
+  captureAuthenticatedNodePairingGeneration,
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
 } from "./node-pairing-generation.js";
@@ -70,6 +71,43 @@ describe("node pairing generation", () => {
       }),
     );
     await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
+  });
+
+  it("binds connected sessions to the public key and node token used at authentication", async () => {
+    const original = pairedNode();
+    mocks.getPairedDevice
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce({ ...original, publicKey: "replacement-public-key" })
+      .mockResolvedValueOnce(
+        pairedNode({
+          tokens: {
+            ...original.tokens,
+            node: { ...original.tokens!.node!, token: "replacement-node-token" },
+          },
+        }),
+      );
+
+    await expect(
+      captureAuthenticatedNodePairingGeneration({
+        nodeId: original.deviceId,
+        publicKey: original.publicKey,
+        token: original.tokens!.node!.token,
+      }),
+    ).resolves.toMatchObject({ nodeId: original.deviceId });
+    await expect(
+      captureAuthenticatedNodePairingGeneration({
+        nodeId: original.deviceId,
+        publicKey: original.publicKey,
+        token: original.tokens!.node!.token,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      captureAuthenticatedNodePairingGeneration({
+        nodeId: original.deviceId,
+        publicKey: original.publicKey,
+        token: original.tokens!.node!.token,
+      }),
+    ).resolves.toBeNull();
   });
 
   it("keeps node work current across unrelated operator approval", async () => {

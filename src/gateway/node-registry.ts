@@ -42,6 +42,8 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 export type NodeSession = {
   nodeId: string;
   connId: string;
+  /** Persistent pairing generation authenticated before this session was registered. */
+  pairingGeneration?: string;
   client: GatewayWsClient;
   clientId?: string;
   clientMode?: string;
@@ -285,14 +287,17 @@ export class NodeRegistry {
   }
 
   /** Register a websocket client as the current connection for its node id. */
-  register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
+  register(
+    client: GatewayWsClient,
+    opts: { remoteIp?: string | undefined; pairingGeneration?: string | undefined },
+  ) {
     return this.registerSession(client, opts);
   }
 
   /** Register a node whose events are delivered by an HTTP polling transport. */
   registerTransport(
     client: GatewayWsClient,
-    opts: { remoteIp?: string | undefined },
+    opts: { remoteIp?: string | undefined; pairingGeneration?: string | undefined },
     transport: NodeEventTransport,
   ) {
     return this.registerSession(client, opts, transport);
@@ -300,7 +305,7 @@ export class NodeRegistry {
 
   private registerSession(
     client: GatewayWsClient,
-    opts: { remoteIp?: string | undefined },
+    opts: { remoteIp?: string | undefined; pairingGeneration?: string | undefined },
     transport?: NodeEventTransport,
   ) {
     const connect = client.connect;
@@ -349,6 +354,7 @@ export class NodeRegistry {
     const session: NodeSession = {
       nodeId,
       connId: client.connId,
+      ...(opts.pairingGeneration ? { pairingGeneration: opts.pairingGeneration } : {}),
       client,
       clientId: connect.client.id,
       clientMode: connect.client.mode,
@@ -430,6 +436,22 @@ export class NodeRegistry {
   get(nodeId: string): NodeSession | undefined {
     const node = this.nodesById.get(nodeId);
     return node?.client.invalidated === true ? undefined : node;
+  }
+
+  /** Return only the session authenticated for the requested persistent pairing generation. */
+  getForPairingGeneration(nodeId: string, pairingGeneration: string): NodeSession | undefined {
+    const node = this.get(nodeId);
+    if (!node) {
+      return undefined;
+    }
+    if (node.pairingGeneration === pairingGeneration) {
+      return node;
+    }
+    // A pairing mutation may happen outside this Gateway process (for example
+    // the CLI). Fence the stale socket as soon as generation-owned work sees it.
+    node.client.invalidated = true;
+    node.client.invalidatedReason = "node-pairing-generation-changed";
+    return undefined;
   }
 
   /** Updates recent input activity for the exact authenticated node connection. */
@@ -679,6 +701,7 @@ export class NodeRegistry {
   async invoke(params: {
     nodeId: string;
     expectedConnId?: string;
+    expectedPairingGeneration?: string;
     command: string;
     params?: unknown;
     timeoutMs?: number;
@@ -702,6 +725,17 @@ export class NodeRegistry {
       };
     }
     if (node.client.invalidated === true) {
+      return {
+        ok: false,
+        error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
+      };
+    }
+    if (
+      params.expectedPairingGeneration &&
+      node.pairingGeneration !== params.expectedPairingGeneration
+    ) {
+      node.client.invalidated = true;
+      node.client.invalidatedReason = "node-pairing-generation-changed";
       return {
         ok: false,
         error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },

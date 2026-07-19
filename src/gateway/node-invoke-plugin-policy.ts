@@ -255,7 +255,12 @@ export async function applyPluginNodeInvokePolicy(params: {
         message: "node pairing changed before dispatch",
       };
     }
-    const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
+    const currentNode = params.nodeSession.pairingGeneration
+      ? params.context.nodeRegistry.getForPairingGeneration(
+          params.nodeSession.nodeId,
+          params.nodeSession.pairingGeneration,
+        )
+      : params.context.nodeRegistry.get(params.nodeSession.nodeId);
     if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
       return {
         ok: false,
@@ -294,6 +299,9 @@ export async function applyPluginNodeInvokePolicy(params: {
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
+      ...(params.nodeSession.pairingGeneration
+        ? { expectedPairingGeneration: params.nodeSession.pairingGeneration }
+        : {}),
       command: params.command,
       params: override.params ?? params.params,
       timeoutMs: override.timeoutMs ?? params.timeoutMs,

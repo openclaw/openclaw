@@ -114,6 +114,7 @@ type MockCallSource = {
 type TestNodeSession = {
   nodeId: string;
   connId?: string;
+  pairingGeneration?: string;
   commands: string[];
   declaredCommands?: string[];
   platform?: string;
@@ -336,12 +337,17 @@ function makeNodeInvokeParams(overrides?: Partial<Record<string, unknown>>) {
 async function invokeNode(params: {
   nodeRegistry: {
     get: (nodeId: string) => TestNodeSession | undefined;
+    getForPairingGeneration?: (
+      nodeId: string,
+      pairingGeneration: string,
+    ) => TestNodeSession | undefined;
     invoke: (payload: {
       nodeId: string;
       command: string;
       params?: unknown;
       timeoutMs?: number;
       idempotencyKey?: string;
+      expectedPairingGeneration?: string;
     }) => Promise<{
       ok: boolean;
       payload?: unknown;
@@ -357,6 +363,12 @@ async function invokeNode(params: {
     info: vi.fn(),
     warn: vi.fn(),
   };
+  const nodeRegistry = {
+    ...params.nodeRegistry,
+    getForPairingGeneration:
+      params.nodeRegistry.getForPairingGeneration ??
+      ((nodeId: string, _pairingGeneration: string) => params.nodeRegistry.get(nodeId)),
+  };
   await expectDefined(
     nodeHandlers["node.invoke"],
     'nodeHandlers["node.invoke"] test invariant',
@@ -364,7 +376,7 @@ async function invokeNode(params: {
     params: makeNodeInvokeParams(params.requestParams),
     respond: respond as never,
     context: {
-      nodeRegistry: params.nodeRegistry,
+      nodeRegistry,
       execApprovalManager: undefined,
       logGateway,
       getRuntimeConfig: () => mocks.getRuntimeConfig(),
@@ -397,6 +409,7 @@ function createOperatorClient(params?: { scopes?: string[]; pluginRuntimeOwnerId
 
 function createNodeClient(nodeId: string, commands?: string[]) {
   return {
+    connId: `conn:${nodeId}`,
     connect: {
       ...(commands ? { commands } : {}),
       role: "node" as const,
@@ -439,32 +452,57 @@ function createMissingNodeRegistry() {
   };
 }
 
-async function pullPending(nodeId: string, commands?: string[]) {
+async function pullPending(
+  nodeId: string,
+  commands?: string[],
+  sessionConnId: string | null = `conn:${nodeId}`,
+) {
   const respond = vi.fn();
+  const client = createNodeClient(nodeId, commands);
   await expectDefined(
     nodeHandlers["node.pending.pull"],
     'nodeHandlers["node.pending.pull"] test invariant',
   )({
     params: {},
     respond: respond as never,
-    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
-    client: createNodeClient(nodeId, commands) as never,
+    context: {
+      getRuntimeConfig: () => mocks.getRuntimeConfig(),
+      nodeRegistry: {
+        getForPairingGeneration: vi.fn(() =>
+          sessionConnId === null ? undefined : { connId: sessionConnId },
+        ),
+      },
+    } as never,
+    client: client as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
   });
   return respond;
 }
 
-async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
+async function ackPending(
+  nodeId: string,
+  ids: string[],
+  commands?: string[],
+  sessionConnId: string | null = `conn:${nodeId}`,
+) {
   const respond = vi.fn();
+  const client = createNodeClient(nodeId, commands);
   await expectDefined(
     nodeHandlers["node.pending.ack"],
     'nodeHandlers["node.pending.ack"] test invariant',
   )({
     params: { ids },
     respond: respond as never,
-    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
-    client: createNodeClient(nodeId, commands) as never,
+    context: {
+      getRuntimeConfig: () => mocks.getRuntimeConfig(),
+      nodeRegistry: {
+        getForPairingGeneration: vi.fn(() =>
+          sessionConnId === null ? undefined : { connId: sessionConnId },
+        ),
+      },
+    } as never,
+    client: client as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
   });
@@ -1195,6 +1233,7 @@ describe("node.invoke APNs wake path", () => {
     vi.setSystemTime(0);
     const nodeRegistry = {
       get: vi.fn(() => undefined),
+      getForPairingGeneration: vi.fn(() => undefined),
     };
 
     const reconnectPromise = waitForNodeReconnect({
@@ -1538,6 +1577,42 @@ describe("node.invoke APNs wake path", () => {
     ]);
   });
 
+  it("does not dispatch current-generation work to a prior-generation session", async () => {
+    const nodeId = "ios-node-prior-generation-session";
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const oldSession: TestNodeSession = {
+      nodeId,
+      connId: "old-generation-conn",
+      pairingGeneration: `generation:${nodeId}:0`,
+      commands: ["camera.capture"],
+      platform: "iOS 26.4.0",
+    };
+    const nodeRegistry = {
+      get: vi.fn(() => oldSession),
+      getForPairingGeneration: vi.fn(
+        (_requestedNodeId: string, generation: string) =>
+          generation === oldSession.pairingGeneration ? oldSession : undefined,
+      ),
+      invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-prior-generation-session" },
+    });
+
+    expect(nodeRegistry.getForPairingGeneration).toHaveBeenCalledWith(
+      nodeId,
+      `generation:${nodeId}:1`,
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "NOT_CONNECTED" } },
+    ]);
+  });
+
   it("does not queue foreground work when pairing changes during node dispatch", async () => {
     const nodeId = "ios-node-replaced-during-dispatch";
     let pairingCurrent = true;
@@ -1791,6 +1866,50 @@ describe("node.invoke APNs wake path", () => {
       "replacement pull payload",
       { nodeId, actions: [] },
     );
+  });
+
+  it("does not let a prior-generation session pull or ack current-generation actions", async () => {
+    const nodeId = "ios-node-prior-generation-pending";
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        idempotencyKey: "idem-prior-generation-pending",
+      },
+    });
+
+    expect(firstRespondCall(await pullPending(nodeId, ["canvas.navigate"], null))).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "PAIRING_CHANGED" } },
+    ]);
+
+    const currentPullPayload = requireRespondPayload(
+      firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+      "current-generation pull response",
+    );
+    const queuedActionId = requireString(
+      (currentPullPayload.actions as Array<{ id?: string }> | undefined)?.[0]?.id,
+      "current-generation queued action id",
+    );
+
+    expect(
+      firstRespondCall(await ackPending(nodeId, [queuedActionId], ["canvas.navigate"], null)),
+    ).toMatchObject([false, undefined, { details: { code: "PAIRING_CHANGED" } }]);
+    expect(
+      (requireRespondPayload(
+        firstRespondCall(await pullPending(nodeId, ["canvas.navigate"])),
+        "post-stale-ack pull response",
+      ).actions as unknown[] | undefined)?.length,
+    ).toBe(1);
   });
 
   it("does not let a stale foreground pull delete replacement-generation actions", async () => {

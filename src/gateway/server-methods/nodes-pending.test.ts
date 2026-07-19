@@ -56,6 +56,7 @@ function makeContext(overrides?: Partial<Record<string, unknown>>) {
   return {
     nodeRegistry: {
       get: vi.fn(() => undefined),
+      getForPairingGeneration: vi.fn(() => undefined),
     },
     logGateway: {
       info: vi.fn(),
@@ -204,7 +205,10 @@ describe("node.pending handlers", () => {
     });
     const context = makeContext({
       nodeRegistry: {
-        get: vi.fn(() => (connected ? { nodeId: "ios-node-2" } : undefined)),
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() =>
+          connected ? { nodeId: "ios-node-2" } : undefined,
+        ),
       },
     });
     const respond = vi.fn();
@@ -232,18 +236,29 @@ describe("node.pending handlers", () => {
       expiresInMs: undefined,
       pairingGeneration: "generation:ios-node-2:1",
     });
-    expect(context.nodeRegistry.get).toHaveBeenCalledWith("ios-node-2");
-    expect(context.nodeRegistry.get).not.toHaveBeenCalledWith(" ios-node-2 ");
+    expect(context.nodeRegistry.getForPairingGeneration).toHaveBeenCalledWith(
+      "ios-node-2",
+      "generation:ios-node-2:1",
+    );
+    expect(context.nodeRegistry.getForPairingGeneration).not.toHaveBeenCalledWith(
+      " ios-node-2 ",
+      expect.anything(),
+    );
     expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledWith("ios-node-2", {
       wakeReason: "node.pending",
       cfg: {},
       lifecycle: wakeLifecycle,
+      generation: {
+        nodeId: "ios-node-2",
+        key: "generation:ios-node-2:1",
+      },
     });
     expect(mocks.waitForNodeReconnect).toHaveBeenCalledWith({
       nodeId: "ios-node-2",
       context,
       timeoutMs: 3_000,
       lifecycle: wakeLifecycle,
+      pairingGeneration: "generation:ios-node-2:1",
     });
     expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
     expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith("ios-node-2", wakeLifecycle);
