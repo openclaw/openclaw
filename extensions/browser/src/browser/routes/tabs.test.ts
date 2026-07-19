@@ -630,7 +630,7 @@ describe("browser tab routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
+    expect(response.body).toEqual({ ok: true, targetId: "T2" });
     expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", { exactTargetId: true });
     expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();

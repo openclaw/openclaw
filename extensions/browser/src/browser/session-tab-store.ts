@@ -5,17 +5,23 @@ import {
   getOptionalBrowserStateRuntime,
   setBrowserStateRuntime,
 } from "../browser-runtime-state.js";
+import {
+  rememberDurableTabAliases,
+  resetDurableTabAliases,
+} from "./session-tab-ephemeral-aliases.js";
 
-export const BROWSER_SESSION_TABS_NAMESPACE = "browser.session-tabs";
-export const BROWSER_SESSION_TABS_MAX_ENTRIES = 5_000;
+const BROWSER_SESSION_TABS_NAMESPACE = "browser.session-tabs";
+const BROWSER_SESSION_TABS_MAX_ENTRIES = 5_000;
 
 export type BrowserSessionTabRecord = {
   version: 1;
   sessionKey: string;
   nativeTargetId: string;
   profile: string;
+  profileAliases?: string[];
   profileFingerprint: string;
   browserInstanceFingerprint: string;
+  interactionTargetKind: "native" | "opaque";
   trackedAt: number;
   lastUsedAt: number;
   cleanupRequestedAt?: number;
@@ -35,6 +41,23 @@ export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStore
     overflowPolicy: "reject-new",
   });
   setBrowserStateRuntime({ sessionTabs });
+  resetDurableTabAliases();
+  for (const entry of sessionTabs.entries()) {
+    const record = parseBrowserSessionTabRecord(entry.value);
+    if (!record || browserSessionTabStorageKey(record) !== entry.key) {
+      continue;
+    }
+    rememberDurableTabAliases(
+      {
+        sessionKey: record.sessionKey,
+        targetId: record.nativeTargetId,
+        profile: record.profile,
+      },
+      [],
+      entry.key,
+      record.profileAliases,
+    );
+  }
 }
 
 export function getBrowserSessionTabStore() {
@@ -63,8 +86,41 @@ export function browserSessionTabStorageKey(record: {
     .digest("hex")}`;
 }
 
+export function browserSessionTabNativeIdentity(
+  record: Pick<BrowserSessionTabRecord, "sessionKey" | "profile" | "nativeTargetId">,
+): string {
+  return `${record.sessionKey}\u0000${record.profile}\u0000${record.nativeTargetId}`;
+}
+
 function isTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+export function compareBrowserSessionTabProfileAliases(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function isCanonicalProfileAliases(
+  value: unknown,
+  profile: unknown,
+): value is string[] | undefined {
+  if (value === undefined) {
+    return true;
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some(
+      (entry) => typeof entry !== "string" || !entry || entry !== entry.trim().toLowerCase(),
+    )
+  ) {
+    return false;
+  }
+  const canonical = [...new Set(value)].toSorted(compareBrowserSessionTabProfileAliases);
+  return (
+    !canonical.includes(String(profile)) &&
+    canonical.every((entry, index) => entry === value[index])
+  );
 }
 
 export function parseBrowserSessionTabRecord(value: unknown): BrowserSessionTabRecord | undefined {
@@ -88,10 +144,12 @@ export function parseBrowserSessionTabRecord(value: unknown): BrowserSessionTabR
     !record.nativeTargetId ||
     typeof record.profile !== "string" ||
     !record.profile ||
+    !isCanonicalProfileAliases(record.profileAliases, record.profile) ||
     typeof record.profileFingerprint !== "string" ||
     !record.profileFingerprint ||
     typeof record.browserInstanceFingerprint !== "string" ||
     !record.browserInstanceFingerprint ||
+    (record.interactionTargetKind !== "native" && record.interactionTargetKind !== "opaque") ||
     !isTimestamp(record.trackedAt) ||
     !isTimestamp(record.lastUsedAt) ||
     !cleanupFieldsValid ||
@@ -112,8 +170,11 @@ export function sameBrowserSessionTabRecord(
     left.sessionKey === right.sessionKey &&
     left.nativeTargetId === right.nativeTargetId &&
     left.profile === right.profile &&
+    (left.profileAliases?.length ?? 0) === (right.profileAliases?.length ?? 0) &&
+    (left.profileAliases ?? []).every((alias, index) => alias === right.profileAliases?.[index]) &&
     left.profileFingerprint === right.profileFingerprint &&
     left.browserInstanceFingerprint === right.browserInstanceFingerprint &&
+    left.interactionTargetKind === right.interactionTargetKind &&
     left.trackedAt === right.trackedAt &&
     left.lastUsedAt === right.lastUsedAt &&
     left.cleanupRequestedAt === right.cleanupRequestedAt &&

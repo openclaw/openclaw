@@ -192,7 +192,11 @@ async function runTabTargetMutation(params: {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId: string;
-  mutate: (profileCtx: ProfileContext, targetId: string, signal: AbortSignal) => Promise<void>;
+  mutate: (
+    profileCtx: ProfileContext,
+    targetId: string,
+    signal: AbortSignal,
+  ) => Promise<string | void>;
 }) {
   const result = await runTabsProfileRoute({
     req: params.req,
@@ -201,8 +205,11 @@ async function runTabTargetMutation(params: {
     mapTabError: true,
     run: async (profileCtx, signal) => {
       await ensureBrowserRunning(params.ctx, profileCtx, signal);
-      await params.mutate(profileCtx, params.targetId, signal);
-      return { ok: true } as const;
+      const canonicalTargetId = await params.mutate(profileCtx, params.targetId, signal);
+      return {
+        ok: true,
+        ...(canonicalTargetId ? { targetId: canonicalTargetId } : {}),
+      } as const;
     },
   });
   if (result) {
@@ -293,6 +300,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           });
         }
         await profileCtx.focusTab(resolved.targetId, { exactTargetId: true });
+        return resolved.targetId;
       },
     });
   });

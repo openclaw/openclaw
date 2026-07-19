@@ -8,6 +8,7 @@ type SessionTabParams = {
   targetId?: string;
   baseUrl?: string;
   profile?: string;
+  profileAliases?: Array<string | undefined>;
   ownership?: BrowserTabOwnership;
   aliases?: Array<string | undefined>;
 };
@@ -62,12 +63,13 @@ export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
   return agentVisible;
 }
 
-async function trackOpenedHostBrowserTab(params: {
+async function trackOpenedBrowserTab(params: {
   result: unknown;
   sessionKey?: string;
-  fallbackProfile: string;
+  fallbackProfile?: string;
+  baseUrl?: string;
   track: SessionTabRegistry["trackSessionBrowserTab"];
-  closeTab: (targetId: string, profile: string) => Promise<void>;
+  closeTab: (targetId: string, profile?: string) => Promise<void>;
 }): Promise<void> {
   const opened = readOpenedTab(params.result);
   const profile = opened.profile ?? params.fallbackProfile;
@@ -75,20 +77,25 @@ async function trackOpenedHostBrowserTab(params: {
     params.track({
       sessionKey: params.sessionKey,
       targetId: opened.targetId,
-      baseUrl: undefined,
+      baseUrl: params.baseUrl,
       profile,
-      ownership: opened.ownership,
+      ...(params.fallbackProfile && opened.profile && opened.profile !== params.fallbackProfile
+        ? { profileAliases: [params.fallbackProfile] }
+        : {}),
+      // Sandbox/browser-bridge tabs belong to a different browser process.
+      // Keep them process-local even if that server returned durable metadata.
+      ownership: params.baseUrl ? undefined : opened.ownership,
       aliases: opened.aliases,
     });
   } catch (trackingError) {
-    if (opened.ownership?.status !== "durable" || !opened.targetId) {
+    if (!opened.targetId) {
       throw trackingError;
     }
     try {
       await params.closeTab(opened.targetId, profile);
     } catch (closeError) {
       throw Object.assign(
-        new Error("Failed to persist browser tab ownership and close the newly opened tab", {
+        new Error("Failed to register browser tab cleanup and close the newly opened tab", {
           cause: closeError,
         }),
         {
@@ -110,36 +117,39 @@ export function createBrowserToolSessionTabs(params: {
   registry: SessionTabRegistry;
 }) {
   const profile = params.requestedProfile ?? params.defaultProfile;
-  const isTrackedHostRoute = () =>
-    !params.baseUrl && (!params.isHostFallbackActive || params.isHostFallbackActive());
+  const isTrackedRoute = () => !params.isHostFallbackActive || params.isHostFallbackActive();
+  const trackedBaseUrl = () => (params.isHostFallbackActive ? undefined : params.baseUrl);
+  const trackedProfile = () => (trackedBaseUrl() && !params.requestedProfile ? undefined : profile);
   const identity = (targetId: string) => ({
     sessionKey: params.sessionKey,
     targetId,
-    baseUrl: undefined,
-    profile,
+    baseUrl: trackedBaseUrl(),
+    profile: trackedProfile(),
   });
   return {
     touch: (targetId: string | undefined): void => {
-      if (targetId && isTrackedHostRoute()) {
+      if (targetId && isTrackedRoute()) {
         params.registry.touchSessionBrowserTab(identity(targetId));
       }
     },
     untrack: (targetId: string | undefined): void => {
-      if (targetId && isTrackedHostRoute()) {
+      if (targetId && isTrackedRoute()) {
         params.registry.untrackSessionBrowserTab(identity(targetId));
       }
     },
     trackOpened: async (
       result: unknown,
-      closeTab: (targetId: string, openedProfile: string) => Promise<void>,
+      closeTab: (targetId: string, openedProfile?: string) => Promise<void>,
     ): Promise<void> => {
-      if (!isTrackedHostRoute()) {
+      if (!isTrackedRoute()) {
         return;
       }
-      await trackOpenedHostBrowserTab({
+      const baseUrl = trackedBaseUrl();
+      await trackOpenedBrowserTab({
         result,
         sessionKey: params.sessionKey,
-        fallbackProfile: profile,
+        fallbackProfile: baseUrl && !params.requestedProfile ? undefined : profile,
+        baseUrl,
         track: params.registry.trackSessionBrowserTab,
         closeTab,
       });

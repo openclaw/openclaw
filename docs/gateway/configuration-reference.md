@@ -457,15 +457,17 @@ See [Inferred commitments](/concepts/commitments).
   `maxTabsPerSession: 0` to disable those individual cleanup modes. Disabling
   `tabCleanup` does not disable explicit session lifecycle cleanup.
 - Host-local opens with a stable native CDP target and browser identity are
-  stored in shared SQLite state and can remain eligible across Gateway restarts
-  for `/new`, session lifecycle, idle, and cap cleanup. This includes
-  OpenClaw-managed and regular remote CDP profiles, plus existing-session
-  profiles with an explicit `cdpUrl`, when stable identity is available.
-  OpenClaw verifies the profile and browser instance before closing. Chrome MCP
-  auto-connect, missing `/json/version` browser identity, and unresolved native
-  targets remain process-local, so they are not automatically closed after a
-  restart. Older untracked tabs require manual closure. Transient failures stay
-  pending for a later retry. See [Tab cleanup ownership](/tools/browser#tab-cleanup-ownership).
+  stored in shared SQLite state and remain eligible across Gateway restarts for
+  `/new` and session lifecycle cleanup. Native tool-facing CDP targets also
+  remain eligible for idle and cap cleanup after restart. Chrome MCP uses
+  process-local target handles, so cold existing-session records wait for
+  lifecycle cleanup rather than risking an idle sweep against unattributable
+  post-restart activity. OpenClaw verifies the profile and browser instance
+  before closing. Chrome MCP auto-connect, missing `/json/version` browser
+  identity, and unresolved native targets remain fully process-local, so they
+  are not automatically closed after a restart. Older untracked tabs require
+  manual closure. Transient failures stay pending for a later retry. See
+  [Tab cleanup ownership](/tools/browser#tab-cleanup-ownership).
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled when unset, so browser navigation stays strict by default.
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when you intentionally trust private-network browser navigation.
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.

@@ -215,13 +215,17 @@ sessions; disabling it does not disable explicit session lifecycle cleanup.
 
 For host-local opens, ownership with a stable native CDP target and browser
 identity is stored in the shared SQLite state. Those records survive a Gateway
-restart and remain eligible for `/new`, other session lifecycle cleanup, and
-the idle and per-session cap sweeps. Session lifecycle cleanup includes
-subagent, cron, and ACP session endings. This durable path can cover
-OpenClaw-managed profiles, regular remote CDP profiles, and existing-session
-profiles with an explicit `cdpUrl`, provided OpenClaw can resolve both the
-native target and a stable browser identity. Before closing a durable record,
-OpenClaw verifies that the configured profile and browser instance still match.
+restart and remain eligible for `/new` and other session lifecycle cleanup;
+session lifecycle cleanup includes subagent, cron, and ACP session endings.
+Records whose tool-facing target is the native CDP target also remain eligible
+for idle and per-session cap sweeps after restart. Chrome MCP target handles are
+process-local, so cold existing-session records wait for lifecycle cleanup
+rather than risking an idle sweep against activity that cannot be attributed
+safely after restart. This durable path can cover OpenClaw-managed profiles,
+regular remote CDP profiles, and existing-session profiles with an explicit
+`cdpUrl`, provided OpenClaw can resolve both the native target and a stable
+browser identity. Before closing a durable record, OpenClaw verifies that the
+configured profile and browser instance still match.
 
 Chrome MCP `--autoConnect`, CDP endpoints whose `/json/version` response lacks
 a stable browser identity, and opens whose native target cannot be resolved

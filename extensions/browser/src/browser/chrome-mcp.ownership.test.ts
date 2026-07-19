@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fetchJsonMock = vi.hoisted(() => vi.fn());
+const { fetchJsonMock, fetchOkMock } = vi.hoisted(() => ({
+  fetchJsonMock: vi.fn(),
+  fetchOkMock: vi.fn(),
+}));
 
 vi.mock("./cdp.helpers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./cdp.helpers.js")>();
   return {
     ...actual,
     fetchJson: (...args: unknown[]) => fetchJsonMock(...args),
+    fetchOk: (...args: unknown[]) => fetchOkMock(...args),
     resolveCdpTabOwnership: async (params: {
       profileName: string;
       cdpUrl: string;
@@ -30,11 +34,8 @@ vi.mock("./cdp.helpers.js", async (importOriginal) => {
       return {
         status: "durable",
         nativeTargetId: params.nativeTargetId,
-        ...actual.createCdpOwnershipFingerprints({
-          profileName: params.profileName,
-          cdpUrl: params.cdpUrl,
-          browserWebSocketUrl: version.webSocketDebuggerUrl,
-        }),
+        profileFingerprint: "sha256:fixture-profile",
+        browserInstanceFingerprint: "sha256:fixture-browser",
       };
     },
   };
@@ -70,8 +71,11 @@ function createSerialLock() {
   };
 }
 
-function createMarkerSession() {
-  const pages: FakePage[] = [];
+function createMarkerSession(options: { existingPage?: boolean; navigateError?: Error } = {}) {
+  const pages: FakePage[] =
+    options.existingPage === false
+      ? []
+      : [{ id: 1, nativeTargetId: "NATIVE-EXISTING", url: "about:blank" }];
   const events: string[] = [];
   const readUrl = (value: unknown) => (typeof value === "string" ? value : "");
   const callTool = vi.fn(async (call: ToolCall) => {
@@ -91,6 +95,9 @@ function createMarkerSession() {
       };
     }
     if (call.name === "navigate_page") {
+      if (options.navigateError) {
+        throw options.navigateError;
+      }
       const page = pages.find((candidate) => candidate.id === call.arguments?.pageId);
       if (!page) {
         throw new Error("unknown page");
@@ -105,6 +112,15 @@ function createMarkerSession() {
           pages: pages.map((page) => ({ id: page.id, url: page.url })),
         },
       };
+    }
+    if (call.name === "close_page") {
+      const pageIndex = pages.findIndex((candidate) => candidate.id === call.arguments?.pageId);
+      if (pageIndex < 0) {
+        throw new Error("unknown page");
+      }
+      const [closed] = pages.splice(pageIndex, 1);
+      events.push(`close:${closed?.url ?? ""}`);
+      return { content: [{ type: "text", text: "closed" }] };
     }
     throw new Error(`unexpected tool ${call.name}`);
   });
@@ -143,6 +159,7 @@ describe("Chrome MCP durable tab ownership", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
     fetchJsonMock.mockReset();
+    fetchOkMock.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -180,7 +197,7 @@ describe("Chrome MCP durable tab ownership", () => {
     );
     expect(ownershipOf(opened)).toMatchObject({
       status: "durable",
-      nativeTargetId: "NATIVE-1",
+      nativeTargetId: "NATIVE-2",
       profileFingerprint: expect.stringMatching(/^sha256:/),
       browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
     });
@@ -208,8 +225,8 @@ describe("Chrome MCP durable tab ownership", () => {
       openChromeMcpTab("chrome-live", "https://example.com/same", profile),
     ]);
 
-    expect(ownershipOf(first)?.nativeTargetId).toBe("NATIVE-1");
-    expect(ownershipOf(second)?.nativeTargetId).toBe("NATIVE-2");
+    expect(ownershipOf(first)?.nativeTargetId).toBe("NATIVE-2");
+    expect(ownershipOf(second)?.nativeTargetId).toBe("NATIVE-3");
     const calls = (session.client.callTool as ReturnType<typeof vi.fn>).mock.calls as Array<
       [ToolCall, ...unknown[]]
     >;
@@ -279,6 +296,10 @@ describe("Chrome MCP durable tab ownership", () => {
         { signal: controller.signal },
       ),
     ).rejects.toThrow("marker lookup aborted");
+    expect(abortedSession.pages).toEqual([
+      { id: 1, nativeTargetId: "NATIVE-EXISTING", url: "about:blank" },
+    ]);
+    expect(abortedSession.events.at(-1)).toMatch(/^close:about:blank#openclaw-/);
 
     await resetChromeMcpSessionsForTest();
     const blockedSession = createMarkerSession();
@@ -293,6 +314,127 @@ describe("Chrome MCP durable tab ownership", () => {
         cdpUrl: "http://10.0.0.1:9222",
       }),
     ).rejects.toBe(blocked);
+    expect(blockedSession.pages).toEqual([
+      { id: 1, nativeTargetId: "NATIVE-EXISTING", url: "about:blank" },
+    ]);
+  });
+
+  it("opens the first page in an empty explicit-CDP browser", async () => {
+    const { session, pages } = createMarkerSession({ existingPage: false });
+    setChromeMcpSessionFactoryForTest(async () => session as never);
+    fetchJsonMock.mockImplementation(async (url: string) => {
+      if (url.includes("/json/list")) {
+        return pages.map((page) => ({
+          id: page.nativeTargetId,
+          url: page.url,
+          type: "page",
+        }));
+      }
+      return {
+        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
+      };
+    });
+
+    const opened = await openChromeMcpTab("chrome-live", "about:blank", {
+      cdpUrl: "http://127.0.0.1:9222",
+    });
+
+    expect(ownershipOf(opened)).toMatchObject({
+      status: "durable",
+      nativeTargetId: "NATIVE-1",
+    });
+    expect(pages).toEqual([{ id: 1, nativeTargetId: "NATIVE-1", url: "about:blank" }]);
+  });
+
+  it("rejects an empty auto-connected browser before creating a page", async () => {
+    const { session, pages } = createMarkerSession({ existingPage: false });
+    setChromeMcpSessionFactoryForTest(async () => session as never);
+
+    await expect(openChromeMcpTab("chrome-live", "about:blank")).rejects.toThrow(
+      "without an explicit CDP endpoint",
+    );
+    expect(pages).toEqual([]);
+    const calls = (session.client.callTool as ReturnType<typeof vi.fn>).mock.calls as Array<
+      [ToolCall, ...unknown[]]
+    >;
+    expect(calls.map(([call]) => call.name)).toEqual(["list_pages"]);
+  });
+
+  it("rejects and closes a first page without durable browser ownership", async () => {
+    const { session, pages } = createMarkerSession({ existingPage: false });
+    setChromeMcpSessionFactoryForTest(async () => session as never);
+    fetchJsonMock.mockImplementation(async (url: string) => {
+      if (url.includes("/json/list")) {
+        return pages.map((page) => ({
+          id: page.nativeTargetId,
+          url: page.url,
+          type: "page",
+        }));
+      }
+      return { webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/NATIVE-1" };
+    });
+    fetchOkMock.mockImplementationOnce(async (url: string) => {
+      const nativeTargetId = decodeURIComponent(url.split("/").at(-1) ?? "");
+      const index = pages.findIndex((page) => page.nativeTargetId === nativeTargetId);
+      if (index >= 0) {
+        pages.splice(index, 1);
+      }
+    });
+
+    await expect(
+      openChromeMcpTab("chrome-live", "about:blank", {
+        cdpUrl: "http://127.0.0.1:9222",
+      }),
+    ).rejects.toThrow("without durable CDP ownership");
+    expect(pages).toEqual([]);
+    expect(fetchOkMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/close/NATIVE-1",
+      undefined,
+      undefined,
+      undefined,
+    );
+  });
+
+  it("closes a failed first-page marker through its captured native target", async () => {
+    const navigateError = new Error("navigation failed");
+    const { session, pages } = createMarkerSession({ existingPage: false, navigateError });
+    setChromeMcpSessionFactoryForTest(async () => session as never);
+    fetchJsonMock.mockImplementation(async (url: string) => {
+      if (url.includes("/json/list")) {
+        return pages.map((page) => ({
+          id: page.nativeTargetId,
+          url: page.url,
+          type: "page",
+        }));
+      }
+      return {
+        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
+      };
+    });
+    fetchOkMock.mockImplementationOnce(async (url: string) => {
+      const nativeTargetId = decodeURIComponent(url.split("/").at(-1) ?? "");
+      const index = pages.findIndex((page) => page.nativeTargetId === nativeTargetId);
+      if (index >= 0) {
+        pages.splice(index, 1);
+      }
+    });
+
+    await expect(
+      openChromeMcpTab("chrome-live", "https://example.com", {
+        cdpUrl: "http://127.0.0.1:9222",
+      }),
+    ).rejects.toBe(navigateError);
+    expect(pages).toEqual([]);
+    expect(fetchOkMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/close/NATIVE-1",
+      undefined,
+      undefined,
+      undefined,
+    );
+    const calls = (session.client.callTool as ReturnType<typeof vi.fn>).mock.calls as Array<
+      [ToolCall, ...unknown[]]
+    >;
+    expect(calls.map(([call]) => call.name)).not.toContain("close_page");
   });
 
   it("classifies marker lookup network failures separately from ambiguous matches", async () => {

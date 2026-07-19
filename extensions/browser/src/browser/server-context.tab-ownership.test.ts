@@ -21,6 +21,7 @@ describe("browser tab ownership probes", () => {
       finalUrl: "http://127.0.0.1:8080",
     });
     let versionSignal: AbortSignal | undefined;
+    let closedCreatedTarget = false;
     let markProbeStarted!: () => void;
     const probeStarted = new Promise<void>((resolve) => {
       markProbeStarted = resolve;
@@ -57,6 +58,10 @@ describe("browser tab ownership probes", () => {
           );
         });
       }
+      if (value.includes("/json/close/CREATED")) {
+        closedCreatedTarget = true;
+        return { ok: true } as Response;
+      }
       throw new Error(`unexpected fetch: ${value}`);
     });
     global.fetch = withBrowserFetchPreconnect(fetchMock);
@@ -76,5 +81,6 @@ describe("browser tab ownership probes", () => {
 
     await expect(opening).rejects.toBe(abortError);
     expect(propagatedImmediately).toBe(true);
+    expect(closedCreatedTarget).toBe(true);
   });
 });

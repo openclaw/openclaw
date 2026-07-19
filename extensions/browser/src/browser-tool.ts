@@ -642,7 +642,7 @@ export function createBrowserTool(opts?: {
               body: { url: targetUrl, ...(label ? { label } : {}) },
               timeoutMs: toolTimeoutMs,
             });
-            const closeOpenedTab = async (targetId: string, openedProfile: string) => {
+            const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
               await proxyRequest({
                 method: "DELETE",
                 path: `/tabs/${encodeURIComponent(targetId)}`,
@@ -658,7 +658,7 @@ export function createBrowserTool(opts?: {
             label,
             timeoutMs: toolTimeoutMs,
           });
-          const closeOpenedTab = async (targetId: string, openedProfile: string) => {
+          const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
             await browserToolDeps.browserCloseTab(baseUrl, targetId, {
               profile: openedProfile,
               timeoutMs: toolTimeoutMs,
@@ -682,11 +682,11 @@ export function createBrowserTool(opts?: {
             sessionTabs.touch(targetId);
             return jsonResult(result);
           }
-          await browserToolDeps.browserFocusTab(baseUrl, targetId, {
+          const result = await browserToolDeps.browserFocusTab(baseUrl, targetId, {
             profile,
             timeoutMs: toolTimeoutMs,
           });
-          sessionTabs.touch(targetId);
+          sessionTabs.touch(readStringValue(result.targetId) ?? targetId);
           return jsonResult({ ok: true });
         }
         case "close": {

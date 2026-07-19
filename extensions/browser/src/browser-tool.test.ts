@@ -1062,6 +1062,7 @@ describe("browser tool snapshot maxChars", () => {
       targetId: "host-tab-opened",
       baseUrl: undefined,
       profile: "host-actual",
+      profileAliases: ["openclaw"],
       ownership: {
         status: "durable",
         nativeTargetId: "HOST-NATIVE-7",
@@ -1815,6 +1816,7 @@ describe("browser tool url alias support", () => {
       targetId: "tab-123",
       baseUrl: undefined,
       profile: "hot-profile",
+      profileAliases: ["openclaw"],
       ownership: {
         status: "durable",
         nativeTargetId: "NATIVE-123",
@@ -1853,6 +1855,40 @@ describe("browser tool url alias support", () => {
       }),
     );
     expect(browserClientMocks.browserCloseTab).not.toHaveBeenCalled();
+  });
+
+  it("closes a newly opened non-durable tab when process tracking fails", async () => {
+    const trackingError = new Error("tracking unavailable");
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "tab-volatile-compensate",
+      resolvedProfile: "work-actual",
+      title: "Example",
+      url: "https://example.com",
+      ownership: {
+        status: "non-durable",
+        reason: "browser-identity-lookup-failed",
+      },
+    });
+    sessionTabRegistryMocks.trackSessionBrowserTab.mockImplementationOnce(() => {
+      throw trackingError;
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "open",
+        profile: "work",
+        url: "https://example.com",
+      }),
+    ).rejects.toBe(trackingError);
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      undefined,
+      "tab-volatile-compensate",
+      {
+        profile: "work-actual",
+        timeoutMs: undefined,
+      },
+    );
   });
 
   it("does not persist durable ownership from a legacy open result without resolved profile", async () => {
@@ -1943,7 +1979,7 @@ describe("browser tool url alias support", () => {
 
       expect(error).toMatchObject({
         name: "BrowserTabTrackingCompensationError",
-        message: "Failed to persist browser tab ownership and close the newly opened tab",
+        message: "Failed to register browser tab cleanup and close the newly opened tab",
       });
       const errors = (error as Error & { errors: unknown[] }).errors;
       expect(errors[0]).toBe(trackingError);
@@ -1954,7 +1990,7 @@ describe("browser tool url alias support", () => {
     }
   });
 
-  it("does not track or compensate sandbox open results", async () => {
+  it("keeps legacy sandbox opens process-local without inventing a host profile", async () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "sandbox-tab",
       title: "Sandbox",
@@ -1977,7 +2013,15 @@ describe("browser tool url alias support", () => {
       url: "https://example.com",
     });
 
-    expect(sessionTabRegistryMocks.trackSessionBrowserTab).not.toHaveBeenCalled();
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        targetId: "sandbox-tab",
+        baseUrl: "http://127.0.0.1:9999",
+        profile: undefined,
+        ownership: undefined,
+      }),
+    );
     expect(browserClientMocks.browserCloseTab).not.toHaveBeenCalled();
     expect(result?.details).not.toHaveProperty("ownership");
   });

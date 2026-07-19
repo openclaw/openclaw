@@ -72,6 +72,7 @@ export type BrowserTabOwnership =
         | "explicit-cdp-url-required"
         | "target-marker-not-unique"
         | "target-marker-lookup-failed"
+        | "target-lookup-failed"
         | "browser-identity-unavailable"
         | "browser-identity-lookup-failed";
     };

@@ -135,22 +135,26 @@ describe("browser remote profile tab ops via Playwright", () => {
     const probeStarted = new Promise<void>((resolve) => {
       markProbeStarted = resolve;
     });
-    const fetchMock = vi.fn(
-      async (_url: unknown, init?: RequestInit) =>
-        await new Promise<Response>((_resolve, reject) => {
-          markProbeStarted();
-          init?.signal?.addEventListener(
-            "abort",
-            () =>
-              reject(
-                init.signal?.reason instanceof Error
-                  ? init.signal.reason
-                  : new Error("ownership version probe aborted"),
-              ),
-            { once: true },
-          );
-        }),
-    );
+    const cleanupUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("/json/close/T2")) {
+        cleanupUrls.push(String(url));
+        return new Response(null, { status: 200 });
+      }
+      return await new Promise<Response>((_resolve, reject) => {
+        markProbeStarted();
+        init?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              init.signal?.reason instanceof Error
+                ? init.signal.reason
+                : new Error("ownership version probe aborted"),
+            ),
+          { once: true },
+        );
+      });
+    });
     const { remote } = deps.createRemoteRouteHarness(fetchMock);
     const controller = new AbortController();
     const abortError = new Error("caller aborted ownership probe");
@@ -160,6 +164,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     controller.abort(abortError);
 
     await expect(opening).rejects.toBe(abortError);
+    expect(cleanupUrls).toEqual([expect.stringContaining("/json/close/T2")]);
   });
 
   it("rejects invalid labels before Playwright creates a page", async () => {

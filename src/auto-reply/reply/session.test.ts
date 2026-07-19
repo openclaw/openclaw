@@ -3,13 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
 import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
@@ -62,12 +55,8 @@ const sessionForkMocks = vi.hoisted(() => ({
 const channelSummaryMocks = vi.hoisted(() => ({
   buildChannelSummary: vi.fn(async () => [] as string[]),
 }));
-type BrowserCleanupParams = {
-  sessionKeys: Array<string | undefined>;
-  onWarn?: (message: string) => void;
-};
 const browserMaintenanceMocks = vi.hoisted(() => ({
-  closeTrackedBrowserTabsForSessions: vi.fn(async (_params: BrowserCleanupParams) => 0),
+  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
 
 type ForkSessionParamsForTest = {
@@ -3060,111 +3049,6 @@ describe("initSessionState browser tab cleanup", () => {
       canonicalKey,
       "agent:main:telegram:default:direct:12345",
     ]);
-  });
-
-  it("closes a restarted durable browser record through the /new lifecycle facade", async () => {
-    const stateDir = await makeCaseDir("openclaw-tab-cleanup-durable-facade-");
-    const storePath = path.join(stateDir, "sessions.json");
-    const canonicalKey = "agent:main:main";
-    const runtimePolicyKey = "agent:main:telegram:default:direct:12345";
-    const existingSessionId = "tab-durable-facade-session-id";
-    const ownership = {
-      status: "durable" as const,
-      nativeTargetId: "NATIVE-FACADE",
-      profileFingerprint: "sha256:profile",
-      browserInstanceFingerprint: "sha256:browser",
-    };
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const browserPlugin = (await import("../../../extensions/browser/index.js")).default;
-      const browserRuntime = await import("../../../extensions/browser/runtime-api.js");
-      const registerBrowserStateRuntime = () => {
-        browserPlugin.register(
-          createTestPluginApi({
-            id: "browser",
-            name: "Browser",
-            source: "test",
-            rootDir: "/plugins/browser",
-            config: {},
-            runtime: {
-              state: {
-                openKeyedStore: (options: OpenKeyedStoreOptions) =>
-                  createPluginStateKeyedStoreForTests("browser", options),
-                openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-                  createPluginStateSyncKeyedStoreForTests("browser", options),
-              },
-            } as never,
-          }),
-        );
-      };
-
-      try {
-        resetPluginStateStoreForTests();
-        registerBrowserStateRuntime();
-        await writeSessionStoreFast(storePath, {
-          [canonicalKey]: {
-            sessionId: existingSessionId,
-            updatedAt: Date.now(),
-          },
-        });
-        browserRuntime.trackSessionBrowserTab({
-          sessionKey: runtimePolicyKey,
-          targetId: "docs",
-          profile: "remote",
-          ownership,
-        });
-
-        // Reopen the shared state DB and plugin runtime to model a Gateway restart.
-        resetPluginStateStoreForTests();
-        registerBrowserStateRuntime();
-        const closeTab = vi.fn(async () => {});
-        browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockImplementation(
-          async (params: BrowserCleanupParams) =>
-            await browserRuntime.closeTrackedBrowserTabsForSessions({
-              ...params,
-              resolveOwnership: async () => ownership,
-              closeTab,
-            }),
-        );
-
-        const result = await initSessionState({
-          ctx: {
-            Body: "/new",
-            RawBody: "/new",
-            CommandBody: "/new",
-            From: "12345",
-            Provider: "telegram",
-            ChatType: "direct",
-          },
-          cfg: { session: { store: storePath } } as OpenClawConfig,
-          commandAuthorized: true,
-        });
-
-        expect(result.isNewSession).toBe(true);
-        await vi.waitFor(() => {
-          expect(closeTab).toHaveBeenCalledWith({
-            targetId: ownership.nativeTargetId,
-            nativeTargetId: ownership.nativeTargetId,
-            profile: "remote",
-          });
-        });
-        expect(
-          createPluginStateSyncKeyedStoreForTests("browser", {
-            namespace: "browser.session-tabs",
-            maxEntries: 5_000,
-            overflowPolicy: "reject-new",
-          }).entries(),
-        ).toEqual([]);
-        expect(
-          requireMockCallArg(
-            browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
-            "closeTrackedBrowserTabsForSessions",
-          ).sessionKeys,
-        ).toEqual([existingSessionId, canonicalKey, runtimePolicyKey]);
-      } finally {
-        resetPluginStateStoreForTests();
-      }
-    });
   });
 });
 

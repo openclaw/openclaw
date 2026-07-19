@@ -2,7 +2,7 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 // Browser plugin runtime state shared across lazy bundles and duplicate SDK module instances.
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-export type BrowserStateRuntime = {
+type BrowserStateRuntime = {
   sessionTabs: PluginStateSyncKeyedStore<unknown>;
 };
 

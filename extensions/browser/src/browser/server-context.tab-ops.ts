@@ -242,16 +242,39 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     options?: BrowserOperationOptions,
   ): Promise<BrowserOpenResult> => {
     const cdpTimeouts = getRemoteCdpActionTimeouts();
-    return {
-      ...tab,
-      ownership: await resolveCdpTabOwnership({
+    let ownership: BrowserOpenResult["ownership"];
+    try {
+      ownership = await resolveCdpTabOwnership({
         profileName: profile.name,
         cdpUrl: profile.cdpUrl,
         nativeTargetId: tab.targetId,
         signal: options?.signal,
         timeoutMs: cdpTimeouts?.httpTimeoutMs,
         ssrfPolicy: getCdpControlPolicy(),
-      }),
+      });
+    } catch (ownershipError) {
+      try {
+        // Ownership probing happens after target creation. Cleanup must not
+        // inherit a caller abort that would strand the new untracked page.
+        await fetchOk(
+          appendCdpPath(cdpHttpBase, `/json/close/${encodeURIComponent(tab.targetId)}`),
+          state().resolved.remoteCdpTimeoutMs,
+          undefined,
+          getCdpControlPolicy(),
+        );
+      } catch (closeError) {
+        throw Object.assign(
+          new Error("Failed to resolve browser tab ownership and close the new target", {
+            cause: ownershipError,
+          }),
+          { errors: [ownershipError, closeError] },
+        );
+      }
+      throw ownershipError;
+    }
+    return {
+      ...tab,
+      ownership,
     };
   };
 

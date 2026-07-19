@@ -294,7 +294,7 @@ function canonicalBrowserWebSocketIdentity(url: string): string {
 }
 
 /** Build restart-stable hashes without retaining endpoint credentials. */
-export function createCdpOwnershipFingerprints(params: {
+function createCdpOwnershipFingerprints(params: {
   profileName: string;
   cdpUrl: string;
   browserWebSocketUrl: string;
@@ -312,15 +312,18 @@ export function createCdpOwnershipFingerprints(params: {
   };
 }
 
-/** Resolve durable ownership for a native target from the browser-level CDP identity. */
-export async function resolveCdpTabOwnership(params: {
+type CdpTabOwnershipParams = {
   profileName: string;
   cdpUrl: string;
   nativeTargetId: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<BrowserTabOwnership> {
+};
+
+async function resolveCdpTabOwnershipContext(
+  params: CdpTabOwnershipParams,
+): Promise<{ ownership: BrowserTabOwnership; browserWebSocketUrl?: string }> {
   params.signal?.throwIfAborted();
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.cdpUrl);
   let version: { webSocketDebuggerUrl?: unknown };
@@ -338,13 +341,15 @@ export async function resolveCdpTabOwnership(params: {
     if (error instanceof BrowserCdpEndpointBlockedError) {
       throw error;
     }
-    return { status: "non-durable", reason: "browser-identity-lookup-failed" };
+    return {
+      ownership: { status: "non-durable", reason: "browser-identity-lookup-failed" },
+    };
   }
   params.signal?.throwIfAborted();
   const browserWebSocketUrl =
     typeof version.webSocketDebuggerUrl === "string" ? version.webSocketDebuggerUrl.trim() : "";
   if (!browserWebSocketUrl) {
-    return { status: "non-durable", reason: "browser-identity-unavailable" };
+    return { ownership: { status: "non-durable", reason: "browser-identity-unavailable" } };
   }
   try {
     await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
@@ -352,61 +357,130 @@ export async function resolveCdpTabOwnership(params: {
       configuredUrl: params.cdpUrl,
     });
     return {
-      status: "durable",
-      nativeTargetId: params.nativeTargetId,
-      ...createCdpOwnershipFingerprints({
-        profileName: params.profileName,
-        cdpUrl: params.cdpUrl,
-        browserWebSocketUrl,
-      }),
+      ownership: {
+        status: "durable",
+        nativeTargetId: params.nativeTargetId,
+        ...createCdpOwnershipFingerprints({
+          profileName: params.profileName,
+          cdpUrl: params.cdpUrl,
+          browserWebSocketUrl,
+        }),
+      },
+      browserWebSocketUrl,
     };
   } catch (error) {
     if (error instanceof BrowserCdpEndpointBlockedError) {
       throw error;
     }
-    return { status: "non-durable", reason: "browser-identity-unavailable" };
+    return { ownership: { status: "non-durable", reason: "browser-identity-unavailable" } };
   }
 }
 
-/** Close a native target directly on a configured browser-level CDP endpoint. */
-export async function closeCdpTargetById(params: {
-  cdpUrl: string;
-  targetId: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<void> {
-  params.signal?.throwIfAborted();
-  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.cdpUrl);
-  const version = await fetchJson<{ webSocketDebuggerUrl?: unknown }>(
-    appendCdpPath(cdpHttpBase, "/json/version"),
-    params.timeoutMs,
-    { signal: params.signal },
-    params.ssrfPolicy,
-  );
-  const browserWebSocketUrl =
-    typeof version.webSocketDebuggerUrl === "string" ? version.webSocketDebuggerUrl.trim() : "";
-  if (!browserWebSocketUrl) {
-    throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+/** Resolve durable ownership for a native target from the browser-level CDP identity. */
+export async function resolveCdpTabOwnership(
+  params: CdpTabOwnershipParams,
+): Promise<BrowserTabOwnership> {
+  return (await resolveCdpTabOwnershipContext(params)).ownership;
+}
+
+export type CloseTrackedCdpTargetResult =
+  | { status: "cancelled" | "closed" | "missing" | "ownership-mismatch" }
+  | {
+      status: "unavailable";
+      reason:
+        | Extract<BrowserTabOwnership, { status: "non-durable" }>["reason"]
+        | "target-close-failed";
+    };
+
+/** Verify ownership and close a tracked target on the same browser-level CDP connection. */
+export async function closeTrackedCdpTarget(
+  params: CdpTabOwnershipParams & {
+    expectedProfileFingerprint: string;
+    expectedBrowserInstanceFingerprint: string;
+    shouldClose?: () => boolean;
+  },
+): Promise<CloseTrackedCdpTargetResult> {
+  const resolved = await resolveCdpTabOwnershipContext(params);
+  if (resolved.ownership.status !== "durable" || !resolved.browserWebSocketUrl) {
+    return {
+      status: "unavailable",
+      reason:
+        resolved.ownership.status === "non-durable"
+          ? resolved.ownership.reason
+          : "browser-identity-unavailable",
+    };
   }
-  await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
-    source: "discovered",
-    configuredUrl: params.cdpUrl,
-  });
+  if (
+    resolved.ownership.profileFingerprint !== params.expectedProfileFingerprint ||
+    resolved.ownership.browserInstanceFingerprint !== params.expectedBrowserInstanceFingerprint
+  ) {
+    return { status: "ownership-mismatch" };
+  }
   params.signal?.throwIfAborted();
-  await withCdpSocket(
-    browserWebSocketUrl,
-    async (send) => {
-      params.signal?.throwIfAborted();
-      await send("Target.closeTarget", { targetId: params.targetId });
-    },
-    {
-      commandTimeoutMs: params.timeoutMs,
-      handshakeTimeoutMs: params.timeoutMs,
-      handshakeRetries: 0,
-    },
-  );
-  params.signal?.throwIfAborted();
+  try {
+    return await withCdpSocket(
+      resolved.browserWebSocketUrl,
+      async (send) => {
+        params.signal?.throwIfAborted();
+        const response = await send("Target.getTargets");
+        params.signal?.throwIfAborted();
+        const targetInfos =
+          response && typeof response === "object"
+            ? (response as { targetInfos?: unknown }).targetInfos
+            : undefined;
+        if (!Array.isArray(targetInfos)) {
+          return { status: "unavailable", reason: "target-lookup-failed" } as const;
+        }
+        const exists = targetInfos.some(
+          (target) =>
+            target &&
+            typeof target === "object" &&
+            (target as { targetId?: unknown }).targetId === params.nativeTargetId,
+        );
+        if (!exists) {
+          return { status: "missing" } as const;
+        }
+        // The SQLite cleanup generation can be revoked while browser identity
+        // is being resolved. Recheck on this same socket immediately before
+        // the irreversible close so fresh activity cancels an idle sweep.
+        if (params.shouldClose && !params.shouldClose()) {
+          return { status: "cancelled" } as const;
+        }
+        try {
+          params.signal?.throwIfAborted();
+          const closeResponse = await send("Target.closeTarget", {
+            targetId: params.nativeTargetId,
+          });
+          params.signal?.throwIfAborted();
+          return closeResponse &&
+            typeof closeResponse === "object" &&
+            (closeResponse as { success?: unknown }).success === true
+            ? ({ status: "closed" } as const)
+            : ({ status: "unavailable", reason: "target-close-failed" } as const);
+        } catch (error) {
+          // Chromium can destroy the page between getTargets and closeTarget.
+          // Its protocol implementation uses this exact InvalidParams message.
+          if (String(error).includes("No target with given id found")) {
+            return { status: "missing" } as const;
+          }
+          throw error;
+        }
+      },
+      {
+        commandTimeoutMs: params.timeoutMs,
+        handshakeTimeoutMs: params.timeoutMs,
+        handshakeRetries: 0,
+      },
+    );
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw params.signal.reason ?? error;
+    }
+    if (error instanceof BrowserCdpEndpointBlockedError) {
+      throw error;
+    }
+    return { status: "unavailable", reason: "target-lookup-failed" };
+  }
 }
 
 type CdpFetchResult = {

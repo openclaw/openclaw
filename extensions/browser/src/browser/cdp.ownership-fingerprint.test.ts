@@ -1,16 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const redactCdpUrlMock = vi.hoisted(() => vi.fn());
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/browser-config", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/browser-config")>();
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
     ...actual,
-    redactCdpUrl: (...args: unknown[]) => redactCdpUrlMock(...args),
+    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
 });
 
-import { createCdpOwnershipFingerprints } from "./cdp.helpers.js";
+import { resolveCdpTabOwnership } from "./cdp.helpers.js";
 
 function endpointWithFixtureAuth(protocol: "https:" | "wss:", path: string, value: string): string {
   const endpoint = new URL(`${protocol}//browser.example${path}`);
@@ -20,57 +20,55 @@ function endpointWithFixtureAuth(protocol: "https:" | "wss:", path: string, valu
   return endpoint.toString();
 }
 
+function mockVersion(browserWebSocketUrl: string): void {
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response: new Response(JSON.stringify({ webSocketDebuggerUrl: browserWebSocketUrl })),
+    release: vi.fn(async () => {}),
+  });
+}
+
 describe("CDP ownership fingerprints", () => {
-  it("ignores long rotated credentials and custom logging redaction output", () => {
+  beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+  });
+
+  it("ignores rotated endpoint credentials", async () => {
     const firstFixture = "fixture-value-a-with-more-than-eighteen-characters";
     const secondFixture = "fixture-value-b-with-more-than-eighteen-characters";
-    redactCdpUrlMock
-      .mockReturnValueOnce("logging-pattern-a")
-      .mockReturnValueOnce("logging-pattern-b");
-
-    const first = createCdpOwnershipFingerprints({
+    mockVersion(endpointWithFixtureAuth("wss:", "/devtools/browser/BROWSER-1", firstFixture));
+    const first = await resolveCdpTabOwnership({
       profileName: "remote",
       cdpUrl: endpointWithFixtureAuth("https:", "", firstFixture),
-      browserWebSocketUrl: endpointWithFixtureAuth(
-        "wss:",
-        "/devtools/browser/BROWSER-1",
-        firstFixture,
-      ),
+      nativeTargetId: "TARGET-1",
     });
-    const rotated = createCdpOwnershipFingerprints({
+    mockVersion(endpointWithFixtureAuth("wss:", "/devtools/browser/BROWSER-1", secondFixture));
+    const rotated = await resolveCdpTabOwnership({
       profileName: "remote",
       cdpUrl: endpointWithFixtureAuth("https:", "", secondFixture),
-      browserWebSocketUrl: endpointWithFixtureAuth(
-        "wss:",
-        "/devtools/browser/BROWSER-1",
-        secondFixture,
-      ),
+      nativeTargetId: "TARGET-1",
     });
 
     expect(first).toEqual(rotated);
-    expect(redactCdpUrlMock).not.toHaveBeenCalled();
   });
 
-  it("rejects provider websocket paths that may embed credentials", () => {
-    expect(() =>
-      createCdpOwnershipFingerprints({
+  it("refuses provider paths that may embed credentials", async () => {
+    mockVersion("wss://browser.example/session/fixture-value/devtools/browser/BROWSER-1");
+    await expect(
+      resolveCdpTabOwnership({
         profileName: "remote",
-        cdpUrl: "https://browser.example/session/fixture-value",
-        browserWebSocketUrl:
-          "wss://browser.example/session/fixture-value/devtools/browser/BROWSER-1",
+        cdpUrl: "https://browser.example",
+        nativeTargetId: "TARGET-1",
       }),
-    ).toThrow(/browser websocket identity/i);
-  });
+    ).resolves.toEqual({ status: "non-durable", reason: "browser-identity-unavailable" });
 
-  it("rejects configured endpoint paths with token-shaped segments", () => {
     const fixturePath = "fixture-path-segment-".repeat(4);
-
-    expect(() =>
-      createCdpOwnershipFingerprints({
+    mockVersion("wss://browser.example/devtools/browser/BROWSER-1");
+    await expect(
+      resolveCdpTabOwnership({
         profileName: "remote",
         cdpUrl: `https://browser.example/session/${fixturePath}`,
-        browserWebSocketUrl: "wss://browser.example/devtools/browser/BROWSER-1",
+        nativeTargetId: "TARGET-1",
       }),
-    ).toThrow(/profile endpoint path/i);
+    ).resolves.toEqual({ status: "non-durable", reason: "browser-identity-unavailable" });
   });
 });
