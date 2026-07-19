@@ -45,6 +45,7 @@ import {
 } from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+import { workspaceResultConflictFromTranscript } from "./workspace-conflict.ts";
 
 const registeredAttachmentPayloads = new Map<
   string,
@@ -814,6 +815,22 @@ describe("cloud workspace conflict notice", () => {
     render(renderChat(createChatProps()), container);
     expect(container.querySelector(".chat-workspace-conflict-notice")).toBeNull();
   });
+
+  it.each(["\u001b[201~echo injected\n", "\r", "\u007f", "\u0085"])(
+    "rejects terminal control bytes before building copyable commands (%j)",
+    (controlSequence) => {
+      expect(
+        workspaceResultConflictFromTranscript({
+          role: "custom",
+          customType: "cloud-workspace-conflict",
+          details: {
+            paths: [`src/${controlSequence}unsafe.ts`],
+            stagedResultRef: "refs/openclaw/worker-results/claim-unsafe",
+          },
+        }),
+      ).toBeUndefined();
+    },
+  );
 });
 
 describe("chat conversation width", () => {
