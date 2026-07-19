@@ -5,14 +5,17 @@ import {
   formatValidationErrors,
   validateUsersLinkEmailParams,
   validateUsersListParams,
+  validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ensureProfileForEmail,
+  getUserProfileListItem,
   linkEmail,
   listProfiles,
+  resolveUserProfileId,
   setAvatar,
   setDisplayName,
   UserProfileNotFoundError,
@@ -54,7 +57,9 @@ function canMutateProfile(
     return true;
   }
   const authenticatedUserId = client?.authenticatedUserId;
-  return authenticatedUserId ? ensureProfileForEmail(authenticatedUserId).id === profileId : false;
+  return authenticatedUserId
+    ? ensureProfileForEmail(authenticatedUserId).id === resolveUserProfileId(profileId)
+    : false;
 }
 
 function requireProfileMutationAccess(
@@ -82,6 +87,26 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { profiles: listProfiles() });
+  },
+  "users.self": ({ client, params, respond }) => {
+    if (!validateUsersSelfParams(params)) {
+      respond(false, undefined, invalidParams("users.self", validateUsersSelfParams.errors));
+      return;
+    }
+    if (!client?.authenticatedUserId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "users.self requires an authenticated user"),
+      );
+      return;
+    }
+    try {
+      const profile = ensureProfileForEmail(client.authenticatedUserId);
+      respond(true, { profile: getUserProfileListItem(profile.id) });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
   },
   "users.linkEmail": ({ params, respond }) => {
     if (!validateUsersLinkEmailParams(params)) {

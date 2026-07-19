@@ -41,6 +41,8 @@ import {
   UsersLinkEmailResultSchema,
   UsersListParamsSchema,
   UsersListResultSchema,
+  UsersSelfParamsSchema,
+  UsersSelfResultSchema,
   UsersSetAvatarParamsSchema,
   UsersSetAvatarResultSchema,
   UsersSetDisplayNameParamsSchema,
@@ -642,6 +644,8 @@ export const validateAuditActivityListParams = lazyCompile<AuditActivityListPara
 );
 export const validateAuditListParams = lazyCompile(AuditListParamsSchema);
 export const validateUsersListParams = lazyCompile(UsersListParamsSchema);
+export const validateUsersSelfParams = lazyCompile(UsersSelfParamsSchema);
+export const validateUsersSelfResult = lazyCompile(UsersSelfResultSchema);
 export const validateUsersLinkEmailParams = lazyCompile(UsersLinkEmailParamsSchema);
 export const validateUsersLinkEmailResult = lazyCompile(UsersLinkEmailResultSchema);
 export const validateUsersSetDisplayNameParams = lazyCompile(UsersSetDisplayNameParamsSchema);
@@ -1173,6 +1177,8 @@ export {
   UsersLinkEmailResultSchema,
   UsersListParamsSchema,
   UsersListResultSchema,
+  UsersSelfParamsSchema,
+  UsersSelfResultSchema,
   UsersSetAvatarParamsSchema,
   UsersSetAvatarResultSchema,
   UsersSetDisplayNameParamsSchema,
@@ -1776,6 +1782,8 @@ export type {
   UsersLinkEmailResult,
   UsersListParams,
   UsersListResult,
+  UsersSelfParams,
+  UsersSelfResult,
   UsersSetAvatarParams,
   UsersSetAvatarResult,
   UsersSetDisplayNameParams,

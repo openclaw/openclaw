@@ -240,6 +240,7 @@ enum class GatewayMethod(
   AuditList("audit.list"),
   AuditActivityList("audit.activity.list"),
   UsersList("users.list"),
+  UsersSelf("users.self"),
   UsersLinkEmail("users.linkEmail"),
   UsersSetDisplayName("users.setDisplayName"),
   UsersSetAvatar("users.setAvatar"),

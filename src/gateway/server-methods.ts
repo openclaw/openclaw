@@ -592,7 +592,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["users.list", "users.linkEmail", "users.setDisplayName", "users.setAvatar"],
+    methods: [
+      "users.list",
+      "users.self",
+      "users.linkEmail",
+      "users.setDisplayName",
+      "users.setAvatar",
+    ],
     loadHandlers: loadUsersHandlers,
   }),
   ...createLazyCoreHandlers({

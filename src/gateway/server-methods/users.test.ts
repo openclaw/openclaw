@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   validateUsersLinkEmailResult,
+  validateUsersSelfResult,
   validateUsersSetAvatarResult,
   validateUsersSetDisplayNameResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -12,11 +13,15 @@ const listProfiles = vi.hoisted(() => vi.fn());
 const setAvatar = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const getUserProfileListItem = vi.hoisted(() => vi.fn());
+const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profiles.js", () => ({
   ensureProfileForEmail,
+  getUserProfileListItem,
   linkEmail,
   listProfiles,
+  resolveUserProfileId,
   setAvatar,
   setDisplayName,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
@@ -54,6 +59,8 @@ describe("users gateway methods", () => {
 
   beforeEach(() => {
     ensureProfileForEmail.mockReset();
+    getUserProfileListItem.mockReset();
+    resolveUserProfileId.mockReset();
     linkEmail.mockReset();
     listProfiles.mockReset();
     setAvatar.mockReset();
@@ -66,6 +73,36 @@ describe("users gateway methods", () => {
     expect(await runUsersHandler("users.list", {})).toHaveBeenCalledWith(true, {
       profiles: [{ id: "profile-1" }],
     });
+  });
+
+  it("creates and returns the caller's profile idempotently", async () => {
+    ensureProfileForEmail.mockReturnValue({ id: profile.id });
+    getUserProfileListItem.mockReturnValue(profile);
+
+    const first = await runUsersHandler("users.self", {}, selfClient);
+    const second = await runUsersHandler("users.self", {}, selfClient);
+
+    expect(first).toHaveBeenCalledWith(true, { profile });
+    expect(second).toHaveBeenCalledWith(true, { profile });
+    expect(validateUsersSelfResult(first.mock.calls[0]?.[1])).toBe(true);
+    expect(ensureProfileForEmail).toHaveBeenNthCalledWith(1, "ada@example.com");
+    expect(ensureProfileForEmail).toHaveBeenNthCalledWith(2, "ada@example.com");
+    expect(getUserProfileListItem).toHaveBeenNthCalledWith(1, profile.id);
+    expect(getUserProfileListItem).toHaveBeenNthCalledWith(2, profile.id);
+  });
+
+  it("rejects users.self without an authenticated user", async () => {
+    expect(
+      await runUsersHandler("users.self", {}, { connect: { scopes: ["operator.write"] } }),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: "users.self requires an authenticated user",
+      }),
+    );
+    expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
 
   it("validates and routes email links", async () => {
@@ -158,6 +195,7 @@ describe("users gateway methods", () => {
 
   it("allows an identified write caller to edit its own profile", async () => {
     ensureProfileForEmail.mockReturnValue(profile);
+    resolveUserProfileId.mockReturnValue(profile.id);
     setDisplayName.mockReturnValue(profile);
     setAvatar.mockReturnValue({ ok: true, value: profile });
 
@@ -175,5 +213,20 @@ describe("users gateway methods", () => {
     expect(displayName).toHaveBeenCalledWith(true, { profile });
     expect(avatar).toHaveBeenCalledWith(true, { profile });
     expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@example.com");
+  });
+
+  it("allows an owner to edit through a tombstoned durable profile id", async () => {
+    ensureProfileForEmail.mockReturnValue(profile);
+    resolveUserProfileId.mockReturnValue(profile.id);
+    setDisplayName.mockReturnValue(profile);
+
+    expect(
+      await runUsersHandler(
+        "users.setDisplayName",
+        { profileId: "merged-profile-1", displayName: "Ada Lovelace" },
+        selfClient,
+      ),
+    ).toHaveBeenCalledWith(true, { profile });
+    expect(resolveUserProfileId).toHaveBeenCalledWith("merged-profile-1");
   });
 });

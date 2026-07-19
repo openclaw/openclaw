@@ -10,12 +10,15 @@ import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const METHOD = "workboard.cards.dispatch";
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const resolveUserProfileId = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
 
 vi.mock("../state/user-profiles.js", () => ({
   ensureProfileForEmail,
+  getUserProfileListItem: vi.fn(),
   linkEmail: vi.fn(),
   listProfiles: vi.fn(),
+  resolveUserProfileId,
   setAvatar: vi.fn(),
   setDisplayName,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
@@ -24,6 +27,7 @@ vi.mock("../state/user-profiles.js", () => ({
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   ensureProfileForEmail.mockReset();
+  resolveUserProfileId.mockReset();
   setDisplayName.mockReset();
 });
 
@@ -146,6 +150,7 @@ describe("gateway method authorization", () => {
   it("allows an identified write caller to edit its own profile", async () => {
     const profile = { id: "profile-1" };
     ensureProfileForEmail.mockReturnValue(profile);
+    resolveUserProfileId.mockReturnValue(profile.id);
     setDisplayName.mockReturnValue(profile);
 
     expect(
@@ -159,6 +164,7 @@ describe("gateway method authorization", () => {
 
   it("requires admin when an identified write caller targets another profile", async () => {
     ensureProfileForEmail.mockReturnValue({ id: "profile-1" });
+    resolveUserProfileId.mockReturnValue("profile-2");
 
     expect(
       await dispatchProfileMutation({

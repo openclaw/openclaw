@@ -124,6 +124,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "audit.list", scope: "operator.read" },
   { name: "audit.activity.list", scope: "operator.read" },
   { name: "users.list", scope: "operator.read" },
+  { name: "users.self", scope: "operator.write" },
   { name: "users.linkEmail", scope: "operator.admin" },
   { name: "users.setDisplayName", scope: "operator.write" },
   { name: "users.setAvatar", scope: "operator.write" },

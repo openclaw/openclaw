@@ -45,6 +45,7 @@ describe("method scope resolution", () => {
     ["audit.activity.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
+    ["users.self", ["operator.write"]],
     ["users.linkEmail", ["operator.admin"]],
     ["users.setDisplayName", ["operator.write"]],
     ["users.setAvatar", ["operator.write"]],

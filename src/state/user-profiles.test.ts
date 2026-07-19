@@ -15,6 +15,7 @@ import {
   listProfiles,
   MAX_USER_PROFILE_AVATAR_BYTES,
   resolveProfileByEmail,
+  resolveUserProfileId,
   setAvatar,
   setDisplayName,
 } from "./user-profiles.js";
@@ -78,6 +79,7 @@ describe("user profiles", () => {
     linkEmail("b@example.com", c.id, options);
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
+    expect(resolveUserProfileId(a.id, options)).toBe(c.id);
     expect(listProfiles(options)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: c.id }),

@@ -212,6 +212,26 @@ function requireResolvedProfileById(db: DatabaseSync, profileId: string): UserPr
   return profile;
 }
 
+/** Resolves a durable profile reference to its current one-hop merge head. */
+export function resolveUserProfileId(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): string | undefined {
+  ensureUserProfilesSchema(options);
+  const { db } = openOpenClawStateDatabase(options);
+  return selectResolvedProfileById(db, profileId)?.id;
+}
+
+/** Reads a profile's protocol-facing representation through its merge head. */
+export function getUserProfileListItem(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): UserProfileListItem {
+  ensureUserProfilesSchema(options);
+  const { db } = openOpenClawStateDatabase(options);
+  return selectUserProfileListItemById(db, requireResolvedProfileById(db, profileId).id);
+}
+
 /** Resolves a profile from a normalized email alias, following one merge tombstone at most. */
 export function resolveProfileByEmail(
   email: string,

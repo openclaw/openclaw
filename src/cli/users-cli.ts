@@ -1,5 +1,6 @@
 // Minimal gateway CLI commands for durable user profile administration.
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -27,7 +28,7 @@ function writeUsersList(result: unknown, json: boolean): void {
   const profiles = (result as UsersListResult).profiles ?? [];
   for (const profile of profiles) {
     process.stdout.write(
-      `${profile.id ?? ""}\t${profile.displayName ?? ""}\t${(profile.emails ?? []).join(",")}\n`,
+      `${sanitizeTerminalText(profile.id ?? "")}\t${sanitizeTerminalText(profile.displayName ?? "")}\t${sanitizeTerminalText((profile.emails ?? []).join(","))}\n`,
     );
   }
 }
