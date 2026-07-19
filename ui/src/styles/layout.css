@@ -1966,6 +1966,72 @@ html.openclaw-native-macos
   font-size: var(--control-ui-text-sm);
 }
 
+.viewer-facepile-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  margin: -2px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  cursor: pointer;
+}
+
+.viewer-facepile-trigger:hover,
+.viewer-facepile-trigger:focus-visible {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+/* Long rosters scroll inside the popup instead of growing past the viewport. */
+.presence-roster-menu::part(menu) {
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+}
+
+.presence-roster-menu__title {
+  padding: 4px 10px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.presence-roster-menu__item::part(label) {
+  display: flex;
+  align-items: center;
+}
+
+.presence-roster-menu__item .viewer-avatar {
+  border-color: transparent;
+}
+
+.presence-roster-menu__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.presence-roster-menu__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.presence-roster-menu__you {
+  color: var(--muted);
+}
+
+.presence-roster-menu__email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .sidebar-recent-session__name {
   flex: 1 1 auto;
   min-width: 0;
