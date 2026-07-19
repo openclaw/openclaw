@@ -117,10 +117,10 @@ export function resolveCanvasDocumentsDir(stateDir = resolveStateDir()): string 
 }
 
 /** Reads the managed HTML entrypoint for a core Canvas document. */
-export async function readCanvasDocumentHtml(
+export async function readCanvasDocumentHtmlSource(
   documentId: string,
   options?: { stateDir?: string },
-): Promise<string> {
+): Promise<{ html: string; cspSandbox?: "scripts" }> {
   const id = normalizeCanvasDocumentId(documentId);
   const documentDir = resolveCanvasDocumentDir(id, options);
   const manifest = JSON.parse(
@@ -137,7 +137,18 @@ export async function readCanvasDocumentHtml(
   if (!localPath.startsWith(`${documentDir}${path.sep}`)) {
     throw new Error(`canvas document entrypoint escapes its document: ${id}`);
   }
-  return await fs.readFile(localPath, "utf8");
+  return {
+    html: await fs.readFile(localPath, "utf8"),
+    ...(manifest.cspSandbox === "scripts" ? { cspSandbox: "scripts" as const } : {}),
+  };
+}
+
+/** Reads only the managed HTML bytes for callers that preserve policy separately. */
+export async function readCanvasDocumentHtml(
+  documentId: string,
+  options?: { stateDir?: string },
+): Promise<string> {
+  return (await readCanvasDocumentHtmlSource(documentId, options)).html;
 }
 
 async function pruneCanvasDocumentsForScope(params: {

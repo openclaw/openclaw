@@ -17,13 +17,13 @@ import {
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/board-notices.js";
 import type { BoardStore } from "../../boards/board-store.js";
-import { readCanvasDocumentHtml } from "../../canvas/documents.js";
+import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { boardStore } from "../board-store.js";
 import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type NoticeAppender = typeof appendBoardEventNotice;
-type CanvasDocumentReader = (docId: string) => Promise<string>;
+type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
 
 function invalidParams(
   method: string,
@@ -54,7 +54,7 @@ function respondBoardError(
 export function createBoardHandlers(
   store: BoardStore,
   appendNotice: NoticeAppender = appendBoardEventNotice,
-  readCanvasHtml: CanvasDocumentReader = readCanvasDocumentHtml,
+  readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
 ): GatewayRequestHandlers {
   return {
     "board.get": ({ params, respond }) => {
@@ -111,10 +111,19 @@ export function createBoardHandlers(
       }
       try {
         const requestParams = params as BoardWidgetPutRequestParams;
-        const content =
-          requestParams.content.kind === "canvas-doc"
-            ? { kind: "html" as const, html: await readCanvasHtml(requestParams.content.docId) }
-            : requestParams.content;
+        let content: BoardWidgetPutParams["content"];
+        if (requestParams.content.kind === "canvas-doc") {
+          const document = await readCanvasDocument(requestParams.content.docId);
+          if (document.cspSandbox !== "scripts") {
+            throw new BoardValidationError(
+              "invalid_operation",
+              `canvas document is not script-enabled: ${requestParams.content.docId}`,
+            );
+          }
+          content = { kind: "html", html: document.html };
+        } else {
+          content = requestParams.content;
+        }
         if (!validateBoardWidgetContent(content)) {
           invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
           return;

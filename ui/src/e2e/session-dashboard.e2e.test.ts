@@ -110,6 +110,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
                 viewId: "cv_release",
                 url: "/__openclaw__/canvas/documents/cv_release/index.html",
                 preferredHeight: 240,
+                sandbox: "scripts",
               },
             },
           ],

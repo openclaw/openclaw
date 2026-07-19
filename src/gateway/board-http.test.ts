@@ -52,6 +52,12 @@ beforeAll(async () => {
     name: "revisioned",
     content: { kind: "html", html: "<p>one</p>" },
   });
+  store.putWidget({
+    sessionKey: "agent:main:main",
+    name: "pending",
+    content: { kind: "html", html: "<script>pending()</script>" },
+    declared: { netOrigins: ["https://example.com"] },
+  });
   server = createServer((req, res) => {
     const handled = handleBoardHttpRequest(req, res, {
       store,
@@ -159,6 +165,16 @@ describe("board widget HTTP", () => {
     expect((await request("status", { ticket: expired })).status).toBe(401);
     expect(readSpy).not.toHaveBeenCalled();
     readSpy.mockRestore();
+  });
+
+  it("withholds declared widget bytes until the operator grants them", async () => {
+    const ticket = ticketFor("pending");
+    expect((await request("pending", { ticket })).status).toBe(404);
+
+    store.grant("agent:main:main", "pending", "granted");
+    const response = await request("pending", { ticket });
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("<script>pending()</script>");
   });
 
   it("rejects a ticket after the widget revision changes", async () => {

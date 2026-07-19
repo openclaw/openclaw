@@ -330,6 +330,212 @@ describe("board providers", () => {
     expect(provider.snapshot$.value).toEqual(current);
   });
 
+  it("preserves a newer deletion reset while an older refresh is in flight", async () => {
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    let resolveIntermediate: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const populated = {
+      sessionKey: "agent:main:deleted-board",
+      revision: 5,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const intermediate = { ...populated, revision: 6 };
+    const deleted = {
+      sessionKey: "agent:main:deleted-board",
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(populated)
+      .mockImplementationOnce(
+        () =>
+          new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+            resolveIntermediate = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(deleted);
+    const provider = new GatewayBoardProvider("agent:main:deleted-board", {
+      request: request as never,
+      addEventListener: (next) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:deleted-board", revision: 6 },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:deleted-board", revision: 7 },
+    });
+    resolveIntermediate?.(intermediate);
+
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(deleted));
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("accepts a recreated board after a higher-revision deletion event", async () => {
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    let resolveStale: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const populated = {
+      sessionKey: "agent:main:recreated-board",
+      revision: 5,
+      tabs: [{ tabId: "old", title: "Old", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const deleted = {
+      sessionKey: "agent:main:recreated-board",
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    };
+    const recreated = {
+      sessionKey: "agent:main:recreated-board",
+      revision: 1,
+      tabs: [{ tabId: "new", title: "New", position: 0, chatDock: "left" as const }],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(populated)
+      .mockImplementationOnce(
+        () =>
+          new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+            resolveStale = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(recreated);
+    const provider = new GatewayBoardProvider("agent:main:recreated-board", {
+      request: request as never,
+      addEventListener: (next) => {
+        listener = next as typeof listener;
+        return () => {};
+      },
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:recreated-board", revision: 6 },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    listener?.({
+      event: "board.changed",
+      payload: { sessionKey: "agent:main:recreated-board", revision: 1 },
+    });
+    resolveStale?.(deleted);
+
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(recreated));
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores a stale empty response from an overlapping mutation", async () => {
+    let resolveOlder: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    let resolveNewer: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const populated = {
+      sessionKey: "agent:main:mutation-race",
+      revision: 5,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const newer = { ...populated, revision: 6 };
+    const deleted = {
+      sessionKey: "agent:main:mutation-race",
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(populated)
+      .mockImplementationOnce(
+        () =>
+          new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+            resolveOlder = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+            resolveNewer = resolve;
+          }),
+      );
+    const provider = new GatewayBoardProvider("agent:main:mutation-race", {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+
+    const olderMutation = provider.applyOps([{ kind: "tab_delete", tabId: "main" }]);
+    const newerMutation = provider.applyOps([
+      { kind: "tab_update", tabId: "main", chatDock: "left" },
+    ]);
+    resolveNewer?.(newer);
+    await newerMutation;
+    resolveOlder?.(deleted);
+    await olderMutation;
+
+    expect(provider.snapshot$.value).toEqual(newer);
+  });
+
+  it("does not resurrect a board from a refresh started before deletion", async () => {
+    let resolveRefresh: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    let resolveDelete: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
+    const populated = {
+      sessionKey: "agent:main:refresh-reset-race",
+      revision: 5,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [],
+    };
+    const staleRefresh = { ...populated, revision: 6 };
+    const deleted = {
+      sessionKey: "agent:main:refresh-reset-race",
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    };
+    let getCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "board.get") {
+        getCount += 1;
+        if (getCount === 1) {
+          return Promise.resolve(populated);
+        }
+        if (getCount === 2) {
+          return new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+            resolveRefresh = resolve;
+          });
+        }
+        return Promise.resolve(deleted);
+      }
+      return new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
+        resolveDelete = resolve;
+      });
+    });
+    const provider = new GatewayBoardProvider("agent:main:refresh-reset-race", {
+      request: request as never,
+      addEventListener: () => () => {},
+    });
+    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+
+    const refresh = provider.activate();
+    await vi.waitFor(() => expect(getCount).toBe(2));
+    const deleteMutation = provider.applyOps([{ kind: "tab_delete", tabId: "main" }]);
+    resolveDelete?.(deleted);
+    await deleteMutation;
+    resolveRefresh?.(staleRefresh);
+    await refresh;
+
+    expect(provider.snapshot$.value).toEqual(deleted);
+    expect(getCount).toBe(3);
+  });
+
   it("discards mutation responses from a replaced gateway client", async () => {
     let resolveMutation: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
     const oldClient = {

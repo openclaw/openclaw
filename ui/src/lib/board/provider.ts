@@ -11,6 +11,7 @@ import {
   buildAgentMainSessionKey,
   normalizeSessionKeyForUiComparison,
 } from "../sessions/session-key.ts";
+import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
 export type { BoardCommandEvent };
 export type { BoardViewCallbacks } from "./view-types.ts";
 
@@ -200,7 +201,7 @@ class MockBoardProvider implements BoardProvider {
   async applyOps(ops: BoardOp[]): Promise<void> {
     let snapshot = this.snapshotSignal.value;
     for (const op of ops) {
-      snapshot = normalizeMockSnapshot(applyMockOp(snapshot, op));
+      snapshot = normalizeMockBoardSnapshot(applyMockBoardOp(snapshot, op));
     }
     this.snapshotSignal.set({ ...snapshot, revision: snapshot.revision + 1 });
   }
@@ -281,6 +282,7 @@ export class GatewayBoardProvider implements BoardProvider {
   private refreshLoop: Promise<void> | undefined;
   private refreshRequested = false;
   private readonly changedWidgets = new Set<string>();
+  private stateGeneration = 0;
   private connected = false;
   private wakeRetryDelay: (() => void) | undefined;
 
@@ -312,6 +314,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.unsubscribe?.();
     this.client = client;
     this.clientGeneration += 1;
+    this.stateGeneration += 1;
     this.changedWidgets.clear();
     this.snapshotSignal.set(emptySnapshot(this.sessionKey));
     this.subscribe(client);
@@ -325,53 +328,42 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   async applyOps(ops: BoardOp[]): Promise<void> {
-    const client = this.client;
-    const generation = this.clientGeneration;
-    const snapshot = await client.request<BoardSnapshot>("board.update", {
+    await this.mutate("board.update", {
       sessionKey: this.sessionKey,
       ops,
     });
-    if (client === this.client && generation === this.clientGeneration) {
-      this.setSnapshot(snapshot);
-    }
   }
 
   async grant(name: string, decision: "granted" | "rejected"): Promise<void> {
-    const client = this.client;
-    const generation = this.clientGeneration;
-    const snapshot = await client.request<BoardSnapshot>("board.widget.grant", {
+    await this.mutate("board.widget.grant", {
       sessionKey: this.sessionKey,
       name,
       decision,
     });
-    if (client === this.client && generation === this.clientGeneration) {
-      this.setSnapshot(snapshot);
-    }
   }
 
   async pinWidget(input: BoardPinWidgetInput): Promise<void> {
     const name = input.name ?? canvasWidgetNameForDocument(input.docId);
     const title = boardWidgetTitle(input.title);
-    const client = this.client;
-    const generation = this.clientGeneration;
-    const snapshot = await client.request<BoardSnapshot>("board.widget.put", {
-      sessionKey: this.sessionKey,
+    await this.mutate(
+      "board.widget.put",
+      {
+        sessionKey: this.sessionKey,
+        name,
+        ...(title ? { title } : {}),
+        content: { kind: "canvas-doc", docId: input.docId },
+        ...(input.tabId || input.size || input.after
+          ? {
+              placement: {
+                ...(input.tabId ? { tabId: input.tabId } : {}),
+                ...(input.size ? { size: input.size } : {}),
+                ...(input.after ? { after: input.after } : {}),
+              },
+            }
+          : {}),
+      },
       name,
-      ...(title ? { title } : {}),
-      content: { kind: "canvas-doc", docId: input.docId },
-      ...(input.tabId || input.size || input.after
-        ? {
-            placement: {
-              ...(input.tabId ? { tabId: input.tabId } : {}),
-              ...(input.size ? { size: input.size } : {}),
-              ...(input.after ? { after: input.after } : {}),
-            },
-          }
-        : {}),
-    });
-    if (client === this.client && generation === this.clientGeneration) {
-      this.setSnapshot(snapshot, new Set([name]));
-    }
+    );
   }
 
   widgetFrameUrl(name: string, revision: number): string {
@@ -391,6 +383,7 @@ export class GatewayBoardProvider implements BoardProvider {
       if (event.event === "board.changed") {
         const payload = event.payload as Partial<BoardChangedEvent> | undefined;
         if (payload && this.matchesSession(payload.sessionKey)) {
+          this.stateGeneration += 1;
           void this.requestRefresh(payload.widget);
         }
         return;
@@ -434,11 +427,12 @@ export class GatewayBoardProvider implements BoardProvider {
       const changedWidgets = new Set(this.changedWidgets);
       this.changedWidgets.clear();
       const client = this.client;
+      const stateGeneration = this.stateGeneration;
       try {
         const snapshot = await client.request<BoardSnapshot>("board.get", {
           sessionKey: this.sessionKey,
         });
-        if (client !== this.client) {
+        if (client !== this.client || stateGeneration !== this.stateGeneration) {
           this.refreshRequested = true;
           continue;
         }
@@ -480,10 +474,37 @@ export class GatewayBoardProvider implements BoardProvider {
     });
   }
 
-  private setSnapshot(snapshot: BoardSnapshot, changedWidgets = new Set<string>()): void {
-    if (snapshot.revision < this.snapshotSignal.value.revision) {
-      return;
+  private async mutate(
+    method: "board.update" | "board.widget.grant" | "board.widget.put",
+    params: Record<string, unknown>,
+    changedWidget?: string,
+  ): Promise<void> {
+    const client = this.client;
+    const clientGeneration = this.clientGeneration;
+    const stateGeneration = ++this.stateGeneration;
+    try {
+      const snapshot = await client.request<BoardSnapshot>(method, params);
+      if (
+        client === this.client &&
+        clientGeneration === this.clientGeneration &&
+        stateGeneration === this.stateGeneration
+      ) {
+        this.stateGeneration += 1;
+        this.setSnapshot(snapshot, changedWidget ? new Set([changedWidget]) : new Set());
+      }
+    } catch (error) {
+      if (
+        client === this.client &&
+        clientGeneration === this.clientGeneration &&
+        stateGeneration === this.stateGeneration
+      ) {
+        void this.requestRefresh();
+      }
+      throw error;
     }
+  }
+
+  private setSnapshot(snapshot: BoardSnapshot, changedWidgets = new Set<string>()): void {
     const previousWidgets = new Map(
       this.snapshotSignal.value.widgets.map((widget) => [widget.name, widget]),
     );
@@ -501,163 +522,6 @@ export class GatewayBoardProvider implements BoardProvider {
     });
     this.snapshotSignal.set({ ...snapshot, widgets });
   }
-}
-
-function normalizeMockSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  const tabs = snapshot.tabs
-    .toSorted((left, right) => left.position - right.position)
-    .map((tab, position) => Object.assign({}, tab, { position }));
-  const tabPositions = new Map(tabs.map((tab) => [tab.tabId, tab.position]));
-  const nextWidgetPosition = new Map<string, number>();
-  const widgets = snapshot.widgets
-    .toSorted((left, right) => {
-      const tabDelta =
-        (tabPositions.get(left.tabId) ?? Number.MAX_SAFE_INTEGER) -
-        (tabPositions.get(right.tabId) ?? Number.MAX_SAFE_INTEGER);
-      return tabDelta || left.position - right.position;
-    })
-    .map((widget) => {
-      const position = nextWidgetPosition.get(widget.tabId) ?? 0;
-      nextWidgetPosition.set(widget.tabId, position + 1);
-      return Object.assign({}, widget, { position });
-    });
-  return { ...snapshot, tabs, widgets };
-}
-
-function applyMockOp(snapshot: BoardSnapshot, op: BoardOp): BoardSnapshot {
-  switch (op.kind) {
-    case "tab_create":
-      if (snapshot.tabs.some((tab) => tab.tabId === op.tabId)) {
-        return snapshot;
-      }
-      return {
-        ...snapshot,
-        tabs: [
-          ...snapshot.tabs,
-          {
-            tabId: op.tabId,
-            title: op.title,
-            position: snapshot.tabs.length,
-            chatDock: op.chatDock ?? "right",
-          },
-        ],
-      };
-    case "tab_update": {
-      const orderedTabs = snapshot.tabs.toSorted((left, right) => left.position - right.position);
-      const tabIndex = orderedTabs.findIndex((tab) => tab.tabId === op.tabId);
-      if (tabIndex < 0) {
-        return snapshot;
-      }
-      const [tab] = orderedTabs.splice(tabIndex, 1);
-      const updated = {
-        ...tab!,
-        ...(op.title !== undefined ? { title: op.title } : {}),
-        ...(op.chatDock !== undefined ? { chatDock: op.chatDock } : {}),
-      };
-      const position = Math.max(
-        0,
-        Math.min(
-          op.position === undefined ? tabIndex : Math.trunc(op.position),
-          orderedTabs.length,
-        ),
-      );
-      orderedTabs.splice(position, 0, updated);
-      return {
-        ...snapshot,
-        tabs: orderedTabs.map((candidate, nextPosition) =>
-          Object.assign({}, candidate, { position: nextPosition }),
-        ),
-      };
-    }
-    case "tab_delete": {
-      const remainingTabs = snapshot.tabs.filter((tab) => tab.tabId !== op.tabId);
-      if (remainingTabs.length === 0 && snapshot.widgets.length > 0) {
-        return snapshot;
-      }
-      const firstTabId = remainingTabs[0]?.tabId;
-      return {
-        ...snapshot,
-        tabs: remainingTabs,
-        widgets: snapshot.widgets.map((widget) =>
-          widget.tabId === op.tabId && firstTabId
-            ? { ...widget, tabId: firstTabId, position: Number.MAX_SAFE_INTEGER }
-            : widget,
-        ),
-      };
-    }
-    case "tabs_reorder": {
-      const requestedTabIds = new Set(op.tabIds);
-      if (
-        op.tabIds.length !== snapshot.tabs.length ||
-        requestedTabIds.size !== snapshot.tabs.length ||
-        snapshot.tabs.some((tab) => !requestedTabIds.has(tab.tabId))
-      ) {
-        return snapshot;
-      }
-      return {
-        ...snapshot,
-        tabs: op.tabIds.flatMap((tabId, position) => {
-          const tab = snapshot.tabs.find((candidate) => candidate.tabId === tabId);
-          return tab ? [{ ...tab, position }] : [];
-        }),
-      };
-    }
-    case "widget_move": {
-      const moving = snapshot.widgets.find((widget) => widget.name === op.name);
-      const anchor = op.after
-        ? snapshot.widgets.find((widget) => widget.name === op.after)
-        : undefined;
-      if (!moving || (op.after && (!anchor || anchor.name === moving.name))) {
-        return snapshot;
-      }
-      const targetTabId = op.tabId ?? moving.tabId;
-      if (
-        (op.position !== undefined && op.after !== undefined) ||
-        !snapshot.tabs.some((tab) => tab.tabId === targetTabId) ||
-        (anchor && anchor.tabId !== targetTabId)
-      ) {
-        return snapshot;
-      }
-      const remaining = snapshot.widgets.filter((widget) => widget.name !== moving.name);
-      const targetWidgets = remaining
-        .filter((widget) => widget.tabId === targetTabId)
-        .toSorted((left, right) => left.position - right.position);
-      const anchorIndex = anchor
-        ? targetWidgets.findIndex((widget) => widget.name === anchor.name)
-        : -1;
-      const insertionIndex = anchor
-        ? anchorIndex + 1
-        : Math.max(0, Math.min(op.position ?? targetWidgets.length, targetWidgets.length));
-      targetWidgets.splice(insertionIndex, 0, { ...moving, tabId: targetTabId });
-      return {
-        ...snapshot,
-        widgets: snapshot.tabs.flatMap((tab) =>
-          (tab.tabId === targetTabId
-            ? targetWidgets
-            : remaining
-                .filter((widget) => widget.tabId === tab.tabId)
-                .toSorted((left, right) => left.position - right.position)
-          ).map((widget, position) => Object.assign({}, widget, { position })),
-        ),
-      };
-    }
-    case "widget_resize":
-      return {
-        ...snapshot,
-        widgets: snapshot.widgets.map((widget) =>
-          widget.name === op.name
-            ? {
-                ...widget,
-                sizeW: Math.min(12, Math.max(1, Math.trunc(op.sizeW))),
-                sizeH: Math.min(20, Math.max(1, Math.trunc(op.sizeH))),
-              }
-            : widget,
-        ),
-      };
-    case "widget_remove":
-      return { ...snapshot, widgets: snapshot.widgets.filter((widget) => widget.name !== op.name) };
-  }
-  return snapshot;
 }
 
 const nullProviders = new Map<string, NullProvider>();

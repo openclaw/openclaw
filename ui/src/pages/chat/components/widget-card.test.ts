@@ -79,6 +79,7 @@ describe("widget-card", () => {
           title: "Release status",
           viewId: "cv_release",
           url: "/__openclaw__/canvas/documents/cv_release/index.html",
+          sandbox: "scripts",
         },
         "chat_message",
         { boardProvider: provider },
@@ -122,6 +123,7 @@ describe("widget-card", () => {
           viewId: "cv_release",
           boardWidgetName: "release-status",
           url: "/__openclaw__/canvas/documents/cv_release/index.html",
+          sandbox: "scripts",
         },
         "chat_message",
         { boardProvider: provider },
@@ -140,6 +142,7 @@ describe("widget-card", () => {
           render: "url",
           viewId: "cv_external",
           url: "https://example.com/widget.html",
+          sandbox: "scripts",
         },
         "chat_message",
         { allowExternalEmbedUrls: true, boardProvider: provider },
@@ -157,6 +160,7 @@ describe("widget-card", () => {
           render: "url",
           viewId: "cv_expected",
           url: "/__openclaw__/canvas/documents/cv_other/index.html",
+          sandbox: "scripts",
         },
         "chat_message",
         { boardProvider: provider },
@@ -164,6 +168,24 @@ describe("widget-card", () => {
       mismatched,
     );
     expect(mismatched.querySelector("[data-pin-widget]")).toBeNull();
+
+    const strict = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_strict",
+          url: "/__openclaw__/canvas/documents/cv_strict/index.html",
+          sandbox: "strict",
+        },
+        "chat_message",
+        { boardProvider: provider },
+      ),
+      strict,
+    );
+    expect(strict.querySelector("[data-pin-widget]")).toBeNull();
 
     const app = document.createElement("div");
     render(

@@ -431,6 +431,7 @@ function renderWidgetCard(
   );
   const pinAction =
     contentKind === "canvas-html" &&
+    preview.sandbox === "scripts" &&
     options?.boardProvider?.canPinWidgets &&
     isManagedCanvasDocumentPreview(preview) &&
     pinName
