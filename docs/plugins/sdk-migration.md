@@ -566,6 +566,18 @@ contract should own it.
 
 ## Removed compatibility surfaces
 
+### Process-global API-provider publication
+
+`registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from
+`openclaw/plugin-sdk/llm`. They published API transports into process-global
+state, which lifecycle-owned model runtimes then had to copy into each prepared
+registry.
+
+Provider plugins should register text-inference providers through
+`api.registerProvider(...)`. Host-owned code and tests that construct an
+`ApiRegistry` should register directly on that registry so provider ownership
+and teardown stay scoped to the prepared runtime.
+
 ### Private testing barrel
 
 `openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
