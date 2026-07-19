@@ -11,10 +11,8 @@
  * is the exact bytes that cross the process boundary.
  */
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const PROOF_SCRIPT_PATH = path.join(import.meta.dirname, "acp-server-process-for-proof.ts");
 
