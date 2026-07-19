@@ -7,11 +7,11 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
-import {
-  type PersistedThreadBindingRecord,
-  type ThreadBindingManager,
-  type ThreadBindingRecord,
-  type ThreadBindingTargetKind,
+import type {
+  PersistedThreadBindingRecord,
+  ThreadBindingManager,
+  ThreadBindingRecord,
+  ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
 type ThreadBindingsGlobalState = {
