@@ -6970,6 +6970,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/pioneer.md
+
+- Route: /plugins/reference/pioneer
+- Headings:
+  - H1: Pioneer plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/pixverse.md
 
 - Route: /plugins/reference/pixverse
@@ -8353,6 +8362,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Native API filtering
   - H2: Advanced configuration
   - H2: Related
+
+## providers/pioneer.md
+
+- Route: /providers/pioneer
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H2: Catalog behavior
+  - H2: Config example
 
 ## providers/pixverse.md
 

@@ -784,6 +784,23 @@ describe("GatewayChatClient", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("loads configured models for the TUI model picker", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({
+      models: [{ provider: "pioneer", id: "auto", name: "Pioneer Auto" }],
+    });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.listModels()).resolves.toEqual([
+      { provider: "pioneer", id: "auto", name: "Pioneer Auto" },
+    ]);
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+  });
+
   it("passes selected-agent global scope through chat methods", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

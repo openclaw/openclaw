@@ -360,7 +360,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listModels(): Promise<GatewayModelChoice[]> {
-    const res = await this.client.request("models.list");
+    const res = await this.client.request("models.list", { view: "configured" });
     return Array.isArray(res?.models) ? res.models : [];
   }
 
