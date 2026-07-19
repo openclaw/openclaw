@@ -955,6 +955,15 @@ describe("registerPolicyDoctorChecks", () => {
                 },
               },
             },
+            {
+              capabilities: ["image"],
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: { source: "exec", provider: "rogue", id: "media/image-token" },
+                },
+              },
+            },
           ],
           audio: {
             request: {
@@ -963,18 +972,6 @@ describe("registerPolicyDoctorChecks", () => {
                 token: { source: "exec", provider: "rogue", id: "media/audio-token" },
               },
             },
-          },
-          image: {
-            models: [
-              {
-                request: {
-                  auth: {
-                    mode: "authorization-bearer",
-                    token: { source: "exec", provider: "rogue", id: "media/image-token" },
-                  },
-                },
-              },
-            ],
           },
         },
       },
@@ -1069,7 +1066,7 @@ describe("registerPolicyDoctorChecks", () => {
           provenance: "secretRef",
           refSource: "exec",
           refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/image/models/#0/request/auth/token",
+          source: "oc://openclaw.config/tools/media/models/#1/request/auth/token",
         }),
       ]),
     );
@@ -1110,7 +1107,7 @@ describe("registerPolicyDoctorChecks", () => {
         }),
         expect.objectContaining({
           checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/tools/media/image/models/#0/request/auth/token",
+          ocPath: "oc://openclaw.config/tools/media/models/#1/request/auth/token",
         }),
         expect.objectContaining({
           checkId: "policy/secrets-unmanaged-provider",

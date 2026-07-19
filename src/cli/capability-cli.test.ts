@@ -2665,7 +2665,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
     expectRuntimeErrorContains("No audio transcription provider is configured or ready");
-    expectRuntimeErrorContains("tools.media.audio.models");
+    expectRuntimeErrorContains("tools.media.models");
   });
 
   it("surfaces the underlying transcription failure for audio transcribe", async () => {
@@ -2766,7 +2766,7 @@ describe("capability cli", () => {
       }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string; voice?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string; voice?: string } } };
     };
     expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
@@ -2797,7 +2797,7 @@ describe("capability cli", () => {
       }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
     expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
@@ -2823,7 +2823,7 @@ describe("capability cli", () => {
       expect.objectContaining({ channelId: "discord" }),
     );
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
     expect(cfg.tts?.providers?.openai).toMatchObject({
       apiKey: "profile-openai-key",
@@ -2856,7 +2856,7 @@ describe("capability cli", () => {
       channels?: {
         discord?: { tts?: { openai?: { apiKey?: string; speakerVoice?: string } } };
       };
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
     expect(cfg.channels?.discord?.tts?.openai).toMatchObject({
       apiKey: "profile-openai-key",
@@ -2893,7 +2893,7 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
       channels?: {
         discord?: { tts?: { providers?: { openai?: { apiKey?: string; speakerVoice?: string } } } };
       };
@@ -2918,7 +2918,7 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      tts?: { providers?: { openai?: { apiKey?: string } } };
     };
     expect(cfg.tts?.providers?.openai?.apiKey).toBeUndefined();
   });
@@ -2947,9 +2947,7 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: {
-        tts?: { providers?: { openai?: { apiKey?: string }; OpenAI?: { apiKey?: string } } };
-      };
+      tts?: { providers?: { openai?: { apiKey?: string }; OpenAI?: { apiKey?: string } } };
     };
     expect(cfg.tts?.providers?.OpenAI?.apiKey).toBe("config-key");
     expect(cfg.tts?.providers?.openai).toBeUndefined();
@@ -2979,11 +2977,9 @@ describe("capability cli", () => {
     });
 
     const cfg = firstTextToSpeechCall()?.cfg as {
-      messages?: {
-        tts?: {
-          openai?: { apiKey?: string };
-          providers?: { openai?: { apiKey?: string } };
-        };
+      tts?: {
+        openai?: { apiKey?: string };
+        providers?: { openai?: { apiKey?: string } };
       };
     };
     expect(cfg.tts?.openai?.apiKey).toBe("config-key");

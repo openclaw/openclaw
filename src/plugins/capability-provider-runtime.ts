@@ -339,9 +339,6 @@ function collectRequestedMediaUnderstandingProviderIds(
   const requested = new Set<string>();
   const media = cfg?.tools?.media;
   addMediaModelProviders(requested, media?.models);
-  addMediaModelProviders(requested, media?.image?.models);
-  addMediaModelProviders(requested, media?.audio?.models);
-  addMediaModelProviders(requested, media?.video?.models);
   return requested;
 }
 

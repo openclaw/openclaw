@@ -401,23 +401,24 @@ describe("Gateway startup SecretRef owner isolation", () => {
         ...baseConfig(),
         tools: {
           media: {
-            audio: {
-              enabled: true,
-              models: [
-                {
-                  provider: "openai",
-                  request: {
-                    auth: {
-                      mode: "authorization-bearer",
-                      token: {
-                        source: "env",
-                        provider: "default",
-                        id: "MISSING_MEDIA_MODEL_VALUE",
-                      },
+            models: [
+              {
+                provider: "openai",
+                capabilities: ["audio"],
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: {
+                      source: "env",
+                      provider: "default",
+                      id: "MISSING_MEDIA_MODEL_VALUE",
                     },
                   },
                 },
-              ],
+              },
+            ],
+            audio: {
+              enabled: true,
             },
           },
         },
@@ -431,7 +432,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
       expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
         {
           ownerKind: "capability",
-          ownerId: "media-model:audio:0",
+          ownerId: "media-model:shared:0",
           state: "unavailable",
         },
       ]);

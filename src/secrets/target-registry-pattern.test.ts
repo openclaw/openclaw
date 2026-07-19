@@ -24,9 +24,9 @@ function compilePattern(pathPattern: string, refPathPattern?: string) {
 
 describe("target registry pattern helpers", () => {
   it("matches wildcard and array tokens with stable capture ordering", () => {
-    const tokens = compilePattern("agents.list[].memorySearch.providers.*.apiKey").pathTokens;
+    const tokens = compilePattern("agents.list[].memory.search.providers.*.apiKey").pathTokens;
     const match = matchPathTokens(
-      ["agents", "list", "2", "memorySearch", "providers", "openai", "apiKey"],
+      ["agents", "list", "2", "memory", "search", "providers", "openai", "apiKey"],
       tokens,
     );
 
@@ -35,25 +35,25 @@ describe("target registry pattern helpers", () => {
     });
     expect(
       matchPathTokens(
-        ["agents", "list", "x", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "x", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
     expect(
       matchPathTokens(
-        ["agents", "list", "02", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "02", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
     expect(
       matchPathTokens(
-        ["agents", "list", "+2", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "+2", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
     expect(
       matchPathTokens(
-        ["agents", "list", "4294967294", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "4294967294", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
@@ -61,15 +61,16 @@ describe("target registry pattern helpers", () => {
 
   it("materializes sibling ref paths from wildcard and array captures", () => {
     const refTokens = compilePattern(
-      "agents.list[].memorySearch.providers.*.apiKey",
-      "agents.list[].memorySearch.providers.*.apiKeyRef",
+      "agents.list[].memory.search.providers.*.apiKey",
+      "agents.list[].memory.search.providers.*.apiKeyRef",
     ).refPathTokens;
     expect(refTokens).toBeDefined();
     expect(materializePathTokens(refTokens ?? [], ["1", "anthropic"])).toEqual([
       "agents",
       "list",
       "1",
-      "memorySearch",
+      "memory",
+      "search",
       "providers",
       "anthropic",
       "apiKeyRef",

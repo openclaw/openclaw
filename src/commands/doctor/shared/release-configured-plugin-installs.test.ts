@@ -310,9 +310,13 @@ describe("configured plugin install release step", () => {
       cfg: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
-            },
+            models: [
+              {
+                provider: "groq",
+                model: "whisper-large-v3-turbo",
+                capabilities: ["audio"],
+              },
+            ],
           },
         },
       },

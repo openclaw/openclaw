@@ -691,10 +691,17 @@ function readDefaultMemorySearch(config: unknown): Record<string, unknown> | und
   return asRecord(asRecord(asRecord(config)?.memory)?.search);
 }
 
+// Doctor still inspects the retired root shape so it can migrate its persisted sidecar path.
+function readTopLevelMemorySearch(config: unknown): Record<string, unknown> | undefined {
+  return asRecord(asRecord(config)?.memorySearch);
+}
+
 function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): string | undefined {
   const defaultVector = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.vector);
   const agentVector = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.vector);
-  const raw = agentVector?.extensionPath ?? defaultVector?.extensionPath;
+  const topLevelVector = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.vector);
+  const raw =
+    agentVector?.extensionPath ?? defaultVector?.extensionPath ?? topLevelVector?.extensionPath;
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
@@ -704,7 +711,8 @@ function readMemorySearchVectorEnabled(config: unknown, agentId: string): boolea
   }
   const defaultVector = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.vector);
   const agentVector = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.vector);
-  const raw = agentVector?.enabled ?? defaultVector?.enabled;
+  const topLevelVector = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.vector);
+  const raw = agentVector?.enabled ?? defaultVector?.enabled ?? topLevelVector?.enabled;
   return typeof raw === "boolean" ? raw : true;
 }
 

@@ -68,10 +68,10 @@ function createGroqAudioConfig(): OpenClawConfig {
   return {
     tools: {
       media: {
+        models: [{ provider: "groq", capabilities: ["audio"] }],
         audio: {
           enabled: true,
           maxBytes: 1024 * 1024,
-          models: [{ provider: "groq" }],
         },
       },
     },
@@ -475,6 +475,7 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
@@ -482,7 +483,6 @@ describe("applyMediaUnderstanding", () => {
               default: "deny",
               rules: [{ action: "allow", match: { chatType: "direct" } }],
             },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -514,6 +514,7 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
@@ -521,7 +522,6 @@ describe("applyMediaUnderstanding", () => {
               default: "deny",
               rules: [{ action: "allow", match: { channel: "whatsapp" } }],
             },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -555,6 +555,7 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
@@ -562,7 +563,6 @@ describe("applyMediaUnderstanding", () => {
               default: "deny",
               rules: [{ action: "allow", match: { chatType: "direct" } }],
             },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -605,10 +605,10 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 1024 * 1024,
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -651,10 +651,10 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             maxBytes: 4,
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -676,16 +676,17 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            { provider: "groq", capabilities: ["audio"] },
+            {
+              type: "cli",
+              command: "whisper",
+              args: ["{{MediaPath}}"],
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              { provider: "groq" },
-              {
-                type: "cli",
-                command: "whisper",
-                args: ["{{MediaPath}}"],
-              },
-            ],
           },
         },
       },
@@ -719,15 +720,16 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              type: "cli",
+              command: "parakeet-mlx",
+              args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              {
-                type: "cli",
-                command: "parakeet-mlx",
-                args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
-              },
-            ],
           },
         },
       },
@@ -757,15 +759,16 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              type: "cli",
+              command: "parakeet-mlx",
+              args: ["{{MediaPath}}", "--output-format", "json", "--output-dir", "{{OutputDir}}"],
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              {
-                type: "cli",
-                command: "parakeet-mlx",
-                args: ["{{MediaPath}}", "--output-format", "json", "--output-dir", "{{OutputDir}}"],
-              },
-            ],
           },
         },
       },
@@ -1098,15 +1101,16 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              type: "cli",
+              command: "gemini",
+              args: ["--file", "{{MediaPath}}", "--prompt", "{{Prompt}}"],
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
-            models: [
-              {
-                type: "cli",
-                command: "gemini",
-                args: ["--file", "{{MediaPath}}", "--prompt", "{{Prompt}}"],
-              },
-            ],
           },
         },
       },
@@ -1185,9 +1189,15 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-5.4",
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
-            models: [{ provider: "openai", model: "gpt-5.4" }],
           },
         },
       },
@@ -1233,9 +1243,15 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-5.4",
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
-            models: [{ provider: "openai", model: "gpt-5.4" }],
           },
         },
       },
@@ -1316,9 +1332,9 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -1362,10 +1378,10 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             attachments: { mode: "all", maxAttachments: 2 },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -1406,10 +1422,10 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
+          models: [{ provider: "groq", capabilities: ["audio"] }],
           audio: {
             enabled: true,
             attachments: { mode: "all", maxAttachments: 2 },
-            models: [{ provider: "groq" }],
           },
         },
       },
@@ -1456,9 +1472,14 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
-          audio: { enabled: true, models: [{ provider: "groq" }] },
-          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+          models: [
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+            { provider: "groq", capabilities: ["audio"] },
+            { provider: "google", model: "gemini-3", capabilities: ["video"] },
+          ],
+          image: { enabled: true },
+          audio: { enabled: true },
+          video: { enabled: true },
         },
       },
     };
@@ -1517,8 +1538,12 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
-          audio: { enabled: true, models: [{ provider: "groq" }] },
+          models: [
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+            { provider: "groq", capabilities: ["audio"] },
+          ],
+          image: { enabled: true },
+          audio: { enabled: true },
         },
       },
     };
@@ -1564,9 +1589,14 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
-          audio: { enabled: true, models: [{ provider: "groq" }] },
-          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+          models: [
+            { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
+            { provider: "groq", capabilities: ["audio"] },
+            { provider: "google", model: "gemini-3", capabilities: ["video"] },
+          ],
+          image: { enabled: true },
+          audio: { enabled: true },
+          video: { enabled: true },
         },
       },
     };

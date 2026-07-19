@@ -363,11 +363,8 @@ function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): bo
   return (
     isConfiguredProviderRequestSecretPath(path, ["tools", "media", "models", "#"]) ||
     isConfiguredProviderRequestSecretPath(path, ["tools", "media", "audio"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "audio", "models", "#"]) ||
     isConfiguredProviderRequestSecretPath(path, ["tools", "media", "image"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "image", "models", "#"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video", "models", "#"])
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video"])
   );
 }
 

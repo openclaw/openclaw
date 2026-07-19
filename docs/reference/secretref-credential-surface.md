@@ -42,7 +42,6 @@ The lists below are generated from the source target registry and checked agains
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
 - `tts.providers.*.apiKey`
-- `tools.web.fetch.firecrawl.apiKey`
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`

@@ -1371,10 +1371,7 @@ export function describeTtsAutoApplyContract() {
 
     const taggedCfg: OpenClawConfig = {
       ...baseCfg,
-      messages: {
-        ...baseCfg.messages!,
-        tts: { ...baseCfg.tts, auto: "tagged" },
-      },
+      tts: { ...baseCfg.tts, auto: "tagged" },
     };
 
     async function expectAutoTtsOutcome(params: {

@@ -36,13 +36,15 @@ async function main() {
           heartbeat: {
             every: "0m",
           },
-          memorySearch: {
-            enabled: false,
-            sync: {
-              onSearch: false,
-              onSessionStart: false,
-              watch: false,
-            },
+        },
+      },
+      memory: {
+        search: {
+          enabled: false,
+          sync: {
+            onSearch: false,
+            onSessionStart: false,
+            watch: false,
           },
         },
       },

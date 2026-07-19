@@ -86,15 +86,16 @@ function buildConfiguredAudioCfg() {
   return withFastReplyConfig({
     tools: {
       media: {
+        models: [
+          {
+            type: "cli",
+            command: "/usr/local/bin/stt-transcribe",
+            args: ["{{MediaPath}}"],
+            capabilities: ["audio"],
+          },
+        ],
         audio: {
           enabled: true,
-          models: [
-            {
-              type: "cli",
-              command: "/usr/local/bin/stt-transcribe",
-              args: ["{{MediaPath}}"],
-            },
-          ],
         },
       },
     },

@@ -966,10 +966,6 @@ describe("qa scenario catalog", () => {
     expect(scenario.gatewayConfigPatch).toMatchObject({
       session: { dmScope: "per-channel-peer" },
       memory: { search: { rememberAcrossConversations: true } },
-
-      agents: {
-        defaults: {},
-      },
       plugins: {
         entries: {
           "active-memory": {

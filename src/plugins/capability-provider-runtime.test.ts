@@ -950,7 +950,8 @@ describe("resolvePluginCapabilityProviders", () => {
         plugins: { allow: ["openai", "deepgram", "google"] },
         tools: {
           media: {
-            audio: { enabled: true, models: [{ provider: "deepgram", model: "nova-3" }] },
+            models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
+            audio: { enabled: true },
           },
         },
       } as OpenClawConfig,

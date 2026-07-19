@@ -33,7 +33,8 @@ function applyLegacyAudioTranscriptionModel(params: {
         });
   if (!hasAudioModel) {
     mediaAudio.enabled = true;
-    mediaAudio.preferredModel = mapped.command ? `cli:${mapped.command}` : undefined;
+    mediaAudio.preferredModel =
+      typeof mapped.command === "string" ? `cli:${mapped.command}` : undefined;
     media.models = [...models, { ...mapped, capabilities: ["audio"] }];
     params.changes.push(params.movedMessage);
     return;

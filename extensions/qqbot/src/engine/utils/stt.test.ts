@@ -140,9 +140,16 @@ describe("engine/utils/stt", () => {
       channels: { qqbot: { stt: { enabled: false, apiKey: "ignored" } } },
       tools: {
         media: {
+          models: [
+            {
+              provider: "local",
+              baseUrl: "https://stt.example.test/",
+              model: "sense",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             timeoutSeconds: 90,
-            models: [{ provider: "local", baseUrl: "https://stt.example.test/", model: "sense" }],
           },
         },
       },
@@ -160,7 +167,7 @@ describe("engine/utils/stt", () => {
       timeoutMs: 90_000,
     });
 
-    Object.assign(expectDefined(cfg.tools.media.audio.models[0], "QQBot STT model"), {
+    Object.assign(expectDefined(cfg.tools.media.models[0], "QQBot STT model"), {
       timeoutSeconds: 75,
     });
     expect(resolveSTTConfig(cfg)?.timeoutMs).toBe(75_000);

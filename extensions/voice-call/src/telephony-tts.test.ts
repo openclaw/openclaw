@@ -15,7 +15,7 @@ function createCoreConfig(): OpenClawConfig {
       },
     },
   };
-  return { messages: { tts } };
+  return { tts };
 }
 
 const passthroughPreparation: TelephonyTtsRuntime["prepareTtsRequest"] = async ({ cfg, text }) => ({
