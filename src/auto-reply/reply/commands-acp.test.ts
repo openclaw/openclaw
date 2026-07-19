@@ -2172,17 +2172,7 @@ describe("/acp command", () => {
   });
 
   it("keeps read-only /acp actions available to internal operator.write clients", async () => {
-    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
-      createAcpSessionEntry({
-        identity: {
-          state: "resolved",
-          source: "status",
-          acpxSessionId: "runtime-1",
-          agentSessionId: "session-1",
-          lastUpdatedAt: Date.now(),
-        },
-      }),
-    ]);
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
 
     const result = await runInternalAcpCommand({
       commandBody: "/acp sessions",
@@ -2190,7 +2180,24 @@ describe("/acp command", () => {
     });
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("ACP sessions");
+    expect(result?.reply?.text).toContain(defaultAcpSessionKey);
+    expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
+  });
+
+  it("lists all ACP sessions for internal operator.admin clients", async () => {
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      createAcpSessionEntry({ sessionKey: "agent:codex:acp:own" }),
+      createAcpSessionEntry({ sessionKey: "agent:claude:acp:foreign" }),
+    ]);
+
+    const result = await runInternalAcpCommand({
+      commandBody: "/acp sessions",
+      scopes: ["operator.admin"],
+    });
+
+    expect(result?.reply?.text).toContain("agent:codex:acp:own");
+    expect(result?.reply?.text).toContain("agent:claude:acp:foreign");
+    expect(hoisted.readAcpSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("allows mutating /acp actions for internal operator.admin clients", async () => {
