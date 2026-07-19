@@ -22,7 +22,6 @@ function createFixture(config: Record<string, unknown>, stateEntries: string[] =
   }
   return {
     HOME: root,
-    OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
   };
