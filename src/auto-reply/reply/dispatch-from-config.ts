@@ -2371,7 +2371,13 @@ async function dispatchReplyFromConfigInner(
                         await sendPayloadAsync(deliveryPayload, undefined, false);
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        const delivered = dispatcher.sendToolResult(deliveryPayload);
+                        // ask_user payloads must be delivered as visible card messages, not
+                        // as progress indicators. sendBlockReply ("block" kind) triggers
+                        // the channel outbound adapter's card-send path, while
+                        // sendToolResult ("tool" kind) is a progress-only delivery.
+                        const delivered = hasAskUserPayload(deliveryPayload)
+                          ? dispatcher.sendBlockReply(deliveryPayload)
+                          : dispatcher.sendToolResult(deliveryPayload);
                         if (delivered && hasAskUserPayload(deliveryPayload)) {
                           // ask_user blocks until this callback resolves; drain its prompt now
                           // or the answerable UI can remain queued behind the blocked agent run.
