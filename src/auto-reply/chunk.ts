@@ -312,11 +312,21 @@ export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode):
   return chunkText(text, limit);
 }
 
-export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+export function chunkMarkdownTextWithMode(
+  text: string,
+  limit: number,
+  mode: ChunkMode,
+  opts?: { packAdjacent?: boolean },
+): string[] {
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    // Outbound newline planning passes packAdjacent:false so top-level blank-line
+    // paragraphs stay separate delivery units while fenced blanks stay intact.
+    const paragraphChunks = chunkByParagraph(text, limit, {
+      splitLongParagraphs: false,
+      packAdjacent: opts?.packAdjacent,
+    });
     const out: string[] = [];
     for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
       paragraphChunk.length > limit

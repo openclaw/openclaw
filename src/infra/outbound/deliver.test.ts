@@ -4164,8 +4164,11 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["m1", "m2"]);
   });
 
-  it("respects newline chunk mode for plugin text without splitting short messages", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+  it("respects newline chunk mode by keeping blank-line paragraphs as separate sends", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
     const cfg: OpenClawConfig = {
       channels: {
         matrix: { textChunkLimit: 4000, chunkMode: "newline" },
@@ -4180,18 +4183,23 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
     const firstChunkCall = requireMatrixSendCall(sendMatrix);
     expect(firstChunkCall?.[0]).toBe("!room:example");
-    expect(firstChunkCall?.[1]).toBe("Line one\n\nLine two");
+    expect(firstChunkCall?.[1]).toBe("Line one");
     expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
+    const secondChunkCall = sendMatrix.mock.calls[1];
+    expect(secondChunkCall?.[0]).toBe("!room:example");
+    expect(secondChunkCall?.[1]).toBe("Line two");
+    expect((secondChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
   });
 
-  it("splits long plugin text on packed paragraph boundaries in newline mode", async () => {
+  it("splits newline-mode plugin text on each blank-line paragraph boundary", async () => {
     const sendMatrix = vi
       .fn()
       .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
-      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m3", roomId: "!room:example" });
     const cfg: OpenClawConfig = {
       channels: {
         matrix: { textChunkLimit: 14, chunkMode: "newline" },
@@ -4206,15 +4214,19 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(sendMatrix).toHaveBeenCalledTimes(3);
     const firstChunkCall = requireMatrixSendCall(sendMatrix);
     expect(firstChunkCall?.[0]).toBe("!room:example");
-    expect(firstChunkCall?.[1]).toBe("Alpha\n\nBeta");
+    expect(firstChunkCall?.[1]).toBe("Alpha");
     expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
     const secondChunkCall = sendMatrix.mock.calls[1];
     expect(secondChunkCall?.[0]).toBe("!room:example");
-    expect(secondChunkCall?.[1]).toBe("Gamma");
+    expect(secondChunkCall?.[1]).toBe("Beta");
     expect((secondChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
+    const thirdChunkCall = sendMatrix.mock.calls[2];
+    expect(thirdChunkCall?.[0]).toBe("!room:example");
+    expect(thirdChunkCall?.[1]).toBe("Gamma");
+    expect((thirdChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
   });
 
   it("lets explicit formatting options override configured chunking", async () => {

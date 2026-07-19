@@ -1,6 +1,10 @@
 // Message planning expands normalized payloads into ordered text/media send
 // units while preserving reply-to consumption rules.
-import { chunkByParagraph, chunkMarkdownText, type ChunkMode } from "../../auto-reply/chunk.js";
+import {
+  chunkByParagraph,
+  chunkMarkdownTextWithMode,
+  type ChunkMode,
+} from "../../auto-reply/chunk.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { ReplyToOverride } from "./reply-policy.js";
 
@@ -135,12 +139,13 @@ export function planOutboundTextMessageUnits(params: {
     // Keep blank-line paragraphs as separate delivery units. The transport
     // limit may still split an oversized paragraph, but must not pack adjacent
     // logical blocks first (Codex final replies arrive as one accumulated text).
+    // Markdown uses the fence-aware newline splitter so blanks inside code
+    // fences are not treated as outbound boundaries.
     const blockChunks =
       (params.chunkerMode ?? "text") === "markdown"
-        ? chunkByParagraph(params.text, params.textLimit, {
+        ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline", {
             packAdjacent: false,
-            splitLongParagraphs: false,
-          }).flatMap((paragraphChunk) => chunkMarkdownText(paragraphChunk, params.textLimit!))
+          })
         : chunkByParagraph(params.text, params.textLimit, { packAdjacent: false });
 
     if (!blockChunks.length && params.text) {

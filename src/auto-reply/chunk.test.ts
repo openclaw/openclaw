@@ -644,6 +644,21 @@ describe("chunkMarkdownTextWithMode", () => {
     ]);
   });
 
+  it("keeps top-level paragraphs separate when packAdjacent is false", () => {
+    expect(
+      chunkMarkdownTextWithMode("Alpha\n\nBeta\n\nGamma", 4000, "newline", {
+        packAdjacent: false,
+      }),
+    ).toEqual(["Alpha", "Beta", "Gamma"]);
+  });
+
+  it("keeps fenced blanks intact when packAdjacent is false", () => {
+    const fence = "```js\nconst a = 1;\n\nconst b = 2;\n```";
+    expect(
+      chunkMarkdownTextWithMode(`${fence}\n\nAfter`, 4000, "newline", { packAdjacent: false }),
+    ).toEqual([fence, "After"]);
+  });
+
   it("does not split surrogate pairs at hard length boundaries", () => {
     const text = `a${"😀".repeat(20_000)}`;
     const chunks = chunkMarkdownTextWithMode(text, 32_768, "length");

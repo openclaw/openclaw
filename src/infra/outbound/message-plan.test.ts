@@ -130,4 +130,39 @@ describe("outbound message planning", () => {
       ["text", "Second bubble."],
     ]);
   });
+
+  it("keeps fenced code blanks intact while splitting top-level markdown paragraphs", () => {
+    const fence = "```js\nconst a = 1;\n\nconst b = 2;\n```";
+    const units = planOutboundTextMessageUnits({
+      text: `${fence}\n\nAfter fence.`,
+      textLimit: 4000,
+      chunkMode: "newline",
+      chunkerMode: "markdown",
+      chunker: (text) => [text],
+      overrides: {},
+    });
+
+    expect(
+      units.map((unit) => (unit.kind === "text" ? [unit.kind, unit.text] : [unit.kind])),
+    ).toEqual([
+      ["text", fence],
+      ["text", "After fence."],
+    ]);
+  });
+
+  it("does not split a lone fenced block that contains blank lines", () => {
+    const fence = "```python\ndef my_function():\n    x = 1\n\n    y = 2\n    return x + y\n```";
+    const units = planOutboundTextMessageUnits({
+      text: fence,
+      textLimit: 4000,
+      chunkMode: "newline",
+      chunkerMode: "markdown",
+      chunker: (text) => [text],
+      overrides: {},
+    });
+
+    expect(
+      units.map((unit) => (unit.kind === "text" ? [unit.kind, unit.text] : [unit.kind])),
+    ).toEqual([["text", fence]]);
+  });
 });
