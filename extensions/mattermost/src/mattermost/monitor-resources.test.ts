@@ -178,7 +178,7 @@ describe("mattermost monitor resources", () => {
       logger: {},
       mediaMaxBytes: 1024,
       saveRemoteMedia,
-      mediaKindFromMime: (contentType) =>
+      mediaKindFromMime: (contentType?: string) =>
         contentType === "audio/mpeg" ? "audio" : contentType === "image/png" ? "image" : null,
     } as unknown as Parameters<typeof createMattermostMonitorResources>[0]);
 
@@ -204,7 +204,7 @@ describe("mattermost monitor resources", () => {
       logger: {},
       mediaMaxBytes: 1024,
       saveRemoteMedia,
-      mediaKindFromMime: (contentType) =>
+      mediaKindFromMime: (contentType?: string) =>
         contentType === "video/mp4"
           ? "video"
           : contentType === "application/pdf"

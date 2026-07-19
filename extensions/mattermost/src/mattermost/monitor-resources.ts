@@ -27,7 +27,7 @@ import { buildButtonProps, type MattermostInteractionResponse } from "./interact
 
 type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
-export type MattermostMediaInfo = {
+type MattermostMediaInfo = {
   path?: string;
   contentType?: string;
   kind: MattermostMediaKind;
