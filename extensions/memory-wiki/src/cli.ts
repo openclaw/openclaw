@@ -58,12 +58,42 @@ const GATEWAY_TERMINAL_STRING_MAX_CHARS = 2_000;
 const GATEWAY_RESPONSE_MAX_ARRAY_ITEMS = 10_000;
 const GATEWAY_RESPONSE_MAX_STRING_CHARS = 10_000;
 const GATEWAY_RESPONSE_MAX_CODE_CHARS = 256;
+const WIKI_APPLY_BODY_FILE_MAX_BYTES = 1_048_576;
+const WIKI_APPLY_BODY_FILE_READ_CHUNK_BYTES = 64 * 1024;
 const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
   String.raw`(?:\x1B\[[0-?]*[ -/]*[@-~]|\x1B[@-Z\\-_]|\x9B[0-?]*[ -/]*[@-~])`,
   "g",
 );
 const TERMINAL_CONTROL_CHARACTER_PATTERN = new RegExp(String.raw`[\x00-\x1F\x7F-\x9F]+`, "g");
 const UNICODE_FORMAT_CONTROL_PATTERN = /[\u061C\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
+
+async function readWikiApplyBodyFile(bodyFile: string): Promise<string> {
+  const handle = await fs.open(bodyFile, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let totalBytesRead = 0;
+    while (totalBytesRead <= WIKI_APPLY_BODY_FILE_MAX_BYTES) {
+      const remainingBytes = WIKI_APPLY_BODY_FILE_MAX_BYTES + 1 - totalBytesRead;
+      const buffer = Buffer.alloc(
+        Math.min(WIKI_APPLY_BODY_FILE_READ_CHUNK_BYTES, remainingBytes),
+      );
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, totalBytesRead);
+      if (bytesRead === 0) {
+        break;
+      }
+      chunks.push(buffer.subarray(0, bytesRead));
+      totalBytesRead += bytesRead;
+    }
+    if (totalBytesRead > WIKI_APPLY_BODY_FILE_MAX_BYTES) {
+      throw new Error(
+        `wiki apply synthesis --body-file is limited to ${WIKI_APPLY_BODY_FILE_MAX_BYTES} bytes.`,
+      );
+    }
+    return Buffer.concat(chunks, totalBytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
 
 type WikiStatusCommandOptions = {
   json?: boolean;
@@ -380,7 +410,7 @@ async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }
     return params.body;
   }
   if (params.bodyFile?.trim()) {
-    return await fs.readFile(params.bodyFile, "utf8");
+    return await readWikiApplyBodyFile(params.bodyFile);
   }
   throw new Error("wiki apply synthesis requires --body or --body-file.");
 }

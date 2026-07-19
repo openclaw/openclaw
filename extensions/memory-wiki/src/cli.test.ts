@@ -192,6 +192,95 @@ describe("memory-wiki cli", () => {
     );
   });
 
+  it("registers apply synthesis with --body-file and writes a synthesis page", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bodyFile = path.join(rootDir, "synthesis-body.md");
+    await fs.mkdir(rootDir, { recursive: true });
+    await fs.writeFile(bodyFile, "Alpha from body file.", "utf8");
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config });
+
+    await program.parseAsync(
+      [
+        "wiki",
+        "apply",
+        "synthesis",
+        "CLI Body File",
+        "--body-file",
+        bodyFile,
+        "--source-id",
+        "source.alpha",
+      ],
+      { from: "user" },
+    );
+
+    const page = await fs.readFile(path.join(rootDir, "syntheses", "cli-body-file.md"), "utf8");
+    expect(page).toContain("Alpha from body file.");
+    expect(page).toContain("source.alpha");
+  });
+
+  it("accepts apply synthesis --body-file at the byte limit", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bodyFile = path.join(rootDir, "limit-synthesis-body.md");
+    await fs.mkdir(rootDir, { recursive: true });
+    await fs.writeFile(bodyFile, "A".repeat(1_048_576), "utf8");
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config });
+
+    await program.parseAsync(
+      [
+        "wiki",
+        "apply",
+        "synthesis",
+        "Limit Body File",
+        "--body-file",
+        bodyFile,
+        "--source-id",
+        "source.alpha",
+      ],
+      { from: "user" },
+    );
+
+    await expect(
+      fs.stat(path.join(rootDir, "syntheses", "limit-body-file.md")),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects oversized apply synthesis --body-file before writing a synthesis page", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bodyFile = path.join(rootDir, "oversized-synthesis-body.md");
+    await fs.mkdir(rootDir, { recursive: true });
+    await fs.writeFile(bodyFile, "A".repeat(1_048_577), "utf8");
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config });
+
+    await expect(
+      program.parseAsync(
+        [
+          "wiki",
+          "apply",
+          "synthesis",
+          "Too Large",
+          "--body-file",
+          bodyFile,
+          "--source-id",
+          "source.alpha",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow(
+      "wiki apply synthesis --body-file is limited to 1048576 bytes.",
+    );
+    await expect(
+      fs.stat(path.join(rootDir, "syntheses", "too-large.md")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("resolves --agent for local commands and requires it with multiple agent vaults", async () => {
     const { rootDir, config } = await createCliVault({
       config: { vault: { scope: "agent" } },
