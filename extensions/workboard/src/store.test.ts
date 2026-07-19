@@ -1093,6 +1093,49 @@ describe("WorkboardStore", () => {
     ]);
   });
 
+  it("reuses an explicitly correlated terminal proof with the same status", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = {
+      id: "proof-passed",
+      status: "passed" as const,
+      createdAt: 1_000,
+      command: "pnpm test extensions/workboard",
+    };
+    const card = await store.create({
+      title: "Reuse terminal proof",
+      metadata: { proof: [proof] },
+    });
+
+    const completed = await store.complete(card.id, {
+      summary: "Already passed.",
+      proofId: proof.id,
+      proof: { status: "passed", command: proof.command },
+    });
+
+    expect(completed.metadata?.proof).toEqual([proof]);
+  });
+
+  it("rejects an explicitly correlated terminal proof with a different status", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Reject terminal status rewrite",
+      metadata: {
+        proof: [{ id: "proof-passed", status: "passed", createdAt: 1_000 }],
+      },
+    });
+
+    await expect(
+      store.complete(card.id, {
+        proofId: "proof-passed",
+        proof: { status: "failed" },
+      }),
+    ).rejects.toThrow("completion proof status does not match existing proof: proof-passed");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "todo",
+      metadata: { proof: [{ id: "proof-passed", status: "passed" }] },
+    });
+  });
+
   it("rejects a completion proof id when its evidence does not match", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({

@@ -166,9 +166,10 @@ entry means the worker reports that its command or check succeeded; consumers th
 an independent quality gate should inspect the attached command, URL, or artifact and
 run their own verifier. `workboard_proof` returns the new record's `proofId`. When
 `workboard_complete` reports that same proof's terminal status, pass `proofId` so the
-pending record is resolved in place without losing its identity or timestamp. Completion
-proof without `proofId` remains append-only, so a later retry cannot rewrite older history
-merely because its command or note is identical.
+pending record is resolved in place without losing its identity or timestamp. A proof that
+already has the same terminal status is reused unchanged. Completion proof without
+`proofId` remains append-only, so a later retry cannot rewrite older history merely because
+its command or note is identical.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an

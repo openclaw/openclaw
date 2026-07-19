@@ -1003,14 +1003,17 @@ export function appendCompletionProof(
   if (!pending) {
     throw new Error(`proof not found: ${proofId}`);
   }
-  if (pending.status !== "unknown") {
-    throw new Error(`proof is already terminal: ${proofId}`);
-  }
   if (proof.status === "unknown") {
     throw new Error("completion proof status must be passed, failed, or skipped.");
   }
   if (completionProofConflicts(pending, proof)) {
     throw new Error(`completion proof does not match pending proof: ${proofId}`);
+  }
+  if (pending.status !== "unknown") {
+    if (pending.status !== proof.status) {
+      throw new Error(`completion proof status does not match existing proof: ${proofId}`);
+    }
+    return entries.slice(-MAX_CARD_PROOF);
   }
   // A proof id is the durable correlation boundary between a separately recorded check and its
   // completion. Preserve the original evidence identity and timestamp while resolving its status.
