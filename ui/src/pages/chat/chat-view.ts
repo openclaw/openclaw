@@ -122,6 +122,7 @@ export type ChatProps = {
   disabledActionLabel?: string | null;
   onDisabledAction?: (() => void) | null;
   error: string | null;
+  runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
   approvalBusy?: boolean;
   approvalErrors?: ReadonlyMap<string, string>;
@@ -386,6 +387,7 @@ export function renderChat(props: ChatProps) {
     disabledReason: props.disabledReason,
     disabledActionLabel: props.disabledActionLabel,
     onDisabledAction: props.onDisabledAction,
+    runError: props.runError,
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,

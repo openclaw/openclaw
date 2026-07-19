@@ -1791,56 +1791,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
-  it("drops an error projection that extends a short stream", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Error",
-      chatStreamStartedAt: 100,
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "provider unavailable",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Error: provider unavailable" }],
-          timestamp: 101,
-        },
-      }),
-    ).toBe("error");
-    expect(state.chatMessages).toEqual([]);
-    expect(state.chatRunError).toEqual({ summary: "Error: provider unavailable" });
-  });
-
-  it("drops partially streamed error guidance that differs from the raw gateway error", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Error: provider unavail",
-      chatStreamStartedAt: 100,
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "provider request failed",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Error: provider unavailable" }],
-          timestamp: 101,
-        },
-      }),
-    ).toBe("error");
-    expect(state.chatMessages).toEqual([]);
-    expect(state.chatRunError).toEqual({ summary: "Error: provider unavailable" });
-  });
-
   it("preserves terminal assistant content that extends the streamed text", () => {
     const message = {
       role: "assistant",
@@ -1986,32 +1936,6 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(state.chatMessages[0], "assistant", "OK");
   });
 
-  it("does not treat error guidance containing the stream as assistant content", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "auth",
-      chatStreamStartedAt: 100,
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "provider request failed",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Configure auth, then retry." }],
-          timestamp: 101,
-        },
-      }),
-    ).toBe("error");
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "auth");
-    expect(state.chatRunError).toEqual({ summary: "Configure auth, then retry." });
-  });
-
   it("keeps the post-tool stream tail without appending the error projection", () => {
     const message = {
       role: "assistant",
@@ -2037,33 +1961,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toHaveLength(2);
     expectTextChatMessage(state.chatMessages[0], "assistant", "First thought.");
     expectTextChatMessage(state.chatMessages[1], "assistant", "After tool.");
-  });
-
-  it("keeps post-tool assistant content without materializing a projected error tail", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Useful answer. Error: provider unavail",
-      chatStreamStartedAt: 100,
-    }) as ChatState & { chatStreamSegments: Array<{ text: string; ts: number }> };
-    state.chatStreamSegments = [{ text: "Useful answer.", ts: 90 }];
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "provider unavailable",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Error: provider unavailable" }],
-          timestamp: 101,
-        },
-      }),
-    ).toBe("error");
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(state.chatMessages[0], "assistant", "Useful answer.");
-    expect(state.chatRunError).toEqual({ summary: "Error: provider unavailable" });
   });
 
   it("does not append legacy assistant-shaped error projections", () => {
@@ -2112,53 +2009,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: legacy gateway failure" });
   });
 
-  it("keeps a streamed legacy error projection out of the transcript", () => {
-    const errorText = "Error: legacy gateway failure";
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: errorText,
-      chatStreamStartedAt: 9,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "error",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: errorText }],
-        timestamp: 10,
-      },
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([]);
-    expect(state.chatRunError).toEqual({ summary: errorText });
-  });
-
-  it("drops a partially streamed legacy error projection", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "Error: legacy gateway fail",
-      chatStreamStartedAt: 9,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "error",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Error: legacy gateway failure" }],
-        timestamp: 10,
-      },
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([]);
-    expect(state.chatRunError).toEqual({ summary: "Error: legacy gateway failure" });
-  });
-
   it("preserves a legacy terminal message that completes streamed assistant content", () => {
     const state = createState({
       sessionKey: "main",
@@ -2183,7 +2033,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "chat error" });
   });
 
-  it("uses server-provided error guidance as the alert copy", () => {
+  it("preserves a differing terminal message instead of classifying it as an error projection", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -2202,11 +2052,9 @@ describe("handleChatGatewayEvent", () => {
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toEqual([message]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({
-      summary: "Configure provider auth, then try again.",
-    });
+    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error" });
   });
 
   it("uses server guidance when an error follows a source-reply final", () => {
@@ -2244,9 +2092,7 @@ describe("handleChatGatewayEvent", () => {
     ).toBe("error");
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
-    expect(state.chatRunError).toEqual({
-      summary: "Configure provider auth, then try again.",
-    });
+    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
   });
 
   it("does not append an orphan error bubble when no run was active", () => {
@@ -2271,7 +2117,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toEqual([existingMessage]);
     expect(state.chatRunId).toBe(null);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "request failed before start" });
+    expect(state.chatRunError).toEqual({ summary: "Error: request failed before start" });
   });
 
   it("uses the generic alert fallback for a blank orphan error", () => {

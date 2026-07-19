@@ -3063,6 +3063,7 @@ class ChatPane extends OpenClawLightDomElement {
           ? () => void this.restoreArchivedSession(state.sessionKey)
           : null,
       error: state.lastError,
+      runError: catalogKey ? null : (state.chatRunError ?? null),
       inlineApproval,
       approvalBusy: approvalSnapshot?.approvalBusy,
       approvalErrors: approvalSnapshot?.approvalErrors,
