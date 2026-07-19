@@ -224,6 +224,9 @@ export const en: TranslationMap = {
     whatsapp: {
       title: "WhatsApp",
       subtitle: "Link WhatsApp Web and monitor connection health.",
+      loggedOut: "Logged out.",
+      logoutNotCleared:
+        "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
     },
     gatewayUrlConfirmation: {
       title: "Change Gateway URL",
@@ -582,6 +585,7 @@ export const en: TranslationMap = {
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
     dashboardAvailable: "Dashboard available",
+    approvalNeeded: "Approval needed",
     noSessions: "No threads found.",
     noSessionsMatchFilters: "No threads match your filters.",
     pagination: "{start}-{end} of {total} rows",
@@ -1276,6 +1280,12 @@ export const en: TranslationMap = {
       title: "Chat",
       hint: "Browser-local chat preferences.",
     },
+    sidebarPrefs: {
+      title: "Sidebar",
+      hint: "Choose what appears while sessions are running.",
+      liveActivity: "Show live agent activity in sidebar",
+      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
+    },
     connection: {
       title: "Connection",
       gateway: "Gateway",
@@ -1335,6 +1345,10 @@ export const en: TranslationMap = {
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
     pending: "{count} pending",
+    otherPending: "Other pending requests",
+    reviewRequest: "Review approval from {agent}: {command}",
+    agentPendingOne: "{count} pending approval",
+    agentPending: "{count} pending approvals",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
@@ -1869,7 +1883,9 @@ export const en: TranslationMap = {
   custodian: {
     title: "OpenClaw",
     subtitle: "Your system setup guide",
+    subtitleCaretaker: "System setup and care.",
     exitSetup: "Exit setup",
+    newAgent: "New agent",
     hatchDraft: "Wake up, my friend!",
     placeholder: "Message OpenClaw…",
     sensitivePlaceholder: "Enter sensitive value…",
@@ -1879,6 +1895,28 @@ export const en: TranslationMap = {
     requestFailed: "OpenClaw could not reply. Try again.",
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    history: {
+      button: "History",
+      title: "Recent changes",
+      description: "What changed on this system, newest first.",
+      loading: "Loading recent changes…",
+      empty: "No recorded changes yet.",
+      requestFailed: "OpenClaw could not load change history.",
+      loadMore: "Load more",
+      loadingMore: "Loading more…",
+      changedPaths: "Changed paths ({count})",
+      invalidEdit: "This manual edit did not pass configuration validation.",
+      opaqueChange: "Formatting or comments changed without visible configuration path changes.",
+      sources: {
+        systemAgent: "system-agent",
+        doctor: "doctor",
+        settings: "settings",
+        cli: "CLI",
+        pluginInstall: "plugin install",
+        manualEdit: "manual edit",
+        unknown: "unknown",
+      },
+    },
     nudge: {
       configReload: "Configuration reload stopped — ask me what happened",
       channelAuth: "{channel} authentication degraded — ask me what happened",
@@ -2076,6 +2114,7 @@ export const en: TranslationMap = {
     swarm: {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
+      empty: "No active swarms.",
     },
   },
   aboutPage: {
@@ -2198,6 +2237,26 @@ export const en: TranslationMap = {
     toolsEmpty: "No tool runs recorded yet.",
     toolRun: "{count} run",
     toolRuns: "{count} runs",
+    identity: {
+      title: "Identity",
+      description: "Your profile on this gateway.",
+      loading: "Loading your identity…",
+      profileUnavailable: "Your identity profile could not be loaded.",
+      avatar: "Avatar",
+      avatarDescription: "PNG, JPEG, or WebP. Images are resized to 256 × 256 or smaller.",
+      chooseAvatar: "Choose image",
+      processingAvatar: "Processing…",
+      displayName: "Display name",
+      displayNameDescription: "Shown to other people using this gateway.",
+      linkedEmails: "Linked emails",
+      linkedEmailsDescription: "Email addresses connected to this profile.",
+      openSettings: "Open identity settings for {name}",
+      avatarErrors: {
+        invalid: "That image could not be processed.",
+        sourceTooLarge: "Choose an image that is 10 MB or smaller.",
+        tooLarge: "The processed avatar is larger than 512 KB.",
+      },
+    },
   },
   tasksPage: {
     active: "Active",
@@ -3717,6 +3776,7 @@ export const en: TranslationMap = {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} threads",
+      toolActivity: "Using {tool}",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -3904,6 +3964,20 @@ export const en: TranslationMap = {
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+      holdToRecordSetting: "Hold microphone button to dictate",
+      holdToRecordSettingDescription:
+        "Hold the composer microphone button, speak, then release to insert text without sending.",
+      dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
+      dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
+      dictationConnecting: "Starting dictation…",
+      dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
+      dictationFailed: "Dictation failed.",
+      dictationFinalizing: "Finishing dictation…",
+      dictationFinalizationTimedOut:
+        "Dictation stopped before the last partial transcript could be finalized.",
+      dictationProviderUnavailable: "No transcription provider is configured for dictation.",
+      dictationRecording: "Recording {elapsed}",
+      dictationReleaseToInsert: "Release to insert dictation",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",

@@ -7,9 +7,12 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
+import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -112,11 +115,18 @@ export type ChatProps = {
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
   connected: boolean;
+  gatewayClient?: GatewayBrowserClient | null;
+  composerHoldToRecord?: boolean;
   canSend: boolean;
   disabledReason: string | null;
   disabledActionLabel?: string | null;
   onDisabledAction?: (() => void) | null;
   error: string | null;
+  inlineApproval?: ExecApprovalRequest | null;
+  approvalBusy?: boolean;
+  approvalErrors?: ReadonlyMap<string, string>;
+  approvalNowMs?: number;
+  onApprovalDecision?: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -165,6 +175,7 @@ export type ChatProps = {
   onSwitchRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
+  onDictationError?: (message: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -402,6 +413,8 @@ export function renderChat(props: ChatProps) {
     realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
     realtimeTalkVideoPending: props.realtimeTalkVideoPending,
     realtimeTalkCameraError: props.realtimeTalkCameraError,
+    gatewayClient: props.gatewayClient,
+    composerHoldToRecord: props.composerHoldToRecord,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -414,6 +427,7 @@ export function renderChat(props: ChatProps) {
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
+    onDictationError: props.onDictationError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
@@ -577,6 +591,18 @@ export function renderChat(props: ChatProps) {
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
             >
               ${thread}
+              ${props.inlineApproval && props.onApprovalDecision
+                ? html`<div class="chat-inline-approval">
+                    ${renderExecApprovalCard({
+                      approval: props.inlineApproval,
+                      busy: props.approvalBusy === true,
+                      error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
+                      nowMs: props.approvalNowMs ?? Date.now(),
+                      variant: "inline",
+                      onDecision: props.onApprovalDecision,
+                    })}
+                  </div>`
+                : nothing}
               ${renderChatTaskSuggestions({
                 suggestions: props.taskSuggestions ?? [],
                 busyIds: props.taskSuggestionBusyIds ?? new Set(),
