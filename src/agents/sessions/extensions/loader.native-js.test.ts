@@ -333,15 +333,17 @@ export default async function extension(api) {
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.js");
 
-    // Write a compiled .js file exceeding the 10 MiB source-scan cap.
+    // Write a valid oversize JavaScript file exceeding the 10 MiB source-scan cap.
     // The file contains no alias imports — normally it would bypass jiti.
     // When oversized, the source scan is skipped and jiti is used as a fallback.
-    const largeSource = Buffer.alloc(11 * 1024 * 1024);
-    Buffer.from(
-      'export default async function extension(api){api.registerCommand("cmd",{description:"p",handler(){}});}',
-      "utf8",
-    ).copy(largeSource, 0);
-    await writeFile(extensionPath, largeSource);
+    // Padding uses line comments so the file is syntactically valid JS.
+    const exportCode =
+      'export default async function extension(api){api.registerCommand("cmd",{description:"p",handler(){}});}';
+    const paddingLine = "// padding line for oversized extension test\n";
+    const paddingNeeded = 11 * 1024 * 1024 - Buffer.byteLength(exportCode, "utf8");
+    const repeats = Math.ceil(paddingNeeded / Buffer.byteLength(paddingLine, "utf8"));
+    const source = exportCode + paddingLine.repeat(repeats);
+    await writeFile(extensionPath, source, "utf8");
 
     const result = await loadExtensions([extensionPath], dir);
 
