@@ -76,7 +76,15 @@ describe("gh-read helpers", () => {
   });
 
   it("preserves the unbounded default for long-lived GitHub CLI commands", () => {
-    const spawnSyncImpl = vi.fn(() => ({ status: 0 }));
+    const received = { args: [] as string[], command: "", timeout: 120_000 as number | undefined };
+    const spawnSyncImpl = vi.fn(
+      (command: string, childArgs: string[], options: { timeout?: number }) => {
+        received.command = command;
+        received.args = childArgs;
+        received.timeout = options.timeout;
+        return { status: 0 };
+      },
+    );
 
     expect(
       runGitHubCli(
@@ -85,15 +93,45 @@ describe("gh-read helpers", () => {
         { spawnSyncImpl },
       ),
     ).toBe(0);
-    expect(spawnSyncImpl).toHaveBeenCalledWith(
-      "gh",
-      ["--repo", "openclaw/openclaw", "run", "watch", "123"],
-      {
-        env: expect.any(Object),
-        killSignal: "SIGKILL",
-        stdio: "inherit",
+    expect(spawnSyncImpl).toHaveBeenCalledOnce();
+    expect(received).toEqual({
+      args: ["--repo", "openclaw/openclaw", "run", "watch", "123"],
+      command: "gh",
+      timeout: undefined,
+    });
+  });
+
+  it.each([
+    {
+      args: ["--hostname=github.com", "pr", "checks", "111328", "--watch"],
+      mode: "pull request check watch mode",
+    },
+    {
+      args: ["agent-task", "view", "111328", "--follow"],
+      mode: "agent task follow mode",
+    },
+    {
+      args: ["codespace", "logs", "-f"],
+      mode: "codespace log short follow mode",
+    },
+  ])("preserves the unbounded default for $mode", ({ args }) => {
+    const received = { args: [] as string[], command: "", timeout: 120_000 as number | undefined };
+    const spawnSyncImpl = vi.fn(
+      (command: string, childArgs: string[], options: { timeout?: number }) => {
+        received.command = command;
+        received.args = childArgs;
+        received.timeout = options.timeout;
+        return { status: 0 };
       },
     );
+
+    expect(runGitHubCli(args, "test-fixture-credential", { spawnSyncImpl })).toBe(0);
+    expect(spawnSyncImpl).toHaveBeenCalledOnce();
+    expect(received).toEqual({
+      args,
+      command: "gh",
+      timeout: undefined,
+    });
   });
 
   it("rejects invalid operator-selected GitHub CLI timeouts", () => {

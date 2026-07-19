@@ -21,8 +21,8 @@ const PERMISSIONS_ENV = "OPENCLAW_GH_READ_PERMISSIONS";
 const COMMAND_TIMEOUT_ENV = "OPENCLAW_GH_READ_COMMAND_TIMEOUT_MS";
 const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
-// Use the measured script-family budget for ordinary broad reads. Intentionally
-// long-lived commands can select a larger finite deadline through COMMAND_TIMEOUT_ENV.
+// Use the measured script-family budget for ordinary broad reads. Explicit CLI
+// watch/follow modes keep their unbounded default unless COMMAND_TIMEOUT_ENV is set.
 const DEFAULT_GH_COMMAND_TIMEOUT_MS = 120_000;
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
@@ -145,9 +145,27 @@ function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
     commandPath.push(arg);
   }
 
-  // `gh run watch` streams until the workflow completes, so preserving its
-  // historical unbounded default avoids surprising existing automation.
-  return commandPath[0] === "run" && commandPath[1] === "watch";
+  if (commandPath[0] === "run" && commandPath[1] === "watch") {
+    return true;
+  }
+
+  // GitHub CLI also exposes long-lived behavior through explicit watch/follow
+  // flags (for example `pr checks --watch` and `agent-task view --follow`).
+  if (
+    ghArgs.some(
+      (arg) =>
+        arg === "--watch" ||
+        arg === "--watch=true" ||
+        arg === "--follow" ||
+        arg === "--follow=true",
+    )
+  ) {
+    return true;
+  }
+
+  // `-f` is ambiguous across gh commands, but for `codespace logs` it is the
+  // documented short form of `--follow`.
+  return commandPath[0] === "codespace" && commandPath[1] === "logs" && ghArgs.includes("-f");
 }
 
 function resolveGitHubCommandTimeoutMs(
