@@ -70,6 +70,22 @@ internal fun chunkWearRealtimeOutput(
   }
 }
 
+internal fun advanceWearRealtimePlaybackDeadline(
+  currentEndsAtMillis: Long,
+  deliveredAtMillis: Long,
+  audioByteCount: Int,
+): Long {
+  require(audioByteCount >= 0 && audioByteCount % PCM_16_BYTES == 0)
+  val sampleCount = audioByteCount / PCM_16_BYTES
+  val durationMillis =
+    (
+      sampleCount *
+        1_000L /
+        WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ
+    ).coerceAtLeast(1L)
+  return maxOf(deliveredAtMillis, currentEndsAtMillis) + durationMillis
+}
+
 internal class WearRealtimeTalkController(
   private val scope: CoroutineScope,
   private val isConnected: () -> Boolean,
@@ -479,6 +495,16 @@ internal class WearRealtimeTalkController(
                     break
                   }
                   sendWatchFrame(nodeId, message.type, chunk)
+                  if (!isCurrentOutput(activeSessionId, nodeId)) {
+                    delivered = false
+                    break
+                  }
+                  playbackEndsAtMillis =
+                    advanceWearRealtimePlaybackDeadline(
+                      currentEndsAtMillis = playbackEndsAtMillis,
+                      deliveredAtMillis = SystemClock.elapsedRealtime(),
+                      audioByteCount = chunk.size,
+                    )
                 }
                 if (!isCurrentOutput(activeSessionId, nodeId)) {
                   delivered = false
@@ -508,15 +534,6 @@ internal class WearRealtimeTalkController(
           if (!delivered) continue
           when (message.type) {
             WearRealtimeAudioFrameType.OUTPUT_PCM -> {
-              val sampleCount = message.payload.size / PCM_16_BYTES
-              val durationMillis =
-                (
-                  sampleCount *
-                    1_000L /
-                    WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ
-                ).coerceAtLeast(1L)
-              playbackEndsAtMillis =
-                maxOf(SystemClock.elapsedRealtime(), playbackEndsAtMillis) + durationMillis
               schedulePlaybackIdle()
             }
             WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {

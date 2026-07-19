@@ -25,6 +25,17 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class WearRealtimeTalkControllerTest {
   @Test
+  fun `playback deadline counts only audio remaining after slow chunk delivery`() {
+    val chunkBytes = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ / 10 * 2
+
+    val first = advanceWearRealtimePlaybackDeadline(0L, 0L, chunkBytes)
+    val second = advanceWearRealtimePlaybackDeadline(first, 100L, chunkBytes)
+    val third = advanceWearRealtimePlaybackDeadline(second, 200L, chunkBytes)
+
+    assertEquals(300L, third)
+  }
+
+  @Test
   fun `stop before a delayed start prevents relay resurrection`() =
     runTest {
       var gatewayCalls = 0
