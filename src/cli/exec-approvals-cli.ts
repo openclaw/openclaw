@@ -1,5 +1,3 @@
-// CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
-import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -27,6 +25,8 @@ import {
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+// CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
+import { readRegularFile } from "../infra/fs-safe.js";
 import { defaultRuntime } from "../runtime.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
