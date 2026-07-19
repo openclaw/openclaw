@@ -642,6 +642,10 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf(
         'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
       ),
+      script.indexOf('echo "⌨️  Copying KeyboardShortcuts resources"'),
+    );
+    const keyboardShortcutsBlock = script.slice(
+      script.indexOf('echo "⌨️  Copying KeyboardShortcuts resources"'),
       script.indexOf("running_packaged_app_pids()"),
     );
 
@@ -653,8 +657,34 @@ describe("package-mac-app plist stamping", () => {
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");
     expect(openClawKitBlock).not.toContain("continuing");
+    expect(keyboardShortcutsBlock).toContain("KeyboardShortcuts_KeyboardShortcuts.bundle");
+    expect(keyboardShortcutsBlock).toContain("ERROR: KeyboardShortcuts resource bundle not found");
+    expect(keyboardShortcutsBlock).toContain("exit 1");
+    expect(keyboardShortcutsBlock).not.toContain("WARN:");
+    expect(keyboardShortcutsBlock).not.toContain("continuing");
     expect(script).not.toContain("Textual resource bundle");
     expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
+  });
+
+  it("patches KeyboardShortcuts to resolve packaged resources before building", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const patch = readFileSync("apps/macos/Patches/KeyboardShortcuts-3.0.1.patch", "utf8");
+    const resolveCall =
+      'swift package --scratch-path "$BUILD_PATH" --only-use-versions-from-resolved-file resolve';
+    const patchCall = 'patch_keyboard_shortcuts_bundle_lookup "$BUILD_PATH"';
+    const buildCall = 'swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+
+    expect(script).toContain(
+      'KEYBOARD_SHORTCUTS_PATCH="$ROOT_DIR/apps/macos/Patches/KeyboardShortcuts-3.0.1.patch"',
+    );
+    expect(script).toContain('git -C "$checkout" apply --check "$KEYBOARD_SHORTCUTS_PATCH"');
+    expect(script).toContain('git -C "$checkout" apply "$KEYBOARD_SHORTCUTS_PATCH"');
+    expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(patchCall));
+    expect(script.indexOf(patchCall)).toBeLessThan(script.indexOf(buildCall));
+    expect(patch).toContain("Bundle.main.url(");
+    expect(patch).toContain('forResource: "KeyboardShortcuts_KeyboardShortcuts"');
+    expect(patch).toContain("return .module");
+    expect(patch).toContain("bundle: .keyboardShortcutsResources");
   });
 
   it("embeds the canonical CLI installer as a signed app resource", () => {

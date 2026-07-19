@@ -89,6 +89,31 @@ sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
 }
 
+KEYBOARD_SHORTCUTS_PATCH="$ROOT_DIR/apps/macos/Patches/KeyboardShortcuts-3.0.1.patch"
+
+patch_keyboard_shortcuts_bundle_lookup() {
+  local build_path="$1"
+  local checkout="$build_path/checkouts/KeyboardShortcuts"
+  local source="$checkout/Sources/KeyboardShortcuts/Utilities.swift"
+
+  if [[ ! -f "$source" ]]; then
+    echo "ERROR: KeyboardShortcuts source not found at $source" >&2
+    exit 1
+  fi
+  if [[ ! -f "$KEYBOARD_SHORTCUTS_PATCH" ]]; then
+    echo "ERROR: KeyboardShortcuts patch not found at $KEYBOARD_SHORTCUTS_PATCH" >&2
+    exit 1
+  fi
+  if grep -Fq "static let keyboardShortcutsResources" "$source"; then
+    return 0
+  fi
+  if ! git -C "$checkout" apply --check "$KEYBOARD_SHORTCUTS_PATCH"; then
+    echo "ERROR: KeyboardShortcuts resource lookup patch no longer applies" >&2
+    exit 1
+  fi
+  git -C "$checkout" apply "$KEYBOARD_SHORTCUTS_PATCH"
+}
+
 PNPM_CMD=()
 
 resolve_pnpm_cmd() {
@@ -220,6 +245,9 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "📦 Resolving Swift packages [$arch]"
+  swift package --scratch-path "$BUILD_PATH" --only-use-versions-from-resolved-file resolve
+  patch_keyboard_shortcuts_bundle_lookup "$BUILD_PATH"
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
@@ -363,6 +391,16 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
   cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
 else
   echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
+  exit 1
+fi
+
+echo "⌨️  Copying KeyboardShortcuts resources"
+KEYBOARD_SHORTCUTS_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/KeyboardShortcuts_KeyboardShortcuts.bundle"
+if [ -d "$KEYBOARD_SHORTCUTS_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"
+  cp -R "$KEYBOARD_SHORTCUTS_BUNDLE" "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"
+else
+  echo "ERROR: KeyboardShortcuts resource bundle not found at $KEYBOARD_SHORTCUTS_BUNDLE" >&2
   exit 1
 fi
 
