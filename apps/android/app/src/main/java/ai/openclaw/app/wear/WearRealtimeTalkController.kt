@@ -4,7 +4,8 @@ import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
-import ai.openclaw.app.voice.ChatEventText
+import ai.openclaw.app.voice.RealtimeAgentCoordinator
+import ai.openclaw.app.voice.RealtimeAgentSession
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeTalkEntry
@@ -44,41 +45,6 @@ private data class WearRealtimeAttemptKey(
   val nodeId: String,
   val attemptId: String,
 )
-
-private data class WearRealtimeToolRun(
-  val callId: String,
-  val relaySessionId: String,
-)
-
-private data class WearRealtimeToolCompletion(
-  val state: String,
-  val message: JsonElement?,
-)
-
-private data class WearRealtimeToolCompletionDispatch(
-  val toolRun: WearRealtimeToolRun,
-  val completion: WearRealtimeToolCompletion,
-)
-
-private sealed interface WearRealtimeToolRegistration {
-  data object SessionEnded : WearRealtimeToolRegistration
-
-  data object AwaitingCompletion : WearRealtimeToolRegistration
-
-  data class Completed(
-    val dispatch: WearRealtimeToolCompletionDispatch,
-  ) : WearRealtimeToolRegistration
-}
-
-private sealed interface WearRealtimeToolCompletionDecision {
-  data object NotHandled : WearRealtimeToolCompletionDecision
-
-  data object Consumed : WearRealtimeToolCompletionDecision
-
-  data class Dispatch(
-    val dispatch: WearRealtimeToolCompletionDispatch,
-  ) : WearRealtimeToolCompletionDecision
-}
 
 internal fun chunkWearRealtimeOutput(
   payload: ByteArray,
@@ -136,10 +102,25 @@ internal class WearRealtimeTalkController(
   private var playbackEndsAtMillis = 0L
   private var userEntryId: String? = null
   private var assistantEntryId: String? = null
-  private val realtimeToolLock = Any()
-  private val realtimeToolRuns = LinkedHashMap<String, WearRealtimeToolRun>()
-  private val pendingRealtimeToolCalls = LinkedHashSet<String>()
-  private val pendingRealtimeToolCompletions = LinkedHashMap<String, WearRealtimeToolCompletion>()
+  private val realtimeAgentCoordinator =
+    RealtimeAgentCoordinator(
+      parentScope = scope,
+      requestGateway = requestGateway,
+      onWorking = { activeSession ->
+        synchronized(lifecycleStateLock) {
+          if (sessionId == activeSession.relaySessionId) {
+            updateState(
+              active = true,
+              listening = false,
+              speaking = false,
+              status = WearRealtimeTalkStatus.THINKING,
+              statusText = "Agent working",
+            )
+          }
+        }
+      },
+      onError = { _, message -> Log.w(TAG, message) },
+    )
 
   suspend fun start(
     nodeId: String,
@@ -210,6 +191,12 @@ internal class WearRealtimeTalkController(
             fail("Real-Time Talk returned no session")
             false
           } else {
+            realtimeAgentCoordinator.beginSession(
+              RealtimeAgentSession(
+                relaySessionId = createdSessionId,
+                sessionKey = sessionKey,
+              ),
+            )
             sessionId = createdSessionId
             startOutputLoop(createdSessionId)
             startAppendLoop(createdSessionId)
@@ -429,7 +416,7 @@ internal class WearRealtimeTalkController(
       "toolCall" -> {
         val callId = obj["callId"].asStringOrNull() ?: return
         val name = obj["name"].asStringOrNull() ?: return
-        handleRealtimeToolCall(
+        realtimeAgentCoordinator.handleToolCall(
           callId = callId,
           name = name,
           args = obj["args"],
@@ -445,268 +432,13 @@ internal class WearRealtimeTalkController(
   private fun handleChatEvent(obj: JsonObject) {
     val runId = obj["runId"].asStringOrNull() ?: return
     val state = obj["state"].asStringOrNull() ?: return
-    val activeSessionKey = ownerSessionKey ?: return
     val eventSessionKey = obj["sessionKey"].asStringOrNull()
-    if (eventSessionKey != null && eventSessionKey != activeSessionKey) return
-    handleRealtimeToolCompletion(runId = runId, state = state, message = obj["message"])
-  }
-
-  private fun handleRealtimeToolCall(
-    callId: String,
-    name: String,
-    args: JsonElement?,
-    forced: Boolean,
-  ) {
-    val activeSessionId = sessionId ?: return
-    val activeSessionKey = ownerSessionKey ?: return
-    synchronized(realtimeToolLock) {
-      pendingRealtimeToolCalls += callId
-    }
-    scope.launch {
-      try {
-        if (sessionId != activeSessionId || ownerSessionKey != activeSessionKey) return@launch
-        if (name == REALTIME_AGENT_CONTROL_TOOL) {
-          submitRealtimeAgentControl(
-            callId = callId,
-            relaySessionId = activeSessionId,
-            sessionKey = activeSessionKey,
-            args = args,
-          )
-          return@launch
-        }
-        if (forced) {
-          submitRealtimeToolWorking(callId = callId, sessionId = activeSessionId)
-        }
-        val params =
-          buildJsonObject {
-            put("sessionKey", JsonPrimitive(activeSessionKey))
-            put("callId", JsonPrimitive(callId))
-            put("name", JsonPrimitive(name))
-            put("relaySessionId", JsonPrimitive(activeSessionId))
-            if (args != null) put("args", args)
-          }
-        val response = requestGateway("talk.client.toolCall", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-        val runId = parseRunId(response)
-        if (runId.isNullOrBlank()) {
-          submitRealtimeToolError(callId, "tool call returned no run id", activeSessionId)
-          return@launch
-        }
-        when (val registration = registerRealtimeToolRun(runId, callId, activeSessionId)) {
-          WearRealtimeToolRegistration.SessionEnded -> Unit
-          WearRealtimeToolRegistration.AwaitingCompletion ->
-            synchronized(lifecycleStateLock) {
-              if (sessionId == activeSessionId) {
-                updateState(
-                  active = true,
-                  listening = false,
-                  speaking = false,
-                  status = WearRealtimeTalkStatus.THINKING,
-                  statusText = "Agent working",
-                )
-              }
-            }
-          is WearRealtimeToolRegistration.Completed -> dispatchRealtimeToolCompletion(registration.dispatch)
-        }
-      } catch (err: Throwable) {
-        if (err is CancellationException) throw err
-        Log.w(TAG, "realtime toolCall failed: ${err.message ?: err::class.simpleName}")
-        submitRealtimeToolError(callId, err.message ?: "tool call failed", activeSessionId)
-      } finally {
-        synchronized(realtimeToolLock) {
-          pendingRealtimeToolCalls -= callId
-        }
-      }
-    }
-  }
-
-  private fun registerRealtimeToolRun(
-    runId: String,
-    callId: String,
-    relaySessionId: String,
-  ): WearRealtimeToolRegistration =
-    synchronized(realtimeToolLock) {
-      if (sessionId != relaySessionId) {
-        return@synchronized WearRealtimeToolRegistration.SessionEnded
-      }
-      val toolRun = WearRealtimeToolRun(callId = callId, relaySessionId = relaySessionId)
-      val completion = pendingRealtimeToolCompletions.remove(runId)
-      if (completion == null) {
-        realtimeToolRuns[runId] = toolRun
-        WearRealtimeToolRegistration.AwaitingCompletion
-      } else {
-        WearRealtimeToolRegistration.Completed(
-          WearRealtimeToolCompletionDispatch(toolRun = toolRun, completion = completion),
-        )
-      }
-    }
-
-  private fun handleRealtimeToolCompletion(
-    runId: String,
-    state: String,
-    message: JsonElement?,
-  ): Boolean {
-    if (state != "final" && state != "aborted" && state != "error") return false
-    val decision =
-      synchronized(realtimeToolLock) {
-        val toolRun = realtimeToolRuns.remove(runId)
-        if (toolRun != null) {
-          if (toolRun.relaySessionId != sessionId) {
-            return@synchronized WearRealtimeToolCompletionDecision.Consumed
-          }
-          return@synchronized WearRealtimeToolCompletionDecision.Dispatch(
-            WearRealtimeToolCompletionDispatch(
-              toolRun = toolRun,
-              completion = WearRealtimeToolCompletion(state = state, message = message),
-            ),
-          )
-        }
-        if (sessionId == null || pendingRealtimeToolCalls.isEmpty()) {
-          return@synchronized WearRealtimeToolCompletionDecision.NotHandled
-        }
-        pendingRealtimeToolCompletions[runId] =
-          WearRealtimeToolCompletion(state = state, message = message)
-        while (pendingRealtimeToolCompletions.size > MAX_CACHED_TOOL_COMPLETIONS) {
-          pendingRealtimeToolCompletions.remove(pendingRealtimeToolCompletions.keys.first())
-        }
-        WearRealtimeToolCompletionDecision.Consumed
-      }
-    return when (decision) {
-      WearRealtimeToolCompletionDecision.NotHandled -> false
-      WearRealtimeToolCompletionDecision.Consumed -> true
-      is WearRealtimeToolCompletionDecision.Dispatch -> {
-        dispatchRealtimeToolCompletion(decision.dispatch)
-        true
-      }
-    }
-  }
-
-  private fun dispatchRealtimeToolCompletion(dispatch: WearRealtimeToolCompletionDispatch) {
-    val toolRun = dispatch.toolRun
-    scope.launch {
-      when (dispatch.completion.state) {
-        "final" -> {
-          val text = ChatEventText.assistantTextFromMessage(dispatch.completion.message).orEmpty()
-          submitRealtimeToolResult(
-            callId = toolRun.callId,
-            result = buildJsonObject { put("text", JsonPrimitive(text)) },
-            sessionId = toolRun.relaySessionId,
-          )
-        }
-        "aborted", "error" ->
-          submitRealtimeToolError(
-            callId = toolRun.callId,
-            message = dispatch.completion.state,
-            sessionId = toolRun.relaySessionId,
-          )
-      }
-    }
-  }
-
-  private suspend fun submitRealtimeToolWorking(
-    callId: String,
-    sessionId: String,
-  ) {
-    submitRealtimeToolResult(
-      callId = callId,
-      sessionId = sessionId,
-      result =
-        buildJsonObject {
-          put("status", JsonPrimitive("working"))
-          put("tool", JsonPrimitive(REALTIME_AGENT_CONSULT_TOOL))
-          put(
-            "message",
-            JsonPrimitive(
-              "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
-            ),
-          )
-        },
-      options = buildJsonObject { put("willContinue", JsonPrimitive(true)) },
+    realtimeAgentCoordinator.handleChatEvent(
+      sessionKey = eventSessionKey,
+      runId = runId,
+      state = state,
+      message = obj["message"],
     )
-  }
-
-  private suspend fun submitRealtimeAgentControl(
-    callId: String,
-    relaySessionId: String,
-    sessionKey: String,
-    args: JsonElement?,
-  ) {
-    val argsObject = args.asObjectOrNull()
-    val text =
-      argsObject
-        ?.get("text")
-        .asStringOrNull()
-        ?.trim()
-        .orEmpty()
-    val mode =
-      argsObject
-        ?.get("mode")
-        .asStringOrNull()
-        ?.trim()
-        ?.takeIf(String::isNotEmpty)
-    val params =
-      buildJsonObject {
-        put("sessionId", JsonPrimitive(relaySessionId))
-        put("sessionKey", JsonPrimitive(sessionKey))
-        put("text", JsonPrimitive(text.ifEmpty { "status" }))
-        if (mode != null) put("mode", JsonPrimitive(mode))
-      }
-    val response = requestGateway("talk.session.steer", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-    val result = runCatching { json.parseToJsonElement(response).asObjectOrNull() }.getOrNull()
-    if (result == null) {
-      submitRealtimeToolError(callId, "control call returned no result", relaySessionId)
-    } else {
-      submitRealtimeToolResult(callId = callId, result = result, sessionId = relaySessionId)
-    }
-  }
-
-  private suspend fun submitRealtimeToolError(
-    callId: String,
-    message: String,
-    sessionId: String,
-  ) {
-    submitRealtimeToolResult(
-      callId = callId,
-      result = buildJsonObject { put("error", JsonPrimitive(message)) },
-      sessionId = sessionId,
-    )
-  }
-
-  private suspend fun submitRealtimeToolResult(
-    callId: String,
-    result: JsonObject,
-    sessionId: String,
-    options: JsonObject? = null,
-  ) {
-    val params =
-      buildJsonObject {
-        put("sessionId", JsonPrimitive(sessionId))
-        put("callId", JsonPrimitive(callId))
-        put("result", result)
-        if (options != null) put("options", options)
-      }
-    try {
-      requestGateway("talk.session.submitToolResult", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-    } catch (err: Throwable) {
-      if (err is CancellationException) throw err
-      Log.w(TAG, "realtime submitToolResult failed: ${err.message ?: err::class.simpleName}")
-    }
-  }
-
-  private fun parseRunId(payloadJson: String): String? =
-    runCatching {
-      json
-        .parseToJsonElement(payloadJson)
-        .asObjectOrNull()
-        ?.get("runId")
-        .asStringOrNull()
-    }.getOrNull()
-
-  private fun clearRealtimeToolState() {
-    synchronized(realtimeToolLock) {
-      realtimeToolRuns.clear()
-      pendingRealtimeToolCalls.clear()
-      pendingRealtimeToolCompletions.clear()
-    }
   }
 
   private fun startOutputLoop(activeSessionId: String) {
@@ -898,6 +630,7 @@ internal class WearRealtimeTalkController(
         Log.w(TAG, message)
         val currentSession = sessionId
         val currentNodeId = ownerNodeId
+        realtimeAgentCoordinator.endSession(currentSession)
         setSnapshot(
           _snapshot.value.copy(
             active = false,
@@ -922,7 +655,6 @@ internal class WearRealtimeTalkController(
         playbackIdleJob?.cancel()
         playbackIdleJob = null
         playbackEndsAtMillis = 0L
-        clearRealtimeToolState()
         currentSession to currentNodeId
       }
     if (!closingSession.isNullOrBlank()) {
@@ -938,6 +670,7 @@ internal class WearRealtimeTalkController(
 
   private fun resetLocked() {
     val closingAttemptId = ownerAttemptId
+    realtimeAgentCoordinator.endSession(sessionId)
     sessionId = null
     ownerNodeId = null
     ownerSessionKey = null
@@ -953,7 +686,6 @@ internal class WearRealtimeTalkController(
     playbackIdleJob?.cancel()
     playbackIdleJob = null
     playbackEndsAtMillis = 0L
-    clearRealtimeToolState()
     userEntryId = null
     assistantEntryId = null
     setSnapshot(WearRealtimeTalkSnapshot(attemptId = closingAttemptId))
@@ -968,13 +700,9 @@ internal class WearRealtimeTalkController(
     const val TAG = "WearRealtimeTalk"
     const val MAX_CONVERSATION_ENTRIES = 20
     const val MAX_CANCELED_ATTEMPTS = 32
-    const val MAX_CACHED_TOOL_COMPLETIONS = 32
     const val MAX_TRANSCRIPT_LENGTH = 1_500
     const val MAX_STATUS_LENGTH = 160
     const val SESSION_CREATE_TIMEOUT_MILLIS = 15_000L
-    const val TOOL_CALL_TIMEOUT_MILLIS = 15_000L
-    const val REALTIME_AGENT_CONSULT_TOOL = "openclaw_agent_consult"
-    const val REALTIME_AGENT_CONTROL_TOOL = "openclaw_agent_control"
   }
 }
 
