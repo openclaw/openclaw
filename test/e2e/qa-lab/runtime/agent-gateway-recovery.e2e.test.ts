@@ -167,6 +167,7 @@ describe("agent Gateway recovery", () => {
         providerMode: "mock-openai",
         transportBaseUrl: "http://127.0.0.1",
         controlUiEnabled: false,
+        runtimeEnvPatch: { OPENCLAW_TEST_RUNTIME_LOG: "1" },
       });
       cleanups.push(() => gateway.stop());
       const proxy = await startRecoveryProxy(gateway.wsUrl);
