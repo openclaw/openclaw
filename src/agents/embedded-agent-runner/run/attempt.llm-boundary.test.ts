@@ -308,7 +308,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
           MediaUrl: "https://example.test/late.png",
           __openclaw: { lateMedia: true },
         },
-      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
     ) as unknown as Array<{ content?: unknown }>;
     expect(normalizedUrlOnly?.content).toBe(
@@ -333,7 +333,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
           content: [image],
           __openclaw: { lateMedia: true },
         },
-      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
       { timezone: "UTC" },
     ) as unknown as Array<{ content?: unknown }>;
     const [normalizedLegacy] = normalizeMessagesForLlmBoundary(

@@ -174,7 +174,7 @@ export function buildPersistedUserTurnMediaInputsFromFields(
 export function buildLateMediaAttachedText(message: AgentMessage): string | undefined {
   const text = (
     readOpenClawMessageMeta(message)?.lateMedia === true
-      ? buildPersistedUserTurnMediaInputsFromFields(message)
+      ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
       : []
   )
     .map((entry) => `[media attached: ${entry.path ?? entry.url}]`)

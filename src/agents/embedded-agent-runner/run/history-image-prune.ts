@@ -101,7 +101,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
         : undefined;
     const content = lateMediaText
       ? Array.isArray(message.content)
-        ? [{ type: "text", text: lateMediaText }, ...message.content]
+        ? ([{ type: "text", text: lateMediaText }, ...message.content] as typeof message.content)
         : lateMediaText
       : message.content;
 
