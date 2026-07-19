@@ -1780,29 +1780,33 @@ describe("capability cli", () => {
     const tempInput = path.join(os.tmpdir(), `openclaw-image-generate-input-${Date.now()}.png`);
     await fs.writeFile(tempInput, Buffer.from(pngBase64, "base64"));
 
-    await runRegisteredCli({
-      register: registerCapabilityCli as (program: Command) => void,
-      argv: [
-        "capability",
-        "image",
-        "generate",
-        "--file",
-        tempInput,
-        "--prompt",
-        "use this reference image",
-        "--model",
-        "openai/gpt-image-2",
-        "--json",
-      ],
-    });
+    try {
+      await runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--file",
+          tempInput,
+          "--prompt",
+          "use this reference image",
+          "--model",
+          "openai/gpt-image-2",
+          "--json",
+        ],
+      });
 
-    const generationCall = firstImageGenerationCall();
-    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
-    expect(generationCall?.prompt).toBe("use this reference image");
-    expect(generationCall?.modelOverride).toBe("openai/gpt-image-2");
-    expect(inputImages).toHaveLength(1);
-    expect(inputImages[0]?.fileName).toBe(path.basename(tempInput));
-    expect(inputImages[0]?.mimeType).toBe("image/png");
+      const generationCall = firstImageGenerationCall();
+      const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+      expect(generationCall?.prompt).toBe("use this reference image");
+      expect(generationCall?.modelOverride).toBe("openai/gpt-image-2");
+      expect(inputImages).toHaveLength(1);
+      expect(inputImages[0]?.fileName).toBe(path.basename(tempInput));
+      expect(inputImages[0]?.mimeType).toBe("image/png");
+    } finally {
+      await fs.rm(tempInput, { force: true });
+    }
   });
 
   it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
