@@ -24,10 +24,12 @@ import {
   createParams,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
+  fastWait,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { withTimeout } from "./timeout.js";
 const testing = {
   hasPendingDynamicToolTerminalDiagnostic,
   resolveCodexAppServerHookChannelId,
@@ -291,7 +293,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         arguments: { topic: "AGENTS.md", mode: "full" },
       },
     });
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1), fastWait);
     const second = harness.handleServerRequest({
       id: "request-tool-2",
       method: "item/tool/call",
@@ -306,7 +308,11 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     resolveTool();
 
-    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    const [firstResponse, secondResponse] = await withTimeout(
+      Promise.all([first, second]),
+      fastWait.timeout,
+      "timed out waiting for coalesced dynamic tool responses",
+    );
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(allocateToolOutcomeOrdinal).toHaveBeenCalledWith("call-2");
@@ -328,8 +334,16 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       }),
     );
 
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    await withTimeout(
+      harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }),
+      fastWait.timeout,
+      "timed out delivering turn completion after coalesced dynamic tool responses",
+    );
+    await withTimeout(
+      run,
+      fastWait.timeout,
+      "timed out finishing run after coalesced dynamic tool responses",
+    );
   });
 
   it("clears dynamic tool diagnostics after successful terminal responses", async () => {
