@@ -38,7 +38,10 @@ import {
   loadSessionMcpConfig,
   resolveSessionMcpConfigSummary,
 } from "./agent-bundle-mcp-runtime-config.js";
-import { resolveSessionMcpRuntimeIdleTtlMs } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  resolveSessionMcpRuntimeIdleTtlMs,
+  waitForSessionMcpRequest,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpRequestOptions,
@@ -251,12 +254,12 @@ function buildMcpClientOptions(mcpAppsEnabled: boolean): ClientOptions {
   return { capabilities: buildMcpClientCapabilities(mcpAppsEnabled) };
 }
 
-async function listAllResources(client: Client, timeoutMs: number) {
+async function listAllResources(client: Client, timeoutMs: number, signal?: AbortSignal) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listResources(params, { timeout: timeoutMs });
+    const page = await client.listResources(params, { timeout: timeoutMs, signal });
     resources.push(...page.resources);
     cursor = page.nextCursor;
   } while (cursor);
@@ -508,13 +511,16 @@ export function createSessionMcpRuntime(params: {
     return true;
   };
 
-  const getCatalog = async (): Promise<McpToolCatalog> => {
+  const getCatalog = async (
+    options?: Pick<McpRequestOptions, "signal">,
+  ): Promise<McpToolCatalog> => {
     failIfDisposed();
     if (catalog) {
+      options?.signal?.throwIfAborted();
       return catalog;
     }
     if (catalogInFlight) {
-      return catalogInFlight;
+      return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
     }
     const catalogGeneration = catalogInvalidationGeneration;
     const inFlight = (async () => {
@@ -831,20 +837,23 @@ export function createSessionMcpRuntime(params: {
         throw error;
       }
     })();
-    catalogInFlight = inFlight;
-
-    try {
-      const nextCatalog = await inFlight;
-      failIfDisposed();
-      if (catalogInvalidationGeneration === catalogGeneration) {
-        catalog = nextCatalog;
+    let trackedInFlight: Promise<McpToolCatalog>;
+    trackedInFlight = (async () => {
+      try {
+        const nextCatalog = await inFlight;
+        failIfDisposed();
+        if (catalogInvalidationGeneration === catalogGeneration) {
+          catalog = nextCatalog;
+        }
+        return nextCatalog;
+      } finally {
+        if (catalogInFlight === trackedInFlight) {
+          catalogInFlight = undefined;
+        }
       }
-      return nextCatalog;
-    } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
-    }
+    })();
+    catalogInFlight = trackedInFlight;
+    return await waitForSessionMcpRequest(trackedInFlight, options?.signal);
   };
 
   return {
@@ -881,12 +890,16 @@ export function createSessionMcpRuntime(params: {
     peekCatalog() {
       return catalog;
     },
+    getServerRequestTimeoutMs(serverName) {
+      failIfDisposed();
+      return requireConnectedSession(serverName).requestTimeoutMs;
+    },
     markUsed() {
       lastUsedAt = Date.now();
     },
-    async callTool(serverName, toolName, input) {
+    async callTool(serverName, toolName, input, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
@@ -897,46 +910,53 @@ export function createSessionMcpRuntime(params: {
               arguments: isMcpConfigRecord(input) ? input : {},
             },
             undefined,
-            { timeout: session.requestTimeoutMs },
+            { timeout: session.requestTimeoutMs, signal: options?.signal },
           )) as CallToolResult,
       );
     },
-    async listTools(serverName, requestParams) {
+    async listTools(serverName, requestParams, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
-        session.client.listTools(requestParams, { timeout: session.requestTimeoutMs }),
+        session.client.listTools(requestParams, {
+          timeout: session.requestTimeoutMs,
+          signal: options?.signal,
+        }),
       );
     },
     async listResources(serverName, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
-        async () => listAllResources(session.client, session.requestTimeoutMs),
+        async () => listAllResources(session.client, session.requestTimeoutMs, options?.signal),
         options,
       );
     },
     async readResource(serverName, uri, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
-          await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
+          await session.client.readResource(
+            { uri },
+            { timeout: session.requestTimeoutMs, signal: options?.signal },
+          ),
         options,
       );
     },
-    async listResourceTemplates(serverName, requestParams) {
+    async listResourceTemplates(serverName, requestParams, options) {
       failIfDisposed();
-      await getCatalog();
+      await getCatalog(options);
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
         session.client.listResourceTemplates(requestParams, {
           timeout: session.requestTimeoutMs,
+          signal: options?.signal,
         }),
       );
     },

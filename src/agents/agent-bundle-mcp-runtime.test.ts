@@ -69,6 +69,8 @@ async function writeListToolsMcpServer(params: {
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   resourceListJsonRpcError?: boolean;
+  resourceListDelayMs?: number;
+  resourceListPages?: number;
   resourceReadJsonRpcError?: boolean;
 }): Promise<void> {
   await writeExecutable(
@@ -100,6 +102,8 @@ const tools = ${JSON.stringify(
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
+const resourceListDelayMs = ${params.resourceListDelayMs ?? 0};
+const resourceListPages = ${params.resourceListPages ?? 1};
 const resourceReadJsonRpcError = ${params.resourceReadJsonRpcError === true};
 
 let buffer = "";
@@ -222,11 +226,17 @@ function handle(message) {
       });
       return;
     }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { resources: [] },
-    });
+    const page = message.params?.cursor ? Number.parseInt(message.params.cursor, 10) : 1;
+    setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          resources: [{ uri: "test://resource/" + page, name: "resource " + page }],
+          ...(page < resourceListPages ? { nextCursor: String(page + 1) } : {}),
+        },
+      });
+    }, resourceListDelayMs);
     return;
   }
   if (message.method === "resources/read") {
@@ -362,6 +372,7 @@ function makeRuntime(
       lastUsedAt = Date.now();
     },
     peekCatalog: () => null,
+    getServerRequestTimeoutMs: () => 60_000,
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
@@ -1317,6 +1328,7 @@ process.on("SIGINT", shutdown);`,
             volatile: {
               command: process.execPath,
               args: [serverPath],
+              requestTimeoutMs: 90_000,
             },
           },
         },
@@ -1333,6 +1345,7 @@ process.on("SIGINT", shutdown);`,
         "list_changed to invalidate the catalog",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
+      expect(runtime.getServerRequestTimeoutMs("volatile")).toBe(90_000);
 
       const refreshedCatalog = await runtime.getCatalog();
       expect(refreshedCatalog.tools).toEqual([]);
@@ -1715,6 +1728,51 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.listResources("failing")).rejects.toThrow(
         'bundle-mcp server "failing" is paused after repeated tool failures',
       );
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts paginated resource listing with one operation signal", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-deadline-"));
+    const serverPath = path.join(tempDir, "resource-deadline.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      resourceListDelayMs: 120,
+      resourceListPages: 2,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-resource-deadline",
+      sessionKey: "agent:test:session-resource-deadline",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            paged: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 1_000,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      if (!runtime.listResources) {
+        throw new Error("Expected test runtime to expose resource utilities");
+      }
+      await expect(
+        runtime.listResources("paged", { signal: AbortSignal.timeout(500) }),
+      ).resolves.toHaveLength(2);
+      await expect(
+        runtime.listResources("paged", { signal: AbortSignal.timeout(180) }),
+      ).rejects.toThrow(/abort/i);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

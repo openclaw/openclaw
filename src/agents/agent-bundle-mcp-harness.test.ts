@@ -121,6 +121,7 @@ function makeRuntime(params: { sessionId: string; requesterSenderId: string }): 
     },
     peekCatalog: () => catalog,
     getCatalog: async () => catalog,
+    getServerRequestTimeoutMs: () => 60_000,
     callTool: async (_server, toolName) => ({
       content: [
         {
