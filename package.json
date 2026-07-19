@@ -2074,6 +2074,7 @@
     "hosted-git-info": "10.1.1",
     "iconv-lite": "0.7.2",
     "ignore": "7.0.5",
+    "ipaddr.js": "2.4.0",
     "jiti": "2.7.0",
     "json5": "2.2.3",
     "jszip": "3.10.1",
