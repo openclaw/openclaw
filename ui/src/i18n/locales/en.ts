@@ -1872,6 +1872,7 @@ export const en: TranslationMap = {
   custodian: {
     title: "OpenClaw",
     subtitle: "Your system setup guide",
+    subtitleCaretaker: "System setup and care.",
     exitSetup: "Exit setup",
     newAgent: "New agent",
     hatchDraft: "Wake up, my friend!",
