@@ -2092,6 +2092,7 @@ export const en: TranslationMap = {
     swarm: {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
+      empty: "No active swarms.",
     },
   },
   aboutPage: {
