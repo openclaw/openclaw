@@ -1,5 +1,6 @@
 // Googlechat tests cover doctor contract plugin behavior.
 import { describe, expect, it } from "vitest";
+import { resolveGoogleChatAccount } from "./accounts.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 describe("googlechat doctor contract", () => {
@@ -111,16 +112,27 @@ describe("googlechat doctor contract", () => {
     expect(second.changes).toEqual([]);
   });
 
-  it("seeds named accounts from accounts.default over root (layered inheritance)", () => {
-    // Regression for #105940: doctor must not drop accounts.default block
-    // streaming when materializing a named account that only had chunkMode.
+  it("materializes accounts.default streaming for migrated named accounts", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {
         channels: {
           googlechat: {
+            streaming: {
+              block: { enabled: false },
+            },
             accounts: {
-              default: { blockStreaming: true },
-              support: { chunkMode: "newline" },
+              default: {
+                streaming: {
+                  block: {
+                    enabled: true,
+                    coalesce: { minChars: 20, maxChars: 100 },
+                  },
+                },
+              },
+              support: {
+                chunkMode: "newline",
+                blockStreamingCoalesce: { maxChars: 80 },
+              },
             },
           },
         },
@@ -130,12 +142,23 @@ describe("googlechat doctor contract", () => {
     const googlechat = result.config.channels?.googlechat as unknown as Record<string, unknown>;
     const accounts = googlechat.accounts as Record<string, Record<string, unknown>>;
     expect(accounts.default?.streaming).toEqual({
-      block: { enabled: true },
+      block: { enabled: true, coalesce: { minChars: 20, maxChars: 100 } },
     });
     expect(accounts.support?.streaming).toEqual({
       chunkMode: "newline",
-      block: { enabled: true },
+      block: {
+        enabled: true,
+        coalesce: { minChars: 20, maxChars: 80 },
+      },
     });
+    expect(accounts.support?.chunkMode).toBeUndefined();
+    expect(accounts.support?.blockStreamingCoalesce).toBeUndefined();
+
+    const resolved = resolveGoogleChatAccount({
+      cfg: result.config,
+      accountId: "support",
+    });
+    expect(resolved.config.streaming).toEqual(accounts.support?.streaming);
 
     const second = normalizeCompatibilityConfig({ cfg: result.config });
     expect(second.changes).toEqual([]);
