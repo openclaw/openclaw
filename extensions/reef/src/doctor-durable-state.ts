@@ -1,5 +1,3 @@
-import fsSync from "node:fs";
-import fsPromises from "node:fs/promises";
 import path from "node:path";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -14,6 +12,15 @@ import {
   type ReviewRequest,
   type SignedReceipt,
 } from "../protocol/index.js";
+import {
+  archiveOversizedLegacySource,
+  isFileTooLargeError,
+  MAX_LEGACY_AUDIT_FILE_BYTES,
+  MAX_LEGACY_DELIVERED_FILE_BYTES,
+  MAX_LEGACY_REPLAY_FILE_BYTES,
+  MAX_LEGACY_REVIEWS_FILE_BYTES,
+  readLegacyReefFileSafely,
+} from "./doctor-legacy-io.js";
 import {
   legacyReefFileExists,
   REEF_DURABLE_LEGACY_FILENAMES,
@@ -56,74 +63,22 @@ import {
 
 const REEF_RUNTIME_LEGACY_FILENAMES = ["replay.jsonl", "reviews.json", "delivered.json"];
 
-// Legacy Reef state files (audit.jsonl, replay.jsonl) are append-only logs
-// that can grow unbounded. Cap individual file reads to prevent OOM during
-// doctor migration — audit/replay logs are typically under 50 MiB for heavy
-// use; reviews/delivered are under 10 MiB.
-const MAX_LEGACY_AUDIT_FILE_BYTES = 50 * 1024 * 1024;
-const MAX_LEGACY_REPLAY_FILE_BYTES = 50 * 1024 * 1024;
-const MAX_LEGACY_REVIEWS_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_LEGACY_DELIVERED_FILE_BYTES = 10 * 1024 * 1024;
-
-/** Read a legacy Reef state file with a byte cap enforced at read time (not via a pre-read
- * stat) to avoid TOCTOU races between checking file size and allocating the read buffer. */
-async function readLegacyReefFileSafely(filePath: string, maxBytes: number): Promise<string> {
-  const fd = fsSync.openSync(filePath, "r");
-  try {
-    const stat = fsSync.fstatSync(fd);
-    if (!stat.isFile()) {
-      throw new Error(`not a regular file: ${filePath}`);
-    }
-    const CHUNK_SIZE = 64 * 1024;
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const scratch = Buffer.allocUnsafe(CHUNK_SIZE);
-    while (true) {
-      const bytesRead = fsSync.readSync(fd, scratch, 0, CHUNK_SIZE, null);
-      if (bytesRead === 0) {
-        return Buffer.concat(chunks, total).toString("utf8");
-      }
-      total += bytesRead;
-      if (total > maxBytes) {
-        throw new RangeError(`file too large: exceeds ${maxBytes} bytes: ${filePath}`);
-      }
-      chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
-    }
-  } finally {
-    fsSync.closeSync(fd);
-  }
-}
-
-function isFileTooLargeError(error: unknown): boolean {
-  return error instanceof RangeError && (error as Error).message.includes("file too large");
-}
-
-/**
- * Archive an oversized legacy source by renaming it to `<path>.migrated`.
- * Reading the file is avoided so the safe-migration cap is not bypassed
- * during archival; a failed rename leaves the source in place for retry.
- *
- * This preserves valid legacy data that exceeds the bounded read cap while
- * allowing `openclaw doctor` to complete the remaining migration.
- */
-async function archiveOversizedLegacySource(params: {
-  filePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  try {
-    await fsPromises.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived oversized ${params.label} legacy source to ${archivedPath}`);
-  } catch (error) {
-    params.warnings.push(
-      `Failed archiving oversized ${params.label} legacy source: ${String(error)}; left source in place`,
-    );
-  }
-}
-
 type ReefAuditMigrationRecord = { pending: true; expectedEntries?: number };
+
+async function handleOversizedLegacyFile(
+  error: unknown,
+  filePath: string,
+  label: string,
+  changes: string[],
+  warnings: string[],
+): Promise<boolean> {
+  if (!isFileTooLargeError(error)) return false;
+  warnings.push(
+    `${label} exceeds safe migration size cap; archived to ${filePath}.migrated for manual recovery`,
+  );
+  await archiveOversizedLegacySource({ filePath, label, changes, warnings });
+  return true;
+}
 
 async function readLegacyReefAudit(filePath: string): Promise<AuditEntry[]> {
   const raw = await readLegacyReefFileSafely(filePath, MAX_LEGACY_AUDIT_FILE_BYTES);
@@ -407,16 +362,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return { changes, warnings };
       }
-      if (isFileTooLargeError(error)) {
-        warnings.push(
-          `Reef audit trail exceeds the safe migration size cap and has been archived to ${filePath}.migrated for manual recovery`,
-        );
-        await archiveOversizedLegacySource({
-          filePath,
-          label: "Reef audit trail",
-          changes,
-          warnings,
-        });
+      if (await handleOversizedLegacyFile(error, filePath, "Reef audit trail", changes, warnings)) {
         await migrationStore.delete(REEF_AUDIT_MIGRATION_KEY);
         return { changes, warnings };
       }
@@ -617,16 +563,10 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        if (isFileTooLargeError(error)) {
-          warnings.push(
-            `Reef replay state exceeds the safe migration size cap and has been archived to ${replayPath}.migrated for manual recovery`,
-          );
-          await archiveOversizedLegacySource({
-            filePath: replayPath,
-            label: "Reef replay state",
-            changes,
-            warnings,
-          });
+        if (
+          await handleOversizedLegacyFile(error, replayPath, "Reef replay state", changes, warnings)
+        ) {
+          // oversized source handled; continue to remaining sources
         } else {
           warnings.push(
             `Failed importing Reef replay state: ${String(error)}; left source in place`,
@@ -675,16 +615,10 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        if (isFileTooLargeError(error)) {
-          warnings.push(
-            `Reef reviews exceed the safe migration size cap and have been archived to ${reviewsPath}.migrated for manual recovery`,
-          );
-          await archiveOversizedLegacySource({
-            filePath: reviewsPath,
-            label: "Reef reviews",
-            changes,
-            warnings,
-          });
+        if (
+          await handleOversizedLegacyFile(error, reviewsPath, "Reef reviews", changes, warnings)
+        ) {
+          // oversized source handled; continue to remaining sources
         } else {
           warnings.push(`Failed importing Reef reviews: ${String(error)}; left source in place`);
         }
@@ -736,16 +670,16 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        if (isFileTooLargeError(error)) {
-          warnings.push(
-            `Reef delivered markers exceed the safe migration size cap and have been archived to ${deliveredPath}.migrated for manual recovery`,
-          );
-          await archiveOversizedLegacySource({
-            filePath: deliveredPath,
-            label: "Reef delivered markers",
+        if (
+          await handleOversizedLegacyFile(
+            error,
+            deliveredPath,
+            "Reef delivered markers",
             changes,
             warnings,
-          });
+          )
+        ) {
+          // oversized source handled; continue to remaining sources
         } else {
           warnings.push(
             `Failed importing Reef delivered markers: ${String(error)}; left source in place`,
