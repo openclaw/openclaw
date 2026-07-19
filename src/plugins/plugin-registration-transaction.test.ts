@@ -161,10 +161,12 @@ describe("plugin registration transaction", () => {
     transaction.rollback();
 
     const restored = registry.hostedMediaResolvers[0] as typeof entry;
-    // structuredClone drops custom-class prototypes, so the instance is kept by
-    // reference; its constructor/methods must survive rollback intact.
+    // Custom-class instances get a prototype-preserving recursive clone, so the
+    // in-transaction mutation is reverted instead of leaking through a shared
+    // reference; the constructor/methods must survive rollback intact.
     expect(restored.meta).toBeInstanceOf(CustomMeta);
-    expect(typeof restored.meta.doubled).toBe("number");
-    expect(restored.meta.doubled).toBe(200);
+    expect(restored.meta).not.toBe(meta);
+    expect(meta.doubled).toBe(200);
+    expect(restored.meta.doubled).toBe(14);
   });
 });

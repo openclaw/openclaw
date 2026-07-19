@@ -83,25 +83,28 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
 // shared with the live registry, so in-transaction mutations survive a rollback
 // and orphan registers remain in the manifest cache (#107514). Deep clone nested
 // data so restore fully reverts nested config changes, but preserve value
-// semantics: function-valued fields and unclonable class instances stay by
-// reference (they are never mutated), while typed values such as Date keep their
-// constructor across snapshot/restore (#107514).
+// semantics: function-valued fields stay by reference (they are never mutated),
+// while typed values such as Date keep their constructor across
+// snapshot/restore (#107514).
 function cloneTypedValue(value: object): unknown {
   // Prefer a structured clone so typed values (Date, etc.) keep their
-  // constructor, but structuredClone silently drops custom-class prototypes,
-  // turning instances into plain objects. If the clone lost the original
-  // prototype, keep the original by reference instead: registry values are
-  // never mutated in place, so sharing the reference across rollback is safe
-  // and preserves type identity for plugin-provided metadata (#107514).
+  // constructor. structuredClone silently drops custom-class prototypes (and
+  // throws on nested functions), so rebuild those instances manually: sharing
+  // the reference would let in-transaction mutations of a plugin-provided
+  // instance survive a rollback (#107514).
   try {
     const cloned = structuredClone(value);
     if (Object.getPrototypeOf(cloned) === Object.getPrototypeOf(value)) {
       return cloned;
     }
-    return value;
   } catch {
-    return value;
+    // Fall through to the prototype-preserving recursive clone below.
   }
+  const cloned = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>;
+  for (const [key, val] of Object.entries(value)) {
+    cloned[key] = deepCloneRegistryValue(val);
+  }
+  return cloned;
 }
 
 function deepCloneRegistryValue(value: unknown): unknown {
