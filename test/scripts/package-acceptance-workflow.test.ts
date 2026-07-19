@@ -39,6 +39,7 @@ const PLUGIN_PRERELEASE_WORKFLOW = ".github/workflows/plugin-prerelease.yml";
 const OPENCLAW_NPM_RELEASE_WORKFLOW = ".github/workflows/openclaw-npm-release.yml";
 const PLUGIN_CLAWHUB_RELEASE_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const PLUGIN_NPM_RELEASE_WORKFLOW = ".github/workflows/plugin-npm-release.yml";
+const PLUGIN_RELEASE_CONTINUE_WORKFLOW = ".github/workflows/plugin-release-continue.yml";
 const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
@@ -97,6 +98,7 @@ type WorkflowJob = {
   "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
+    "max-parallel"?: number | string;
     matrix?: {
       include?: WorkflowMatrixEntry[];
       profile?: string[];
@@ -589,6 +591,213 @@ describe("package acceptance workflow", () => {
       "plugin-clawhub-release.yml: detached; approval and publish not awaited",
       "plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited",
     ]);
+  });
+
+  it("dispatches ClawHub only after plugin npm succeeds", () => {
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const orchestration = workflowStep(publishJob, "Dispatch publish workflows").run;
+    if (!orchestration) {
+      throw new Error("Expected release publish orchestration script");
+    }
+
+    const pluginNpmDispatch = orchestration.indexOf(
+      'plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml',
+    );
+    const pluginNpmWait = orchestration.indexOf(
+      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"',
+    );
+    const continuationDispatch = orchestration.indexOf(
+      "dispatch_workflow plugin-release-continue.yml",
+    );
+    const clawHubDispatch = orchestration.indexOf(
+      'plugin_clawhub_run_id="$(dispatch_workflow_at_ref',
+    );
+    const clawHubBootstrapDispatch = orchestration.indexOf(
+      'plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref',
+    );
+
+    expect(pluginNpmDispatch).toBeGreaterThan(-1);
+    expect(continuationDispatch).toBeGreaterThan(pluginNpmDispatch);
+    expect(continuationDispatch).toBeLessThan(pluginNpmWait);
+    expect(pluginNpmWait).toBeGreaterThan(pluginNpmDispatch);
+    expect(clawHubDispatch).toBeGreaterThan(pluginNpmWait);
+    expect(clawHubBootstrapDispatch).toBeGreaterThan(pluginNpmWait);
+    expect(orchestration).toContain(
+      "Plugin npm publish failed; ClawHub publish was not dispatched.",
+    );
+    expect(orchestration).not.toContain("cancelling dispatched ClawHub child workflows");
+  });
+
+  it("starts prerelease core publication before plugin npm convergence", () => {
+    const publishStep = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
+      "Dispatch publish workflows",
+    );
+    const orchestration = publishStep.run;
+    if (!orchestration) {
+      throw new Error("Expected release publish orchestration script");
+    }
+
+    const pluginNpmWait = orchestration.indexOf(
+      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"',
+    );
+    const continuationDispatch = orchestration.indexOf(
+      "dispatch_workflow plugin-release-continue.yml",
+    );
+    const prereleaseCoreStart = orchestration.indexOf(
+      'if ! is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then',
+    );
+
+    expect(prereleaseCoreStart).toBeGreaterThan(-1);
+    expect(prereleaseCoreStart).toBeLessThan(pluginNpmWait);
+    expect(continuationDispatch).toBeGreaterThan(prereleaseCoreStart);
+    expect(continuationDispatch).toBeLessThan(pluginNpmWait);
+    expect(orchestration).toContain(
+      "ClawHub convergence failed; beta core release remains publishable.",
+    );
+    expect(orchestration).toContain(
+      "Release state: beta-live; plugin ecosystem convergence remains asynchronous",
+    );
+    expect(orchestration).toContain(
+      "Core prerelease publication starts before every fallible plugin",
+    );
+    expect(publishStep.env?.CLAWHUB_PLAN_OUTCOME).toBe("${{ steps.clawhub_plan.outcome }}");
+    expect(orchestration).toContain('if [[ "${CLAWHUB_PLAN_OUTCOME}" != "success" ]]; then');
+    expect(orchestration).toContain(
+      "ClawHub release planning step failed; prerelease ecosystem repair is required.",
+    );
+    expect(orchestration).toContain(
+      '[[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WAIT_FOR_CLAWHUB}" != "true" ]]',
+    );
+    expect(orchestration).toContain('if [[ "${plugin_ecosystem_detached}" != "true" ]]; then');
+    expect(orchestration).toContain("Plugin ecosystem continuation dispatch failed");
+    expect(orchestration).toContain("return_run_details: true");
+    expect(orchestration).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
+    expect(orchestration).toMatch(
+      /plugin_ecosystem_is_required\(\) \{\n\s+is_stable_release \|\|\n\s+\[\[ "\$\{PUBLISH_OPENCLAW_NPM\}" != "true" \]\]/,
+    );
+    expect(orchestration).toContain(
+      'if should_wait_for_plugin_ecosystem && [[ "${ecosystem_failed}" == "0" && "${clawhub_failed}" == "0" && "${plugin_npm_succeeded}" == "true" ]]; then',
+    );
+    expect(orchestration).toContain('if ! plugin_clawhub_run_id="$(dispatch_workflow_at_ref');
+    expect(orchestration).toContain(
+      "Plugin ecosystem did not converge; prerelease core and GitHub publication completed at beta-live.",
+    );
+    expect(orchestration).toContain(
+      "no plugin npm child dispatched; repair from the release publish run",
+    );
+    expect(orchestration).toContain('if [[ "${skip_clawhub}" != "true" ]]; then');
+    expect(orchestration).toContain(
+      'verify_args+=(--clawhub-workflow-ref "${clawhub_workflow_ref}")',
+    );
+    expect(orchestration).toMatch(
+      /upload_release_evidence_assets\n\s+publish_github_release\n\s+mark_release_completion\n\s+upload_release_evidence_assets/,
+    );
+    expect(orchestration).toContain('.releaseState = "verification-passed"');
+    expect(orchestration).toContain(".pluginPublishScope = $plugin_publish_scope");
+    expect(orchestration).toContain(".releaseProfile = $release_profile");
+    expect(orchestration).toContain(
+      ".windowsNodeInstallerDigests = $windows_node_installer_digests",
+    );
+    expect(orchestration).toContain("windows_node_installer_digests='{}'");
+  });
+
+  it("continues prerelease plugin publication outside the beta-live critical path", () => {
+    const job = workflowJob(PLUGIN_RELEASE_CONTINUE_WORKFLOW, "continue_plugin_release");
+    const identity = workflowStep(job, "Validate continuation identity");
+    const download = workflowStep(job, "Download parent ClawHub release plan");
+    const wait = workflowStep(job, "Wait for plugin npm");
+    const handoff = workflowStep(job, "Download plugin npm release handoff");
+    const continuation = workflowStep(job, "Continue ClawHub release");
+    const continuationRun = continuation.run;
+    if (!continuationRun) {
+      throw new Error("Expected plugin release continuation script");
+    }
+
+    expect(job.permissions?.actions).toBe("write");
+    expect(job["timeout-minutes"]).toBe(300);
+    expect(identity.run).toContain(
+      '[[ "${PARENT_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ && "${GITHUB_SHA}" == "${PARENT_WORKFLOW_SHA}" ]]',
+    );
+    expect(download.uses).toBe(DOWNLOAD_ARTIFACT_V8);
+    expect(download.with?.["run-id"]).toBe("${{ inputs.release_publish_run_id }}");
+    expect(wait.run).toContain(
+      'gh run watch --repo "${GITHUB_REPOSITORY}" "${PLUGIN_NPM_RUN_ID}" --exit-status',
+    );
+    expect(wait["continue-on-error"]).toBe(true);
+    expect(workflowStep(job, "Initialize continuation evidence").run).toContain(
+      'status: "awaiting-plugin-npm"',
+    );
+    const resolvePluginNpm = workflowStep(job, "Resolve plugin npm wait outcome");
+    expect(resolvePluginNpm.run).toContain('.conclusion == "success"');
+    expect(resolvePluginNpm.run).toContain('evidence_status="plugin-npm-failed"');
+    expect(resolvePluginNpm.run).toContain('evidence_status="plugin-npm-observation-failed"');
+    expect(handoff.uses).toBe(DOWNLOAD_ARTIFACT_V8);
+    expect(handoff.with?.name).toContain("plugin-npm-release-handoff-");
+    expect(handoff.with?.["run-id"]).toBe("${{ inputs.plugin_npm_run_id }}");
+    expect(continuationRun).toContain('.kind == "openclaw-plugin-npm-release-handoff"');
+    expect(continuationRun).toContain(".releasePublishRunId == $parent_run_id");
+    expect(continuationRun).toContain(".sourceSha == $release_sha");
+    expect(continuationRun).toContain(".pluginNpm.inputs == $handoff[0].inputs");
+    expect(continuationRun).toContain("dispatch_target normal");
+    expect(continuationRun).toContain("dispatch_target bootstrap");
+    expect(continuationRun).toContain("return_run_details: true");
+    expect(continuationRun).toContain('continuation_status="clawhub-dispatched"');
+    expect(continuationRun).toContain('continuation_status="ecosystem-dispatch-failed"');
+    expect(continuationRun).toContain("cancel_and_drain");
+    expect(continuationRun).toContain('continuation_status="ecosystem-cleanup-incomplete"');
+    expect(continuationRun).toContain("did not reach a terminal state during cleanup");
+    expect(continuationRun).toContain("continuation_id");
+    expect(continuationRun).toContain("display_title == $expected_title");
+    expect(continuationRun).toContain(
+      'echo "$(target_base_correlation "${target}")-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+    );
+    expect(continuationRun).toContain('reconcile_latest_target "${target}" 12');
+    expect(continuationRun).toContain("lookup was indeterminate");
+    expect(continuationRun).toContain("Reusing successful or active ClawHub");
+    expect(continuationRun).toContain("failed before or after identity");
+    expect(continuationRun).toContain('.actor == "github-actions[bot]"');
+    expect(continuationRun).toContain("Identity upload is first");
+    expect(continuationRun).toContain("authenticate_target_run");
+    expect(continuationRun).toContain("openclaw-clawhub-continuation-identity");
+    expect(continuationRun).not.toContain(".head_sha == $expected_sha");
+    expect(continuationRun).toContain("Unable to reconcile ClawHub");
+    expect(continuationRun).toContain('echo "UNRESOLVED:${target}"');
+    expect(continuationRun).toContain("mark_target_pending normal");
+    expect(continuationRun).toContain("clear_target_pending normal");
+    expect(continuationRun).toContain("mark_target_pending bootstrap");
+    expect(continuationRun).toContain("clear_target_pending bootstrap");
+    expect(continuationRun).toContain("unresolvedCorrelations: $unresolved_correlations");
+    expect(continuationRun).toContain('reconcile_target "${target}" 60');
+    expect(continuationRun).toContain('if [[ "${watch_failed}" == "true" ]]; then');
+    expect(continuationRun).toContain('watch_run "${run_id}" "${watch_log}" &');
+    expect(continuationRun).toContain('for index in "${!watch_pids[@]}"; do');
+    expect(continuationRun).toContain("all dispatched child outcomes were collected");
+    expect(continuationRun).toContain("cleanup_on_exit");
+    expect(continuationRun).toContain("trap 'exit 143' TERM");
+    expect(continuationRun).toContain("trap '' INT TERM");
+    expect(continuationRun).toContain('continuation_status="ecosystem-interrupted"');
+    expect(continuationRun).toContain('continuation_status="ecosystem-converged"');
+    expect(workflowStep(job, "Upload continuation evidence").if).toBe("${{ always() }}");
+  });
+
+  it("emits an immutable parent-bound plugin npm handoff", () => {
+    const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "record_release_handoff");
+    const write = workflowStep(job, "Write immutable release handoff");
+    const upload = workflowStep(job, "Upload immutable release handoff");
+
+    expect(job.if).toContain("inputs.release_publish_run_id != ''");
+    expect(job.if).toContain("needs.publish_plugins_npm.result == 'success'");
+    expectTextToIncludeAll(write.run, [
+      'kind: "openclaw-plugin-npm-release-handoff"',
+      "releasePublishRunId: $release_publish_run_id",
+      "sourceSha: $source_sha",
+      "workflowSha: $workflow_sha",
+      "npm_dist_tag: $npm_dist_tag",
+      "preflight_only: $preflight_only",
+    ]);
+    expect(upload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(upload.with?.name).toContain("plugin-npm-release-handoff-");
   });
 
   it("compares dependency evidence zip contents independently of archive timestamps", () => {
@@ -4026,6 +4235,10 @@ describe("package artifact reuse", () => {
       "Install trusted release tooling dependencies",
     );
     const trustedClawHubPlan = workflowStep(releasePublishJob, "Resolve ClawHub release plan");
+    const attestClawHubApproval = workflowStep(
+      releasePublishJob,
+      "Attest ClawHub bootstrap approval",
+    );
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
@@ -4045,6 +4258,8 @@ describe("package artifact reuse", () => {
     expect(trustedReleaseToolingInstall.run).toContain(
       "ln -s .release-harness/node_modules node_modules",
     );
+    expect(trustedClawHubPlan["continue-on-error"]).toContain("contains(inputs.tag, '-beta.')");
+    expect(attestClawHubApproval["continue-on-error"]).toContain("contains(inputs.tag, '-beta.')");
     expect(fastPretagScript).toContain(
       "node --import tsx scripts/plugin-release-pretag-pack-check.ts",
     );
@@ -4121,30 +4336,36 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("missing_trusted_publisher_count");
     expect(clawHubWorkflow).toContain("Bootstrap candidates requiring token bootstrap:");
     expect(clawHubWorkflow).toContain("Missing trusted publisher candidates:");
-    expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
+    expect(clawHubWorkflow).toContain("verify_published_clawhub_packages:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
     const clawHubVerifier = workflowJob(
       PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
-      "verify_published_clawhub_package",
+      "verify_published_clawhub_packages",
     );
-    expect(clawHubVerifier["timeout-minutes"]).toBe(45);
+    expect(clawHubVerifier["timeout-minutes"]).toBe(60);
+    expect(clawHubVerifier.strategy).toBeUndefined();
+    expect(clawHubVerifier.env).toMatchObject({
+      OPENCLAW_CLAWHUB_VERIFY_ATTEMPTS: "54",
+      OPENCLAW_CLAWHUB_VERIFY_CONCURRENCY: "8",
+      OPENCLAW_CLAWHUB_VERIFY_DELAY_MS: "30000",
+    });
     expect(clawHubVerifier.permissions).toMatchObject({ actions: "read", contents: "read" });
-    expect(workflowStep(clawHubVerifier, "Download published package input")).toMatchObject({
+    expect(workflowStep(clawHubVerifier, "Download published package inputs")).toMatchObject({
       uses: DOWNLOAD_ARTIFACT_V8,
       with: {
-        name: "${{ matrix.plugin.artifactName }}",
-        path: "${{ runner.temp }}/clawhub-package-artifact",
+        pattern: "clawhub-package-*",
+        path: "${{ runner.temp }}/clawhub-package-artifacts",
+        "merge-multiple": false,
       },
     });
-    const clawHubVerifyRun = workflowStep(clawHubVerifier, "Verify published ClawHub package").run;
+    const clawHubVerifyRun = workflowStep(clawHubVerifier, "Verify published ClawHub packages").run;
     expectTextToIncludeAll(clawHubVerifyRun, [
-      "scripts/verify-clawhub-published-artifact.mjs",
-      '--expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact"',
-      '--package-name "${PACKAGE_NAME}"',
-      '--package-version "${PACKAGE_VERSION}"',
-      '--publish-tag "${PACKAGE_TAG}"',
+      "scripts/verify-clawhub-release-batch.mjs",
+      '--plan "${RUNNER_TEMP}/clawhub-batch-evidence/plan.json"',
+      '--artifacts-root "${RUNNER_TEMP}/clawhub-package-artifacts"',
       '--registry "${CLAWHUB_REGISTRY}"',
+      '--output "${RUNNER_TEMP}/clawhub-batch-evidence/evidence.json"',
     ]);
     expect(clawHubVerifyRun).not.toContain("fetchWithRetry");
     expect(clawHubVerifyRun).not.toContain(".json()");
@@ -4166,7 +4387,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain(
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
     );
-    expect(releaseWorkflow).not.toContain("return_run_details: true");
+    expect(releaseWorkflow).toContain("return_run_details: true");
     expect(releaseWorkflow).toContain("'.workflow_run_id'");
     expect(releaseWorkflow).toContain("'.html_url'");
     expect(releaseWorkflow).toContain(
@@ -4372,11 +4593,23 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
     expect(releaseWorkflow).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
     expect(releaseWorkflow).toContain(
-      '[[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]',
+      '[[ -n "${plugin_clawhub_bootstrap_run_id}" ]] && should_wait_for_plugin_ecosystem',
     );
     expect(clawHubReleasePlanScript).toContain("--skip-clawhub");
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
+    expect(
+      workflowStep(
+        workflowJob(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub"),
+        "Upload continuation identity",
+      ).with?.name,
+    ).toContain("clawhub-continuation-identity-");
+    expect(
+      workflowStep(
+        workflowJob(".github/workflows/plugin-clawhub-new.yml", "resolve_bootstrap_plan"),
+        "Upload continuation identity",
+      ).with?.name,
+    ).toContain("clawhub-continuation-identity-");
     expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
     const pluginNpmPublishJob = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
     const npmPackageVersionStep = workflowStep(

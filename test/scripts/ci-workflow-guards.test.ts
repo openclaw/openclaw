@@ -2124,6 +2124,12 @@ describe("ci workflow guards", () => {
     expect(installStep.run).toContain(
       "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install",
     );
+    expect(installStep.run).toContain(
+      '[ "$sticky_snapshot_matches" = "true" ] && [ "$STICKY_WRITER" != "true" ]',
+    );
+    expect(installStep.run).toContain(
+      "Sticky dependency writer is reconciling the matching snapshot",
+    );
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
     expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
     expect(installStep.run).toContain("install_attempts=2");
@@ -2313,7 +2319,7 @@ describe("ci workflow guards", () => {
       execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: root });
 
       const baseline = fingerprint();
-      expect(baseline).toMatch(/^v2-[a-f0-9]{64}$/);
+      expect(baseline).toMatch(/^v3-[a-f0-9]{64}$/);
 
       // Presence is part of the record type, so a real file cannot collide
       // with the representation of an absent optional install input.
@@ -3101,14 +3107,8 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("bounds the workflow sanity tool downloads", () => {
+  it("bounds workflow sanity downloads and keeps ShellCheck out of actionlint", () => {
     const workflow = readWorkflowSanityWorkflow();
-    const shellcheckStep = expectDefined(
-      workflow.jobs.actionlint.steps.find(
-        (step: WorkflowStep) => step.name === "Install ShellCheck",
-      ),
-      "ShellCheck install step",
-    );
     const actionlintStep = expectDefined(
       workflow.jobs.actionlint.steps.find(
         (step: WorkflowStep) => step.name === "Install actionlint",
@@ -3116,8 +3116,15 @@ describe("ci workflow guards", () => {
       "actionlint install step",
     );
 
-    expect(shellcheckStep.run).toContain("curl --connect-timeout 10 --max-time 120");
-    expect(shellcheckStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+    expect(
+      workflow.jobs.actionlint.steps.some(
+        (step: WorkflowStep) => step.name === "Install ShellCheck",
+      ),
+    ).toBe(false);
+    expect(
+      workflow.jobs.actionlint.steps.find((step: WorkflowStep) => step.name === "Lint workflows")
+        ?.run,
+    ).toContain("actionlint -shellcheck=");
     expect(actionlintStep.run).toContain("--connect-timeout 10");
     expect(actionlintStep.run).toContain("--max-time 120");
     expect(actionlintStep.run).toContain("--retry 5");

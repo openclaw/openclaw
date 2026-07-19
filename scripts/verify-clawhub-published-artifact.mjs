@@ -11,7 +11,8 @@ import { readBoundedRegularFile } from "./plugin-publication-artifact.mjs";
 const DEFAULT_ATTEMPTS = 12;
 const DEFAULT_DELAY_MS = 5_000;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 120_000;
-const MAX_ATTEMPTS = 12;
+// Release workflows override the short default to cover asynchronous promotion.
+const MAX_ATTEMPTS = 60;
 const MAX_DELAY_MS = 60_000;
 const MAX_ARTIFACT_BYTES = 130 * 1024 * 1024;
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -23,9 +24,9 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 
-class PermanentReadbackError extends Error {}
+export class PermanentReadbackError extends Error {}
 
-class RetryableReadbackError extends Error {
+export class RetryableReadbackError extends Error {
   constructor(message, requestedDelayMs) {
     super(message);
     this.retryAfterMs = requestedDelayMs;

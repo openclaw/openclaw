@@ -11,6 +11,8 @@ export function parseArgs(argv: unknown): {
   pluginPublishScope: string;
   plugins: string;
   skipDispatch: boolean;
+  dispatchPublish: boolean;
+  waitForEcosystem: boolean;
   skipLocalGeneratedCheck: boolean;
   skipParallels: boolean;
   skipTelegram: boolean;
@@ -21,6 +23,7 @@ export function parseArgs(argv: unknown): {
   npmPreflightRunId: string;
   windowsNodeTag: string;
   windowsNodeInstallerDigests: string;
+  publishRunId: string;
   outputDir: string;
 };
 export function releaseBranchForTag(tag: string): string;
@@ -184,6 +187,14 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
  * Builds the final release publish workflow command once validation evidence is ready.
  */
 export function buildPublishCommand(options: unknown): string;
+export function buildPublishFields(options: unknown): Array<[string, unknown]>;
+export function validatePublishEvidence(
+  evidence: unknown,
+  expected: unknown,
+): {
+  status: string;
+  completionState: string;
+};
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
 export function validateTrustedToolingPin({

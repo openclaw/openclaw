@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 const WORKFLOW_PATH = ".github/workflows/openclaw-cross-os-release-checks-reusable.yml";
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
+const FULL_RELEASE_VALIDATION_PATH = ".github/workflows/full-release-validation.yml";
 const WRAPPER_PATH = "scripts/github/run-openclaw-cross-os-release-checks.sh";
 const SCRIPT_PATH = "scripts/openclaw-cross-os-release-checks.ts";
 const HARNESS = "bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh";
@@ -52,6 +53,45 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
 }
 
 describe("cross-OS release checks workflow", () => {
+  it("keeps beta packaged upgrades visible but off the release critical path", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    expect(workflow.on?.workflow_call?.inputs?.packaged_upgrade_advisory).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const crossOs = job(workflow, "cross_os_release_checks") as WorkflowJob & {
+      "continue-on-error"?: string;
+    };
+    expect(crossOs["continue-on-error"]).toBe(
+      "${{ inputs.advisory || (inputs.packaged_upgrade_advisory && matrix.suite == 'packaged-upgrade') }}",
+    );
+    const releaseChecks = readWorkflow(RELEASE_CHECKS_PATH);
+    expect(job(releaseChecks, "cross_os_release_checks").with?.packaged_upgrade_advisory).toBe(
+      "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
+    );
+    const fullRelease = readWorkflow(FULL_RELEASE_VALIDATION_PATH);
+    const releaseDispatch = step(
+      job(fullRelease, "release_checks"),
+      "Dispatch and monitor release checks",
+    );
+    expect(releaseDispatch.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expect(releaseDispatch.run).toContain('-f release_profile="$RELEASE_PROFILE"');
+  });
+
+  it("caches the installed packaged-upgrade baseline by immutable package identity", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const crossOs = job(workflow, "cross_os_release_checks");
+    const cache = step(crossOs, "Restore packaged-upgrade baseline prefix");
+    expect(cache.if).toBe("${{ matrix.suite == 'packaged-upgrade' }}");
+    expect(cache.uses).toContain("actions/cache@");
+    expect(cache.with?.path).toBe("${{ runner.temp }}/openclaw-cross-os-baseline-prefix");
+    expect(cache.with?.key).toContain("${{ needs.prepare.outputs.baseline_sha256 }}");
+    const run = step(crossOs, "Run cross-OS release checks");
+    expect(run.env?.OPENCLAW_CROSS_OS_BASELINE_PREFIX_CACHE_DIR).toBe(
+      "${{ runner.temp }}/openclaw-cross-os-baseline-prefix",
+    );
+  });
+
   it("runs the TypeScript release harness through the Windows-safe wrapper", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
