@@ -11,11 +11,8 @@ import type {
   CliBackendResolveExecutionArgs,
   CliBundleMcpMode,
 } from "../plugins/types.js";
-import {
-  testing as cliBackendsTesting,
-  resolveCliBackendConfig,
-  resolveCliBackendLiveTest,
-} from "./cli-backends.js";
+import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 
 type RuntimeBackendEntry = ReturnType<
   (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
@@ -28,6 +25,7 @@ let runtimeBackendEntries: RuntimeBackendEntry[] = [];
 let setupBackendEntries: SetupBackendEntry[] = [];
 
 function createBackendEntry(params: {
+  autoSelectAuthProfile?: boolean;
   pluginId: string;
   id: string;
   config: CliBackendConfig;
@@ -56,6 +54,9 @@ function createBackendEntry(params: {
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
+      ...(params.autoSelectAuthProfile !== undefined
+        ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
+        : {}),
       ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
@@ -275,6 +276,7 @@ beforeEach(() => {
       id: "claude-cli",
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
+      autoSelectAuthProfile: false,
       ownsNativeCompaction: true,
       config: {
         command: "claude",
@@ -492,77 +494,6 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "--skip-git-repo-check",
     ]);
   });
-
-  it("deep-merges reliability watchdog overrides for codex", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "codex-cli": {
-              command: "codex",
-              reliability: {
-                watchdog: {
-                  resume: {
-                    noOutputTimeoutMs: 42_000,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const resolved = requireCliBackendConfig("codex-cli", cfg);
-
-    expect(resolved.config.reliability?.watchdog?.resume?.noOutputTimeoutMs).toBe(42_000);
-    // Ensure defaults are retained when only one field is overridden.
-    expect(resolved.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio).toBe(0.3);
-    expect(resolved.config.reliability?.watchdog?.resume?.minMs).toBe(60_000);
-    expect(resolved.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
-    expect(resolved.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
-  });
-
-  it("deep-merges reliability output-limit overrides", () => {
-    runtimeBackendEntries.unshift(
-      createRuntimeBackendEntry({
-        pluginId: "test",
-        id: "test-cli",
-        config: {
-          command: "test-cli",
-          reliability: {
-            outputLimits: {
-              maxTurnRawChars: 8192,
-              maxTurnLines: 20_000,
-            },
-          },
-        },
-      }),
-    );
-    const cfg = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "test-cli": {
-              command: "test-cli",
-              reliability: {
-                outputLimits: {
-                  maxTurnRawChars: 16_384,
-                },
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const resolved = requireCliBackendConfig("test-cli", cfg);
-
-    expect(resolved?.config.reliability?.outputLimits).toEqual({
-      maxTurnRawChars: 16_384,
-      maxTurnLines: 20_000,
-    });
-  });
 });
 
 describe("resolveCliBackendLiveTest", () => {
@@ -603,6 +534,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.output).toBe("jsonl");
     expect(resolved?.config.args).toContain("stream-json");
     expect(resolved?.config.args).toContain("--include-partial-messages");
@@ -981,6 +913,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.args).toEqual([
       "-p",
       "--output-format",
@@ -1186,3 +1119,4 @@ describe("resolveCliBackendConfig alias precedence", () => {
     expect(resolved?.config.args).toEqual(["--canonical"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

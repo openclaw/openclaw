@@ -1,7 +1,7 @@
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-export type ChatSendAckServerTiming = {
+type ChatSendAckServerTiming = {
   receivedToAckMs: number;
   loadSessionMs: number;
   prepareAttachmentsMs?: number;

@@ -121,10 +121,9 @@ describe("channel-streaming", () => {
   });
 
   it("resolves flat delivery keys when no nested streaming config exists", () => {
-    // Flat delivery keys stay canonical for channels without a nested
-    // streaming schema (Mattermost, WhatsApp, Google Chat, IRC, Signal) and
-    // for external SDK plugins; mode-family aliases (streamMode, scalar
-    // streaming, nativeStreaming) are doctor-only and stay unread.
+    // Bundled channel schemas are nested-only. Flat delivery keys remain
+    // compatibility fallbacks for external SDK plugins; mode-family aliases
+    // are doctor-only and stay unread.
     const entry = {
       chunkMode: "newline",
       blockStreaming: true,
@@ -238,7 +237,7 @@ describe("channel-streaming", () => {
   });
 
   it("uses auto progress labels when no explicit label is configured", () => {
-    expect(DEFAULT_PROGRESS_DRAFT_LABELS[0]).toBe("Working");
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS).toEqual(["Working"]);
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );
@@ -660,7 +659,7 @@ describe("channel-streaming", () => {
     expect(recoveredUpdated[0]).not.toHaveProperty("detail");
   });
 
-  it("starts progress drafts after five seconds or a second work event", async () => {
+  it("starts progress drafts after five seconds", async () => {
     vi.useFakeTimers();
     const onStart = vi.fn(async () => {});
     const gate = createChannelProgressDraftGate({ onStart });
@@ -676,17 +675,22 @@ describe("channel-streaming", () => {
     expect(gate.hasStarted).toBe(true);
   });
 
-  it("starts progress drafts immediately on the second work event", async () => {
+  it("does not start progress drafts before the delay after two rapid work events", async () => {
     vi.useFakeTimers();
     const onStart = vi.fn(async () => {});
     const gate = createChannelProgressDraftGate({ onStart });
 
-    await gate.noteWork();
-    await expect(gate.noteWork()).resolves.toBe(true);
+    await expect(gate.noteWork()).resolves.toBe(false);
+    await expect(gate.noteWork()).resolves.toBe(false);
 
+    expect(gate.workEvents).toBe(2);
+    expect(onStart).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(onStart).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
     expect(onStart).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
   });
 
   it("does not report started when delayed progress startup rejects", async () => {
@@ -706,7 +710,7 @@ describe("channel-streaming", () => {
     expect(gate.hasStarted).toBe(false);
     expect(onStartError).toHaveBeenCalledWith(error);
 
-    await expect(gate.noteWork()).resolves.toBe(true);
+    await expect(gate.startNow()).resolves.toBeUndefined();
 
     expect(onStart).toHaveBeenCalledTimes(2);
     expect(gate.hasStarted).toBe(true);
@@ -724,7 +728,7 @@ describe("channel-streaming", () => {
     const gate = createChannelProgressDraftGate({ onStart });
 
     await gate.noteWork();
-    const firstStart = gate.noteWork();
+    const firstStart = gate.startNow();
     const secondStart = gate.startNow();
     await Promise.resolve();
 
@@ -732,7 +736,7 @@ describe("channel-streaming", () => {
     expect(gate.hasStarted).toBe(true);
 
     resolveStart?.();
-    await expect(firstStart).resolves.toBe(true);
+    await expect(firstStart).resolves.toBeUndefined();
     await expect(secondStart).resolves.toBeUndefined();
 
     expect(onStart).toHaveBeenCalledTimes(1);
@@ -751,7 +755,7 @@ describe("channel-streaming", () => {
     const gate = createChannelProgressDraftGate({ onStart });
 
     await gate.noteWork();
-    const startResult = gate.noteWork();
+    const startResult = gate.startNow();
     await Promise.resolve();
 
     expect(onStart).toHaveBeenCalledTimes(1);
@@ -759,7 +763,7 @@ describe("channel-streaming", () => {
 
     resolveStart?.();
 
-    await expect(startResult).resolves.toBe(false);
+    await expect(startResult).resolves.toBeUndefined();
     expect(gate.hasStarted).toBe(false);
   });
 

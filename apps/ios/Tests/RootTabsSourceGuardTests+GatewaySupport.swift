@@ -63,11 +63,20 @@ extension RootTabsSourceGuardTests {
         #expect(scannerLifecycle.contains("self.stopScannerCapture()"))
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
+        #expect(sectionsSource.contains("This phone has limited Gateway access."))
+        #expect(sectionsSource.contains("Use a secure wss:// or Tailscale Serve Gateway"))
+        #expect(sectionsSource.contains("Label(\"Scan Full-Access Code\""))
         #expect(sectionsSource.contains("self.gatewayActions"))
         #expect(sectionsSource.contains("self.manualGatewayCard"))
         #expect(sectionsSource.contains("self.gatewaySetupCard"))
-        #expect(sectionsSource.contains("self.discoveredGatewaysCard"))
         #expect(sectionsSource.contains("self.gatewayAdvancedCard"))
+        // Pairing stays reachable without scrolling: nav-bar scanner button on the
+        // gateway route plus a status-card hero while nothing is paired. The hero
+        // honors the same connect lock as the other scanner entry points.
+        #expect(sectionsSource.contains("if route == .gateway {"))
+        #expect(sectionsSource.contains(
+            "let showScanHero = self.gatewayNeedsPairing && self.connectingGateway == nil"))
+        #expect(sectionsSource.contains("actionTitle: showScanHero ? \"Scan QR to Pair\" : nil"))
         #expect(sectionsSource.contains("title: \"Reconnect\""))
         #expect(sectionsSource.contains("Task { await self.reconnectGateway() }"))
         #expect(sectionsSource.contains("title: \"Diagnose\""))
@@ -90,10 +99,11 @@ extension RootTabsSourceGuardTests {
         // root's only remediation surface must not depend on aggregate status.
         #expect(activeProblemToast.contains("appModel.lastGatewayProblem"))
         #expect(!activeProblemToast.contains("gatewayStatus"))
-        // Every problem report re-surfaces a swiped-away toast or shakes the
-        // visible one; value equality alone must not keep the toast hidden.
+        // Every problem report re-surfaces a swiped-away toast. Visible problem
+        // banners stay stationary when reconnects re-report the same failure.
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
-        #expect(rootSource.contains("GatewayToastShakeEffect"))
+        #expect(rootSource.contains("guard self.isGatewayToastSwipeDismissed else { return }"))
+        #expect(!rootSource.contains("GatewayToastShakeEffect"))
 
         #expect(actionsSource.contains("await self.gatewayController.connectActiveGateway()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
@@ -135,6 +145,8 @@ extension RootTabsSourceGuardTests {
         #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource.contains("case let .gatewayLink(link):"))
         #expect(actionsSource.contains("case let .setupCode(code):"))
+        #expect(actionsSource.contains(
+            "self.stagedGatewaySetupLink = nil\n        self.setupCode = \"\"\n        await self.applyGatewayLink(link)"))
         #expect(stopScanning.lowerBound < deliverResult.lowerBound)
         #expect(trustSource.contains("Trust this gateway?"))
         #expect(trustSource.contains("Trust and connect"))
@@ -220,7 +232,7 @@ extension RootTabsSourceGuardTests {
         #expect(connectionFailure.contains("self.localConnectionFailure = message"))
         #expect(!connectionFailure.contains("self.connectMessage = message"))
         #expect(connectionFailure.contains("self.statusLine = message"))
-        #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
+        #expect(onboardingSource.contains(".failedStatus(message: localFailure, allowsRetry: false)"))
         #expect(onboardingSource.contains(
             "primaryActionTitle: allowsRetry ? OpenClawTextValue.localized(\"Retry\") : nil"))
         #expect(onboardingSource.contains("onPrimaryAction: allowsRetry ? self.onRetry : nil"))

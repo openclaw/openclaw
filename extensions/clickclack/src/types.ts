@@ -9,19 +9,21 @@ export type ClickClackAccountConfig = {
   enabled?: boolean;
   baseUrl?: string;
   token?: unknown;
+  tokenFile?: string;
   workspace?: string;
   botUserId?: string;
   agentId?: string;
   replyMode?: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo?: string;
   allowFrom?: string[];
   reconnectMs?: number;
   /** Opt-in: publish durable agent activity (commentary + tool) rows. */
   agentActivity?: boolean;
+  /** Publish the native command catalog to ClickClack composer autocomplete. */
+  commandMenu?: boolean;
 };
 
 /** Root ClickClack channel config with optional named accounts. */
@@ -51,12 +53,12 @@ export type ResolvedClickClackAccount = {
   replyMode: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo: string;
   allowFrom: string[];
   reconnectMs: number;
   agentActivity: boolean;
+  commandMenu: boolean;
   config: ClickClackAccountConfig;
 };
 
@@ -69,6 +71,39 @@ export type ClickClackUser = {
   handle: string;
   avatar_url: string;
   created_at: string;
+};
+
+/** Bot command row returned by the ClickClack command-menu API. */
+export type ClickClackBotCommand = {
+  id: string;
+  workspace_id: string;
+  bot_user_id: string;
+  command: string;
+  description: string;
+  args_hint: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One-time bot token and installer context returned by setup-code claim. */
+export type ClickClackSetupCodeClaim = {
+  token: string;
+  bot: {
+    id: string;
+    handle: string;
+    display_name: string;
+  };
+  workspace: {
+    id: string;
+    route_id: string;
+    slug: string;
+    name: string;
+  };
+  defaults: {
+    defaultTo?: string;
+    allowFrom?: string[];
+    agentActivity?: boolean;
+  };
 };
 
 /** Workspace object returned by the ClickClack API. */

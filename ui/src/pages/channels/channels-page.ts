@@ -3,16 +3,21 @@ import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { NostrProfile } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
+import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
+
+const NOSTR_PROFILE_TIMEOUT_ERROR =
+  "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.";
 
 type NostrOperation = {
   generation: number;
@@ -24,30 +29,10 @@ type NostrOperation = {
   headers: Record<string, string>;
 };
 
-function parseValidationErrors(details: unknown): Record<string, string> {
-  if (!Array.isArray(details)) {
-    return {};
-  }
-  const errors: Record<string, string> = {};
-  for (const entry of details) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const [rawField, ...rest] = entry.split(":");
-    if (!rawField || rest.length === 0) {
-      continue;
-    }
-    const field = rawField.trim();
-    const message = rest.join(":").trim();
-    if (field && message) {
-      errors[field] = message;
-    }
-  }
-  return errors;
-}
-
-function buildNostrProfileUrl(accountId: string, suffix = ""): string {
-  return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
+function formatNostrProfileOperationError(error: unknown, prefix: string): string {
+  return error instanceof DOMException && error.name === "TimeoutError"
+    ? NOSTR_PROFILE_TIMEOUT_ERROR
+    : `${prefix}: ${String(error)}`;
 }
 
 class ChannelsPage extends OpenClawLightDomElement {
@@ -59,6 +44,17 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   @state()
   private nostrProfileAccountId: string | null = null;
+
+  @state()
+  private selectedChannel: string | null = null;
+
+  private readonly wizardHost = new ChannelWizardHost({
+    getContext: () => this.context,
+    requestUpdate: () => this.requestUpdate(),
+    clearSelection: () => {
+      this.selectedChannel = null;
+    },
+  });
 
   private schemaLoadStarted = false;
   private gatewaySource?: ApplicationContext["gateway"];
@@ -166,6 +162,8 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.wizardHost.cancelOnDisconnect();
+    this.selectedChannel = null;
     this.gatewaySource = undefined;
     this.channelsSource = undefined;
     this.gatewayClient = null;
@@ -320,21 +318,11 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = pendingForm;
 
     try {
-      const response = await fetch(buildNostrProfileUrl(operation.accountId), {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...operation.headers,
-        },
-        body: JSON.stringify(form.values),
+      const { data, response } = await putNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
+        values: form.values,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        details?: unknown;
-        persisted?: boolean;
-      } | null;
-
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
@@ -377,7 +365,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         saving: false,
-        error: `Profile update failed: ${String(err)}`,
+        error: formatNostrProfileOperationError(err, "Profile update failed"),
         success: null,
       };
     }
@@ -400,22 +388,10 @@ class ChannelsPage extends OpenClawLightDomElement {
     };
 
     try {
-      const response = await fetch(buildNostrProfileUrl(operation.accountId, "/import"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...operation.headers,
-        },
-        body: JSON.stringify({ autoMerge: true }),
+      const { data, response } = await importNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        imported?: NostrProfile;
-        merged?: NostrProfile;
-        saved?: boolean;
-      } | null;
-
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
@@ -454,7 +430,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrProfileFormState = {
         ...currentForm,
         importing: false,
-        error: `Profile import failed: ${String(err)}`,
+        error: formatNostrProfileOperationError(err, "Profile import failed"),
         success: null,
       };
     }
@@ -468,7 +444,6 @@ class ChannelsPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
-          <div class="page-sub">${subtitleForRoute("channels")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(
@@ -490,10 +465,27 @@ class ChannelsPage extends OpenClawLightDomElement {
           configFormDirty: config.configFormDirty,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
+          selectedChannel: this.selectedChannel,
+          wizard: this.wizardHost.state,
+          wizardMultiselect: this.wizardHost.multiselect,
+          setupBlockedByDirtyConfig: this.wizardHost.blockedByDirtyConfig,
+          onShowDetail: (channelId) => {
+            this.selectedChannel = channelId;
+          },
+          onCloseDetail: () => {
+            this.selectedChannel = null;
+          },
+          onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
+          onWizardAnswer: (value) => this.wizardHost.answer(value),
+          onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
+          onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
-          onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
-          onWhatsAppWait: () => void context.channels.waitWhatsApp(),
-          onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
+          onWhatsAppStart: (force) =>
+            void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
+          onWhatsAppWait: () =>
+            void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
+          onWhatsAppLogout: () =>
+            void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),

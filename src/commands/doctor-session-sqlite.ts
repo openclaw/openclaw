@@ -55,12 +55,13 @@ import {
 } from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
-import type {
-  DoctorSessionSqliteIssue,
-  DoctorSessionSqliteMode,
-  DoctorSessionSqliteOptions,
-  DoctorSessionSqliteReport,
-  DoctorSessionSqliteTargetReport,
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteMode,
+  type DoctorSessionSqliteOptions,
+  type DoctorSessionSqliteReport,
+  type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 export {
   restoreSessionSqliteMigrationRun,
@@ -81,13 +82,6 @@ type LegacySessionRecord = {
   sessionKey: string;
   transcriptPath?: string;
 };
-
-const WARNING_ISSUE_CODES = new Set([
-  "transcript_missing",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "unreferenced_jsonl_archive_failed",
-]);
 
 /** Runs the targeted doctor SQLite session migration/inspection submode. */
 export async function runDoctorSessionSqlite(
@@ -140,9 +134,9 @@ export async function runDoctorSessionSqlite(
   }
   if (activeRun) {
     archiveImportedLegacySessionStores(targets, reports, activeRun, fullyCoveredStorePaths);
-    const hasIssues = reports.some((report) => report.issues.length > 0);
+    const hasBlockingIssues = reports.some((report) => blockingIssueCount(report) > 0);
     activeRun.manifest.completedAt = new Date().toISOString();
-    if (hasIssues) {
+    if (hasBlockingIssues) {
       activeRun.manifest.failedAt = activeRun.manifest.completedAt;
       const failureReports = writeSessionSqliteMigrationFailureReports(activeRun.manifestPath, {
         reason: "doctor import reported session SQLite migration issues",
@@ -259,7 +253,7 @@ async function inspectOrMigrateTarget(params: {
     return report;
   }
   if (params.mode === "compact") {
-    compactSqliteDatabase(params.target, report);
+    compactSqliteDatabase(params.target, report, { env: params.env });
     report.sqliteEntries = readSqliteEntryCount(params.target);
     appendSqliteDbStats(params.target, report);
     return report;
@@ -297,7 +291,11 @@ async function inspectOrMigrateTarget(params: {
     if (validationPassed) {
       // Post-import compact retrofits auto_vacuum=INCREMENTAL onto pre-flip
       // databases and returns the pages the import churn freed.
-      compactSqliteDatabase(params.target, report, { closeImportedHandle: true });
+      compactSqliteDatabase(params.target, report, {
+        closeImportedHandle: true,
+        env: params.env,
+        migrateOlderSchema: true,
+      });
     }
   }
   report.unreferencedJsonlFiles = listUnreferencedJsonlFiles(params.target.storePath, [
@@ -337,7 +335,7 @@ function resolveFullyCoveredLegacyStorePaths(
           isLegacySessionRecordOwnedByTarget(cfg, target, record.sessionKey),
       ),
     );
-    if (issues.length === 0 && coversEveryRecord) {
+    if (issues.every(isSessionSqliteMigrationWarning) && coversEveryRecord) {
       covered.add(storePath);
     }
   }
@@ -455,7 +453,7 @@ function countLegacyTranscript(
 }
 
 function blockingIssueCount(report: DoctorSessionSqliteTargetReport): number {
-  return report.issues.filter((issue) => !WARNING_ISSUE_CODES.has(issue.code)).length;
+  return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
 }
 
 async function importLegacySessionRecord(
@@ -985,13 +983,22 @@ function appendSqliteDbStats(
 function compactSqliteDatabase(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
-  options: { closeImportedHandle?: boolean } = {},
+  options: {
+    closeImportedHandle?: boolean;
+    env?: NodeJS.ProcessEnv;
+    migrateOlderSchema?: boolean;
+  } = {},
 ): void {
   try {
     if (options.closeImportedHandle) {
       closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
     }
-    report.compact = compactDoctorSessionSqliteTarget(target);
+    report.compact = options.migrateOlderSchema
+      ? compactDoctorSessionSqliteTarget(target, {
+          env: options.env,
+          migrateOlderSchema: true,
+        })
+      : compactDoctorSessionSqliteTarget(target, { env: options.env });
   } catch (err) {
     report.issues.push({
       code: "sqlite_compact_failed",
@@ -1252,3 +1259,4 @@ function sumTargets(
 ): number {
   return targets.reduce((total, target) => total + target[key], 0);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

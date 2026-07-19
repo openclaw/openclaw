@@ -4,9 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
 type HistoryMessage = {
@@ -28,7 +30,7 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 }
 
-function createHistoryToolWithMessage(content: string) {
+function createHistoryToolWithMessage(content: unknown) {
   return createSessionsHistoryTool({
     config: {},
     callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
@@ -63,6 +65,18 @@ function readMessageSeq(message: unknown): number | undefined {
   return typeof seq === "number" ? seq : undefined;
 }
 
+function readMessageId(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const meta = (message as Record<string, unknown>)["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  const id = (meta as Record<string, unknown>).id;
+  return typeof id === "string" ? id : undefined;
+}
+
 describe("sessions_history redaction", () => {
   beforeAll(async () => {
     previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -80,6 +94,21 @@ describe("sessions_history redaction", () => {
     if (tempDir) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("declares complete success and closed error contracts", async () => {
+    const tool = createHistoryToolWithMessage("hello");
+    const result = await tool.execute("contract", { sessionKey: "main" });
+
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(Value.Check(tool.outputSchema!, { status: "error", error: "missing" })).toBe(true);
+    expect(
+      Value.Check(tool.outputSchema!, { status: "forbidden", error: "hidden", extra: true }),
+    ).toBe(false);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+    );
   });
 
   it("redacts recalled session text even when log redaction is disabled", async () => {
@@ -111,6 +140,42 @@ describe("sessions_history redaction", () => {
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
 
+  it.each([
+    {
+      name: "reports decoded bytes for raw image data",
+      content: [
+        {
+          type: "image",
+          data: Buffer.from([0, 1, 2, 3, 4]).toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+      expectedBytes: 5,
+    },
+    {
+      name: "replaces stale bytes for empty image data",
+      content: [{ type: "image", data: "", mimeType: "image/png", bytes: 999 }],
+      expectedBytes: 0,
+    },
+    {
+      name: "preserves existing bytes when image data is already omitted",
+      content: [{ type: "image", mimeType: "image/png", bytes: 37, omitted: true }],
+      expectedBytes: 37,
+    },
+  ])("$name", async ({ content, expectedBytes }) => {
+    const tool = createHistoryToolWithMessage(content);
+
+    const result = await tool.execute("call-1", { sessionKey: "main" });
+    const details = readHistoryDetails(result);
+
+    expect(details.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "image", mimeType: "image/png", bytes: expectedBytes, omitted: true }],
+      },
+    ]);
+  });
+
   it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {
     const tool = createHistoryToolWithMessage("hello");
 
@@ -133,6 +198,22 @@ describe("sessions_history redaction", () => {
       "offset must be a non-negative integer",
     );
     expect(requests).toEqual([]);
+  });
+
+  it("rejects offset and messageId together", async () => {
+    const tool = createHistoryToolWithMessage("hello");
+
+    await expect(
+      tool.execute("call-1", { sessionKey: "main", offset: 0, messageId: "message-1" }),
+    ).rejects.toThrow("offset and messageId cannot be used together");
+  });
+
+  it("rejects sessionId without messageId", async () => {
+    const tool = createHistoryToolWithMessage("hello");
+
+    await expect(
+      tool.execute("call-1", { sessionKey: "main", sessionId: "session-1" }),
+    ).rejects.toThrow("sessionId requires messageId");
   });
 
   it("preserves the bounded default history request", async () => {
@@ -189,6 +270,71 @@ describe("sessions_history redaction", () => {
       hasMore: true,
       totalMessages: 4,
     });
+  });
+
+  it("requests history around a search result message id", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return {
+          messages: [
+            { role: "user", content: "before" },
+            { role: "assistant", content: "matching message" },
+            { role: "user", content: "after" },
+          ],
+        } as T;
+      },
+    });
+
+    const result = await tool.execute("call-1", {
+      sessionKey: "main",
+      limit: 3,
+      messageId: "matching-message",
+      sessionId: "matching-session",
+    });
+
+    expect(requests[0]).toMatchObject({
+      method: "chat.history",
+      params: {
+        sessionKey: "main",
+        limit: 3,
+        messageId: "matching-message",
+        sessionId: "matching-session",
+      },
+    });
+    expect(result.details).toMatchObject({
+      messages: [{ content: "before" }, { content: "matching message" }, { content: "after" }],
+    });
+  });
+
+  it("keeps the anchored message when the history byte cap trims neighbors", async () => {
+    const anchorId = "message-10";
+    const messages = Array.from({ length: 30 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message-${index + 1} ${"x".repeat(4_000)}`,
+      __openclaw: { id: `message-${index + 1}`, seq: index + 1 },
+    }));
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({ messages, offset: 0, totalMessages: messages.length }) as T,
+    });
+
+    const result = await tool.execute("call-1", {
+      sessionKey: "main",
+      messageId: anchorId,
+    });
+    const details = readHistoryDetails(result);
+    const returnedMessages = details.messages as unknown[];
+
+    expect(returnedMessages.length).toBeLessThan(messages.length);
+    expect(returnedMessages.some((message) => readMessageId(message) === anchorId)).toBe(true);
+    expect(details).toMatchObject({ truncated: true, droppedMessages: true });
+    expect(details.offset).toBeUndefined();
+    expect(details.nextOffset).toBeUndefined();
+    expect(details.hasMore).toBeUndefined();
   });
 
   it("recomputes pagination after the tool byte cap drops older returned messages", async () => {

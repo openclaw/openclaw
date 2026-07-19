@@ -302,7 +302,7 @@ function resolveDiscordModelPickerSubmissionRuntime(params: {
   );
 }
 
-export async function handleDiscordModelPickerInteraction(params: {
+async function handleDiscordModelPickerInteraction(params: {
   interaction: ButtonInteraction | StringSelectMenuInteraction;
   data: ComponentData;
   ctx: DiscordModelPickerContext;
@@ -780,3 +780,4 @@ export function createDiscordModelPickerFallbackSelect(
 ): StringSelectMenu {
   return new DiscordModelPickerFallbackSelect(params);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

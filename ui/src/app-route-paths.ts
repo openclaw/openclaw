@@ -3,24 +3,35 @@ import type { RouteLocation } from "@openclaw/uirouter";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
+  custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
-  agents: { path: "/agents" },
+  apps: { path: "/apps" },
+  agents: { path: "/settings/agents", aliases: ["/agents"] },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
   config: { path: "/settings/general", aliases: ["/config"] },
   profile: { path: "/settings/profile", aliases: ["/profile"] },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
   appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
+  notifications: { path: "/settings/notifications" },
+  security: { path: "/settings/security" },
+  advanced: { path: "/settings/advanced" },
+  approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
+  labs: { path: "/settings/labs" },
   about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
+  "model-setup": { path: "/settings/model-setup", aliases: ["/model-setup"] },
   "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
+  // Memory import, sessions, and worktrees are workspace destinations; the
+  // /settings/* aliases keep pre-restructure bookmarks and deep links working.
+  "memory-import": { path: "/memory-import", aliases: ["/settings/memory-import"] },
   workboard: { path: "/workboard" },
-  worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
-  sessions: { path: "/sessions" },
+  worktrees: { path: "/worktrees", aliases: ["/settings/worktrees"] },
+  sessions: { path: "/sessions", aliases: ["/settings/sessions"] },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
   logs: { path: "/logs" },
@@ -29,7 +40,7 @@ const APP_ROUTE_DEFINITIONS = {
   plugins: { path: "/settings/plugins" },
   cron: { path: "/cron" },
   tasks: { path: "/tasks" },
-  nodes: { path: "/nodes" },
+  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },
 } as const;
 
@@ -44,7 +55,7 @@ export function normalizeBasePath(basePath: string): string {
   return normalizeRouteBasePath(basePath);
 }
 
-export function normalizePath(path: string): string {
+function normalizePath(path: string): string {
   return normalizeRoutePath(path);
 }
 

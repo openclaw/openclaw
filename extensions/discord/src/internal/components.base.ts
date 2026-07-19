@@ -11,7 +11,7 @@ export type ComponentData<
 > = {
   [K in T]: ComponentParserResult["data"][K];
 };
-export type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
+type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
 
 export function parseCustomId(id: string): ComponentParserResult {
   const [rawKeyValue, ...parts] = id.split(";");

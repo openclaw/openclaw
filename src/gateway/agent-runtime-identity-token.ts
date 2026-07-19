@@ -1,15 +1,18 @@
 // Purpose-scoped local agent runtime identity token for Gateway clients.
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../channels/plugins/types.public.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
 import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
 const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
+const MESSAGE_ACTION_TOKEN_TTL_MS = 60_000;
 
 export type AgentRuntimeIdentity = {
   kind: "agentRuntime";
@@ -47,12 +50,6 @@ function signPayload(secret: string, payload: string): string {
     .digest("base64url");
 }
 
-function signatureMatches(value: string, expected: string): boolean {
-  const valueBytes = Buffer.from(value);
-  const expectedBytes = Buffer.from(expected);
-  return valueBytes.length === expectedBytes.length && timingSafeEqual(valueBytes, expectedBytes);
-}
-
 function encodePayload(payload: AgentRuntimeIdentityTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
@@ -70,6 +67,14 @@ function decodeMessageActionContext(
     return undefined;
   }
   const rawToolContext = value.toolContext;
+  const sourceReplyFinal = value.sourceReplyFinal;
+  const sourceReplyToolCallId = normalizeOptionalString(value.sourceReplyToolCallId);
+  if (sourceReplyFinal !== undefined && typeof sourceReplyFinal !== "boolean") {
+    return undefined;
+  }
+  if (value.sourceReplyToolCallId !== undefined && !sourceReplyToolCallId) {
+    return undefined;
+  }
   if (rawToolContext !== undefined && !isRecord(rawToolContext)) {
     return undefined;
   }
@@ -98,7 +103,7 @@ function decodeMessageActionContext(
     const candidate = rawToolContext?.[key];
     return typeof candidate === "boolean" ? candidate : undefined;
   };
-  const toolContext: ChannelThreadingToolContext | undefined = rawToolContext
+  const toolContext: InternalChannelThreadingToolContext | undefined = rawToolContext
     ? ({
         currentChannelId: normalizeOptionalString(rawToolContext.currentChannelId),
         currentChatType,
@@ -109,6 +114,7 @@ function decodeMessageActionContext(
           | undefined,
         currentThreadTs: normalizeOptionalString(rawToolContext.currentThreadTs),
         currentMessageId,
+        currentSourceTurnId: normalizeOptionalString(rawToolContext.currentSourceTurnId),
         replyToMode:
           replyToMode === "off" ||
           replyToMode === "first" ||
@@ -122,14 +128,25 @@ function decodeMessageActionContext(
             : undefined,
         sameChannelThreadRequired: readOptionalBoolean("sameChannelThreadRequired"),
         skipCrossContextDecoration: readOptionalBoolean("skipCrossContextDecoration"),
-      } satisfies ChannelThreadingToolContext)
+      } satisfies InternalChannelThreadingToolContext)
     : undefined;
-  return {
+  const context = {
     expiresAtMs: value.expiresAtMs,
     sessionId: normalizeOptionalString(value.sessionId),
     requesterAccountId: normalizeOptionalString(value.requesterAccountId),
     requesterSenderId: normalizeOptionalString(value.requesterSenderId),
     toolContext,
+  };
+  if (sourceReplyFinal === true) {
+    if (!sourceReplyToolCallId) {
+      return undefined;
+    }
+    return { ...context, sourceReplyFinal: true, sourceReplyToolCallId };
+  }
+  return {
+    ...context,
+    ...(sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+    ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
   };
 }
 
@@ -181,11 +198,28 @@ export async function mintAgentRuntimeIdentityToken(params: {
   sessionKey: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
 }): Promise<string> {
+  if (
+    params.messageActionContext?.sourceReplyFinal === true &&
+    !normalizeOptionalString(params.messageActionContext.sourceReplyToolCallId)
+  ) {
+    throw new Error("terminal source reply requires tool-call correlation");
+  }
+  const messageActionContext = params.messageActionContext
+    ? {
+        ...params.messageActionContext,
+        // The process-local turn capability may live for the whole run, but a
+        // copied bearer must expire shortly after its individual tool action.
+        expiresAtMs: Math.min(
+          params.messageActionContext.expiresAtMs,
+          Date.now() + MESSAGE_ACTION_TOKEN_TTL_MS,
+        ),
+      }
+    : undefined;
   const payload = encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
-    ...(params.messageActionContext ? { messageActionContext: params.messageActionContext } : {}),
+    ...(messageActionContext ? { messageActionContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
@@ -205,7 +239,7 @@ export async function verifyAgentRuntimeIdentityToken(
     return undefined;
   }
   const sharedSecret = await readSharedAgentRuntimeIdentitySecret();
-  if (!sharedSecret || !signatureMatches(signature, signPayload(sharedSecret, payloadPart))) {
+  if (!sharedSecret || !safeEqualSecret(signature, signPayload(sharedSecret, payloadPart))) {
     return undefined;
   }
   const payload = decodePayload(payloadPart, nowMs ?? Date.now());

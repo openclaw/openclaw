@@ -245,11 +245,17 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: primaryActionTitle)",
   ],
   "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
-    "title: LocalizedStringResource",
-    "status: PrivacyPermissionStatus",
     "detail: LocalizedStringResource",
+    "statusLabel: LocalizedStringResource? = nil",
     "actionTitle: LocalizedStringResource?",
-    "String(localized: status.resource)",
+  ],
+  "apps/ios/Sources/Permissions/DevicePermissionRow.swift": [
+    "title: LocalizedStringResource",
+    "detail: LocalizedStringResource",
+    "statusLabel: LocalizedStringResource?",
+    "actionTitle: LocalizedStringResource?",
+    "Text(self.title)",
+    "Text(actionTitle)",
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
     'String(localized: "Connecting...")',
@@ -375,6 +381,7 @@ const MACOS_CATALOG = {
       "Save",
     ],
     "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
+    "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift": ["Wake up, my friend!"],
   },
 } as const;
 
@@ -852,6 +859,20 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
   return build;
 }
 
+/**
+ * Regenerates every Apple derived artifact (iOS catalog, contradiction report,
+ * InfoPlist strings). Shared by this CLI and native-app-i18n's sync so the
+ * inventory can never be rewritten without its derived catalogs.
+ */
+export async function syncAppleAppI18n(): Promise<{
+  build: AppleCatalogBuild;
+  infoPlistFiles: number;
+}> {
+  const build = await syncIosCatalog(true);
+  const infoPlistFiles = await syncIosInfoPlist(true);
+  return { build, infoPlistFiles };
+}
+
 export async function checkAppleAppI18n() {
   await validateRuntimeInterpolationPaths();
   for (const [sourcePath, contracts] of Object.entries(LOCALIZED_WRAPPER_CONTRACTS)) {
@@ -950,8 +971,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (command === "check") {
     await checkAppleAppI18n();
   } else if (command === "sync-ios" && flag === "--write") {
-    const build = await syncIosCatalog(true);
-    const infoPlistFiles = await syncIosInfoPlist(true);
+    const { build, infoPlistFiles } = await syncAppleAppI18n();
     process.stdout.write(
       `apple-app-i18n: synced iOS catalog and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length}\n`,
     );

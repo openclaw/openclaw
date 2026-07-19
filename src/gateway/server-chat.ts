@@ -2,6 +2,7 @@
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
@@ -9,6 +10,7 @@ import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-commo
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   type AgentEventPayload,
@@ -34,6 +36,7 @@ import {
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
@@ -201,11 +204,7 @@ function normalizeHeartbeatChatFinalText(params: {
  */
 const AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
-export type ChatEventBroadcast = (
-  event: string,
-  payload: unknown,
-  opts?: { dropIfSlow?: boolean },
-) => void;
+export type ChatEventBroadcast = GatewayBroadcastFn;
 
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
@@ -303,12 +302,7 @@ function resolveBroadcastDelta(params: {
 
 export type AgentEventHandlerOptions = {
   broadcast: ChatEventBroadcast;
-  broadcastToConnIds: (
-    event: string,
-    payload: unknown,
-    connIds: ReadonlySet<string>,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: NodeSendToSession;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
@@ -356,6 +350,10 @@ export type AgentEventHandlerOptions = {
   }) => { active: boolean; runIds: string[] };
 };
 
+type AgentEventHandler = ((event: AgentEventPayload) => void) & {
+  dispose: () => void;
+};
+
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
@@ -380,7 +378,7 @@ export function createAgentEventHandler({
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
-}: AgentEventHandlerOptions): (event: AgentEventPayload) => void {
+}: AgentEventHandlerOptions): AgentEventHandler {
   const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
     const claimId = evt.contextClaimId;
     if (!claimId) {
@@ -505,6 +503,7 @@ export function createAgentEventHandler({
               ? {
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
+                  lastRunError: row.lastRunError,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
@@ -527,7 +526,18 @@ export function createAgentEventHandler({
     const activeRunFields = activeRunState
       ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
       : {};
-    const session = row ? { ...row, ...lifecyclePatch, ...activeRunFields } : undefined;
+    const clearsLastRunError =
+      Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
+    const session = row
+      ? {
+          ...row,
+          ...lifecyclePatch,
+          ...activeRunFields,
+          // JSON drops undefined values, so a start/success must send null to
+          // evict a prior failure reason from the subscribed client row.
+          ...(clearsLastRunError ? { lastRunError: null } : {}),
+        }
+      : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
     }
@@ -582,6 +592,7 @@ export function createAgentEventHandler({
       model: row?.model,
       ...activeRunFields,
       status: snapshotSource.status,
+      lastRunError: snapshotSource.lastRunError ?? null,
       startedAt: snapshotSource.startedAt,
       endedAt: snapshotSource.endedAt,
       runtimeMs: snapshotSource.runtimeMs,
@@ -733,6 +744,16 @@ export function createAgentEventHandler({
         // Some local lifecycle sources only carry the aborted flag. Preserve
         // that terminal state instead of misclassifying the run as a timeout.
         const terminalStopReason = evtStopReason ?? (lifecycleAborted ? "aborted" : undefined);
+        const yieldedWaiting = isAgentLifecycleYieldedWaiting({
+          phase: lifecyclePhase,
+          yielded: evt.data?.yielded,
+          livenessState: evt.data?.livenessState,
+          stopReason: terminalStopReason,
+          aborted: lifecycleAborted,
+          status: evt.data?.status,
+          timeoutPhase: evt.data?.timeoutPhase,
+          error: evt.data?.error,
+        });
         const terminalOutcome = buildAgentRunTerminalOutcome({
           status: lifecyclePhase === "error" ? "error" : lifecycleAborted ? "timeout" : "ok",
           error: evt.data?.error,
@@ -765,6 +786,7 @@ export function createAgentEventHandler({
               controlUiVisible: isControlUiVisible,
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+              yielded: yieldedWaiting ? true : undefined,
             },
           );
         }
@@ -1022,13 +1044,19 @@ export function createAgentEventHandler({
   ) => {
     const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
     if (opts?.controlUiVisible ?? true) {
-      broadcast("chat", payload, { dropIfSlow: opts?.dropIfSlow });
+      broadcast("chat", payload, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
       sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
       return;
     }
     const recipients = sessionMessageSubscribers.get(deliverySessionKey);
     if (recipients.size > 0) {
-      broadcastToConnIds("chat", payload, recipients, { dropIfSlow: opts?.dropIfSlow });
+      broadcastToConnIds("chat", payload, recipients, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
     }
   };
 
@@ -1046,6 +1074,7 @@ export function createAgentEventHandler({
       controlUiVisible?: boolean;
       firstAssistantTimingEntry?: ChatRunEntry;
       abortErrorMessage?: string;
+      yielded?: true;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -1070,6 +1099,7 @@ export function createAgentEventHandler({
           ? { errorMessage: opts.abortErrorMessage }
           : {}),
         ...(stopReason && { stopReason }),
+        ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
           text && !shouldSuppressSilent
             ? {
@@ -1103,7 +1133,11 @@ export function createAgentEventHandler({
     opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
   ) => {
     if (opts?.controlUiVisible ?? true) {
-      broadcast("agent", payload);
+      broadcast("agent", payload, {
+        sessionKeys: sessionKey
+          ? [resolveSessionDeliveryKey(sessionKey, opts?.agentId)]
+          : undefined,
+      });
       if (sessionKey) {
         sendNodeSessionPayloadForAgent(sessionKey, "agent", payload, opts?.agentId);
       }
@@ -1112,11 +1146,13 @@ export function createAgentEventHandler({
     if (!sessionKey) {
       return;
     }
-    const recipients = sessionMessageSubscribers.get(
-      resolveSessionDeliveryKey(sessionKey, opts?.agentId),
-    );
+    const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
+    const recipients = sessionMessageSubscribers.get(deliverySessionKey);
     if (recipients.size > 0) {
-      broadcastToConnIds("agent", payload, recipients, { dropIfSlow: opts?.dropIfSlow });
+      broadcastToConnIds("agent", payload, recipients, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
     }
   };
 
@@ -1266,7 +1302,7 @@ export function createAgentEventHandler({
     }
   };
 
-  return (event: AgentEventPayload) => {
+  const handleEvent = (event: AgentEventPayload) => {
     const evt = event as AgentEventRuntimePayload;
     if (!shouldProcessOwnedEvent(evt)) {
       return;
@@ -1357,23 +1393,40 @@ export function createAgentEventHandler({
         : agentPayload;
     if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
-      broadcast("agent", {
-        runId: eventRunId,
-        stream: "error",
-        ts: Date.now(),
-        sessionKey,
-        ...(spawnedBy && { spawnedBy }),
-        ...(isHeartbeat !== undefined && { isHeartbeat }),
-        data: {
-          reason: "seq gap",
-          expected: last + 1,
-          received: evt.seq,
+      broadcast(
+        "agent",
+        {
+          runId: eventRunId,
+          stream: "error",
+          ts: Date.now(),
+          sessionKey,
+          ...(spawnedBy && { spawnedBy }),
+          ...(isHeartbeat !== undefined && { isHeartbeat }),
+          data: {
+            reason: "seq gap",
+            expected: last + 1,
+            received: evt.seq,
+          },
         },
-      });
+        {
+          sessionKeys: sessionKey
+            ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+            : undefined,
+        },
+      );
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (evt.stream === "assistant") {
       updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    }
+    if (evt.stream === "plan" && evt.data?.phase === "update") {
+      const steps = normalizeAgentPlanSteps(evt.data.steps) ?? [];
+      const explanation =
+        typeof evt.data.explanation === "string" ? evt.data.explanation.trim() : "";
+      chatRunState.planSnapshots.set(clientRunId, {
+        steps,
+        ...(explanation ? { explanation } : {}),
+      });
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
@@ -1410,7 +1463,8 @@ export function createAgentEventHandler({
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
-      // messages to messaging surfaces (Telegram, Discord, etc.).
+      // messages to messaging surfaces (Telegram, Discord, etc.). Carry the
+      // delivery key so scoped clients must also own the session subscription.
       const runToolRecipients = toolEventRecipients.get(evt.runId);
       if (
         isControlUiVisible &&
@@ -1427,6 +1481,11 @@ export function createAgentEventHandler({
               }
             : agentPayload,
           runToolRecipients,
+          {
+            sessionKeys: sessionKey
+              ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+              : undefined,
+          },
         );
       }
       if (!isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
@@ -1611,4 +1670,16 @@ export function createAgentEventHandler({
       }
     }
   };
+
+  return Object.assign(handleEvent, {
+    dispose: () => {
+      // Deferred provider errors belong to this gateway subscription. Letting
+      // them outlive shutdown can project stale terminal state into a successor.
+      for (const pending of pendingTerminalLifecycleErrors.values()) {
+        clearTimeout(pending.timer);
+      }
+      pendingTerminalLifecycleErrors.clear();
+    },
+  });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

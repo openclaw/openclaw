@@ -519,6 +519,7 @@ describe("plugin-sdk root alias", () => {
         "src",
         "number-coercion.ts",
       ),
+      result: path.join(packageRoot, "packages", "normalization-core", "src", "result.ts"),
       retry: path.join(packageRoot, "packages", "retry", "src", "index.ts"),
     };
     const lazyModule = loadRootAliasWithStubs({
@@ -535,6 +536,7 @@ describe("plugin-sdk root alias", () => {
     expect(aliasMap["@openclaw/normalization-core/number-coercion"]).toBe(
       sourcePaths.numberCoercion,
     );
+    expect(aliasMap["@openclaw/normalization-core/result"]).toBe(sourcePaths.result);
     expect(aliasMap["@openclaw/retry"]).toBe(sourcePaths.retry);
   });
 
@@ -592,6 +594,7 @@ describe("plugin-sdk root alias", () => {
       "@openclaw/normalization-core/error-coercion",
       "@openclaw/normalization-core/number-coercion",
       "@openclaw/normalization-core/record-coerce",
+      "@openclaw/normalization-core/result",
       "@openclaw/normalization-core/string-coerce",
       "@openclaw/normalization-core/string-normalization",
       "@openclaw/normalization-core/utf16-slice",

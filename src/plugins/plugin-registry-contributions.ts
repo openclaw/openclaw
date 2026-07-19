@@ -1,5 +1,4 @@
 /** Loads manifest and installed-index contributions used to build plugin registry snapshots. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -26,22 +25,19 @@ import {
   type LoadPluginRegistryParams,
   type PluginRegistrySnapshot,
 } from "./plugin-registry-snapshot.js";
-export {
-  createPluginRegistryIdNormalizer,
-  type PluginRegistryIdNormalizerOptions,
-} from "./plugin-registry-id-normalizer.js";
+export { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 
-export type PluginLookUpTable = Pick<
+type PluginLookUpTable = Pick<
   PluginMetadataSnapshot,
   "index" | "manifestRegistry" | "plugins" | "normalizePluginId" | "owners"
 >;
 
-export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
+type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   lookUpTable?: PluginLookUpTable;
 };
 
-export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
+type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   pluginIds?: readonly string[];
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
@@ -57,37 +53,32 @@ export type PluginRegistryContributionKey =
   | "commandAliases"
   | "contracts";
 
-export type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions & {
+type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
   matches: string | ((contributionId: string) => boolean);
 };
 
-export type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
+type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
 };
 
-export type ResolveProviderOwnersParams = PluginRegistryContributionOptions & {
-  providerId: string;
-};
-
-export type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
+type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
   contract: PluginManifestContractListKey;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
 };
 
-export type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
+type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
   contract: PluginManifestContractListKey;
   value: string | undefined;
   origin?: PluginOrigin;
 };
 
-export type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams =
-  LoadPluginRegistryParams & {
-    contract: PluginManifestContractListKey;
-    path: string | undefined;
-    origin?: PluginOrigin;
-  };
+type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams = LoadPluginRegistryParams & {
+  contract: PluginManifestContractListKey;
+  path: string | undefined;
+  origin?: PluginOrigin;
+};
 
 function normalizeContributionId(value: string): string {
   return value.trim();
@@ -371,33 +362,6 @@ export function resolvePluginContributionOwners(
       listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
     ),
   );
-}
-
-export function resolveProviderOwners(params: ResolveProviderOwnersParams): readonly string[] {
-  const providerId = normalizeProviderId(params.providerId);
-  if (!providerId) {
-    return [];
-  }
-  if (params.lookUpTable) {
-    const index = params.lookUpTable.index;
-    const owners: string[] = [];
-    for (const [contributionId, ownerIds] of params.lookUpTable.owners.providers.entries()) {
-      if (normalizeProviderId(contributionId) === providerId) {
-        owners.push(...ownerIds);
-      }
-    }
-    return filterContributionOwnerIds({
-      owners,
-      index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    });
-  }
-  return resolvePluginContributionOwners({
-    ...params,
-    contribution: "providers",
-    matches: (contributionId) => normalizeProviderId(contributionId) === providerId,
-  });
 }
 
 export function resolveManifestContractPluginIds(

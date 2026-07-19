@@ -16,7 +16,7 @@ import {
 } from "./config-env-vars.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "./gateway-env-selection.js";
-import { collectDurableServiceEnvVars, readStateDirDotEnvVars } from "./state-dir-dotenv.js";
+import { collectDurableServiceEnvVars } from "./state-dir-dotenv.js";
 import { withEnvOverride, withTempHome, writeStateDirDotEnv } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -598,7 +598,7 @@ describe("config env vars", () => {
       await writeStateDirDotEnv("BRAVE_API_KEY=BSA-test-key\nDISCORD_BOT_TOKEN=discord-tok\n", {
         env: process.env,
       });
-      const vars = readStateDirDotEnvVars(process.env);
+      const vars = collectDurableServiceEnvVars({ env: process.env });
       expect(vars.BRAVE_API_KEY).toBe("BSA-test-key");
       expect(vars.DISCORD_BOT_TOKEN).toBe("discord-tok");
     });
@@ -606,7 +606,7 @@ describe("config env vars", () => {
 
   it("returns empty record when the state-dir .env file is missing", async () => {
     await withTempHome(async (_home) => {
-      expect(readStateDirDotEnvVars(process.env)).toStrictEqual({});
+      expect(collectDurableServiceEnvVars({ env: process.env })).toStrictEqual({});
     });
   });
 
@@ -616,7 +616,7 @@ describe("config env vars", () => {
         "NODE_OPTIONS=--require /tmp/evil.js\nOPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1\nEMPTY=\nVALID=ok\n",
         { env: process.env },
       );
-      const vars = readStateDirDotEnvVars(process.env);
+      const vars = collectDurableServiceEnvVars({ env: process.env });
       expect(vars.NODE_OPTIONS).toBeUndefined();
       expect(vars.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
       expect(vars.EMPTY).toBeUndefined();
@@ -631,8 +631,8 @@ describe("config env vars", () => {
         stateDir: customStateDir,
       });
       expect(
-        readStateDirDotEnvVars({
-          OPENCLAW_STATE_DIR: customStateDir,
+        collectDurableServiceEnvVars({
+          env: { OPENCLAW_STATE_DIR: customStateDir },
         }).CUSTOM_KEY,
       ).toBe("from-override");
     });

@@ -1,6 +1,7 @@
 // Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
+import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
 
 // SQLite schema setup for builtin memory index, embedding cache, and FTS.
 
@@ -13,10 +14,43 @@ export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 export const MEMORY_INDEX_VECTOR_TABLE = "memory_index_chunks_vec";
 
-const MEMORY_PATH_FTS_TRIGGER_NAMES = [
-  "memory_index_paths_fts_after_insert",
-  "memory_index_paths_fts_after_update",
-  "memory_index_paths_fts_after_delete",
+/** Optional canonical triggers owned by the derived path FTS index. */
+export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
+  {
+    name: "memory_index_paths_fts_after_insert",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
+      AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
+      BEGIN
+        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+        VALUES (NEW.id, NEW.path, NEW.source);
+      END;
+    `,
+  },
+  {
+    name: "memory_index_paths_fts_after_update",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
+      AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
+      BEGIN
+        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+        WHERE rowid = OLD.id;
+        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+        VALUES (NEW.id, NEW.path, NEW.source);
+      END;
+    `,
+  },
+  {
+    name: "memory_index_paths_fts_after_delete",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
+      AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
+      BEGIN
+        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+        WHERE rowid = OLD.id;
+      END;
+    `,
+  },
 ] as const;
 
 const LEGACY_MEMORY_INDEX_TRIGGERS = [
@@ -35,7 +69,7 @@ const MEMORY_INDEX_SOURCE_COLUMN_TYPES = new Map<string, string>([
   ["path", "TEXT"],
   ["source", "TEXT"],
   ["hash", "TEXT"],
-  ["mtime", "INTEGER"],
+  ["mtime", "REAL"],
   ["size", "INTEGER"],
 ]);
 
@@ -158,7 +192,7 @@ function tableHasCanonicalSourceColumnTypes(db: DatabaseSync): boolean {
     const expectedType = MEMORY_INDEX_SOURCE_COLUMN_TYPES.get(column.name);
     const expectedDefault = column.name === "source" ? "'memory'" : null;
     if (
-      column.type !== expectedType ||
+      (column.type !== expectedType && !(column.name === "mtime" && column.type === "INTEGER")) ||
       column.defaultValue !== expectedDefault ||
       column.hidden !== 0
     ) {
@@ -262,10 +296,10 @@ export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
         path TEXT NOT NULL,
         source TEXT NOT NULL DEFAULT 'memory',
         hash TEXT NOT NULL,
-        mtime INTEGER NOT NULL,
+        mtime REAL NOT NULL,
         size INTEGER NOT NULL,
         UNIQUE (path, source)
-      );
+      ) STRICT;
       INSERT INTO ${MEMORY_INDEX_SOURCES_TABLE} (id, path, source, hash, mtime, size)
       SELECT rowid, path, source, hash, mtime, size
       FROM memory_index_sources_identity_migration;
@@ -330,7 +364,8 @@ function copyLegacyMemoryIndexRows(
     SELECT key, value FROM ${schema}.meta;
 
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-    SELECT path, source, hash, mtime, size FROM ${schema}.files;
+    SELECT path, source, hash, mtime, size
+    FROM ${schema}.files;
 
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
       id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
@@ -395,7 +430,7 @@ function copyLegacyMemoryIndexRows(
         dims INTEGER,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (provider, model, provider_key, hash)
-      );
+      ) STRICT;
       INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
         provider, model, provider_key, hash, embedding, dims, updated_at
       )
@@ -454,37 +489,18 @@ function migrateLegacyMemoryIndexTables(
 
 /** Drop the canonical source-to-path-FTS maintenance triggers. */
 export function dropMemoryPathFtsTriggers(db: DatabaseSync): void {
-  for (const triggerName of MEMORY_PATH_FTS_TRIGGER_NAMES) {
-    db.exec(`DROP TRIGGER IF EXISTS main.${triggerName}`);
+  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
+    db.exec(`DROP TRIGGER IF EXISTS main.${trigger.name}`);
   }
 }
 
 /** Install the canonical source-to-path-FTS maintenance triggers. */
 export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
-  db.exec(`
-    -- The named integer source identity survives VACUUM and gives every
-    -- FTS update/delete a direct rowid lookup instead of a virtual-table scan.
-    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
-    AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-      VALUES (NEW.id, NEW.path, NEW.source);
-    END;
-    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
-    AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-      WHERE rowid = OLD.id;
-      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-      VALUES (NEW.id, NEW.path, NEW.source);
-    END;
-    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
-    AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-      WHERE rowid = OLD.id;
-    END;
-  `);
+  // The named integer source identity survives VACUUM and gives every
+  // FTS update/delete a direct rowid lookup instead of a virtual-table scan.
+  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
+    db.exec(trigger.sql);
+  }
 }
 
 function ensureMemoryPathFtsSchema(params: { db: DatabaseSync; tokenizeClause: string }): void {
@@ -512,6 +528,58 @@ function ensureMemoryPathFtsSchema(params: { db: DatabaseSync; tokenizeClause: s
   }
 }
 
+function buildMemoryIndexStrictSchema(params: {
+  embeddingCacheTable: string;
+  includeEmbeddingCache: boolean;
+}): string {
+  const embeddingCacheSql = params.includeEmbeddingCache
+    ? `
+      CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        provider_key TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        dims INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, model, provider_key, hash)
+      ) STRICT;
+    `
+    : "";
+  return `
+    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_META_TABLE} (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_SOURCES_TABLE} (
+      id INTEGER PRIMARY KEY,
+      path TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'memory',
+      hash TEXT NOT NULL,
+      mtime REAL NOT NULL,
+      size INTEGER NOT NULL,
+      UNIQUE (path, source)
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_CHUNKS_TABLE} (
+      id TEXT PRIMARY KEY,
+      path TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'memory',
+      start_line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
+      hash TEXT NOT NULL,
+      model TEXT NOT NULL,
+      text TEXT NOT NULL,
+      embedding TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_STATE_TABLE} (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL
+    ) STRICT;
+    ${embeddingCacheSql}
+  `;
+}
+
 /** Ensure canonical memory index tables and the optional FTS table exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
@@ -525,36 +593,13 @@ export function ensureMemoryIndexSchema(params: {
 }): { ftsAvailable: boolean; ftsError?: string } {
   const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
   const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
+  params.db.exec(
+    buildMemoryIndexStrictSchema({
+      embeddingCacheTable,
+      includeEmbeddingCache: params.cacheEnabled,
+    }),
+  );
   params.db.exec(`
-    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_META_TABLE} (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_SOURCES_TABLE} (
-      id INTEGER PRIMARY KEY,
-      path TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'memory',
-      hash TEXT NOT NULL,
-      mtime INTEGER NOT NULL,
-      size INTEGER NOT NULL,
-      UNIQUE (path, source)
-    );
-    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_CHUNKS_TABLE} (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'memory',
-      start_line INTEGER NOT NULL,
-      end_line INTEGER NOT NULL,
-      hash TEXT NOT NULL,
-      model TEXT NOT NULL,
-      text TEXT NOT NULL,
-      embedding TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_STATE_TABLE} (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      revision INTEGER NOT NULL
-    );
     INSERT OR IGNORE INTO ${MEMORY_INDEX_STATE_TABLE} (id, revision) VALUES (1, 0);
   `);
   migrateMemoryIndexSourcesIdentity(params.db);
@@ -608,20 +653,18 @@ export function ensureMemoryIndexSchema(params: {
         ? "idx_memory_embedding_cache_updated_at"
         : "idx_embedding_cache_updated_at";
     params.db.exec(`
-      CREATE TABLE IF NOT EXISTS ${embeddingCacheTable} (
-        provider TEXT NOT NULL,
-        model TEXT NOT NULL,
-        provider_key TEXT NOT NULL,
-        hash TEXT NOT NULL,
-        embedding TEXT NOT NULL,
-        dims INTEGER,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (provider, model, provider_key, hash)
-      );
       CREATE INDEX IF NOT EXISTS ${updatedAtIndex}
         ON ${embeddingCacheTable}(updated_at);
     `);
   }
+  migrateSqliteSchemaToStrict(
+    params.db,
+    buildMemoryIndexStrictSchema({
+      embeddingCacheTable,
+      includeEmbeddingCache: params.cacheEnabled || tableExists(params.db, embeddingCacheTable),
+    }),
+    { databaseLabel: "memory index" },
+  );
 
   let ftsAvailable = false;
   let ftsError: string | undefined;

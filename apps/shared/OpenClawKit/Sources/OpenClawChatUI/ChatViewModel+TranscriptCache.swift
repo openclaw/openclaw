@@ -5,7 +5,7 @@ import Foundation
 // of truth and replace cached rows wholesale.
 
 extension OpenClawChatViewModel {
-    struct SessionSnapshot {
+    struct SessionSnapshot: Equatable {
         var key: String
         var generation: UInt64
         var agentID: String?
@@ -16,6 +16,7 @@ extension OpenClawChatViewModel {
     func replaceMessages(_ messages: [OpenClawChatMessage]) {
         guard self.messages != messages else { return }
         self.messages = messages
+        self.seedInputHistory(from: messages)
         markTimelineChanged()
     }
 
@@ -61,7 +62,8 @@ extension OpenClawChatViewModel {
                 // A live sessions response (even an empty one) is authoritative;
                 // a slow cache read must never repaint over it.
                 guard self.sessions.isEmpty, !self.hasAppliedLiveSessions else { return }
-                self.sessions = OpenClawChatSessionListOrganizer.organize(cached)
+                self.sessions = self.applyingLocalUnreadOverrides(
+                    to: OpenClawChatSessionListOrganizer.organize(cached))
             }
         }
         guard messages.isEmpty, !hasAppliedLiveHistory else { return }
@@ -79,7 +81,7 @@ extension OpenClawChatViewModel {
     }
 
     static func transcriptCacheAgentID(sessionKey: String, agentID: String?) -> String? {
-        guard Self.agentID(fromSessionKey: sessionKey) == nil else { return nil }
+        guard OpenClawChatSessionKey.agentID(from: sessionKey) == nil else { return nil }
         let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized?.isEmpty == false ? normalized : nil
     }

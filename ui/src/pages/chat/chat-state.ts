@@ -12,15 +12,16 @@ import {
   loadLocalAssistantIdentity,
 } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
   patchSettings,
   type UiSettings,
 } from "../../app/settings.ts";
+import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { retirePendingChatSideQuestion, type ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -56,7 +57,10 @@ import {
 } from "./chat-gateway.ts";
 import {
   chatScopedEventSessionMatches,
+  isHiddenAssistantStreamText,
+  loadChatBranches,
   loadChatHistory,
+  shouldHideAssistantChatMessage,
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
@@ -111,6 +115,7 @@ import {
   storedChatOutboxScopeKey,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -120,7 +125,6 @@ import {
 } from "./input-history.ts";
 import { applyModelCatalogResult, loadModels } from "./models.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
-import { waitForCommit } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
   reconcileChatRunFromCurrentSessionRow,
@@ -135,13 +139,25 @@ import {
   scheduleChatScroll,
   scheduleCommittedChatScroll,
 } from "./scroll.ts";
-import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  appendChatMessageToCache,
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
+import {
+  clearAuthoritativeTerminal,
+  rememberAuthoritativeTerminal,
+} from "./terminal-message-identity.ts";
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
   resetToolStream,
   type CompactionStatus,
   type FallbackStatus,
+  type PlanStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -192,7 +208,7 @@ export type ChatPageHost = ChatHost &
     chatQueueByScope: Record<string, ChatQueueItem[]>;
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
-    chatMessagesBySession: Map<string, unknown[]>;
+    chatMessagesBySession: ChatMessageCache;
     basePath: string;
     chatAvatarUrl: string | null;
     chatAvatarSource: string | null;
@@ -221,16 +237,13 @@ export type ChatPageHost = ChatHost &
     toolStreamSyncTimer: number | null;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
+    planStatus: PlanStatus | null;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
-    chatManualRefreshInFlight: boolean;
-    chatManualRefreshFrame: number | null;
-    chatManualRefreshGeneration: number;
     chatMetadataRequestVersion: number;
     chatModelsLoading: boolean;
-    chatMobileControlsOpen: boolean;
-    chatMobileControlsTrigger: HTMLElement | null;
-    sessionsHideCron: boolean;
+    chatViewMenuOpen: boolean;
+    chatViewMenuTrigger: HTMLElement | null;
     sessionsLoading: boolean;
     lastErrorCode: string | null;
     chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
@@ -239,9 +252,9 @@ export type ChatPageHost = ChatHost &
     chatInputHistoryIndex: number;
     chatDraftBeforeHistory: string | null;
     chatScrollCommitCleanup: (() => void) | null;
+    chatStreamRenderFrame: number | null;
     chatScrollFrame: number | null;
     chatScrollGuardFrame: number | null;
-    chatScrollTimeout: number | null;
     chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
@@ -250,6 +263,7 @@ export type ChatPageHost = ChatHost &
     chatFollowLocked: boolean;
     chatIsProgrammaticScroll: boolean;
     chatProgrammaticScrollTarget: number;
+    chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
     sidebarOpen: boolean;
     sidebarContent: SidebarContent | null;
     splitRatio: number;
@@ -261,7 +275,7 @@ export type ChatPageHost = ChatHost &
     resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
-    setChatMobileControlsOpen: (
+    setChatViewMenuOpen: (
       open: boolean,
       options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
     ) => void;
@@ -279,7 +293,8 @@ export type ChatPageHost = ChatHost &
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
-    createChatSession?: () => Promise<void>;
+    createChatSession?: () => Promise<boolean>;
+    confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
@@ -304,73 +319,6 @@ export function canCreateChatSession(
     state.chatStream === null &&
     state.chatQueue.length === 0
   );
-}
-
-export async function handleChatManualRefresh(state: ChatPageHost): Promise<void> {
-  if (state.chatManualRefreshFrame !== null) {
-    cancelAnimationFrame(state.chatManualRefreshFrame);
-    state.chatManualRefreshFrame = null;
-  }
-  const lifecycle = state.renderLifecycle;
-  const generation = ++state.chatManualRefreshGeneration;
-  state.chatManualRefreshInFlight = true;
-  state.chatNewMessagesBelow = false;
-  const committed = await waitForCommit(lifecycle);
-  if (!committed || generation !== state.chatManualRefreshGeneration) {
-    if (generation === state.chatManualRefreshGeneration) {
-      state.chatManualRefreshInFlight = false;
-    }
-    return;
-  }
-  state.resetToolStream();
-  try {
-    await Promise.allSettled([
-      refreshPageChat(state, { awaitHistory: true, scheduleScroll: false }),
-      refreshChatModelAuthStatus(state, { refresh: true }),
-    ]);
-    if (generation === state.chatManualRefreshGeneration) {
-      state.scrollToBottom({ smooth: true });
-    }
-  } finally {
-    if (generation === state.chatManualRefreshGeneration) {
-      let finalized = false;
-      const frame = requestAnimationFrame(() => {
-        finalized = true;
-        state.chatManualRefreshFrame = null;
-        if (
-          generation !== state.chatManualRefreshGeneration ||
-          lifecycle !== state.renderLifecycle
-        ) {
-          return;
-        }
-        state.chatManualRefreshInFlight = false;
-        state.chatNewMessagesBelow = false;
-        lifecycle.invalidate();
-      });
-      if (!finalized) {
-        state.chatManualRefreshFrame = frame;
-      }
-    }
-  }
-}
-
-function cancelChatManualRefresh(state: ChatPageHost): void {
-  state.chatManualRefreshGeneration += 1;
-  if (state.chatManualRefreshFrame !== null) {
-    cancelAnimationFrame(state.chatManualRefreshFrame);
-    state.chatManualRefreshFrame = null;
-  }
-  state.chatManualRefreshInFlight = false;
-}
-
-export function resolveAssistantAttachmentAuthToken(state: ChatPageHost) {
-  return resolveControlUiAuthToken(state);
-}
-
-export function dismissChatError(state: ChatPageHost) {
-  state.lastError = null;
-  state.lastErrorCode = null;
-  state.chatError = null;
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
@@ -398,11 +346,29 @@ function restoreChatQueueForSession(state: ChatPageHost, sessionKey: string): Ch
 }
 
 function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
-  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey }, state.chatMessages);
+  cacheChatSessionSnapshot(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey },
+    {
+      messages: state.chatMessages,
+      pagination: state.chatHistoryPagination ?? { hasMore: false },
+      sessionId: state.currentSessionId ?? null,
+    },
+  );
 }
 
-function restoreChatMessagesForSession(state: ChatPageHost, sessionKey: string): unknown[] {
-  return readChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+function restoreChatMessagesForSession(
+  state: ChatPageHost,
+  sessionKey: string,
+): ChatSessionSnapshot {
+  return (
+    readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ?? {
+      messages: [],
+      pagination: { hasMore: false },
+      sessionId: null,
+    }
+  );
 }
 
 function resolveChatComposerMemoryFallback(
@@ -516,6 +482,7 @@ export function resetChatStateForRouteSession(
     previousComposerScope?: StoredChatOutboxScope;
   } = {},
 ): ChatComposerRouteResetResult {
+  cancelChatStreamRenderFrame(state);
   const previousSessionKey = state.sessionKey;
   const previousComposerScopeKey = storedChatOutboxScopeKey(
     options.previousComposerScope ?? resolveStoredChatOutboxScope(state, previousSessionKey),
@@ -538,22 +505,29 @@ export function resetChatStateForRouteSession(
   }
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
+  const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
     ) === true;
-  state.currentSessionId = null;
+  state.currentSessionId = snapshot.sessionId;
   state.reconnectResumeSessionId = null;
-  state.chatHistoryPagination = { hasMore: false };
+  state.chatHistoryPagination = snapshot.pagination;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatReplyTarget = null;
-  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
+  state.chatMessages = snapshot.messages;
+  state.chatBranches = [];
+  state.chatBranchesSessionKey = null;
+  state.chatBranchesConnectionEpoch = null;
+  state.chatBranchesLoading = false;
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatVerboseLevel = null;
+  state.chatQueueModeOverride = undefined;
+  state.chatEffectiveQueueMode = undefined;
   state.chatStream = null;
   state.chatSending = false;
   state.chatSendingScopeKey = null;
@@ -565,6 +539,7 @@ export function resetChatStateForRouteSession(
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
+  clearAuthoritativeTerminal(state);
   resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
@@ -572,12 +547,13 @@ export function resetChatStateForRouteSession(
   // projection without rendering through the old route's persistence owner.
   // switchPaneSession requests an update only after adopting the new baseline.
   syncVisibleChatQueueProjection(state, { requestUpdate: false });
+  const initialTurn = admitInitialTurnHandoff(state, sessionKey);
   const { fallback } = resolveChatComposerMemoryFallback(state, sessionKey);
   if (fallback) {
     state.chatMessage = fallback.message;
     state.chatAttachments = [...fallback.attachments];
   }
-  const restoredStorageFailure = fallback?.storageFailed === true;
+  const restoredStorageFailure = fallback?.storageFailed === true || initialTurn;
   if (options.previousDraftRetry || restoredStorageFailure) {
     state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
     state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
@@ -885,7 +861,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
 }
 
-export async function refreshChat(
+async function refreshChat(
   host: ChatPageHost,
   opts?: ChatRefreshOptions & {
     onStartupMetadata?: ChatStartupMetadataHandler;
@@ -1106,10 +1082,14 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     return;
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
+  if (matchesChat) {
+    void loadChatBranches(state);
+  }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
   const runIdBeforeApply = state.chatRunId;
+  rememberAuthoritativeTerminal({ event, host: state, matchesChat, payload, runIdBeforeApply });
   const result = reconcileSessionEvent(state, payload);
   if (runIdBeforeApply && matchesChat) {
     const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
@@ -1166,12 +1146,13 @@ function replayPendingSessionMessageReload(
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
-  if (
-    event &&
-    globalSessionEventMatchesChat(state, event) &&
-    sessionMessageMatchesChat(state, event) &&
-    event.archived !== null
-  ) {
+  const matchesChat = Boolean(
+    event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
+  );
+  if (matchesChat) {
+    void loadChatBranches(state);
+  }
+  if (event && matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
@@ -1179,7 +1160,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     result.applied &&
     event &&
     runIdBeforeApply &&
-    sessionMessageMatchesChat(state, event) &&
+    matchesChat &&
     finishSessionMessageRunReconcile(
       state,
       event.key,
@@ -1232,6 +1213,7 @@ export function createPageState(
   context: ApplicationContext,
   renderLifecycle: RenderLifecycle,
   page: ChatPageElement,
+  chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
   const settings = loadSettings();
   const identity = loadLocalUserIdentity();
@@ -1266,9 +1248,15 @@ export function createPageState(
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],
+    chatBranches: [],
+    chatBranchesSessionKey: null,
+    chatBranchesConnectionEpoch: null,
+    chatBranchesLoading: false,
     chatToolMessages: [] as Record<string, unknown>[],
     chatThinkingLevel: null,
     chatVerboseLevel: null,
+    chatQueueModeOverride: undefined,
+    chatEffectiveQueueMode: undefined,
     chatAttachments: [] as ChatAttachment[],
     chatRunId: null,
     chatStream: null,
@@ -1284,6 +1272,7 @@ export function createPageState(
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,
+    planStatus: null,
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
@@ -1313,25 +1302,21 @@ export function createPageState(
     chatQueueByScope: {} as Record<string, ChatQueueItem[]>,
     chatComposerFallbackByScope: {} as Record<string, ChatComposerMemoryFallback>,
     chatSendingScopeKey: null,
-    chatMessagesBySession: new Map<string, unknown[]>(),
+    chatMessagesBySession,
     eventLogBuffer: [] as unknown[],
     basePath: context.basePath,
     chatNewMessagesBelow: false,
-    chatManualRefreshInFlight: false,
-    chatManualRefreshFrame: null,
-    chatManualRefreshGeneration: 0,
-    chatMobileControlsOpen: false,
-    chatMobileControlsTrigger: null,
-    sessionsHideCron: true,
+    chatViewMenuOpen: false,
+    chatViewMenuTrigger: null,
     chatLocalInputHistoryBySession: {} as Record<string, Array<{ text: string; ts: number }>>,
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
     chatScrollCommitCleanup: null,
+    chatStreamRenderFrame: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
-    chatScrollTimeout: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -1346,7 +1331,7 @@ export function createPageState(
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
     toolStreamSyncTimer: null,
-    ...createInitialChatRealtimeState(settings.realtimeTalkInputDeviceId),
+    ...createInitialChatRealtimeState(),
     renderLifecycle,
     requestUpdate: () => renderLifecycle.invalidate(),
     sessionWorkspaceState: undefined,
@@ -1371,23 +1356,22 @@ export function createPageState(
       chatShowThinking: next.chatShowThinking,
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
-      chatAutoScroll: next.chatAutoScroll,
       chatSendShortcut: next.chatSendShortcut,
       splitRatio: next.splitRatio,
     });
     state.splitRatio = state.settings.splitRatio;
     renderLifecycle.invalidate();
   };
-  state.setChatMobileControlsOpen = (open, options) => {
+  state.setChatViewMenuOpen = (open, options) => {
     if (open) {
-      state.chatMobileControlsTrigger = options?.trigger ?? state.chatMobileControlsTrigger;
-      state.chatMobileControlsOpen = true;
+      state.chatViewMenuTrigger = options?.trigger ?? state.chatViewMenuTrigger;
+      state.chatViewMenuOpen = true;
       renderLifecycle.invalidate();
       return;
     }
-    const focusTarget = options?.restoreFocus ? state.chatMobileControlsTrigger : null;
-    state.chatMobileControlsOpen = false;
-    state.chatMobileControlsTrigger = null;
+    const focusTarget = options?.restoreFocus ? state.chatViewMenuTrigger : null;
+    state.chatViewMenuOpen = false;
+    state.chatViewMenuTrigger = null;
     renderLifecycle.invalidate();
     if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
       return;
@@ -1437,9 +1421,41 @@ export function createPageState(
   return state;
 }
 
+function hasVisibleFinalAssistantReply(
+  state: ChatPageHost,
+  payload: ChatEventPayload | undefined,
+): boolean {
+  if (payload?.state !== "final") {
+    return false;
+  }
+  const ownsReply =
+    chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
+    (typeof payload.runId === "string" && payload.runId === state.chatRunId);
+  if (!ownsReply) {
+    return false;
+  }
+  const finalText = extractText(payload.message);
+  if (
+    typeof finalText === "string" &&
+    finalText.trim().length > 0 &&
+    !isHiddenAssistantStreamText(finalText) &&
+    !shouldHideAssistantChatMessage(payload.message)
+  ) {
+    return true;
+  }
+  return [
+    state.chatStream,
+    ...(state.chatStreamSegments ?? []).map((segment) => segment.text),
+  ].some(
+    (text) =>
+      typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text),
+  );
+}
+
 export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventFrame) {
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
+    const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
     const terminal =
       payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
     const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
@@ -1448,29 +1464,32 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveDeliveredQueuedUserTurn(state, delivered);
     }
-    handleChatGatewayEvent(state as unknown as ChatState, payload);
+    const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
+    if (shouldCelebrateFirstReply && result === "final") {
+      fireFirstReplyConfetti();
+    }
     replayPendingSessionMessageReload(state, payload);
     if (terminal) {
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
       void resumeStoredChatOutboxes(state);
     }
-    requestPageUpdate(state);
+    requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
     return;
   }
   if (event.event === "chat.side_result") {
     if (handleChatSideResultGatewayEvent(state as unknown as ChatState, event.payload)) {
-      requestPageUpdate(state);
+      requestChatPageUpdate(state);
     }
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
     handleAgentEvent(state as never, event.payload as never);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "chat.send_timing") {
@@ -1480,13 +1499,13 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
   if (event.event === "session.message") {
     handleSessionMessageEvent(state, event.payload);
     void resumeStoredChatOutboxes(state);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "sessions.changed") {
     handleSessionsChangedEvent(state, event.payload);
     void resumeStoredChatOutboxes(state);
-    requestPageUpdate(state);
+    requestChatPageUpdate(state);
     return;
   }
   if (event.event === "task") {
@@ -1581,12 +1600,46 @@ function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueIte
   const target = { sessionKey, agentId: item.agentId };
   const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
   if (!containsUserTurn(cached)) {
-    cacheChatMessages(state.chatMessagesBySession, state, target, [...cached, userMessage]);
+    appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
   }
 }
 
-function requestPageUpdate(state: ChatPageHost) {
-  state.requestUpdate?.();
+type ChatPageUpdateMode = "immediate" | "animation-frame";
+
+function cancelChatStreamRenderFrame(state: Pick<ChatPageHost, "chatStreamRenderFrame">): void {
+  const frame = state.chatStreamRenderFrame;
+  if (frame == null) {
+    return;
+  }
+  state.chatStreamRenderFrame = null;
+  if (typeof globalThis.cancelAnimationFrame === "function") {
+    globalThis.cancelAnimationFrame(frame);
+  }
+}
+
+function requestChatPageUpdate(
+  state: Pick<ChatPageHost, "chatStreamRenderFrame" | "requestUpdate">,
+  mode: ChatPageUpdateMode = "immediate",
+): void {
+  if (mode === "immediate" || typeof globalThis.requestAnimationFrame !== "function") {
+    cancelChatStreamRenderFrame(state);
+    state.requestUpdate?.();
+    return;
+  }
+  if (state.chatStreamRenderFrame != null) {
+    return;
+  }
+  // Deltas still mutate the canonical stream immediately. One frame owns the
+  // paint; terminal/non-stream events cancel it so stale partial UI cannot win.
+  let frame = 0;
+  frame = globalThis.requestAnimationFrame(() => {
+    if (state.chatStreamRenderFrame !== frame) {
+      return;
+    }
+    state.chatStreamRenderFrame = null;
+    state.requestUpdate?.();
+  });
+  state.chatStreamRenderFrame = frame;
 }
 
 type ChatRenderLifecycleScope = {
@@ -1609,7 +1662,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private chatThreadResizeTargets:
     | {
         thread: Element;
-        content: Element;
       }
     | undefined;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
@@ -1645,7 +1697,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   attach(state: TState) {
     if (this.stateValue && this.stateValue !== state) {
       this.composerPersistence.stop();
-      cancelChatManualRefresh(this.stateValue);
+      cancelChatStreamRenderFrame(this.stateValue);
       cancelChatScroll(this.stateValue);
     }
     this.stateValue = state;
@@ -1816,35 +1868,28 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     const thread = state.querySelector(".chat-thread");
-    const content = state.querySelector(".chat-thread-inner");
-    if (
-      thread &&
-      content &&
-      this.chatThreadResizeTargets?.thread === thread &&
-      this.chatThreadResizeTargets.content === content
-    ) {
+    if (thread && this.chatThreadResizeTargets?.thread === thread) {
       return;
     }
 
     this.chatThreadResizeObserver?.disconnect();
     this.chatThreadResizeObserver = null;
     this.chatThreadResizeTargets = undefined;
-    if (!thread || !content) {
+    if (!thread) {
       return;
     }
 
-    // Streamed markdown and mobile composer controls can finish sizing after
-    // Lit's update. Follow the rendered geometry so the viewport stays pinned.
+    // The transcript virtualizer owns row measurement and content-height
+    // correction. This observer only follows viewport-size changes.
     this.chatThreadResizeObserver = new ResizeObserver(() => {
       const currentState = this.stateValue;
-      if (!currentState || currentState.chatManualRefreshInFlight) {
+      if (!currentState) {
         return;
       }
       scheduleCommittedChatScroll(currentState, false, false, { source: "resize" });
     });
     this.chatThreadResizeObserver.observe(thread);
-    this.chatThreadResizeObserver.observe(content);
-    this.chatThreadResizeTargets = { thread, content };
+    this.chatThreadResizeTargets = { thread };
   }
 
   hostConnected() {
@@ -1867,7 +1912,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.scrollAfterUpdate = false;
     this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
-    if (!state || state.chatManualRefreshInFlight) {
+    if (!state) {
       return;
     }
     scheduleCommittedChatScroll(state, force, false, { contentChanged });
@@ -1927,13 +1972,18 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     const state = this.stateValue;
     if (state) {
-      cancelChatManualRefresh(state);
+      cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       clearSessionWorkspaceTimers(state);
     }
     state?.realtimeTalkSession?.stop();
     if (state) {
       state.realtimeTalkSession = null;
+      state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
+      state.realtimeTalkVideoCapable = false;
+      state.realtimeTalkVideoPending = false;
+      state.realtimeTalkCameraError = false;
       state.resetToolStream?.();
     }
   }
@@ -1952,3 +2002,4 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.pendingCreatedSessionComposer = null;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

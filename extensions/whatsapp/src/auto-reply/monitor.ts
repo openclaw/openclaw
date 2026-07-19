@@ -2,10 +2,10 @@
 import type { WAMessageKey } from "baileys";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
@@ -28,7 +28,6 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { WHATSAPP_INBOUND_DEDUPE_TTL_MS } from "../inbound/dedupe.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
   attachWebInboxToSocket,
@@ -150,6 +149,7 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
 }
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
+const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -181,7 +181,7 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
-  const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
+  const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     account.historyLimit ??
@@ -226,7 +226,7 @@ export async function monitorWebChannel(
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
   const reconnectCatchUpWindowMs = Math.min(
     Math.max(messageTimeoutMs, 60_000),
-    WHATSAPP_INBOUND_DEDUPE_TTL_MS,
+    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
   );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
@@ -265,19 +265,16 @@ export async function monitorWebChannel(
       });
       const shouldDebounce = (msg: WebInboundMessageInput) => {
         const normalized = normalizeWebInboundMessage(msg);
-        if (normalized.payload.media?.path || normalized.payload.media?.type) {
-          return false;
-        }
-        if (normalized.payload.location) {
-          return false;
-        }
-        if (normalized.quote?.id || normalized.quote?.body) {
-          return false;
-        }
-        return !isControlCommandMessage(
-          normalized.payload.commandBody ?? normalized.payload.body,
+        return shouldDebounceTextInbound({
+          text: normalized.payload.commandBody ?? normalized.payload.body,
           cfg,
-        );
+          hasMedia: Boolean(normalized.payload.media?.path || normalized.payload.media?.type),
+          allowDebounce: !(
+            normalized.payload.location ||
+            normalized.quote?.id ||
+            normalized.quote?.body
+          ),
+        });
       };
 
       let connection;

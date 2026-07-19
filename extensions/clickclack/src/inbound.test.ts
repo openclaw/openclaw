@@ -70,7 +70,7 @@ function createAgentAccount(
     enabled: true,
     configured: true,
     baseUrl: "http://127.0.0.1:8080",
-    token: "ccb_default",
+    token: "test-token-placeholder",
     workspace: "wsp_1",
     replyMode: "agent",
     toolsAllow: [],
@@ -78,6 +78,7 @@ function createAgentAccount(
     allowFrom: ["*"],
     reconnectMs: 1_500,
     agentActivity: false,
+    commandMenu: true,
     config: {
       allowFrom: ["*"],
     },
@@ -135,7 +136,7 @@ describe("handleClickClackInbound", () => {
       enabled: true,
       configured: true,
       baseUrl: "http://127.0.0.1:8080",
-      token: "ccb_service",
+      token: "test-auth-token",
       workspace: "wsp_1",
       agentId: "service-bot",
       replyMode: "model",
@@ -145,6 +146,7 @@ describe("handleClickClackInbound", () => {
       allowFrom: ["*"],
       reconnectMs: 1_500,
       agentActivity: false,
+      commandMenu: true,
       config: {},
     } satisfies ResolvedClickClackAccount;
 
@@ -172,12 +174,12 @@ describe("handleClickClackInbound", () => {
       correlationId: "fakeco.case_1",
     });
 
-    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
     expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
-    expect(completionRequest?.maxTokens).toBe(96);
+    expect(completionRequest).not.toHaveProperty("maxTokens");
     expect(completionRequest?.purpose).toBe("clickclack bot reply");
     expect(completionRequest?.messages).toEqual([{ role: "user", content: "hello bot" }]);
 
@@ -187,6 +189,64 @@ describe("handleClickClackInbound", () => {
     expect(sendRequest?.text).toBe("service bot online");
     expect(sendRequest?.replyToId).toBe("msg_1");
     expect(sendRequest?.correlationId).toBe("fakeco.case_1");
+  });
+
+  it("uses the selected runtime model budget", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const account = createAgentAccount({
+      accountId: "service",
+      agentId: "service-bot",
+      replyMode: "model",
+    });
+
+    await handleClickClackInbound({
+      account,
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        body: "hello without a clickclack cap",
+        author_id: "usr_human",
+      }),
+    });
+
+    const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
+    expect(completionRequest).not.toHaveProperty("maxTokens");
+    expect(sendClickClackTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "service", text: "service bot online" }),
+    );
+  });
+
+  it("logs and skips delivery when model mode produces no sendable text", async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.llm.complete).mockResolvedValue({
+      text: "   ",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      agentId: "service-bot",
+      usage: {},
+      audit: { caller: { kind: "plugin", id: "clickclack" } },
+    });
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        accountId: "service",
+        agentId: "service-bot",
+        replyMode: "model",
+      }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({ body: "hello bot" }),
+    });
+
+    expect(sendClickClackTextMock).not.toHaveBeenCalled();
+    expect(runtime.logging.getChildLogger).toHaveBeenCalledWith({
+      plugin: "clickclack",
+      feature: "model-reply",
+    });
+    const logger = vi.mocked(runtime.logging.getChildLogger).mock.results[0]?.value;
+    expect(logger?.warn).toHaveBeenCalledWith(
+      "[service] ClickClack model reply produced no sendable text",
+    );
   });
 
   it("marks agent turns command-authorized for allowlisted senders", async () => {
@@ -210,9 +270,9 @@ describe("handleClickClackInbound", () => {
       message: createMessage(),
     });
 
-    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
-    expect(dispatchReply).toHaveBeenCalledTimes(1);
-    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+    const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatchTurn).toHaveBeenCalledTimes(1);
+    expect(dispatchTurn.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
   });
 
   it("propagates account toolsAllow into agent reply dispatch", async () => {
@@ -237,9 +297,9 @@ describe("handleClickClackInbound", () => {
       message: createMessage(),
     });
 
-    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
-    expect(dispatchReply).toHaveBeenCalledTimes(1);
-    const dispatchParams = dispatchReply.mock.calls[0]?.[0] as
+    const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatchTurn).toHaveBeenCalledTimes(1);
+    const dispatchParams = dispatchTurn.mock.calls[0]?.[0] as
       | (Record<string, unknown> & {
           toolsAllow?: unknown;
         })
@@ -275,12 +335,12 @@ describe("handleClickClackInbound", () => {
       }),
     });
 
-    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
-    expect(dispatchReply).toHaveBeenCalledTimes(2);
-    const withoutOptIn = dispatchReply.mock.calls[0]?.[0] as {
+    const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatchTurn).toHaveBeenCalledTimes(2);
+    const withoutOptIn = dispatchTurn.mock.calls[0]?.[0] as {
       replyOptions?: { runId?: unknown; onItemEvent?: unknown; onModelSelected?: unknown };
     };
-    const withOptIn = dispatchReply.mock.calls[1]?.[0] as {
+    const withOptIn = dispatchTurn.mock.calls[1]?.[0] as {
       replyOptions?: {
         onItemEvent?: unknown;
         onModelSelected?: unknown;
@@ -317,7 +377,7 @@ describe("handleClickClackInbound", () => {
       correlationId: "fakeco.case_2",
     });
 
-    const dispatchParams = vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0]?.[0];
+    const dispatchParams = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0];
     expect(dispatchParams?.replyOptions?.runId).toBe(`clickclack:${VALID_MESSAGE_ID}`);
 
     await dispatchParams?.delivery.deliver({ text: "correlated reply" }, {} as never);
@@ -331,6 +391,42 @@ describe("handleClickClackInbound", () => {
     );
   });
 
+  it("routes media replies through required durable delivery", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount(),
+      config: {} as CoreConfig,
+      message: createMessage({
+        id: VALID_MESSAGE_ID,
+        thread_root_id: VALID_MESSAGE_ID,
+      }),
+    });
+
+    const delivery = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].delivery;
+    if (typeof delivery?.durable !== "function") {
+      throw new Error("expected ClickClack media durable delivery resolver");
+    }
+    const payload = { text: "artifact", mediaUrl: "/workspace/artifact.txt" };
+    expect(delivery.durable(payload, { kind: "final" } as never)).toEqual({
+      to: "channel:chn_1",
+      threadId: undefined,
+      replyToId: VALID_MESSAGE_ID,
+      requiredCapabilities: {
+        text: true,
+        media: true,
+        replyTo: true,
+        messageSendingHooks: true,
+        reconcileUnknownSend: true,
+      },
+    });
+    await expect(delivery?.deliver(payload, { kind: "final" } as never)).rejects.toThrow(
+      "ClickClack media reply requires durable delivery",
+    );
+    expect(sendClickClackTextMock).not.toHaveBeenCalled();
+  });
+
   it("does not derive a run id from a noncanonical message id", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
@@ -341,7 +437,7 @@ describe("handleClickClackInbound", () => {
       message: createMessage({ id: "msg_invalid" }),
     });
 
-    expect(vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0]?.[0].replyOptions).toBe(
+    expect(vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].replyOptions).toBe(
       undefined,
     );
   });
@@ -365,15 +461,15 @@ describe("handleClickClackInbound", () => {
       }),
       config: cfg,
       message: createMessage({
-        channel_id: undefined,
+        channel_id: "",
         direct_conversation_id: "dcn_1",
       }),
     });
 
-    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
-    expect(dispatchReply).toHaveBeenCalledTimes(1);
-    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.ChatType).toBe("direct");
-    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+    const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatchTurn).toHaveBeenCalledTimes(1);
+    expect(dispatchTurn.mock.calls[0]?.[0].ctxPayload.ChatType).toBe("direct");
+    expect(dispatchTurn.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
   });
 
   it("preserves session policy when an account overrides the routed agent", async () => {
@@ -407,8 +503,8 @@ describe("handleClickClackInbound", () => {
       }),
     });
 
-    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
-    expect(dispatchReply.mock.calls[0]?.[0].routeSessionKey).toBe(
+    const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatchTurn.mock.calls[0]?.[0].route.sessionKey).toBe(
       "agent:service-bot:clickclack:direct:alice",
     );
     expect(runtime.channel.routing.buildAgentSessionKey).toHaveBeenCalledWith({
@@ -450,10 +546,12 @@ describe("handleClickClackInbound", () => {
       }),
     });
 
-    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
-    expect(dispatchReply.mock.calls[0]?.[0]).toMatchObject({
-      agentId: "service-bot",
-      routeSessionKey: "agent:service-bot:clickclack:default:direct:dm:usr_owner",
+    const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatchTurn.mock.calls[0]?.[0]).toMatchObject({
+      route: {
+        agentId: "service-bot",
+        sessionKey: "agent:service-bot:clickclack:default:direct:dm:usr_owner",
+      },
     });
   });
 
@@ -488,7 +586,7 @@ describe("handleClickClackInbound", () => {
       }),
     });
 
-    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
     expect(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 });

@@ -74,7 +74,6 @@ vi.mock("openclaw/plugin-sdk/llm", () => {
     createAssistantMessageEventStream: vi.fn(),
     getApiProvider,
     getModel: vi.fn(),
-    registerApiProvider: vi.fn(),
     streamSimple: vi.fn(),
   };
 });
@@ -1328,3 +1327,4 @@ export function describeTtsAutoApplyContract() {
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

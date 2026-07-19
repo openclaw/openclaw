@@ -3,23 +3,24 @@ import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Descriptor shape for root commands owned by the core CLI. */
-export type CoreCliCommandDescriptor = NamedCommandDescriptor;
+type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
-    name: "crestodian",
-    description: "Open the ring-zero setup and repair helper",
+    name: "setup",
+    description: "Chat with OpenClaw; onboard when setup is incomplete",
     hasSubcommands: false,
   },
   {
-    name: "setup",
-    description: "Alias for openclaw onboard",
+    name: "crestodian", // hidden alias
+    description: "Deprecated: use openclaw setup",
     hasSubcommands: false,
+    hidden: true,
   },
   {
     name: "onboard",
     description: "Guided setup for auth, models, Gateway, workspace, channels, and skills",
-    hasSubcommands: false,
+    hasSubcommands: true,
   },
   {
     name: "configure",

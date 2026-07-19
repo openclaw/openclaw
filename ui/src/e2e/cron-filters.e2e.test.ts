@@ -69,7 +69,7 @@ async function waitForCronListRequest(
       return match;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`No matching cron.list request found: ${JSON.stringify(requests)}`);
@@ -204,7 +204,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
         sortDir: "asc",
       });
 
-      await page.locator("details.cron-filter-popover > summary").click();
+      await page.locator(".cron-filter-popover__trigger").click();
       await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
       await page.locator('[data-test-id="cron-jobs-last-status-filter"]').selectOption("unknown");
 
@@ -293,6 +293,61 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("defaults recurring jobs converted to one-time cleanup", async () => {
+    const existingJob = {
+      ...cronJob("recurring-to-once", "Recurring retention", { kind: "every", everyMs: 60_000 }),
+      deleteAfterRun: false,
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([existingJob]),
+        "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+        "cron.update": { id: existingJob.id },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await jobTitle(page, existingJob.name).click();
+      await page.locator("details.cron-advanced > summary").click();
+      expect(
+        await page
+          .locator("wa-switch.settings-toggle")
+          .filter({ hasText: "Delete after run" })
+          .count(),
+      ).toBe(0);
+
+      await page.locator('[data-test-id="cron-schedule-kind-at"]').click();
+      await page.locator("#cron-schedule-at").fill("2026-07-19T09:00");
+      const expectedAt = await page.evaluate(() => new Date("2026-07-19T09:00").toISOString());
+      const deleteToggle = page.locator("wa-switch.settings-toggle").filter({
+        hasText: "Delete after run",
+      });
+      await expect
+        .poll(() => deleteToggle.evaluate((element) => Reflect.get(element, "checked")))
+        .toBe(true);
+
+      await page.locator('[data-test-id="cron-submit"]').click();
+      const request = await gateway.waitForRequest("cron.update");
+      const params = requestParams(request);
+      expect(params.id).toBe(existingJob.id);
+      expect(requireRecord(params.patch)).toMatchObject({
+        deleteAfterRun: true,
+        schedule: { kind: "at", at: expectedAt },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows why a requested run was not started", async () => {
     const existingJob = cronJob(
       "already-running-job",
@@ -334,6 +389,51 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
         .toContain("This automation is already running.");
       expect(await gateway.getRequests("cron.runs")).toHaveLength(historyRequestsBeforeRun);
       expect(pageErrors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("supports skip navigation and keyboard tab activation", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await page.locator('[data-test-id="cron-list-tab-tasks"]').waitFor();
+
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
+        .toBe("Skip to main content");
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.id))
+        .toBe("control-ui-main");
+
+      const tasksTab = page.getByRole("tab", { name: "Automations", exact: true });
+      const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
+      await tasksTab.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect
+        .poll(() => activityTab.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
+      await expect
+        .poll(() => page.getByRole("tabpanel", { name: "Run history" }).isVisible())
+        .toBe(true);
     } finally {
       await context.close();
     }

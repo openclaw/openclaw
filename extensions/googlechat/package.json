@@ -8,7 +8,6 @@
   },
   "type": "module",
   "dependencies": {
-    "gaxios": "7.1.5",
     "google-auth-library": "10.9.0",
     "zod": "4.4.3"
   },
@@ -31,6 +30,7 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "googlechat",
+      "approvalFlags": ["native"],
       "label": "Google Chat",
       "selectionLabel": "Google Chat (Chat API)",
       "detailLabel": "Google Chat",

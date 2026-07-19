@@ -25,6 +25,7 @@
     },
     "channel": {
       "id": "telegram",
+      "approvalFlags": ["native"],
       "label": "Telegram",
       "selectionLabel": "Telegram (Bot API)",
       "detailLabel": "Telegram Bot",
@@ -47,9 +48,7 @@
           "allOf": [
             "TELEGRAM_BOT_TOKEN"
           ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasTelegramConfiguredState"
+        }
       }
     }
   }

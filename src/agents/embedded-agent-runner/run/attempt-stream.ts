@@ -23,7 +23,10 @@ import {
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import { resolveUnknownToolGuardThreshold } from "./attempt.run-decisions.js";
 import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
-import { createYieldAbortedResponse } from "./attempt.sessions-yield.js";
+import {
+  createYieldAbortedResponse,
+  isSessionsYieldAbortReason,
+} from "./attempt.sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
 import {
   shouldRepairMalformedToolCallArguments,
@@ -187,7 +190,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
   const innerStreamFn = session.agent.streamFn;
   session.agent.streamFn = (model, context, options) => {
     const signal = input.abortSignal as AbortSignal & { reason?: unknown };
-    if (input.isYieldDetected() && signal.aborted && signal.reason === "sessions_yield") {
+    if (input.isYieldDetected() && signal.aborted && isSessionsYieldAbortReason(signal.reason)) {
       return createYieldAbortedResponse(model) as unknown as Awaited<
         ReturnType<typeof innerStreamFn>
       >;

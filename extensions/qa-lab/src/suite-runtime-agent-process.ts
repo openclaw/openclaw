@@ -229,6 +229,7 @@ function signalQaCliProcessTree(
         {
           stdio: "ignore",
           windowsHide: true,
+          timeout: 5_000,
         },
       );
       if (!result.error && result.status === 0) {
@@ -590,13 +591,11 @@ async function runAgentPrompt(
 export {
   forceMemoryIndex,
   findManagedDreamingCronJob,
-  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
   runQaCli,
   startAgentRun,
   waitForAgentHistoryReply,
-  waitForMemorySearchMatch,
   waitForAgentRun,
 };

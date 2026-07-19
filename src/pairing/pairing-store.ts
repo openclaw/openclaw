@@ -23,7 +23,6 @@ import {
   writeChannelPairingStateToDatabase,
 } from "./pairing-store-sqlite.js";
 import type { PairingChannel } from "./pairing-store.types.js";
-export type { PairingChannel } from "./pairing-store.types.js";
 
 /** @deprecated Compatibility helper for doctor/plugin migrations of the retired JSON store. */
 export function resolveChannelAllowFromPath(
@@ -210,28 +209,12 @@ async function updateAllowFromStoreEntry(params: {
   }, sqliteOptionsForEnv(env));
 }
 
-/** @deprecated Reads the canonical default-account SQLite rows. */
-export async function readLegacyChannelAllowFromStore(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<string[]> {
-  return readAllowFromState(channel, env, DEFAULT_ACCOUNT_ID);
-}
-
 export async function readChannelAllowFromStore(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): Promise<string[]> {
   return readAllowFromState(channel, env, accountId);
-}
-
-/** @deprecated Reads the canonical default-account SQLite rows. */
-export function readLegacyChannelAllowFromStoreSync(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  return readAllowFromState(channel, env, DEFAULT_ACCOUNT_ID);
 }
 
 export function readChannelAllowFromStoreSync(
@@ -241,9 +224,6 @@ export function readChannelAllowFromStoreSync(
 ): string[] {
   return readAllowFromState(channel, env, accountId);
 }
-
-/** @deprecated SQLite reads are uncached; retained for the shipped SDK test surface. */
-export function clearPairingAllowFromReadCacheForTest(): void {}
 
 type AllowFromStoreEntryUpdateParams = {
   channel: PairingChannel;
@@ -409,11 +389,17 @@ export async function approveChannelPairingCode(params: {
       normalizeOptionalString(params.accountId) ?? normalizeOptionalString(entry.meta?.accountId),
     );
     const currentAllow = state.allowFrom?.[allowAccountId] ?? [];
-    const normalizedAllow = normalizeAllowFromInput(
-      params.channel,
-      entry.id,
-      params.pairingAdapter,
-    );
+    const adapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
+    // Channels with key-bound handoffs can persist an opaque approval token
+    // derived from request metadata instead of a durable sender allowlist id.
+    const approvalEntry = adapter?.resolveApprovalStoreEntry
+      ? adapter.resolveApprovalStoreEntry({
+          id: entry.id,
+          ...(entry.meta ? { meta: entry.meta } : {}),
+        })
+      : entry.id;
+    const normalizedAllow =
+      approvalEntry == null ? "" : normalizeAllowFromInput(params.channel, approvalEntry, adapter);
     if (normalizedAllow && !currentAllow.includes(normalizedAllow)) {
       state.allowFrom ??= {};
       state.allowFrom[allowAccountId] = [...currentAllow, normalizedAllow];

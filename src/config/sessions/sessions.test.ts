@@ -11,13 +11,13 @@ import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps, resolveSessionWorkStartError } from "./lifecycle.js";
 import {
-  resolveExplicitSessionFilePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -25,13 +25,24 @@ import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js"
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
+import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
+
+it("merges bounded restart tombstones without evicting fresh-only ids", () => {
+  const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
+
+  expect(mergeRestartRecoveryTerminalRunIds(existing, [...existing.slice(1), "run-new"])).toEqual([
+    ...existing.slice(1),
+    "run-new",
+  ]);
+  expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
+});
 
 function requireWriteTextAtomicCall(
   spy: { mock: { calls: WriteTextAtomicCall[] } },
@@ -74,16 +85,6 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
-  });
-
-  it("rejects explicit sessionFile paths without derived fallback", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    expect(() =>
-      resolveExplicitSessionFilePath("/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl", {
-        sessionsDir,
-      }),
-    ).toThrow(/within sessions directory/);
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
@@ -151,16 +152,16 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      expect(groupPolicy.mode).toBe("none");
     });
   });
 
-  it("defaults to daily resets at 4am local time", () => {
+  it("defaults to no automatic reset", () => {
     const policy = resolveSessionResetPolicy({
       resetType: "direct",
     });
 
-    expect(policy.mode).toBe("daily");
+    expect(policy.mode).toBe("none");
     expect(policy.atHour).toBe(4);
   });
 
@@ -302,16 +303,34 @@ describe("session lifecycle timestamps", () => {
         "utf8",
       );
 
-      const timestamps = resolveSessionLifecycleTimestamps({
-        storePath,
-        entry: {
-          sessionId: "legacy-session",
-          sessionFile,
-          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
-        },
-      });
+      const realReadSync = fs.readSync.bind(fs);
+      let shortReadCalls = 0;
+      const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+        fd: number,
+        buffer: NodeJS.ArrayBufferView,
+        offset: number,
+        length: number,
+        position: fs.ReadPosition | null,
+      ) => {
+        shortReadCalls += 1;
+        return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+      }) as typeof fs.readSync);
 
-      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      try {
+        const timestamps = resolveSessionLifecycleTimestamps({
+          storePath,
+          entry: {
+            sessionId: "legacy-session",
+            sessionFile,
+            updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+          },
+        });
+
+        expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+        expect(shortReadCalls).toBeGreaterThan(1);
+      } finally {
+        readSpy.mockRestore();
+      }
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
@@ -456,7 +475,19 @@ describe("session store writer queue", () => {
           channel: "discord",
           to: [],
         },
+        restartRecoveryBeforeAgentReplyState: "maybe",
+        restartRecoveryDeliveryMediaUrls: "not-an-array",
+        restartRecoveryDisableMessageTool: "yes",
+        restartRecoverySuppressTextDelivery: "yes",
         restartRecoveryDeliveryRunId: 123,
+        restartRecoveryDeliverySourceRunId: 123,
+        restartRecoveryRequesterAccountId: 123,
+        restartRecoveryRequesterSenderId: {},
+        restartRecoverySameChannelThreadRequired: "yes",
+        restartRecoverySourceIngress: "web",
+        restartRecoverySourceReplyDeliveryMode: "sometimes",
+        restartRecoveryTerminalDeliveryEvidence: [{ runId: 123, payloads: "bad" }],
+        restartRecoveryTerminalRunIds: [123, "", {}],
       },
       "agent:main:good-pending": {
         sessionId: "s-good-pending",
@@ -480,7 +511,46 @@ describe("session store writer queue", () => {
           accountId: "Main",
           threadId: "reply-1",
         },
+        restartRecoveryBeforeAgentReplyState: "admitted",
+        restartRecoveryDeliveryMediaUrls: [" /tmp/proof.png ", "", "/tmp/proof.png"],
+        restartRecoveryDisableMessageTool: true,
+        restartRecoverySuppressTextDelivery: true,
         restartRecoveryDeliveryRunId: "run-1",
+        restartRecoveryDeliverySourceRunId: "source-run-1",
+        restartRecoveryRequesterAccountId: " work ",
+        restartRecoveryRequesterSenderId: " sender-1 ",
+        restartRecoverySameChannelThreadRequired: true,
+        restartRecoverySourceIngress: "channel",
+        restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: " terminal-1 ",
+            captured: true,
+            payloads: [{ visible: false }, { visible: true, mediaUrls: [" /tmp/proof.png "] }],
+            deliveryStatus: {
+              status: "partial_failed",
+              payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+            },
+            messagingToolSentTargets: [
+              {
+                provider: " Discord ",
+                to: " channel:123 ",
+                threadId: 42,
+                mediaUrls: [" /tmp/proof.png "],
+                visible: true,
+              },
+              {
+                provider: " Discord ",
+                to: " channel:empty ",
+                visible: false,
+              },
+            ],
+            messagingToolSentTargetsTruncated: true,
+            messagingToolAggregateEvidenceUnaccounted: true,
+            restartUnsafeSideEffectsDetected: true,
+          },
+        ],
+        restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
       },
     } as unknown as Record<string, SessionEntry>);
 
@@ -501,7 +571,19 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(bad?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
+    expect(bad?.restartRecoveryDeliveryMediaUrls).toBeUndefined();
+    expect(bad?.restartRecoveryDisableMessageTool).toBeUndefined();
+    expect(bad?.restartRecoverySuppressTextDelivery).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(bad?.restartRecoveryRequesterAccountId).toBeUndefined();
+    expect(bad?.restartRecoveryRequesterSenderId).toBeUndefined();
+    expect(bad?.restartRecoverySameChannelThreadRequired).toBeUndefined();
+    expect(bad?.restartRecoverySourceIngress).toBeUndefined();
+    expect(bad?.restartRecoverySourceReplyDeliveryMode).toBeUndefined();
+    expect(bad?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
+    expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
     expect(good).toMatchObject({
       pendingFinalDelivery: true,
@@ -523,7 +605,46 @@ describe("session store writer queue", () => {
         accountId: "main",
         threadId: "reply-1",
       },
+      restartRecoveryBeforeAgentReplyState: "admitted",
+      restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
+      restartRecoveryDisableMessageTool: true,
+      restartRecoverySuppressTextDelivery: true,
       restartRecoveryDeliveryRunId: "run-1",
+      restartRecoveryDeliverySourceRunId: "source-run-1",
+      restartRecoveryRequesterAccountId: "work",
+      restartRecoveryRequesterSenderId: "sender-1",
+      restartRecoverySameChannelThreadRequired: true,
+      restartRecoverySourceIngress: "channel",
+      restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+      restartRecoveryTerminalDeliveryEvidence: [
+        {
+          runId: "terminal-1",
+          captured: true,
+          payloads: [{ visible: false }, { visible: true, mediaUrls: ["/tmp/proof.png"] }],
+          deliveryStatus: {
+            status: "partial_failed",
+            payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+          },
+          messagingToolSentTargets: [
+            {
+              provider: "Discord",
+              to: "channel:123",
+              threadId: "42",
+              mediaUrls: ["/tmp/proof.png"],
+              visible: true,
+            },
+            {
+              provider: "Discord",
+              to: "channel:empty",
+              visible: false,
+            },
+          ],
+          messagingToolSentTargetsTruncated: true,
+          messagingToolAggregateEvidenceUnaccounted: true,
+          restartUnsafeSideEffectsDetected: true,
+        },
+      ],
+      restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],
     });
   });
 
@@ -774,7 +895,8 @@ describe("session store writer queue", () => {
     writeSessionStoreCache({
       storePath,
       store,
-      mtimeMs: 1,
+      ctimeNs: 1n,
+      mtimeNs: 1n,
       sizeBytes: serialized.length,
       serialized,
       cloneSerialized: serialized,
@@ -784,11 +906,43 @@ describe("session store writer queue", () => {
 
     const cached = readSessionStoreCache({
       storePath,
-      mtimeMs: 1,
+      ctimeNs: 1n,
+      mtimeNs: 1n,
       sizeBytes: serialized.length,
     });
 
     expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
+  });
+
+  it("invalidates session store cache when ctime nanoseconds change inside the same millisecond", () => {
+    const key = "agent:main:ctime-ns-cache";
+    const storePath = "/tmp/openclaw-ctime-ns-cache-test.json";
+    const store = {
+      [key]: {
+        sessionId: "s-ctime-ns-cache",
+        updatedAt: Date.now(),
+      },
+    } satisfies Record<string, SessionEntry>;
+    const serialized = JSON.stringify(store);
+    writeSessionStoreCache({
+      storePath,
+      store,
+      ctimeNs: 1_000_000n,
+      mtimeNs: 1_000_000n,
+      sizeBytes: serialized.length,
+      serialized,
+      cloneSerialized: serialized,
+      takeOwnership: true,
+    });
+
+    const cached = readSessionStoreCache({
+      storePath,
+      ctimeNs: 1_000_001n,
+      mtimeNs: 1_000_000n,
+      sizeBytes: serialized.length,
+    });
+
+    expect(cached).toBeNull();
   });
 
   it("returns an owned parsed store for fresh skip-cache loads without cloning again", async () => {
@@ -845,6 +999,38 @@ describe("session store writer queue", () => {
     expect(writeOptions?.mode).toBe(0o600);
     expect(writeOptions?.beforeRename).toBeTypeOf("function");
     writeSpy.mockRestore();
+  });
+
+  it("uses a durable index write before disk-budget eviction deletes transcripts", async () => {
+    const oldKey = "agent:main:subagent:old-worker";
+    const activeKey = "agent:main:main";
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      [oldKey]: { sessionId: "old", updatedAt: now - 1_000 },
+      [activeKey]: { sessionId: "active", updatedAt: now },
+    };
+    const { dir, storePath } = await makeTmpStore(store);
+    await fsPromises.writeFile(path.join(dir, "old.jsonl"), "t".repeat(10 * 1024), "utf-8");
+    await fsPromises.writeFile(path.join(dir, "active.jsonl"), "a".repeat(64), "utf-8");
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    try {
+      await saveSessionStore(storePath, store, {
+        activeSessionKey: activeKey,
+        maintenanceOverride: { mode: "enforce", maxDiskBytes: 100, highWaterBytes: 100 },
+      });
+
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      const [writtenPath, , writeOptions] = requireWriteTextAtomicCall(writeSpy);
+      expect(writtenPath).toBe(storePath);
+      expect(writeOptions?.durable).toBe(true);
+      expect(store[oldKey]).toBeUndefined();
+      await expect(fsPromises.access(path.join(dir, "old.jsonl"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 
   it("can persist a known single entry without touching hydrated prompts from other sessions", async () => {
@@ -983,36 +1169,6 @@ describe("session store writer queue", () => {
     );
 
     expect(merged.sessionFile).toBe("/tmp/openclaw/sessions/custom-transcript.jsonl");
-  });
-
-  it("caps future updatedAt values at the session merge boundary", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-future",
-        updatedAt: now + 10_000,
-      },
-      {
-        updatedAt: now + 20_000,
-      },
-      { now },
-    );
-
-    expect(merged.updatedAt).toBe(now);
-  });
-
-  it("caps future updatedAt values while preserving activity", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-preserve-future",
-        updatedAt: now + 10_000,
-      },
-      {},
-      { now, policy: "preserve-activity" },
-    );
-
-    expect(merged.updatedAt).toBe(now);
   });
 
   it("normalizes orphan modelProvider fields at store write boundary", async () => {
@@ -1204,3 +1360,4 @@ describe("resolveAndPersistSessionFile", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -58,6 +58,19 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
+
+export type SessionTranscriptInstance = SessionEntrySummary & {
+  /** Stable transcript identity, including rotated history for one logical session key. */
+  sessionId: string;
+  /** True when this transcript instance was owned by an ACP runtime. */
+  acpOwned: boolean;
+  /** True when exclusion-sensitive session ownership was captured for this transcript id. */
+  provenanceKnown: boolean;
+  /** Activity timestamp for this transcript instance, not the current logical session row. */
+  updatedAtMs: number;
+};
+
 export type TranscriptEvent = unknown;
 
 export type SessionTranscriptStats = {
@@ -67,6 +80,18 @@ export type SessionTranscriptStats = {
   maxSeq: number;
   sizeBytes: number;
 };
+
+export type SessionTranscriptEventRow = {
+  event: TranscriptEvent;
+  seq: number;
+};
+
+export type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {
   config?: OpenClawConfig;
@@ -242,7 +267,7 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   archiveTranscript: boolean;
   expectedEntry?: SessionEntry;
-  expectedSessionId?: string;
+  expectedSessionId?: string | null;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
   storePath: string;

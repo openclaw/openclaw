@@ -31,7 +31,7 @@ import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
  * These functions analyze config-based security properties without I/O.
  */
 
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -39,11 +39,11 @@ export type SecurityAuditFinding = {
   remediation?: string;
 };
 
-export type HooksHardeningAuditOptions = {
+type HooksHardeningAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
-export type GatewayHttpNoAuthAuditOptions = {
+type GatewayHttpNoAuthAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
@@ -1259,3 +1259,4 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
 
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

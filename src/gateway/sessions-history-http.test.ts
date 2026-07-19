@@ -12,10 +12,7 @@ import {
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import {
-  emitInternalSessionTranscriptUpdate,
-  emitSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -740,6 +737,44 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test.each(["", " ", "abc", "0", "-5", "1.5"])(
+    "rejects invalid limit %j with 400",
+    async (limit) => {
+      await seedSession({ text: "first message" });
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error?.type).toBe("invalid_request_error");
+        expect(body.error?.message).toBe("limit must be a positive integer");
+      });
+    },
+  );
+
+  test.each(["1", "+1"])(
+    "returns the requested bounded history for valid limit %s",
+    async (limit) => {
+      const { storePath } = await seedSession({ text: "first message" });
+      await appendVisibleAssistantMessage({
+        sessionKey: "agent:main:main",
+        text: "second message",
+        storePath,
+      });
+
+      await withGatewayHarness(async (harness) => {
+        const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+          "second message",
+        ]);
+        expect(body.hasMore).toBe(true);
+      });
+    },
+  );
+
   test("streams bounded history windows over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
@@ -883,7 +918,7 @@ describe("session history HTTP endpoints", () => {
       const stream = await openSessionHistorySse(harness.port, "agent:main:main");
       await expectHistoryEventTexts(stream, ["first message"]);
 
-      emitInternalSessionTranscriptUpdate({
+      emitSessionTranscriptUpdate({
         target: {
           agentId: "main",
           sessionId: "sess-main",
@@ -1126,3 +1161,4 @@ describe("session history HTTP endpoints", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
