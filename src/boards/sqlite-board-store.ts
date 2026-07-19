@@ -54,6 +54,23 @@ type StoredBoard = {
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
 
+// Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
+// no board tables until the first write. Reads must treat that as "no boards",
+// not "no such table".
+function boardTablesPresent(database: OpenClawAgentDatabase): boolean {
+  if (ensuredBoardDatabases.has(database.db)) {
+    return true;
+  }
+  const row = database.db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'board_widgets'")
+    .get(); // sqlite-allow-raw: catalog probe before Kysely table access.
+  if (!row) {
+    return false;
+  }
+  ensuredBoardDatabases.add(database.db);
+  return true;
+}
+
 function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
@@ -373,7 +390,7 @@ export class SqliteBoardStore implements BoardStore {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) =>
-        hasSession(database, resolved.sessionKey)
+        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
           ? readStoredBoard(database, resolved.sessionKey).snapshot
           : undefined,
       {
@@ -523,7 +540,7 @@ export class SqliteBoardStore implements BoardStore {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) => {
-        if (!hasSession(database, resolved.sessionKey)) {
+        if (!hasSession(database, resolved.sessionKey) || !boardTablesPresent(database)) {
           return undefined;
         }
         const db = getNodeSqliteKysely<BoardDatabase>(database.db);
@@ -583,6 +600,9 @@ export class SqliteBoardStore implements BoardStore {
         resolveOpenClawAgentSqlitePath({ agentId, env: this.options.env });
       const result = withOpenClawAgentDatabaseReadOnly(
         (database) => {
+          if (!boardTablesPresent(database)) {
+            return [];
+          }
           const db = getNodeSqliteKysely<BoardDatabase>(database.db);
           return executeSqliteQuerySync(
             database.db,
