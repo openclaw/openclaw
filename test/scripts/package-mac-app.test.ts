@@ -1,6 +1,6 @@
 // Package Mac App tests cover package mac app script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -63,6 +63,17 @@ function getSparkleBuildHelperBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("sparkle_canonical_build_from_version()");
   const end = script.indexOf("build_path_for_arch()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getSwiftPackageResolutionBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("resolve_swift_packages()");
+  const end = script.indexOf("PNPM_CMD=()");
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -153,6 +164,36 @@ function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
     mkdir -p "$APP_ROOT/Contents/Frameworks"
     ${getSwiftCompatibilityBlock()}
   `);
+}
+
+function runSwiftPackageResolutionHarness(mutateLockfile: boolean) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-swift-resolve-root-"));
+  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-swift-resolve-tools-"));
+  const resolvedFile = path.join(root, "apps", "macos", "Package.resolved");
+  const swiftPath = path.join(toolsDir, "swift");
+  tempDirs.push(root, toolsDir);
+
+  mkdirSync(path.dirname(resolvedFile), { recursive: true });
+  writeFileSync(resolvedFile, "locked\n", { encoding: "utf8", flag: "wx" });
+  writeFileSync(
+    swiftPath,
+    [
+      "#!/usr/bin/env bash",
+      mutateLockfile ? `printf 'changed\\n' > ${JSON.stringify(resolvedFile)}` : ":",
+    ].join("\n"),
+    "utf8",
+  );
+  chmodSync(swiftPath, 0o755);
+
+  const result = runHelper(`
+    set -euo pipefail
+    ROOT_DIR=${JSON.stringify(root)}
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    ${getSwiftPackageResolutionBlock()}
+    resolve_swift_packages "$ROOT_DIR/apps/macos/.build/arm64"
+  `);
+
+  return { result, resolvedFile };
 }
 
 afterEach(() => {
@@ -669,10 +710,10 @@ describe("package-mac-app plist stamping", () => {
   it("patches KeyboardShortcuts to resolve packaged resources before building", () => {
     const script = readFileSync(scriptPath, "utf8");
     const patch = readFileSync("apps/macos/Patches/KeyboardShortcuts-3.0.1.patch", "utf8");
-    const resolveCall =
-      'swift package --scratch-path "$BUILD_PATH" --only-use-versions-from-resolved-file resolve';
+    const resolveCall = 'resolve_swift_packages "$BUILD_PATH"';
     const patchCall = 'patch_keyboard_shortcuts_bundle_lookup "$BUILD_PATH"';
-    const buildCall = 'swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+    const buildCall =
+      'swift build -c "$BUILD_CONFIG" --disable-automatic-resolution --product "$PRODUCT"';
 
     expect(script).toContain(
       'KEYBOARD_SHORTCUTS_PATCH="$ROOT_DIR/apps/macos/Patches/KeyboardShortcuts-3.0.1.patch"',
@@ -681,12 +722,35 @@ describe("package-mac-app plist stamping", () => {
       'git -C "$checkout" apply --unidiff-zero --check "$KEYBOARD_SHORTCUTS_PATCH"',
     );
     expect(script).toContain('git -C "$checkout" apply --unidiff-zero "$KEYBOARD_SHORTCUTS_PATCH"');
+    expect(script).toContain('resolved_file="$ROOT_DIR/apps/macos/Package.resolved"');
+    expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
+    expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
+    expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
+    expect(script).toContain(
+      'swift build -c "$BUILD_CONFIG" --disable-automatic-resolution --product "$PRODUCT"',
+    );
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(patchCall));
     expect(script.indexOf(patchCall)).toBeLessThan(script.indexOf(buildCall));
     expect(patch).toContain("Bundle.main.url(");
     expect(patch).toContain('forResource: "KeyboardShortcuts_KeyboardShortcuts"');
     expect(patch).toContain("return .module");
     expect(patch).toContain("bundle: .keyboardShortcutsResources");
+  });
+
+  it("restores and rejects a Swift package resolution that changes the lockfile", () => {
+    const { result, resolvedFile } = runSwiftPackageResolutionHarness(true);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Swift package resolution changed Package.resolved");
+    expect(readFileSync(resolvedFile, "utf8")).toBe("locked\n");
+  });
+
+  it("accepts a Swift package resolution that preserves the lockfile", () => {
+    const { result, resolvedFile } = runSwiftPackageResolutionHarness(false);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(readFileSync(resolvedFile, "utf8")).toBe("locked\n");
   });
 
   it("embeds the canonical CLI installer as a signed app resource", () => {

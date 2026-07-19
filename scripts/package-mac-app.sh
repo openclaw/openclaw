@@ -114,6 +114,31 @@ patch_keyboard_shortcuts_bundle_lookup() {
   git -C "$checkout" apply --unidiff-zero "$KEYBOARD_SHORTCUTS_PATCH"
 }
 
+resolve_swift_packages() {
+  local build_path="$1"
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local resolved_snapshot
+
+  if [[ ! -f "$resolved_file" ]]; then
+    echo "ERROR: Swift package lockfile not found at $resolved_file" >&2
+    return 1
+  fi
+  resolved_snapshot="$(mktemp)"
+  cp "$resolved_file" "$resolved_snapshot"
+  if ! swift package --scratch-path "$build_path" resolve; then
+    cp "$resolved_snapshot" "$resolved_file"
+    rm "$resolved_snapshot"
+    return 1
+  fi
+  if ! cmp -s "$resolved_snapshot" "$resolved_file"; then
+    cp "$resolved_snapshot" "$resolved_file"
+    rm "$resolved_snapshot"
+    echo "ERROR: Swift package resolution changed Package.resolved; update it in a separate reviewed change" >&2
+    return 1
+  fi
+  rm "$resolved_snapshot"
+}
+
 PNPM_CMD=()
 
 resolve_pnpm_cmd() {
@@ -246,10 +271,10 @@ echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
   echo "📦 Resolving Swift packages [$arch]"
-  swift package --scratch-path "$BUILD_PATH" --only-use-versions-from-resolved-file resolve
+  resolve_swift_packages "$BUILD_PATH"
   patch_keyboard_shortcuts_bundle_lookup "$BUILD_PATH"
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build -c "$BUILD_CONFIG" --disable-automatic-resolution --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
