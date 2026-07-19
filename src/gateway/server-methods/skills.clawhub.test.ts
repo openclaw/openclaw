@@ -199,6 +199,72 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(JSON.stringify(response)).not.toContain('"security":');
   });
 
+  it("forwards the owner handle for an owner-qualified linked skill so ambiguous slugs resolve", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "anysearch",
+          skillKey: "anysearch",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "anysearch",
+            ownerHandle: "anysearch-ai",
+            installedVersion: "2.1.0",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [
+        {
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          requestedSlug: "anysearch",
+          requestedVersion: "2.1.0",
+          slug: "anysearch",
+          version: "2.1.0",
+          publisherHandle: "anysearch-ai",
+          security: { status: "clean", passed: true },
+        },
+      ],
+    });
+
+    const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    // Regression for openclaw/openclaw#108654: the owner handle must
+    // reach the bulk verdict fetch, otherwise an ambiguous bare slug
+    // (e.g. `anysearch`) resolves to `skill_not_found` even though an
+    // owner-qualified `skills verify @anysearch-ai/anysearch` succeeds.
+    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
+    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      items: [{ slug: "anysearch", version: "2.1.0", ownerHandle: "anysearch-ai" }],
+      skipAuth: true,
+    });
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          registry: "https://clawhub.ai",
+          ok: true,
+          requestedSlug: "anysearch",
+          requestedVersion: "2.1.0",
+          securityStatus: "clean",
+          securityPassed: true,
+        }),
+      ],
+    });
+  });
+
   it("does not passively fetch verdicts from a non-default registry", async () => {
     buildWorkspaceSkillStatusMock.mockReturnValue({
       workspaceDir: "/tmp/workspace",

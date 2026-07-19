@@ -117,8 +117,11 @@ function canAutoFetchVerdictRegistry(registry: string): boolean {
 
 export function collectClawHubVerdictTargets(
   report: ReturnType<typeof buildWorkspaceSkillStatus>,
-): Array<{ registry: string; slug: string; version: string }> {
-  const targets = new Map<string, { registry: string; slug: string; version: string }>();
+): Array<{ registry: string; slug: string; version: string; ownerHandle?: string }> {
+  const targets = new Map<
+    string,
+    { registry: string; slug: string; version: string; ownerHandle?: string }
+  >();
   for (const skill of report.skills) {
     const link = skill.clawhub;
     if (!link || link.status !== "linked" || !link.valid) {
@@ -127,23 +130,36 @@ export function collectClawHubVerdictTargets(
     if (!canAutoFetchVerdictRegistry(link.registry)) {
       continue;
     }
-    const key = `${link.registry}\0${link.slug}\0${link.installedVersion}`;
+    // Carry the owner handle when present. ClawHub resolves an ambiguous
+    // bare slug (e.g. `anysearch`) to the correct owner-qualified
+    // skill only when the owner handle is supplied; without it a linked
+    // install can report `skill_not_found` even though an owner-qualified
+    // `skills verify @owner/slug` succeeds. See openclaw/openclaw#108654.
+    const key = `${link.registry}\0${link.slug}\0${link.installedVersion}\0${link.ownerHandle ?? ""}`;
     targets.set(key, {
       registry: link.registry,
       slug: link.slug,
       version: link.installedVersion,
+      ...(link.ownerHandle ? { ownerHandle: link.ownerHandle } : {}),
     });
   }
   return [...targets.values()];
 }
 
 export async function fetchOpenClawSkillSecurityVerdicts(
-  targets: Array<{ registry: string; slug: string; version: string }>,
+  targets: Array<{ registry: string; slug: string; version: string; ownerHandle?: string }>,
 ): Promise<OpenClawSkillSecurityVerdictItem[]> {
-  const byRegistry = new Map<string, Array<{ slug: string; version: string }>>();
+  const byRegistry = new Map<
+    string,
+    Array<{ slug: string; version: string; ownerHandle?: string }>
+  >();
   for (const target of targets) {
     const registryTargets = byRegistry.get(target.registry) ?? [];
-    registryTargets.push({ slug: target.slug, version: target.version });
+    registryTargets.push({
+      slug: target.slug,
+      version: target.version,
+      ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
+    });
     byRegistry.set(target.registry, registryTargets);
   }
 
