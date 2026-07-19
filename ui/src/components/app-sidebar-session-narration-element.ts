@@ -1,16 +1,22 @@
 import { state } from "lit/decorators.js";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { AppSidebarMenusElement } from "./app-sidebar-menus.ts";
-import { SidebarSessionNarrationController } from "./app-sidebar-session-narration.ts";
+import type {
+  SidebarNarrationSyncInput,
+  SidebarSessionNarrationController,
+} from "./app-sidebar-session-narration.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 /** Gateway subscription and reactive narration state for the session-list renderer. */
 export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusElement {
   @state() protected sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
 
-  private readonly narration = new SidebarSessionNarrationController((lines) => {
-    this.sidebarNarrationLines = lines;
-  });
+  // Lazy: the controller pulls core token-suppression modules that must stay
+  // out of the startup chunk (QA smoke startup-JS budget). It loads on the
+  // first update with the preference enabled; earlier events are safely
+  // dropped because the controller aligns from cumulative snapshots.
+  private narration: SidebarSessionNarrationController | null = null;
+  private narrationLoad: Promise<void> | null = null;
   private readonly narrationSubscriptions = new SubscriptionsController(this);
 
   protected abstract visibleSessionChildren(
@@ -33,19 +39,18 @@ export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusE
     super();
     this.narrationSubscriptions.effect(
       () => this.context?.gateway,
-      (gateway) => gateway.subscribeEvents((event) => this.narration.handleEvent(event)),
+      (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     );
   }
 
   override disconnectedCallback() {
-    this.narration.disconnect();
+    this.narration?.disconnect();
     super.disconnectedCallback();
   }
 
-  override updated() {
-    super.updated();
+  private narrationSyncInput(): SidebarNarrationSyncInput {
     const gateway = this.context?.gateway.snapshot;
-    this.narration.sync({
+    return {
       enabled: this.sidebarLiveActivity,
       connected: this.connected && gateway?.connected === true,
       connectionIdentity: gateway?.client ?? null,
@@ -53,6 +58,34 @@ export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusE
       rows: this.visibleNarrationRowsInOrder(),
       openSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
+    };
+  }
+
+  private ensureNarrationController(): void {
+    if (this.narration || this.narrationLoad) {
+      return;
+    }
+    this.narrationLoad = import("./app-sidebar-session-narration.ts").then((module) => {
+      this.narrationLoad = null;
+      // The element may have left the DOM while the chunk loaded.
+      if (!this.isConnected) {
+        return;
+      }
+      this.narration = new module.SidebarSessionNarrationController((lines) => {
+        this.sidebarNarrationLines = lines;
+      });
+      this.narration.sync(this.narrationSyncInput());
     });
+  }
+
+  override updated() {
+    super.updated();
+    if (!this.narration) {
+      if (this.sidebarLiveActivity) {
+        this.ensureNarrationController();
+      }
+      return;
+    }
+    this.narration.sync(this.narrationSyncInput());
   }
 }

@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import {
-  deriveSidebarNarrationLine,
-  SIDEBAR_NARRATION_THROTTLE_MS,
-  SidebarSessionNarrationController,
-} from "./app-sidebar-session-narration.ts";
+import { SidebarSessionNarrationController } from "./app-sidebar-session-narration.ts";
+import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
+
+// Mirrors the controller-internal throttle; asserting through timers keeps the
+// constant unexported (production-only export policy).
+const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 function runningRow(key: string): SidebarRecentSession {

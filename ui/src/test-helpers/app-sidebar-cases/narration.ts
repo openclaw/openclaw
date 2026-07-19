@@ -94,20 +94,22 @@ describe("AppSidebar live narration", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    gateway.publishEvent("chat", {
-      sessionKey: key,
-      state: "delta",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Checking the remaining files." }],
-      },
-    });
-    await waitForFast(() =>
+    // Republish inside the wait: the narration controller chunk loads lazily,
+    // so an event raced before its import resolves is intentionally dropped.
+    await waitForFast(() => {
+      gateway.publishEvent("chat", {
+        sessionKey: key,
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Checking the remaining files." }],
+        },
+      });
       expect(
         sidebar.querySelector(`[data-session-key="${key}"] .sidebar-recent-session__subtitle`)
           ?.textContent,
-      ).toBe("Checking the remaining files."),
-    );
+      ).toBe("Checking the remaining files.");
+    });
 
     gateway.publishEvent("question.requested", {
       id: "question-narration-priority",

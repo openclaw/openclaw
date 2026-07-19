@@ -3,7 +3,7 @@ import { keyed } from "lit/directives/keyed.js";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 
-export type SidebarSessionSubtitle = {
+type SidebarSessionSubtitle = {
   subtitle: string | undefined;
   narration: string | undefined;
 };

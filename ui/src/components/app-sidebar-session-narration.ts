@@ -14,7 +14,6 @@ import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
 import { extractText } from "../lib/chat/message-extract.ts";
-import { clampText } from "../lib/format.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -22,10 +21,10 @@ import {
   normalizeAgentId,
 } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 
-export const SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT = 6;
-export const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
-const SIDEBAR_NARRATION_MAX_LENGTH = 120;
+const SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT = 6;
+const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 const SIDEBAR_NARRATION_BUFFER_CHARS = 16_384;
 
 type SessionMessageSubscription = Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
@@ -60,19 +59,6 @@ export type SidebarNarrationSyncInput = {
   agentId: string;
 };
 
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/```/g, " ")
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
-    .replace(/[*_~]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function normalizeSidebarNarrationText(text: string): string | null {
   const displayText = stripSuppressedControlReplyToken(
     stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
@@ -102,24 +88,6 @@ function trailingInternalDelimiterPrefix(text: string): string {
     }
   }
   return "";
-}
-
-/** Compact the newest prose into one quiet, stable sidebar line. */
-export function deriveSidebarNarrationLine(text: string): string {
-  const paragraphs = text
-    .replace(/```[\s\S]*?```/g, " ")
-    .split(/\n\s*\n/)
-    .map((paragraph) => stripMarkdown(paragraph))
-    .filter(Boolean);
-  const paragraph = paragraphs.at(-1) ?? "";
-  if (!paragraph) {
-    return "";
-  }
-  const fragments = paragraph.match(/[^.!?…]+(?:[.!?…]+(?=\s|$)|$)/g);
-  const newest =
-    fragments?.map((fragment) => fragment.trim()).findLast((fragment) => Boolean(fragment)) ??
-    paragraph;
-  return clampText(newest, SIDEBAR_NARRATION_MAX_LENGTH);
 }
 
 function rowIsRunning(row: SidebarRecentSession): boolean {
