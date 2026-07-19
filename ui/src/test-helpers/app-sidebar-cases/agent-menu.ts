@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { AgentsListResult } from "../../api/types.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -258,5 +259,53 @@ describe("AppSidebar agent chip", () => {
     ];
     expect(rows).toHaveLength(10);
     expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
+  });
+
+  it("renders complete flag and ZWJ graphemes in the agent chip avatar slot", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const agentsList = {
+      defaultId: "flag",
+      mainKey: "main",
+      scope: "agent",
+      agents: [
+        { id: "flag", identity: { name: "🇺🇸Team" } },
+        { id: "dev", identity: { name: "👨‍💻Dev" } },
+      ],
+    } as AgentsListResult;
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("flag", ["agent:flag:main"]),
+      "panel",
+      agentsList,
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    // Production path: sidebar agent card avatar text when no URL/text avatar is set.
+    expect(sidebar.querySelector(".sidebar-agent-card__avatar-text")?.textContent).toBe("🇺🇸");
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await sidebar.updateComplete;
+    const switchRows = [
+      ...sidebar.querySelectorAll(
+        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+      ),
+    ];
+    const flagAvatar = switchRows
+      .find((row) => row.textContent?.includes("🇺🇸Team"))
+      ?.querySelector(".sidebar-agent-section__avatar");
+    const zwjAvatar = switchRows
+      .find((row) => row.textContent?.includes("👨‍💻Dev"))
+      ?.querySelector(".sidebar-agent-section__avatar");
+    expect(flagAvatar?.textContent).toBe("🇺🇸");
+    expect(zwjAvatar?.textContent).toBe("👨‍💻");
+    console.log(
+      "sidebar avatar-slot proof:",
+      JSON.stringify({
+        chip: sidebar.querySelector(".sidebar-agent-card__avatar-text")?.textContent,
+        flagMenu: flagAvatar?.textContent,
+        zwjMenu: zwjAvatar?.textContent,
+      }),
+    );
   });
 });

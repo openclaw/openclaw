@@ -11,7 +11,11 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import {
+  normalizeAgentLabel,
+  resolveAgentTextAvatar,
+  resolveFallbackAvatarInitial,
+} from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
@@ -155,7 +159,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     const approvalCount = this.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
     const cardAvatarText =
       (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
-      (cardName || cardAgentId).slice(0, 1).toUpperCase();
+      resolveFallbackAvatarInitial(cardName || cardAgentId);
     // The sidebar action follows gateway availability; collapsed native chrome
     // keeps its separate offline-tolerant ⌘N mirror.
     return html`
