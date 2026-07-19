@@ -462,9 +462,9 @@ export class ReefInboxConnection {
           );
         }
         // The production ws client already bounds its close handshake with its
-        // native 30-second closeTimeout and emits close after destroying a
-        // non-responsive socket. Keep reconnect ordering tied to that real close
-        // event instead of imposing a second Reef-specific force-close deadline.
+        // native closeTimeout and emits close after destroying a non-responsive
+        // socket. Keep reconnect ordering tied to that real close event instead
+        // of imposing a second Reef-specific force-close deadline.
         socket.close();
       };
       const abortListener = () => closeAndFinish(undefined, true);
