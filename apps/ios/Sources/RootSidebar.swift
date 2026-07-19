@@ -451,10 +451,14 @@ struct RootSidebar: View {
                     self.selectDestination(.gateway)
                 } label: {
                     HStack(spacing: 9) {
-                        Circle()
-                            .fill(self.gatewayStatusColor)
-                            .frame(width: 8, height: 8)
-                            .accessibilityHidden(true)
+                        // The agent card owns the healthy status; like the web
+                        // footer, a dot appears here only when degraded.
+                        if !self.isGatewayConnected {
+                            Circle()
+                                .fill(self.gatewayStatusColor)
+                                .frame(width: 8, height: 8)
+                                .accessibilityHidden(true)
+                        }
                         Text(verbatim: self.gatewayName)
                             .font(OpenClawType.subheadSemiBold)
                             .lineLimit(1)
@@ -668,6 +672,10 @@ struct RootSidebar: View {
         case .error: String(localized: "Needs attention")
         case .disconnected: String(localized: "Offline")
         }
+    }
+
+    private var isGatewayConnected: Bool {
+        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
     private var gatewayStatusColor: Color {
