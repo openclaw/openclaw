@@ -31,12 +31,11 @@ export type RoutePeer = {
   id: string;
 };
 
-export type ResolveAgentRouteInput = {
+type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
@@ -548,20 +547,8 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
   return `${peer.kind}:${peer.id}`;
 }
 
-function formatRoleIdsCacheKey(roleIds: string[]): string {
-  const count = roleIds.length;
-  if (count === 0) {
-    return "-";
-  }
-  if (count === 1) {
-    return roleIds[0] ?? "-";
-  }
-  if (count === 2) {
-    const first = roleIds[0] ?? "";
-    const second = roleIds[1] ?? "";
-    return first <= second ? `${first},${second}` : `${second},${first}`;
-  }
-  return roleIds.toSorted().join(",");
+function formatRoleIdsCacheKey(roleIds: string[]): string[] {
+  return roleIds.toSorted();
 }
 
 function buildResolvedRouteCacheKey(params: {
@@ -574,7 +561,16 @@ function buildResolvedRouteCacheKey(params: {
   memberRoleIds: string[];
   dmScope: string;
 }): string {
-  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+  return JSON.stringify([
+    params.channel,
+    params.accountId,
+    formatRouteCachePeer(params.peer),
+    formatRouteCachePeer(params.parentPeer),
+    params.guildId ?? null,
+    params.teamId ?? null,
+    formatRoleIdsCacheKey(params.memberRoleIds),
+    params.dmScope,
+  ]);
 }
 
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
@@ -623,7 +619,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
-  const dmScope = input.dmScope ?? input.cfg.session?.dmScope ?? "main";
+  const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
@@ -820,4 +816,3 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
