@@ -1,5 +1,5 @@
 // Openshell plugin module implements fs bridge behavior.
-import fsPromises, { type FileHandle } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
@@ -31,34 +31,6 @@ export function createOpenShellFsBridge(params: {
 
 const MAX_SANDBOX_READ_BYTES = 100 * 1024 * 1024;
 
-/**
- * Read a file handle in async chunks, capping the total at `maxBytes`.
- * Enforces the cap at read time (not via a pre-read stat) to avoid
- * TOCTOU races between checking file size and allocating the read buffer,
- * without blocking the Node event loop.
- */
-async function readHandleBounded(
-  handle: FileHandle,
-  maxBytes: number,
-  containerPath: string,
-): Promise<Buffer> {
-  const CHUNK_SIZE = 64 * 1024;
-  const chunks: Buffer[] = [];
-  let total = 0;
-  const scratch = Buffer.allocUnsafe(CHUNK_SIZE);
-  while (true) {
-    const { bytesRead } = await handle.read(scratch, 0, CHUNK_SIZE, null);
-    if (bytesRead === 0) {
-      return Buffer.concat(chunks, total);
-    }
-    total += bytesRead;
-    if (total > maxBytes) {
-      throw new RangeError(`file too large: ${containerPath} (max ${maxBytes} bytes)`);
-    }
-    chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
-  }
-}
-
 class OpenShellFsBridge implements SandboxFsBridge {
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
@@ -86,7 +58,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    let opened: Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
     try {
       await assertLocalPathSafety({
         target,
@@ -95,14 +66,10 @@ class OpenShellFsBridge implements SandboxFsBridge {
         allowFinalSymlinkForUnlink: false,
       });
       const root = await fsRoot(target.mountHostRoot);
-      opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
+      return await root.readBytes(path.relative(target.mountHostRoot, hostPath), {
         hardlinks: "reject",
+        maxBytes: MAX_SANDBOX_READ_BYTES,
       });
-      try {
-        return await readHandleBounded(opened.handle, MAX_SANDBOX_READ_BYTES, target.containerPath);
-      } finally {
-        await opened.handle.close();
-      }
     } catch (err) {
       throw new Error(
         `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,
