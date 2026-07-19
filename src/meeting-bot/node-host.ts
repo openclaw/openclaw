@@ -1,9 +1,21 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import {
+  appendAudioChunk,
+  createAudioChunkQueue,
+  DEFAULT_MAX_AUDIO_CHUNKS,
+  DEFAULT_MAX_AUDIO_QUEUE_BYTES,
+  takeAudioChunk,
+  type AudioChunkQueueLimits,
+} from "./node-audio-chunk-queue.js";
 import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
 
 const NODE_BRIDGE_TERMINATION_GRACE_MS = 2_000;
+const AUDIO_CHUNK_QUEUE_LIMITS: AudioChunkQueueLimits = {
+  maxChunks: DEFAULT_MAX_AUDIO_CHUNKS,
+  maxBytes: DEFAULT_MAX_AUDIO_QUEUE_BYTES,
+};
 
 type NodeBridgeSession = {
   id: string;
@@ -12,7 +24,7 @@ type NodeBridgeSession = {
   outputCommand: { command: string; args: string[] };
   input?: ChildProcess;
   output?: ChildProcess;
-  chunks: Buffer[];
+  audioChunks: ReturnType<typeof createAudioChunkQueue>;
   waiters: MeetingNodeAudioPullWaiters;
   closed: boolean;
   createdAt: string;
@@ -169,7 +181,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       url: params.url,
       mode: params.mode,
       outputCommand: output,
-      chunks: [],
+      audioChunks: createAudioChunkQueue(),
       waiters: new MeetingNodeAudioPullWaiters(),
       closed: false,
       createdAt: new Date().toISOString(),
@@ -188,10 +200,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       session.lastInputAt = new Date().toISOString();
       session.lastInputBytes += audio.byteLength;
-      session.chunks.push(audio);
-      if (session.chunks.length > 200) {
-        session.chunks.splice(0, session.chunks.length - 200);
-      }
+      appendAudioChunk(session.audioChunks, audio, AUDIO_CHUNK_QUEUE_LIMITS);
       wake(session);
     });
     const stop = () => {
@@ -216,10 +225,10 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       throw new Error(`unknown bridgeId: ${bridgeId}`);
     }
     const timeoutMs = Math.min(readNumber(params.timeoutMs, 250), 2_000);
-    if (session.chunks.length === 0 && !session.closed) {
+    if (session.audioChunks.chunks.length === 0 && !session.closed) {
       await session.waiters.wait(timeoutMs);
     }
-    const chunk = session.chunks.shift();
+    const chunk = takeAudioChunk(session.audioChunks);
     return {
       bridgeId,
       closed: session.closed,
@@ -364,7 +373,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
             lastInputBytes: session.lastInputBytes,
             lastOutputBytes: session.lastOutputBytes,
             clearCount: session.clearCount,
-            queuedInputChunks: session.chunks.length,
+            queuedInputChunks: session.audioChunks.chunks.length,
           }
         : bridgeId
           ? { bridgeId, closed: true }
@@ -499,3 +508,4 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     },
   };
 }
+
