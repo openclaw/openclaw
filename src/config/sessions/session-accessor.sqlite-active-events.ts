@@ -458,6 +458,105 @@ export function readSessionTranscriptVisibleMessageDelta(
   });
 }
 
+/**
+ * Reads a bounded active-path head using the same JSONL-style byte budget as
+ * `session-utils.fs` `readTranscriptHeadChunk` (default 8192). Byte accounting
+ * uses SQLite LENGTH before any `event_json` fetch so an oversized early row
+ * cannot allocate into Node. Malformed fetched rows are skipped like
+ * unparseable JSONL lines, but still consume the budget so a corrupt early row
+ * cannot force a full-table scan.
+ */
+export function readHeadSessionTranscriptMessageEvents(
+  scope: SessionTranscriptReadScope,
+  options: { maxBytes: number; maxMessages: number },
+): SessionTranscriptMessageEventPage {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const maxMessages = Math.max(
+      0,
+      Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
+    );
+    const maxBytes = Math.max(
+      1,
+      Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8192),
+    );
+    if (maxMessages === 0) {
+      return { events: [], totalMessages: projection.state.activeMessageCount };
+    }
+    const db = getActiveTranscriptKysely(projection.database);
+    // Metadata-only pass: decide the contiguous head prefix without materializing
+    // event_json. Mirrors readSessionTranscriptVisibleMessageDelta so oversized
+    // rows stay outside the head window (JSONL truncated-line parity).
+    const metadata = executeSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select([
+          "active.event_seq",
+          "active.message_position",
+          /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
+          sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        ])
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.message_position", "is not", null)
+        .orderBy("active.message_position", "asc")
+        .limit(maxMessages),
+    ).rows;
+
+    let serializedBytes = 0;
+    let selectedCount = 0;
+    for (const row of metadata) {
+      if (selectedCount >= maxMessages || serializedBytes + row.serialized_bytes > maxBytes) {
+        break;
+      }
+      serializedBytes += row.serialized_bytes;
+      selectedCount += 1;
+      if (serializedBytes >= maxBytes) {
+        break;
+      }
+    }
+    if (selectedCount === 0) {
+      return { events: [], totalMessages: projection.state.activeMessageCount };
+    }
+
+    const lastMessagePosition = metadata[selectedCount - 1]?.message_position;
+    if (lastMessagePosition === null || lastMessagePosition === undefined) {
+      return { events: [], totalMessages: projection.state.activeMessageCount };
+    }
+
+    const events: SessionTranscriptMessageEvent[] = [];
+    for (const row of executeSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select(["active.event_seq", "active.message_position", "event.event_json"])
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.message_position", "is not", null)
+        .where("active.message_position", "<=", lastMessagePosition)
+        .orderBy("active.message_position", "asc"),
+    ).rows) {
+      try {
+        events.push(parseMessageEventRow(row));
+      } catch {
+        // Skip unreadable rows the way JSONL title scans skip bad lines.
+      }
+    }
+    return {
+      events,
+      totalMessages: projection.state.activeMessageCount,
+    };
+  });
+}
+
 /** Reads a bounded active-path tail while preserving transcript line and byte caps. */
 export function readRecentSessionTranscriptMessageEvents(
   scope: SessionTranscriptReadScope,
