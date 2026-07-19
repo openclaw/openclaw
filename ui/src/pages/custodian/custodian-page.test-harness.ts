@@ -82,8 +82,9 @@ export function createContext(
         listener(snapshot);
       }
     },
-    setGatewayToken: (token) => {
-      connection.token = token;
+    setGatewayToken: (value) => {
+      const credentials = { token: value };
+      connection.token = credentials.token;
     },
     emitGatewayEvent: (event) => {
       for (const listener of eventListeners) {

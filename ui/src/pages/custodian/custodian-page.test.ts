@@ -115,7 +115,7 @@ describe("custodian page", () => {
     ]);
   });
 
-  it("preserves rendered durable history and requests a fresh welcome after a client replacement", async () => {
+  it("keeps rows for a same-ownership client replacement and requests a fresh welcome", async () => {
     let chatCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "openclaw.chat.history") {
@@ -147,8 +147,68 @@ describe("custodian page", () => {
       "openclaw.chat",
       "openclaw.chat",
     ]);
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
+      sessionId: expect.stringMatching(/^control-ui-onboarding-/),
+    });
     expect(page.textContent).toContain("Earlier state");
     expect(page.textContent).toContain("Fresh session welcome");
+  });
+
+  it("does not rotate against a replacement gateway without chat support", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "engine-session-before-replacement",
+      reply: "Existing welcome.",
+      action: "none",
+    });
+    const replacementRequest = vi.fn();
+    const { context, setGatewaySnapshot } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    setGatewaySnapshot({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: [] },
+      },
+    });
+    await waitForFast(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Update the Gateway"),
+    );
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(replacementRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps loaded transcript rows when a welcome retry cannot refresh them", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        turns: [{ role: "assistant", text: "Loaded transcript row", at: 1 }],
+      })
+      .mockRejectedValueOnce(new Error("temporary welcome failure"))
+      .mockRejectedValueOnce(new Error("temporary history failure"))
+      .mockResolvedValueOnce({
+        sessionId: "engine-session-after-retry",
+        reply: "Recovered welcome.",
+        action: "none",
+      });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(page.querySelector('[role="alert"] button')).not.toBeNull());
+
+    page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForFast(() => expect(page.textContent).toContain("Recovered welcome."));
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+    expect(page.textContent).toContain("Loaded transcript row");
   });
 
   it("keeps failed sensitive replies masked for correction and retry", async () => {
@@ -227,9 +287,12 @@ describe("custodian page", () => {
     expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("rotates credentials without clearing durable messages or retaining sensitive input", async () => {
+  it("clears stale rows and cold-starts against the new gateway after credentials change", async () => {
     const request = vi
       .fn()
+      .mockResolvedValueOnce({
+        turns: [{ role: "assistant", text: "Old gateway transcript", at: 1 }],
+      })
       .mockResolvedValueOnce({
         sessionId: "engine-session-before-rotation",
         reply: "Enter the token.",
@@ -240,15 +303,23 @@ describe("custodian page", () => {
         new Promise<never>(() => {
           // Keep the sensitive turn pending while the gateway replaces its client.
         }),
-      )
+      );
+    const replacementRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        turns: [{ role: "assistant", text: "New gateway transcript", at: 2 }],
+      })
       .mockResolvedValueOnce({
         sessionId: "engine-session-after-rotation",
         reply: "Fresh safe welcome.",
         action: "none",
       });
-    const { context, setGatewaySnapshot, setGatewayToken } = createContext(request);
+    const { context, setGatewaySnapshot, setGatewayToken } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
     const { page } = await mountPage(context);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
     const input = page.querySelector<HTMLInputElement>(
       '.agent-chat__composer-combobox input[type="password"]',
@@ -257,27 +328,34 @@ describe("custodian page", () => {
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
 
     setGatewayToken("new-operator-token");
-    setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    setGatewaySnapshot({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+    });
+    await waitForFast(() => expect(replacementRequest).toHaveBeenCalledTimes(2));
     await waitForFast(() => expect(page.textContent).toContain("Fresh safe welcome."));
 
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
       sessionId: "engine-session-before-rotation",
       message: "test-token-placeholder",
     });
-    expect(request.mock.calls[2]?.[1]).toMatchObject({
+    expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+    ]);
+    expect(replacementRequest.mock.calls[1]?.[1]).toMatchObject({
       sessionId: expect.stringMatching(/^control-ui-onboarding-/),
     });
-    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
-    expect(request.mock.calls[2]?.[1]).not.toMatchObject({
+    expect(replacementRequest.mock.calls[1]?.[1]).not.toHaveProperty("message");
+    expect(replacementRequest.mock.calls[1]?.[1]).not.toMatchObject({
       sessionId: "engine-session-before-rotation",
     });
-    expect(page.textContent).toContain("Enter the token.");
-    expect(page.textContent).toContain("Sensitive reply sent");
-    expect(page.querySelector(".chat-divider")?.textContent).toContain("Earlier");
+    expect(page.textContent).not.toContain("Old gateway transcript");
+    expect(page.textContent).not.toContain("Enter the token.");
+    expect(page.textContent).not.toContain("Sensitive reply sent");
+    expect(page.textContent).toContain("New gateway transcript");
     expect(page.querySelector('input[type="password"]')).toBeNull();
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });

@@ -174,6 +174,8 @@ export class CustodianPage extends OpenClawLightDomElement {
   private synchronizeClient(): void {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.connected ? snapshot.client : null;
+    const chatSupported =
+      client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true;
     const historyAvailable =
       client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.changes.list") === true;
     if (this.historyAvailable !== historyAvailable) {
@@ -195,7 +197,13 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.sessionStarted &&
       this.sessionOwnershipKey !== null &&
       ownershipKey !== this.sessionOwnershipKey;
-    if (client === this.activeClient && !variantChanged && !clientReplaced && !ownershipChanged) {
+    if (
+      client === this.activeClient &&
+      !variantChanged &&
+      !clientReplaced &&
+      !ownershipChanged &&
+      this.chatAvailable === chatSupported
+    ) {
       return;
     }
     const requestWasPending = this.sending && this.retryParams !== null;
@@ -207,10 +215,18 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sending = false;
     this.chatAvailable = false;
     this.eventNudge = null;
-    if (variantChanged) {
+    if (variantChanged || ownershipChanged) {
       this.sessionStarted = false;
       this.clearConversation();
-    } else if (client && (clientReplaced || ownershipChanged)) {
+    } else if (client && clientReplaced) {
+      // A transport replacement keeps the same durable transcript, but do not
+      // create a fresh volatile session until the new client advertises chat.
+      if (!chatSupported) {
+        this.sessionStarted = false;
+        this.error = t("custodian.unsupportedGateway");
+        return;
+      }
+      this.chatAvailable = true;
       this.rotateVolatileSession(client, variant);
       return;
     } else if (requestWasPending) {
@@ -224,7 +240,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (!client) {
       return;
     }
-    if (isGatewayMethodAdvertised(snapshot, "openclaw.chat") !== true) {
+    if (!chatSupported) {
       this.error = t("custodian.unsupportedGateway");
       return;
     }
@@ -530,7 +546,6 @@ export class CustodianPage extends OpenClawLightDomElement {
     const client = this.activeClient;
     const params = this.retryParams;
     if (client && params && params.message === undefined && this.chatAvailable && !this.sending) {
-      this.clearConversation();
       void this.initializeSession(client, params);
     }
   }
