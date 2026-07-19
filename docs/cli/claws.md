@@ -1,5 +1,5 @@
 ---
-summary: "Add, inspect, and remove experimental Claw agent packages"
+summary: "Add, inspect, update, and remove experimental Claw agent packages"
 read_when:
   - You want to validate a grouped Claw manifest
   - You want to preview or add one agent from a Claw
@@ -197,6 +197,27 @@ This is not a reference count. Ordinary plugin, skill, and agent commands keep
 their existing behavior; Claws add provenance and guarded lifecycle operations
 on top.
 
+## Preview an update
+
+By default, update uses the source recorded when the Claw was added. Use
+`--from` when that source moved or when testing another package directory:
+
+```bash
+openclaw claws update incident-triage --dry-run --json
+openclaw claws update incident-triage \
+  --from ./incident-triage-next \
+  --dry-run --json
+```
+
+The plan compares current provenance and live state with the target manifest.
+It reports agent, workspace, package, MCP, cron, and ownership changes,
+including capability escalations and blockers. Capability escalations have
+separate machine-readable records and `!` lines in human output; the eventual
+exact `planIntegrity` confirmation binds that disclosed set as well as ordinary
+content changes. Hosts may use the same records for a separate dialog or an
+aggregate multi-agent review. This stage is read-only: `claws update` requires
+`--dry-run` and does not apply the plan.
+
 ## Remove an installed Claw
 
 Preview removal before selecting cleanup:
@@ -249,6 +270,7 @@ agents, credentials, sessions, and unowned local state are excluded.
 | `claws inspect <source>`            | Validate a package directory or JSON manifest.      |
 | `claws add <source>`                | Preview or create one new agent and workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
+| `claws update <claw-or-agent>`      | Preview changes from the recorded or given source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
 | `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
 
