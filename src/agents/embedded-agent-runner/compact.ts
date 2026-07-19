@@ -482,7 +482,8 @@ export async function compactEmbeddedAgentSessionDirect(
       config: preparedModelRuntime.config,
       agentId: preparedModelRuntime.agentId ?? requestedAgentIds.sessionAgentId,
       agentDir: preparedModelRuntime.agentDir,
-      workspaceDir: preparedModelRuntime.workspaceDir,
+      workspaceDir:
+        preparedModelRuntime.workspaceDir ?? resolveUserPath(requestedParams.workspaceDir),
       preparedModelRuntime,
     };
     if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
