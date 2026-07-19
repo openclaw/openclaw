@@ -6,6 +6,7 @@ import {
   resolveDurableWorkerPollIntervalMs,
 } from "./config.js";
 import { recordDurableRuntimeHealthFailure, recordDurableRuntimeHealthSuccess } from "./health.js";
+import { getDurableRuntimeRegistry, type DurableRuntimeRegistry } from "./registry.js";
 import {
   DURABLE_AGENT_TURN_OPERATION_KIND,
   DURABLE_CHAT_SEND_OPERATION_KIND,
@@ -14,12 +15,30 @@ import { recoverDurableSessionAttentionDeliveries } from "./session-owner-adapte
 import { openDurableRuntimeStore } from "./store-factory.js";
 import type { DurableRuntimeRun, DurableRuntimeStep, DurableRuntimeStore } from "./types.js";
 import { runDurableWakeDispatcherOnce } from "./wake-dispatcher.js";
+import { runRegisteredDurableWorkersOnce } from "./worker.js";
 
 const log = createSubsystemLogger("durable/recovery");
 
 const MIN_STALE_RUNTIME_RUN_AFTER_MS = 2 * 60_000;
 const DEFAULT_STALE_SCAN_INTERVAL_MS = 60_000;
 const RECOVERY_DIAGNOSTIC_METADATA_KEY = "recoveryDiagnostic";
+
+function ensureCoreDurableRuntimeDefinitions(registry: DurableRuntimeRegistry): void {
+  if (!registry.getRuntime(DURABLE_AGENT_TURN_OPERATION_KIND, "1")) {
+    registry.registerRuntime({
+      operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
+      version: "1",
+      stepTypes: ["agent"],
+    });
+  }
+  if (!registry.getRuntime(DURABLE_CHAT_SEND_OPERATION_KIND, "1")) {
+    registry.registerRuntime({
+      operationKind: DURABLE_CHAT_SEND_OPERATION_KIND,
+      version: "1",
+      stepTypes: ["checkpoint"],
+    });
+  }
+}
 
 export function resolveDurableStaleRuntimeRunAfterMs(): number {
   return Math.max(MIN_STALE_RUNTIME_RUN_AFTER_MS, resolveDurableWorkerClaimTtlMs() * 2);
@@ -677,6 +696,8 @@ export function startDurableRecoveryWorker(params: {
   if (!isDurableWorkerEnabled()) {
     return () => {};
   }
+  const runtimeRegistry = getDurableRuntimeRegistry();
+  ensureCoreDurableRuntimeDefinitions(runtimeRegistry);
   const pollIntervalMs = resolveDurableWorkerPollIntervalMs();
   const claimTtlMs = resolveDurableWorkerClaimTtlMs();
   const staleAfterMs = resolveDurableStaleRuntimeRunAfterMs();
@@ -724,6 +745,14 @@ export function startDurableRecoveryWorker(params: {
         processInstanceId: params.processInstanceId,
         now,
       });
+      const executionResult = await runRegisteredDurableWorkersOnce({
+        store,
+        registry: runtimeRegistry,
+        workerId: params.processInstanceId,
+        claimTtlMs,
+        maxStepsPerOperation: 32,
+        now: () => Date.now(),
+      });
       const wakeResult = await runDurableWakeDispatcherOnce({
         store,
         workerId: params.processInstanceId,
@@ -737,6 +766,9 @@ export function startDurableRecoveryWorker(params: {
         chatSendResult.markedLost > 0 ||
         (timerResult.firedTimers ?? 0) > 0 ||
         (signalResult.consumedSignals ?? 0) > 0 ||
+        executionResult.claimsRecovered > 0 ||
+        executionResult.claimsBlocked > 0 ||
+        executionResult.stepsClaimed > 0 ||
         wakeResult.obligationsCreated > 0 ||
         wakeResult.acknowledged > 0 ||
         wakeResult.handoffAccepted > 0 ||
@@ -751,6 +783,9 @@ export function startDurableRecoveryWorker(params: {
           firedTimers: timerResult.firedTimers ?? 0,
           consumedSignals: signalResult.consumedSignals ?? 0,
           queuedRuns: (timerResult.queuedRuns ?? 0) + (signalResult.queuedRuns ?? 0),
+          executionClaimsRecovered: executionResult.claimsRecovered,
+          executionClaimsBlocked: executionResult.claimsBlocked,
+          executionStepsClaimed: executionResult.stepsClaimed,
           ownerFactsScanned: wakeResult.ownerFactsScanned,
           wakeObligationsCreated: wakeResult.obligationsCreated,
           wakeClaims: wakeResult.claimed,

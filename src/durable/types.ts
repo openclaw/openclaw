@@ -734,10 +734,26 @@ export type CompleteWakeObligationClaimInput = {
 };
 
 export type ClaimDurableRuntimeStepInput = {
-  operationKind?: string;
+  operationKind: string;
+  operationVersion: string;
   stepType?: DurableRuntimeStepType;
   workerId: string;
   claimTtlMs: number;
+  now?: number;
+};
+
+export type ListExpiredDurableRuntimeStepClaimsInput = {
+  operationKind: string;
+  operationVersion: string;
+  now?: number;
+  limit?: number;
+};
+
+export type RecoverExpiredDurableRuntimeStepClaimInput = {
+  runtimeRunId: string;
+  stepId: string;
+  expectedClaimedBy: string;
+  resolution: "runnable" | "requires_owner_decision" | "unknown_after_side_effect";
   now?: number;
 };
 
@@ -783,17 +799,21 @@ export type DurableRuntimeStore = {
   createStep(input: CreateDurableRuntimeStepInput): DurableRuntimeStep;
   updateStep(input: UpdateDurableRuntimeStepInput): DurableRuntimeStep | undefined;
   claimNextRunnableStep(input: ClaimDurableRuntimeStepInput): DurableRuntimeStep | undefined;
+  listExpiredStepClaims(input: ListExpiredDurableRuntimeStepClaimsInput): DurableRuntimeStep[];
+  recoverExpiredStepClaim(
+    input: RecoverExpiredDurableRuntimeStepClaimInput,
+  ): DurableRuntimeStep | undefined;
   renewStepClaim(input: {
     runtimeRunId: string;
     stepId: string;
-    workerId: string;
+    claimToken: string;
     claimTtlMs: number;
     now?: number;
   }): DurableRuntimeStep | undefined;
   releaseStepClaim(input: {
     runtimeRunId: string;
     stepId: string;
-    workerId: string;
+    claimToken: string;
     now?: number;
   }): DurableRuntimeStep | undefined;
   listSteps(runtimeRunId: string): DurableRuntimeStep[];

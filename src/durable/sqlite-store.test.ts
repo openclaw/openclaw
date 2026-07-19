@@ -454,6 +454,7 @@ describe("durable runtime sqlite store", () => {
       });
       const claimedStep = store.claimNextRunnableStep({
         operationKind: "test.runtime",
+        operationVersion: "1",
         stepType: "tool",
         workerId: "worker-1",
         claimTtlMs: 1_000,
@@ -471,7 +472,7 @@ describe("durable runtime sqlite store", () => {
         store.releaseStepClaim({
           runtimeRunId: parent.runtimeRunId,
           stepId: executableStep.stepId,
-          workerId: claimedStep!.claimedBy!,
+          claimToken: claimedStep!.claimedBy!,
           now: 177,
         }),
       ).toMatchObject({
@@ -567,6 +568,7 @@ describe("durable runtime sqlite store", () => {
       expect(
         store.claimNextRunnableStep({
           operationKind: "test.runtime",
+          operationVersion: "1",
           workerId: "worker-1",
           claimTtlMs: 1_000,
           now: 120,
@@ -601,6 +603,7 @@ describe("durable runtime sqlite store", () => {
 
       const firstClaim = store.claimNextRunnableStep({
         operationKind: "test.runtime",
+        operationVersion: "1",
         workerId: "worker-1",
         claimTtlMs: 10,
         now: 140,
@@ -613,6 +616,7 @@ describe("durable runtime sqlite store", () => {
       expect(
         store.claimNextRunnableStep({
           operationKind: "test.runtime",
+          operationVersion: "1",
           workerId: "worker-2",
           claimTtlMs: 10,
           now: 145,
@@ -620,6 +624,7 @@ describe("durable runtime sqlite store", () => {
       ).toBeUndefined();
       const secondClaim = store.claimNextRunnableStep({
         operationKind: "test.runtime",
+        operationVersion: "1",
         workerId: "worker-2",
         claimTtlMs: 10,
         now: 151,
@@ -634,7 +639,7 @@ describe("durable runtime sqlite store", () => {
         store.releaseStepClaim({
           runtimeRunId: run.runtimeRunId,
           stepId: step.stepId,
-          workerId: firstClaim!.claimedBy!,
+          claimToken: firstClaim!.claimedBy!,
           now: 152,
         }),
       ).toBeUndefined();
@@ -664,6 +669,91 @@ describe("durable runtime sqlite store", () => {
         recoveryState: "terminal",
       });
       expect(completedStep?.claimedBy).toBeUndefined();
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers expired running claims with compare-and-set fencing", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const run = store.createRun({
+        operationKind: "test.runtime",
+        rootOperationReason: "expired-running-claim-test",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 100,
+      });
+      const step = store.createStep({
+        runtimeRunId: run.runtimeRunId,
+        stepType: "tool",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 100,
+      });
+      const firstClaim = store.claimNextRunnableStep({
+        operationKind: "test.runtime",
+        operationVersion: "1",
+        workerId: "worker-1",
+        claimTtlMs: 10,
+        now: 100,
+      });
+      expect(
+        store.updateStep({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          expectedClaimedBy: firstClaim!.claimedBy!,
+          status: "running",
+          recoveryState: "running",
+          now: 105,
+        }),
+      ).toBeDefined();
+      const expired = store.listExpiredStepClaims({
+        operationKind: "test.runtime",
+        operationVersion: "1",
+        now: 111,
+      });
+      expect(expired).toEqual([
+        expect.objectContaining({
+          stepId: step.stepId,
+          status: "running",
+          claimedBy: firstClaim!.claimedBy,
+        }),
+      ]);
+      expect(
+        store.recoverExpiredStepClaim({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          expectedClaimedBy: firstClaim!.claimedBy!,
+          resolution: "runnable",
+          now: 111,
+        }),
+      ).toMatchObject({ status: "queued", recoveryState: "runnable" });
+      const secondClaim = store.claimNextRunnableStep({
+        operationKind: "test.runtime",
+        operationVersion: "1",
+        workerId: "worker-2",
+        claimTtlMs: 10,
+        now: 112,
+      });
+      expect(secondClaim?.claimedBy).toMatch(/^claim_/);
+      expect(secondClaim?.claimedBy).not.toBe(firstClaim?.claimedBy);
+      expect(
+        store.recoverExpiredStepClaim({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          expectedClaimedBy: firstClaim!.claimedBy!,
+          resolution: "unknown_after_side_effect",
+          now: 113,
+        }),
+      ).toBeUndefined();
+      expect(store.listSteps(run.runtimeRunId)).toEqual([
+        expect.objectContaining({ claimedBy: secondClaim!.claimedBy, recoveryState: "claimed" }),
+      ]);
     } finally {
       store.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1270,6 +1360,8 @@ describe("durable runtime sqlite store", () => {
       });
       expect(
         store.claimNextRunnableStep({
+          operationKind: "test.runtime",
+          operationVersion: "1",
           workerId: "attempt-1",
           claimTtlMs: 10,
           now: 110,

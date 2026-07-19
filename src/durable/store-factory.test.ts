@@ -34,6 +34,7 @@ describe("durable runtime store factory", () => {
 
       const claimed = store.claimNextRunnableStep({
         operationKind: "factory.runtime",
+        operationVersion: "1",
         workerId: "factory-worker",
         claimTtlMs: 1000,
       });

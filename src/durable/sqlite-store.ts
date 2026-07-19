@@ -21,6 +21,8 @@ import type {
   AppendDurableRuntimeEventInput,
   ClaimNextWakeObligationInput,
   ClaimDurableRuntimeStepInput,
+  ListExpiredDurableRuntimeStepClaimsInput,
+  RecoverExpiredDurableRuntimeStepClaimInput,
   CompactDurableRuntimeRunInput,
   CompactDurableRuntimeRunResult,
   CompleteWakeObligationClaimInput,
@@ -2364,6 +2366,13 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       const claimExpiresAt = now + input.claimTtlMs;
       return runSqliteImmediateTransactionSync(db, () => {
         const operationKind = optionalText(input.operationKind);
+        if (!operationKind) {
+          throw new Error("Durable step claims require an operationKind scope");
+        }
+        const operationVersion = optionalText(input.operationVersion);
+        if (!operationVersion) {
+          throw new Error("Durable step claims require an operationVersion scope");
+        }
         const row = queryFirst<DurableRuntimeStepRow>(
           db,
           durableDb
@@ -2380,7 +2389,9 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
               ]),
             )
             .where("r.status", "not in", ["succeeded", "failed", "cancelled", "lost"])
-            .$if(Boolean(operationKind), (qb) => qb.where("r.operation_kind", "=", operationKind!))
+            .where("r.recovery_state", "in", ["runnable", "claimed", "running"])
+            .where("r.operation_kind", "=", operationKind)
+            .where("r.operation_version", "=", operationVersion)
             .$if(Boolean(input.stepType), (qb) => qb.where("s.step_type", "=", input.stepType!))
             .orderBy("s.updated_at", "asc")
             .orderBy("s.runtime_run_id", "asc")
@@ -2455,10 +2466,97 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       });
     },
 
+    listExpiredStepClaims(input: ListExpiredDurableRuntimeStepClaimsInput): DurableRuntimeStep[] {
+      const now = input.now ?? Date.now();
+      const operationKind = optionalText(input.operationKind);
+      if (!operationKind) {
+        throw new Error("Expired durable step claim inspection requires an operationKind scope");
+      }
+      const operationVersion = optionalText(input.operationVersion);
+      if (!operationVersion) {
+        throw new Error("Expired durable step claim inspection requires an operationVersion scope");
+      }
+      return queryRows<DurableRuntimeStepRow>(
+        db,
+        durableDb
+          .selectFrom("durable_execution_steps as s")
+          .innerJoin("durable_execution_records as r", "r.runtime_run_id", "s.runtime_run_id")
+          .selectAll("s")
+          .where("s.status", "in", ["queued", "running"])
+          .where("s.claimed_by", "is not", null)
+          .where("s.claim_expires_at", "is not", null)
+          .where("s.claim_expires_at", "<=", now)
+          .where("r.status", "not in", ["succeeded", "failed", "cancelled", "lost"])
+          .where("r.operation_kind", "=", operationKind)
+          .where("r.operation_version", "=", operationVersion)
+          .orderBy("s.claim_expires_at", "asc")
+          .orderBy("s.runtime_run_id", "asc")
+          .orderBy("s.step_id", "asc")
+          .limit(normalizeQueryLimit(input.limit, 500)),
+      ).map(rowToStep);
+    },
+
+    recoverExpiredStepClaim(
+      input: RecoverExpiredDurableRuntimeStepClaimInput,
+    ): DurableRuntimeStep | undefined {
+      const now = input.now ?? Date.now();
+      return runSqliteImmediateTransactionSync(db, () => {
+        const current = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_execution_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId)
+            .where("status", "in", ["queued", "running"])
+            .where("claimed_by", "=", input.expectedClaimedBy)
+            .where("claim_expires_at", "is not", null)
+            .where("claim_expires_at", "<=", now),
+        );
+        if (!current) {
+          return undefined;
+        }
+        executeQuery(
+          db,
+          durableDb
+            .deleteFrom("state_leases")
+            .where("scope", "=", DURABLE_STEP_LEASE_SCOPE)
+            .where("lease_key", "=", durableStepLeaseKey(input.runtimeRunId, input.stepId))
+            .where("owner", "=", input.expectedClaimedBy),
+        );
+        const runnable = input.resolution === "runnable";
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_execution_steps")
+            .set({
+              status: runnable ? "queued" : "waiting",
+              recovery_state: input.resolution,
+              claimed_by: null,
+              claim_expires_at: null,
+              heartbeat_at: null,
+              updated_at: now,
+            })
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId)
+            .where("claimed_by", "=", input.expectedClaimedBy),
+        );
+        const recovered = queryFirst<DurableRuntimeStepRow>(
+          db,
+          durableDb
+            .selectFrom("durable_execution_steps")
+            .selectAll()
+            .where("runtime_run_id", "=", input.runtimeRunId)
+            .where("step_id", "=", input.stepId),
+        );
+        return recovered ? rowToStep(recovered) : undefined;
+      });
+    },
+
     renewStepClaim(input: {
       runtimeRunId: string;
       stepId: string;
-      workerId: string;
+      claimToken: string;
       claimTtlMs: number;
       now?: number;
     }): DurableRuntimeStep | undefined {
@@ -2476,7 +2574,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             })
             .where("scope", "=", DURABLE_STEP_LEASE_SCOPE)
             .where("lease_key", "=", durableStepLeaseKey(input.runtimeRunId, input.stepId))
-            .where("owner", "=", input.workerId)
+            .where("owner", "=", input.claimToken)
             .where("expires_at", ">", now),
         );
         if (renewed !== 1) {
@@ -2493,7 +2591,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             })
             .where("runtime_run_id", "=", input.runtimeRunId)
             .where("step_id", "=", input.stepId)
-            .where("claimed_by", "=", input.workerId)
+            .where("claimed_by", "=", input.claimToken)
             .where("status", "not in", ["succeeded", "failed", "cancelled", "lost", "skipped"]),
         );
         if (updated !== 1) {
@@ -2514,7 +2612,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
     releaseStepClaim(input: {
       runtimeRunId: string;
       stepId: string;
-      workerId: string;
+      claimToken: string;
       now?: number;
     }): DurableRuntimeStep | undefined {
       const now = input.now ?? Date.now();
@@ -2526,7 +2624,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             .selectAll()
             .where("runtime_run_id", "=", input.runtimeRunId)
             .where("step_id", "=", input.stepId)
-            .where("claimed_by", "=", input.workerId)
+            .where("claimed_by", "=", input.claimToken)
             .where("status", "not in", ["succeeded", "failed", "cancelled", "lost", "skipped"])
             .where("recovery_state", "!=", "terminal")
             .where("completed_at", "is", null),
@@ -2540,7 +2638,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             .deleteFrom("state_leases")
             .where("scope", "=", DURABLE_STEP_LEASE_SCOPE)
             .where("lease_key", "=", durableStepLeaseKey(input.runtimeRunId, input.stepId))
-            .where("owner", "=", input.workerId),
+            .where("owner", "=", input.claimToken),
         );
         executeQuery(
           db,
