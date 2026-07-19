@@ -401,7 +401,16 @@ function readLegacySessionRecords(
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(fs.readFileSync(fd, "utf-8"));
+      // Read at most the validated byte count through the opened descriptor
+      // so same-inode growth after fstat cannot bypass the size cap.
+      const buf = Buffer.alloc(storeStat.size);
+      let totalBytes = 0;
+      while (totalBytes < storeStat.size) {
+        const bytesRead = fs.readSync(fd, buf, totalBytes, storeStat.size - totalBytes, totalBytes);
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+      }
+      parsed = JSON.parse(buf.subarray(0, totalBytes).toString("utf-8"));
     } catch (err) {
       issues.push({
         code: "store_unreadable",
