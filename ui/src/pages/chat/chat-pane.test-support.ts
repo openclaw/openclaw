@@ -1,8 +1,15 @@
 import type { TemplateResult } from "lit";
 import { vi } from "vitest";
+import type {
+  SessionCatalogSession,
+  SessionCatalogTranscriptItem,
+  TaskSuggestion,
+  TaskSuggestionEvent,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
@@ -23,23 +30,23 @@ export type TestChatPane = HTMLElement & {
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
   disconnectedCallback: () => void;
-  acceptTaskSuggestion: (suggestion: { id: string }) => Promise<void>;
+  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
-  handleTaskSuggestionEvent: (event: Event) => void;
+  handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
-  taskSuggestions: unknown[];
+  taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   paneTitle: string;
-  catalogSession: unknown;
-  catalogItemMessage: (item: unknown) => Record<string, unknown> | null;
+  catalogSession: SessionCatalogSession | null;
+  catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
   handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
-  loadCatalogSession: (key: string, older: boolean) => Promise<boolean>;
+  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
