@@ -7440,6 +7440,58 @@ describe("handleSendChat", () => {
     expect(JSON.stringify(host.chatMessages[0])).toContain("keep this visible");
   });
 
+  it("still materializes the user turn when an assistant entry carries the steer's run key", () => {
+    const assistantWithRunKey = {
+      role: "assistant",
+      content: [{ type: "text", text: "assistant reply for the same run" }],
+      timestamp: 1,
+      __openclaw: { idempotencyKey: "steer-send-run" },
+    };
+    const host = makeHost({
+      chatRunId: "active-run",
+      chatMessages: [assistantWithRunKey],
+      chatQueue: [
+        {
+          id: "assistant-key-steer",
+          text: "user turn must still appear",
+          createdAt: 2,
+          kind: "steered",
+          pendingRunId: "active-run",
+          sendRunId: "steer-send-run",
+          sessionKey: "agent:main:main",
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+
+    handlePageGatewayEvent(
+      host as unknown as ChatPageHost,
+      {
+        event: "chat",
+        payload: {
+          state: "final",
+          runId: "active-run",
+          sessionKey: "agent:main:main",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 3,
+          },
+        },
+      } as Parameters<typeof handlePageGatewayEvent>[1],
+    );
+
+    expect(host.chatQueue).toEqual([]);
+    const userTurn = host.chatMessages.find(
+      (message) => (message as { role?: string }).role === "user",
+    );
+    expect(userTurn).toMatchObject({
+      role: "user",
+      __openclaw: { idempotencyKey: "steer-send-run:user" },
+    });
+    expect(JSON.stringify(userTurn)).toContain("user turn must still appear");
+  });
+
   it("materializes an attachment-only steered chip from store-backed payload bytes", () => {
     const file = new File(["fake-png"], "shot.png", { type: "image/png" });
     const dataUrl = "data:image/png;base64,ZmFrZS1wbmc=";

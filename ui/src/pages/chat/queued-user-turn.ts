@@ -30,6 +30,11 @@ export function chatMessagesContainQueuedUserTurn(
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return false;
     }
+    // Only a user-role entry proves the queued turn is visible; an assistant
+    // entry can carry the same run's idempotency key and must not satisfy this.
+    if ((message as { role?: unknown }).role !== "user") {
+      return false;
+    }
     const marker = (message as { __openclaw?: unknown })["__openclaw"];
     const idempotencyKey =
       marker && typeof marker === "object" && !Array.isArray(marker)
