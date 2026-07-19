@@ -367,7 +367,12 @@ function shouldDeleteSqliteSessionEntryLifecycle(
   ) {
     return false;
   }
-  if (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) {
+  if (
+    params.expectedSessionId !== undefined &&
+    (params.expectedSessionId === null
+      ? entry.sessionId !== undefined
+      : entry.sessionId !== params.expectedSessionId)
+  ) {
     return false;
   }
   if (
