@@ -1,4 +1,3 @@
-import { statSync } from "node:fs";
 // Device Pair doctor contract migrates shipped plugin-owned state.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,16 +23,21 @@ function resolveLegacyNotifyStatePath(stateDir: string): string {
 const MAX_LEGACY_NOTIFY_FILE_BYTES = 10 * 1024 * 1024;
 
 async function readLegacyNotifyFileSafely(filePath: string): Promise<string> {
-  const stat = statSync(filePath);
-  if (!stat.isFile()) {
-    throw new Error(`not a regular file: ${filePath}`);
+  const file = await fs.open(filePath, "r");
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${filePath}`);
+    }
+    if (stat.size > MAX_LEGACY_NOTIFY_FILE_BYTES) {
+      throw new Error(
+        `file too large: ${stat.size} bytes exceeds ${MAX_LEGACY_NOTIFY_FILE_BYTES} bytes: ${filePath}`,
+      );
+    }
+    return await file.readFile("utf8");
+  } finally {
+    await file.close();
   }
-  if (stat.size > MAX_LEGACY_NOTIFY_FILE_BYTES) {
-    throw new Error(
-      `file too large: ${stat.size} bytes exceeds ${MAX_LEGACY_NOTIFY_FILE_BYTES} bytes: ${filePath}`,
-    );
-  }
-  return await fs.readFile(filePath, "utf8");
 }
 
 async function readLegacyNotifyState(
