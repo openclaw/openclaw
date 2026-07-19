@@ -62,13 +62,15 @@ describe("listGatewayMethods", () => {
     const applyIdx = methods.indexOf("migrations.memory.apply");
     expect(methods[applyIdx - 2]).toBe("models.probe");
     expect(methods[applyIdx - 1]).toBe("migrations.memory.plan");
+    expect(methods[applyIdx + 1]).toBe("safety.events.list");
+    expect(methods[applyIdx + 2]).toBe("safety.events.summary");
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
       methods.indexOf("node.describe") + 1,
     );
     expect(methods.indexOf("node.pluginTools.update")).toBe(
       methods.indexOf("node.pluginSurface.refresh") + 1,
     );
-    expect(methods.slice(-2)).toEqual(["safety.events.list", "safety.events.summary"]);
+    expect(methods.slice(-3)).toEqual(["board.prompt.authorize", "board.data.read", "board.action"]);
   });
 
   it("advertises ClawHub skill trust methods", () => {
@@ -132,6 +134,8 @@ describe("listGatewayMethods", () => {
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
+      "safety.events.list",
+      "safety.events.summary",
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",
@@ -141,8 +145,6 @@ describe("listGatewayMethods", () => {
       "board.prompt.authorize",
       "board.data.read",
       "board.action",
-      "safety.events.list",
-      "safety.events.summary",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
