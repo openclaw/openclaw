@@ -298,8 +298,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           `
         : nothing}
       <div class="chat-pane__actions">
-        ${props.boardDockAction ?? nothing} ${props.terminalAction}
-        ${props.discussionAction}
+        ${props.boardDockAction ?? nothing} ${props.terminalAction} ${props.discussionAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}
