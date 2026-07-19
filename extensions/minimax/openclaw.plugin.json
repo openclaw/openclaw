@@ -98,7 +98,8 @@
     "usageProviders": ["minimax"]
   },
   "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"],
+    "compatibilityMigrationPaths": ["models.providers.minimax-portal.models"]
   },
   "mediaUnderstandingProviderMetadata": {
     "minimax": {
