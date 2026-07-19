@@ -112,23 +112,36 @@ function avatarColor(userId: string): string {
   return `hsl(${(hash >>> 0) % 360} 48% 42%)`;
 }
 
-type GravatarCacheEntry = string | null | Promise<string | null>;
+type GravatarCacheEntry = string | Promise<string | null> | { failedUntil: number };
 
-// Missing images stay missing for this page lifetime, so repeated avatar mounts
-// do not keep sending the same known-404 request to Gravatar.
+// An <img> error cannot distinguish a Gravatar 404 from a transient network or
+// 5xx failure, so negative entries expire instead of poisoning the page lifetime.
+const GRAVATAR_NEGATIVE_CACHE_MS = 10 * 60 * 1000;
 const gravatarUrlCache = new Map<string, GravatarCacheEntry>();
+
+function negativeEntry(): GravatarCacheEntry {
+  return { failedUntil: Date.now() + GRAVATAR_NEGATIVE_CACHE_MS };
+}
 
 function normalizedEmail(email: string | null | undefined): string | undefined {
   return normalized(email)?.toLowerCase();
 }
 
-function gravatarUrlForEmail(email: string): GravatarCacheEntry {
+function gravatarUrlForEmail(email: string): string | null | Promise<string | null> {
   const normalizedValue = normalizedEmail(email);
   if (!normalizedValue) {
     return null;
   }
-  if (gravatarUrlCache.has(normalizedValue)) {
-    return gravatarUrlCache.get(normalizedValue) ?? null;
+  const cached = gravatarUrlCache.get(normalizedValue);
+  if (cached !== undefined) {
+    if (typeof cached === "object" && cached !== null && "failedUntil" in cached) {
+      if (cached.failedUntil > Date.now()) {
+        return null;
+      }
+      gravatarUrlCache.delete(normalizedValue);
+    } else {
+      return cached;
+    }
   }
   const pending = Promise.resolve()
     .then(() =>
@@ -143,7 +156,7 @@ function gravatarUrlForEmail(email: string): GravatarCacheEntry {
       return url;
     })
     .catch(() => {
-      gravatarUrlCache.set(normalizedValue, null);
+      gravatarUrlCache.set(normalizedValue, negativeEntry());
       return null;
     });
   gravatarUrlCache.set(normalizedValue, pending);
@@ -197,7 +210,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     }
     const email = normalizedEmail(user.email);
     if (!user.avatarUrl && email && imageUrl === this.gravatar?.url) {
-      gravatarUrlCache.set(email, null);
+      gravatarUrlCache.set(email, negativeEntry());
       this.gravatar = null;
       return;
     }
