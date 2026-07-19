@@ -2173,6 +2173,10 @@ class ChatPane extends OpenClawLightDomElement {
         : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
       if (nextSessionKey) {
         this.sessionDiscussionStates.delete(nextSessionKey);
+        // Resolve availability before the action renders: the methods are
+        // advertised even without a provider, so an unprobed session would
+        // otherwise show a dead Discussion button on provider-less installs.
+        void this.probeSessionDiscussion(nextSessionKey);
       }
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
@@ -2348,6 +2352,11 @@ class ChatPane extends OpenClawLightDomElement {
     state.connected = snapshot.connected;
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (sourceChanged && snapshot.connected && state.sessionKey) {
+      // Reconnects clear the probed states above; re-probe the active session
+      // so the Discussion action reappears without a manual session switch.
+      void this.probeSessionDiscussion(state.sessionKey);
+    }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
       snapshot.connected &&
@@ -2669,14 +2678,39 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
+  // Probe once per session activation; transient failures stay uncached so the
+  // next activation retries instead of permanently hiding the feature.
+  private async probeSessionDiscussion(sessionKey: string) {
+    const state = this.state;
+    if (
+      !state?.connected ||
+      !state.client ||
+      this.sessionDiscussionStates.has(sessionKey) ||
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+    ) {
+      return;
+    }
+    try {
+      const info = await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
+        sessionKey,
+      });
+      this.sessionDiscussionStates.set(sessionKey, info.state);
+      this.requestUpdate();
+    } catch {
+      // Leave unprobed: the action stays hidden and a later switch retries.
+    }
+  }
+
   private renderSessionDiscussionAction() {
     const state = this.state;
     const sessionKey = state?.sessionKey.trim() ?? "";
+    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
     if (
       !state?.connected ||
       !state.client ||
       !sessionKey ||
-      this.sessionDiscussionStates.get(sessionKey) === "none" ||
+      known === undefined ||
+      known === "none" ||
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
     ) {
       return nothing;

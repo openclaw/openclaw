@@ -42,8 +42,18 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(true, result, undefined);
-    } catch {
-      respond(true, { state: "none" }, undefined);
+    } catch (error) {
+      // A throwing provider is a transient failure, not "no discussion":
+      // returning none here would make the UI cache-hide the feature until
+      // reconnect. Only an absent provider means none.
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "session discussion provider failed",
+        ),
+      );
     }
   },
   "session.discussion.open": async ({ params, respond }) => {
@@ -76,8 +86,18 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(true, result, undefined);
-    } catch {
-      respond(true, { state: "none" }, undefined);
+    } catch (error) {
+      // A throwing provider is a transient failure, not "no discussion":
+      // returning none here would make the UI cache-hide the feature until
+      // reconnect. Only an absent provider means none.
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "session discussion provider failed",
+        ),
+      );
     }
   },
 };

@@ -85,7 +85,7 @@ describe("session discussion gateway methods", () => {
   });
 
   it.each(["session.discussion.info", "session.discussion.open"] as const)(
-    "returns none when the provider throws from %s",
+    "returns a retryable error when the provider throws from %s",
     async (method) => {
       const registered = provider();
       const operation = method === "session.discussion.info" ? registered.info : registered.open;
@@ -93,8 +93,8 @@ describe("session discussion gateway methods", () => {
       mocks.getProvider.mockReturnValue(registered.value);
 
       expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
-        ok: true,
-        payload: { state: "none" },
+        ok: false,
+        error: { code: "UNAVAILABLE" },
       });
     },
   );
