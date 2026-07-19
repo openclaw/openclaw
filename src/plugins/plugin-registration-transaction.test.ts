@@ -201,7 +201,7 @@ describe("plugin registration transaction", () => {
     expect((restored.handlers.get("alpha") as { fn: () => string }).fn()).toBe("cb");
     expect(restored.tags).toBeInstanceOf(Set);
     expect(restored.tags.size).toBe(1);
-    const [tag] = [...restored.tags] as Array<{ fn: () => string; weight: number }>;
+    const tag = [...restored.tags][0] as { fn: () => string; weight: number };
     expect(tag).toEqual({ fn: expect.any(Function), weight: 1 });
     expect(tag.fn()).toBe("cb");
   });
