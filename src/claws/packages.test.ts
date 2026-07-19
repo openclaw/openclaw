@@ -40,6 +40,7 @@ function plan(
       blockedActions: 0,
       capabilityEscalations: 0,
     },
+    capabilityChanges: [],
     actions: packages.map((pkg) => ({
       kind: "package",
       id: `${pkg.kind}:${pkg.ref}`,
@@ -68,9 +69,11 @@ const completePackageRef = vi.fn(
 const pluginIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
   const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
+  const packageName = spec.replace(/^clawhub:/, "").replace(/@[^@]+$/, "");
   return {
     ok: true as const,
     pluginId,
+    packageName,
     targetDir: "/tmp/plugin",
     extensions: [],
     clawhub: { integrity: pluginIntegrity },
