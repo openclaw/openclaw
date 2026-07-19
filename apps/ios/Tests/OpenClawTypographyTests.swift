@@ -4,6 +4,23 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
+struct RootSidebarTypographyTests {
+    @Test func `root sidebar uses branded typography`() throws {
+        let sidebar = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/RootSidebar.swift"),
+            encoding: .utf8)
+
+        #expect(sidebar.contains("OpenClawType.headline"))
+        #expect(sidebar.contains("OpenClawType.subheadSemiBold"))
+        #expect(sidebar.contains("OpenClawType.captionMedium"))
+        #expect(sidebar.contains("OpenClawType.caption2Bold"))
+        #expect(!sidebar.contains(".font(."))
+    }
+}
+
 struct OpenClawTypographyTests {
     @Test func `thread controls use branded typography`() throws {
         let support = try String(

@@ -459,33 +459,35 @@ struct SwiftUIRenderSmokeTests {
         await controller.connectManual(host: host, port: port, useTLS: true)
     }
 
-    @Test @MainActor func `phone control hub builds gateway state view hierarchies`() {
+    @Test @MainActor func `root sidebar builds gateway state view hierarchies`() {
         for appModel in Self.rootTabsGatewayStateModels() {
-            let root = RootTabsPhoneControlHub(
-                groups: RootTabs.phoneControlGroups,
-                initialDestination: nil,
-                navigationRequest: nil,
-                openRootDestination: { _ in },
-                openChatFromControlDetail: { _ in })
+            let root = RootSidebar(
+                model: RootSidebarModel(),
+                selectedDestination: .overview,
+                isDrawerLayout: true,
+                selectDestination: { _ in },
+                selectSettingsRoute: { _ in },
+                hideSidebar: {})
                 .environment(appModel)
 
-            _ = Self.host(root)
+            _ = Self.host(root, size: CGSize(width: 340, height: 852))
         }
     }
 
-    @Test @MainActor func `phone control hub builds landscape compact state`() {
+    @Test @MainActor func `root sidebar builds landscape compact state`() {
         let appModel = NodeAppModel()
-        let root = RootTabsPhoneControlHub(
-            groups: RootTabs.phoneControlGroups,
-            initialDestination: nil,
-            navigationRequest: nil,
-            openRootDestination: { _ in },
-            openChatFromControlDetail: { _ in })
+        let root = RootSidebar(
+            model: RootSidebarModel(),
+            selectedDestination: .chat,
+            isDrawerLayout: true,
+            selectDestination: { _ in },
+            selectSettingsRoute: { _ in },
+            hideSidebar: {})
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)
             .environment(\.verticalSizeClass, .compact)
 
-        _ = Self.host(root)
+        _ = Self.host(root, size: CGSize(width: 340, height: 393))
     }
 
     @Test @MainActor func `routed sidebar screens build offline states`() {

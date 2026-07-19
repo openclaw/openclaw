@@ -62,8 +62,8 @@ struct ChatSessionSidebarModelTests {
             query: "")
 
         #expect(sections.map(\.id) == ["pinned", "recent"])
-        #expect(sections[0].sessions.map(\.key) == ["b"])
-        #expect(sections[1].sessions.map(\.key) == ["c", "a"])
+        #expect(sections[0].nodes.map(\.session.key) == ["b"])
+        #expect(sections[1].nodes.map(\.session.key) == ["c", "a"])
         #expect(sections[1].title == "Recent")
     }
 
@@ -106,8 +106,8 @@ struct ChatSessionSidebarModelTests {
             query: "")
 
         #expect(sections.map(\.id) == ["group:Projects", "recent"])
-        #expect(sections[0].sessions.map(\.key) == ["exact"])
-        #expect(Set(sections[1].sessions.map(\.key)) == Set(["case", "spaces"]))
+        #expect(sections[0].nodes.map(\.session.key) == ["exact"])
+        #expect(Set(sections[1].nodes.map(\.session.key)) == Set(["case", "spaces"]))
     }
 
     @Test func `pinned descendants move to pinned section independently`() {
@@ -134,7 +134,7 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "main",
             query: "")
 
-        #expect(sections.flatMap(\.sessions).map(\.key) == ["main"])
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["main"])
     }
 
     @Test func `active session gets a placeholder row before lists load`() {
@@ -143,7 +143,7 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "agent:main:main",
             query: "")
 
-        #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:main:main"])
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:main"])
     }
 
     @Test func `main aliases select the resolved row without adding a placeholder`() {
@@ -155,7 +155,7 @@ struct ChatSessionSidebarModelTests {
             activeAgentID: "default",
             query: "")
 
-        #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:default:main"])
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:default:main"])
         #expect(ChatSessionSidebarModel.selectedSessionKey(
             sessions: sessions,
             currentSessionKey: "main",
@@ -180,7 +180,7 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "global",
             mainSessionKey: "agent:main:main",
             activeAgentID: "ops") == "agent:ops:global")
-        #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:ops:global"])
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:ops:global"])
     }
 
     @Test func `query filters on display name and key`() {
@@ -192,7 +192,7 @@ struct ChatSessionSidebarModelTests {
             currentSessionKey: "agent:main:main",
             query: "research")
 
-        #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:main:research"])
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
     @Test func `session keys render as human names`() {
@@ -316,7 +316,7 @@ struct ChatSessionSidebarModelTests {
         #expect(nodes[0].children.map(\.id) == ["child"])
         #expect(nodes[0].children[0].children.map(\.id) == ["grandchild"])
         #expect(nodes[0].badges == .init(runningCount: 1, failedCount: 1, hasUnread: true))
-        #expect(nodes[0].hasUnreadDescendant)
+        #expect(nodes[0].children.contains { $0.badges.hasUnread })
     }
 
     @Test func `tree breaks cycles without dropping or duplicating sessions`() {
