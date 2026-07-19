@@ -1828,6 +1828,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What OpenClaw shows
   - H2: Examples
   - H2: Operations and approval
+  - H3: Change history
   - H3: Switching to masked channel setup
   - H2: Setup bootstrap
   - H2: AI conversation
@@ -9738,6 +9739,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install and pair
   - H2: Use it
   - H3: Tab copilot side panel
+  - H2: Send a page to OpenClaw
   - H2: Remote / cross-machine
   - H2: Diagnostics
   - H2: Security model

@@ -70,6 +70,11 @@ export type GatewayClient = {
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
   authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+  };
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
@@ -223,8 +228,8 @@ export type GatewayRequestContext = {
   subscribeSessionMessageEvents: (
     connId: string,
     sessionKey: string,
-    opts?: { includeApprovals?: boolean },
-  ) => (() => void) | undefined;
+    opts?: { includeApprovals?: boolean; provisional?: boolean },
+  ) => ((() => void) & { commit: () => void }) | undefined;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;

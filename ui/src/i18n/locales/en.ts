@@ -585,6 +585,7 @@ export const en: TranslationMap = {
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
     dashboardAvailable: "Dashboard available",
+    approvalNeeded: "Approval needed",
     noSessions: "No threads found.",
     noSessionsMatchFilters: "No threads match your filters.",
     pagination: "{start}-{end} of {total} rows",
@@ -1279,6 +1280,12 @@ export const en: TranslationMap = {
       title: "Chat",
       hint: "Browser-local chat preferences.",
     },
+    sidebarPrefs: {
+      title: "Sidebar",
+      hint: "Choose what appears while sessions are running.",
+      liveActivity: "Show live agent activity in sidebar",
+      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
+    },
     connection: {
       title: "Connection",
       gateway: "Gateway",
@@ -1338,6 +1345,10 @@ export const en: TranslationMap = {
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
     pending: "{count} pending",
+    otherPending: "Other pending requests",
+    reviewRequest: "Review approval from {agent}: {command}",
+    agentPendingOne: "{count} pending approval",
+    agentPending: "{count} pending approvals",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
@@ -1872,6 +1883,7 @@ export const en: TranslationMap = {
   custodian: {
     title: "OpenClaw",
     subtitle: "Your system setup guide",
+    subtitleCaretaker: "System setup and care.",
     exitSetup: "Exit setup",
     newAgent: "New agent",
     hatchDraft: "Wake up, my friend!",
@@ -1883,6 +1895,28 @@ export const en: TranslationMap = {
     requestFailed: "OpenClaw could not reply. Try again.",
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    history: {
+      button: "History",
+      title: "Recent changes",
+      description: "What changed on this system, newest first.",
+      loading: "Loading recent changes…",
+      empty: "No recorded changes yet.",
+      requestFailed: "OpenClaw could not load change history.",
+      loadMore: "Load more",
+      loadingMore: "Loading more…",
+      changedPaths: "Changed paths ({count})",
+      invalidEdit: "This manual edit did not pass configuration validation.",
+      opaqueChange: "Formatting or comments changed without visible configuration path changes.",
+      sources: {
+        systemAgent: "system-agent",
+        doctor: "doctor",
+        settings: "settings",
+        cli: "CLI",
+        pluginInstall: "plugin install",
+        manualEdit: "manual edit",
+        unknown: "unknown",
+      },
+    },
     nudge: {
       configReload: "Configuration reload stopped — ask me what happened",
       channelAuth: "{channel} authentication degraded — ask me what happened",
@@ -2080,6 +2114,7 @@ export const en: TranslationMap = {
     swarm: {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
+      empty: "No active swarms.",
     },
   },
   aboutPage: {
@@ -3721,6 +3756,7 @@ export const en: TranslationMap = {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} threads",
+      toolActivity: "Using {tool}",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
@@ -3908,6 +3944,20 @@ export const en: TranslationMap = {
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+      holdToRecordSetting: "Hold microphone button to dictate",
+      holdToRecordSettingDescription:
+        "Hold the composer microphone button, speak, then release to insert text without sending.",
+      dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
+      dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
+      dictationConnecting: "Starting dictation…",
+      dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
+      dictationFailed: "Dictation failed.",
+      dictationFinalizing: "Finishing dictation…",
+      dictationFinalizationTimedOut:
+        "Dictation stopped before the last partial transcript could be finalized.",
+      dictationProviderUnavailable: "No transcription provider is configured for dictation.",
+      dictationRecording: "Recording {elapsed}",
+      dictationReleaseToInsert: "Release to insert dictation",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",

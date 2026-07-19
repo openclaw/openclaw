@@ -72,6 +72,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.uiDescriptors", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
   { name: "openclaw.chat", scope: "operator.admin" },
+  { name: "openclaw.changes.list", scope: "operator.admin" },
   { name: "openclaw.approval.list", scope: "operator.approvals" },
   { name: "openclaw.setup.detect", scope: "operator.admin" },
   // Failed activation candidates are non-mutating probes. Keep this admin-only
@@ -87,6 +88,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
   { name: "talk.config", scope: "dynamic" },
   { name: "talk.client.create", scope: "operator.write" },
+  { name: "talk.client.transcript", scope: "operator.write" },
+  { name: "talk.client.close", scope: "operator.write" },
   { name: "talk.client.toolCall", scope: "operator.write" },
   { name: "talk.client.steer", scope: "operator.write" },
   { name: "talk.session.create", scope: "operator.write" },
@@ -123,6 +126,11 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "board.event", scope: "operator.write" },
   { name: "audit.list", scope: "operator.read" },
   { name: "audit.activity.list", scope: "operator.read" },
+  { name: "users.list", scope: "operator.read" },
+  { name: "users.self", scope: "operator.write" },
+  { name: "users.linkEmail", scope: "operator.admin" },
+  { name: "users.setDisplayName", scope: "operator.write" },
+  { name: "users.setAvatar", scope: "operator.write" },
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
