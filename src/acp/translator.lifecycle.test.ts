@@ -602,4 +602,77 @@ describe("acp translator stable lifecycle handlers", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("newSession suppresses deferred notifications when closeSession runs before the timer fires", async () => {
+    const connection = createAcpConnection();
+    const sessionUpdate = connection["__sessionUpdateMock"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.newSession({
+      cwd: "/tmp",
+      mcpServers: [],
+      _meta: {},
+    } as NewSessionRequest);
+    expect(result.sessionId).toBeTruthy();
+
+    // Close the session before the deferred notification timer fires.
+    await agent.closeSession(createCloseSessionRequest(result.sessionId));
+
+    // Flush the deferred timer queue. The guard must prevent stale notifications.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(sessionUpdate).not.toHaveBeenCalled();
+    expect(sessionStore.hasSession(result.sessionId)).toBe(false);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("resumeSession suppresses deferred notifications when closeSession runs before the timer fires", async () => {
+    const connection = createAcpConnection();
+    const sessionUpdate = connection["__sessionUpdateMock"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([
+          createSessionRow({ key: "agent:main:close-guard", cwd: "/tmp" }),
+        ]);
+      }
+      if (method === "sessions.get") {
+        return { ok: true };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.resumeSession(
+      createResumeSessionRequest("agent:main:close-guard", "/tmp"),
+    );
+    expect(result.configOptions).toBeTruthy();
+
+    // Close the session before the deferred notification timer fires.
+    await agent.closeSession(createCloseSessionRequest("agent:main:close-guard"));
+
+    // Flush the deferred timer queue. The guard must prevent stale notifications.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(sessionUpdate).not.toHaveBeenCalled();
+    expect(sessionStore.hasSession("agent:main:close-guard")).toBe(false);
+
+    sessionStore.clearAllSessionsForTest();
+  });
 });

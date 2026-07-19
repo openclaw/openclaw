@@ -396,7 +396,12 @@ export class AcpGatewayAgent implements Agent {
     // receives the session/new result before session_info_update. A zero-delay
     // timer places the callback after the current synchronous handler return
     // and response serialization on the event-loop timeline.
+    // Guard: if closeSession ran before the timer fires, the session is gone
+    // and sending stale notifications would be incorrect.
     setTimeout(() => {
+      if (!this.sessionStore.hasSession(session.sessionId)) {
+        return;
+      }
       this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
         includeControls: false,
         record: true,
@@ -561,7 +566,11 @@ export class AcpGatewayAgent implements Agent {
     const { configOptions, modes } = sessionSnapshot;
     // Same deferred-ordering contract as newSession: the resume result must
     // reach the client before session_info_update.
+    // Guard: if closeSession ran before the timer fires, skip stale notifications.
     setTimeout(() => {
+      if (!this.sessionStore.hasSession(session.sessionId)) {
+        return;
+      }
       this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
         includeControls: false,
         record: false,
