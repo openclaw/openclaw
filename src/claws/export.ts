@@ -241,6 +241,17 @@ export async function exportClawAgent(
       `Cannot export drifted packages: ${driftedPackages.map((pkg) => `${pkg.kind}:${pkg.ref}@${pkg.version} (${pkg.state})`).join(", ")}.`,
     );
   }
+  const unresolvedCronJobs = record.cronJobs.filter(
+    (cron) => cron.status !== "complete" || !cron.schedulerJobId,
+  );
+  if (unresolvedCronJobs.length > 0) {
+    throw new ClawExportError(
+      "cron_jobs_unavailable",
+      `Cannot export cron declarations with unresolved ownership: ${unresolvedCronJobs
+        .map((cron) => cron.manifestId)
+        .join(", ")}.`,
+    );
+  }
 
   const workspace = await fsSafeRoot(record.install.workspace, {
     hardlinks: "reject",
@@ -296,7 +307,9 @@ export async function exportClawAgent(
         return comparePortableText(leftIdentity, rightIdentity);
       }),
     mcpServers: {},
-    cronJobs: [],
+    cronJobs: record.cronJobs
+      .map((cron) => cron.job)
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
   const parsed = parseClawManifest(manifest);
   if (!parsed.ok) {
