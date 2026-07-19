@@ -56,6 +56,8 @@ function parseRawTranscriptCursor(value: string): RawTranscriptCursor | undefine
     return undefined;
   }
   try {
+    // SDK cursors are opaque continuation tokens that callers must return unchanged.
+    // Exact round-tripping rejects decoder-normalized aliases and extended envelopes.
     const bytes = Buffer.from(value, "base64url");
     if (bytes.toString("base64url") !== value) {
       return undefined;
