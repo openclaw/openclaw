@@ -1,6 +1,7 @@
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { settleRequesterAfterSessionSpawns } from "../../subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
@@ -133,6 +134,7 @@ export async function runEmbeddedAttemptSettledPhase(
   let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
   let lastAssistant: AssistantMessage | undefined;
   let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
+  let currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   let attemptUsage: NormalizedUsage | undefined;
   let cacheBreak: PromptCacheBreak | null = null;
   let contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
@@ -290,6 +292,7 @@ export async function runEmbeddedAttemptSettledPhase(
         sessionIdUsed = settledStream.sessionIdUsed;
         lastAssistant = settledStream.lastAssistant;
         currentAttemptAssistant = settledStream.currentAttemptAssistant;
+        currentAttemptCompletedAssistant = settledStream.currentAttemptCompletedAssistant;
         attemptUsage = settledStream.attemptUsage;
         cacheBreak = settledStream.cacheBreak;
         sessionRuntimeState.promptCache = settledStream.promptCache;
@@ -387,6 +390,7 @@ export async function runEmbeddedAttemptSettledPhase(
       ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
       lastAssistant,
       currentAttemptAssistant,
+      currentAttemptCompletedAssistant,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,
       contextBudgetStatus,
@@ -407,5 +411,13 @@ export async function runEmbeddedAttemptSettledPhase(
     trajectoryRecorder,
   });
   state.trajectoryEndRecorded = true;
+  if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {
+    settleRequesterAfterSessionSpawns({
+      requesterSessionKey: attempt.sessionKey,
+      requesterTurnRunId: attempt.runId,
+      requesterYielded: result.yieldDetected === true,
+      acceptedSessionSpawns: result.acceptedSessionSpawns,
+    });
+  }
   return result;
 }

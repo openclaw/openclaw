@@ -3,6 +3,7 @@
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -35,9 +36,9 @@ const hoisted = vi.hoisted(() => ({
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  prepareProviderRuntimeAuthMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
-  resolveCopilotApiTokenMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
   unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
@@ -52,9 +53,9 @@ const {
   fetchMock,
   registerProviderStreamForModelMock,
   prepareProviderDynamicModelMock,
+  prepareProviderRuntimeAuthMock,
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
-  resolveCopilotApiTokenMock,
   shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
@@ -147,8 +148,28 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   shouldPreferProviderRuntimeResolvedModel: shouldPreferProviderRuntimeResolvedModelMock,
 }));
 
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  prepareProviderRuntimeAuth: prepareProviderRuntimeAuthMock,
+}));
+
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
-  resolveModelAsync: resolveModelAsyncMock,
+  resolveModelAsync: async (...args: unknown[]) => {
+    const result = await resolveModelAsyncMock(...args);
+    const modelRegistry = (result?.modelRegistry ?? {}) as Record<string, unknown>;
+    return {
+      ...result,
+      modelRegistry: {
+        ...modelRegistry,
+        llmRuntime: modelRegistry.llmRuntime ?? { complete: completeMock },
+      },
+    };
+  },
+}));
+
+vi.mock("../agents/sessions/model-registry-runtime.js", () => ({
+  getModelRegistryRuntime: (owner: { llmRuntime?: unknown }) => ({
+    llmRuntime: owner.llmRuntime ?? { complete: completeMock },
+  }),
 }));
 
 vi.mock("../plugin-sdk/provider-auth.js", () => ({
@@ -157,8 +178,18 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
     "User-Agent": "GitHubCopilotChat/0.35.0",
   }),
   COPILOT_INTEGRATION_ID: "vscode-chat",
-  resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
+
+const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
+  return {
+    ...mod,
+    fetchWithSsrFGuard: imageTestFetchWithSsrFGuardMock,
+  };
+});
 
 const { describeImageWithModel } = await import("./image.js");
 
@@ -181,6 +212,16 @@ describe("describeImageWithModel", () => {
         base_resp: { status_code: 0 },
         content: "portal ok",
       }),
+    );
+    // Bridge fetchWithSsrFGuard through the globally-stubbed fetch so existing
+    // assertions on fetchMock call count and arguments continue to work.
+    imageTestFetchWithSsrFGuardMock.mockImplementation(
+      async (opts: { url: string; init: RequestInit; timeoutMs?: number }) => {
+        const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
+        const init = { ...opts.init, signal };
+        const response = await globalThis.fetch(opts.url, init);
+        return { response, release: vi.fn(), finalUrl: opts.url };
+      },
     );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -212,11 +253,13 @@ describe("describeImageWithModel", () => {
         return { authStorage, model, modelRegistry };
       },
     );
-    resolveCopilotApiTokenMock.mockResolvedValue({
-      token: "copilot-api-token",
-      expiresAt: Date.now() + 60_000,
-      source: "test",
-      baseUrl: "https://api.githubcopilot.com",
+    prepareProviderRuntimeAuthMock.mockImplementation(async (params: { provider: string }) => {
+      return params.provider === "github-copilot"
+        ? {
+            apiKey: "copilot-api-token",
+            baseUrl: "https://api.githubcopilot.com",
+          }
+        : undefined;
     });
   });
 
@@ -258,20 +301,59 @@ describe("describeImageWithModel", () => {
     expect(fetchUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(fetchOptions).toEqual({
       method: "POST",
-      headers: {
-        Authorization: "Bearer oauth-test",
-        "Content-Type": "application/json",
-        "MM-API-Source": "OpenClaw",
-      },
+      headers: fetchOptions.headers,
       body: JSON.stringify({
         prompt: "Describe the image.",
         image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
       }),
       signal: fetchOptions.signal,
     });
+    expect(Object.fromEntries(new Headers(fetchOptions.headers as HeadersInit))).toEqual({
+      authorization: "Bearer oauth-test",
+      "content-type": "application/json",
+      "mm-api-source": "OpenClaw",
+    });
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("carries resolved MiniMax model transport policy into the VLM request", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() =>
+        attachModelProviderRequestTransport(
+          {
+            provider: "minimax-portal",
+            id: "MiniMax-VL-01",
+            input: ["text", "image"],
+            baseUrl: "https://custom-minimax.example.com/anthropic",
+          },
+          {
+            proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" },
+          },
+        ),
+      ),
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "minimax-portal",
+      model: "MiniMax-VL-01",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    const guardedOptions = requireRecord(
+      requireFirstMockCall(imageTestFetchWithSsrFGuardMock, "guarded fetch")[0],
+      "guarded fetch options",
+    );
+    expect(guardedOptions.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "https://proxy.example.com",
+    });
   });
 
   it("unwraps a sentinel only at the direct MiniMax VLM handoff", async () => {
@@ -299,9 +381,9 @@ describe("describeImageWithModel", () => {
     );
     const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
     const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
-    expect(fetchOptions.headers).toMatchObject({
-      Authorization: "Bearer resolved-minimax-secret",
-    });
+    expect(new Headers(fetchOptions.headers as HeadersInit).get("Authorization")).toBe(
+      "Bearer resolved-minimax-secret",
+    );
   });
 
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
@@ -1048,7 +1130,7 @@ describe("describeImageWithModel", () => {
       find: vi.fn(() => ({
         api: "openai-completions",
         provider: "qwen",
-        id: "qwen-vl-max-latest",
+        id: "qwen3.6-plus",
         input: ["text", "image"],
         baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       })),
@@ -1057,7 +1139,7 @@ describe("describeImageWithModel", () => {
       role: "assistant",
       api: "openai-completions",
       provider: "qwen",
-      model: "qwen-vl-max-latest",
+      model: "qwen3.6-plus",
       stopReason: "stop",
       timestamp: Date.now(),
       content: [{ type: "text", text: "dashscope ok" }],
@@ -1067,7 +1149,7 @@ describe("describeImageWithModel", () => {
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "qwen",
-      model: "qwen-vl-max-latest",
+      model: "qwen3.6-plus",
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
       mime: "image/png",
@@ -1077,7 +1159,7 @@ describe("describeImageWithModel", () => {
 
     expect(result).toEqual({
       text: "dashscope ok",
-      model: "qwen-vl-max-latest",
+      model: "qwen3.6-plus",
     });
     const firstCall = requireFirstMockCall(completeMock, "DashScope image completion");
     const [, context] = firstCall;
@@ -1496,7 +1578,9 @@ describe("describeImageWithModel", () => {
     expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toEqual(
       expect.objectContaining({
         authStorage,
-        modelRegistry,
+        modelRegistry: expect.objectContaining({
+          llmRuntime: expect.anything(),
+        }),
         authProfileId: "github-copilot:backup",
       }),
     );
@@ -1547,10 +1631,12 @@ describe("describeImageWithModel", () => {
 
     expect(completeMock).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledOnce();
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: "oauth-test",
-      config: {},
-    });
+    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        context: expect.objectContaining({ apiKey: "oauth-test", authMode: "oauth" }),
+      }),
+    );
     const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(setRuntimeApiKeyMock.mock.calls[0]?.[0]).toBe("github-copilot");
     expect(looksLikeSecretSentinel(storedToken)).toBe(true);
@@ -1620,10 +1706,12 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: sourceSecret,
-      config: {},
-    });
+    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        context: expect.objectContaining({ apiKey: sourceSentinel, authMode: "token" }),
+      }),
+    );
     const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(looksLikeSecretSentinel(storedToken)).toBe(true);
     expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");
@@ -1641,7 +1729,7 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://api.githubcopilot.com",
       })),
     });
-    resolveCopilotApiTokenMock.mockRejectedValueOnce(
+    prepareProviderRuntimeAuthMock.mockRejectedValueOnce(
       new Error("Copilot token exchange failed: HTTP 401"),
     );
 

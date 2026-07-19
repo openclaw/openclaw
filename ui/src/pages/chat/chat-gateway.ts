@@ -253,7 +253,21 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
-    reconcileTerminalRun("done", "done");
+    if (payload.yielded === true && payload.stopReason === "end_turn") {
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          yielded: true,
+          runId: terminalRunId,
+          sessionKey: state.sessionKey,
+          sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
+          clearLocalRun: true,
+          clearChatStream: true,
+        },
+      );
+    } else {
+      reconcileTerminalRun("done", "done");
+    }
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {

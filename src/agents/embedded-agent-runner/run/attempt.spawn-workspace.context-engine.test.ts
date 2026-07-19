@@ -21,7 +21,7 @@ import {
   leasePendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
-} from "../../subagent-registry.js";
+} from "../../subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -29,7 +29,6 @@ import {
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
   buildContextEnginePromptCacheInfo,
-  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
@@ -3190,16 +3189,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         total: 1340,
       },
     } as unknown as AgentMessage;
-    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+    const promptCache = buildLoopPromptCacheInfo({
       messagesSnapshot: [seedMessage, priorAssistant],
       prePromptMessageCount: 2,
-    });
-    const promptCache = buildContextEnginePromptCacheInfo({
       retention: "short",
-      lastCallUsage: (currentAttemptAssistant as { usage?: undefined } | undefined)?.usage,
     });
 
-    expect(currentAttemptAssistant).toBeUndefined();
     expect(promptCache).toEqual({ retention: "short" });
   });
 
@@ -3227,6 +3222,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptCache?.lastCallUsage?.cacheRead).toBe(39036);
     expect(promptCache?.lastCallUsage?.cacheWrite).toBe(59934);
     expect(promptCache?.lastCallUsage?.total).toBe(98973);
+    expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
+  });
+
+  it("keeps the latest nonzero usage when an aborted assistant reports zeros", () => {
+    const completedAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
+    } as unknown as AgentMessage;
+    const abortedAssistant = {
+      role: "assistant",
+      content: "",
+      timestamp: "2026-04-16T16:50:00.000Z",
+      stopReason: "aborted",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    } as unknown as AgentMessage;
+
+    const promptCache = buildLoopPromptCacheInfo({
+      messagesSnapshot: [seedMessage, completedAssistant, abortedAssistant],
+      prePromptMessageCount: 1,
+      retention: "short",
+    });
+
+    expect(promptCache?.lastCallUsage).toMatchObject({
+      input: 38_333,
+      cacheRead: 120_320,
+      total: 158_719,
+    });
     expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
   });
 

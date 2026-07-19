@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
   buildMcpAppContentSecurityPolicy,
   buildMcpAppSandboxPath,
@@ -8,11 +9,11 @@ import {
   resolveMcpAppSandboxPort,
 } from "./mcp-app-sandbox.js";
 import {
-  testing as mcpUiResourceTesting,
   acquireMcpAppViewRequest,
   fetchMcpAppView,
   getMcpAppViewLease,
 } from "./mcp-ui-resource.js";
+import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
@@ -198,8 +199,17 @@ describe("MCP App UI resources", () => {
     const sandboxPath = buildMcpAppSandboxPath(view?.csp);
     const encodedCsp = new URL(sandboxPath, "https://gateway.example").searchParams.get("csp");
     expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
+  });
+
+  it.each(["bm90LWpzb24", Buffer.from("{not json}", "utf8").toString("base64url")])(
+    "rejects malformed encoded CSP metadata",
+    (value) => {
+      expect(() => decodeMcpAppSandboxCsp(value)).toThrow();
+    },
+  );
+
+  it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
-    expect(proxyHtml.startsWith('<!doctype html>\n<meta charset="utf-8"')).toBe(true);
     expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');
     expect(proxyHtml).toContain("inner.srcdoc = params.html");
     expect(proxyHtml).not.toContain("doc.write");
@@ -229,11 +239,17 @@ describe("MCP App UI resources", () => {
       toolInput: { token: "secret" },
       toolResult: { content: [] },
     });
-    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toBeDefined();
+    const view = getMcpAppViewLease(result?.viewId ?? "", sessionRuntime);
+    expect(view).toBeDefined();
+    updateMcpAppModelContext(sessionRuntime, view!, {
+      content: [{ type: "text", text: "ephemeral context" }],
+    });
+    expect(sessionRuntime.pendingMcpAppModelContext).toBeDefined();
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toBeUndefined();
+    expect(sessionRuntime.pendingMcpAppModelContext).toBeUndefined();
     expect(sessionRuntime.acquireLease).toHaveBeenCalledOnce();
     const release = vi.mocked(sessionRuntime.acquireLease!).mock.results[0]?.value;
     expect(release).toHaveBeenCalledOnce();

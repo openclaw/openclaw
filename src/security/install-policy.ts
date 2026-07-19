@@ -77,7 +77,7 @@ export type InstallPolicyFinding = {
   evidence?: string;
 };
 
-export type InstallPolicyRequest = {
+type InstallPolicyRequest = {
   targetType: InstallPolicyTarget;
   targetName: string;
   sourcePath: string;

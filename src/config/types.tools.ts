@@ -45,12 +45,6 @@ export type MediaUnderstandingAttachmentsConfig = {
 type MediaProviderRequestConfig = {
   /** Optional provider-specific query params (merged into requests). */
   providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
   /** Optional base URL override for provider requests. */
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
@@ -152,13 +146,6 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
-  asyncCompletion?: {
-    /**
-     * Deprecated compatibility flag. Async media generation completions stay
-     * requester-session mediated so source delivery policy remains agent-owned.
-     */
-    directSend?: boolean;
-  };
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
@@ -241,6 +228,23 @@ export type CodeModeConfig =
       searchDefaultLimit?: number;
       /** Maximum search result count for tools.search. */
       maxSearchLimit?: number;
+    };
+
+export type SwarmConfig =
+  | boolean
+  | {
+      /** Enable collector-mode subagents and agents_wait. Default: false. */
+      enabled?: boolean;
+      /** Maximum concurrently running collector children per swarm group. */
+      maxConcurrent?: number;
+      /** Maximum live collector children per swarm group. */
+      maxChildrenPerGroup?: number;
+      /** Maximum lifetime collector spawns per swarm group. */
+      maxTotalPerGroup?: number;
+      /** Maximum agents_wait timeout in seconds. */
+      waitTimeoutSecondsMax?: number;
+      /** Default child agent id when sessions_spawn omits agentId. */
+      defaultAgentId?: string;
     };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
@@ -408,6 +412,8 @@ export type AgentToolsConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
   codeMode?: CodeModeConfig;
+  /** Per-agent swarm override; merges over the top-level tools.swarm config. */
+  swarm?: SwarmConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -436,6 +442,8 @@ export type AgentToolsConfig = {
 export type MemorySearchConfig = {
   /** Enable vector memory search (default: true). */
   enabled?: boolean;
+  /** Use relevant context from this agent's other private conversations. */
+  rememberAcrossConversations?: boolean;
   /** Sources to index and search (default: ["memory"]). */
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
@@ -725,6 +733,8 @@ export type ToolsConfig = {
   toolSearch?: ToolSearchConfig;
   /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
   codeMode?: CodeModeConfig;
+  /** Collector-mode subagents and wait controls. */
+  swarm?: SwarmConfig;
   /** sessions_spawn tool configuration. */
   sessions_spawn?: SessionsSpawnToolsConfig;
   /** Sub-agent tool policy defaults (deny wins). */
@@ -745,19 +755,14 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Experimental tool flags. Default off unless explicitly enabled, except strict-agentic GPT-5 OpenAI/Codex runs may auto-enable `planTool`. */
+  /** Experimental tool flags. */
   experimental?: {
-    /** Enable the structured `update_plan` tool explicitly outside strict-agentic execution mode. */
+    /** Structured checklist tool; enabled by default. Set false to opt out. */
     planTool?: boolean;
   };
 };
 
 export type MessageToolsConfig = {
-  /**
-   * @deprecated Use tools.message.crossContext settings.
-   * Allows cross-context sends across providers.
-   */
-  allowCrossContextSend?: boolean;
   crossContext?: {
     /** Allow sends to other channels within the same provider (default: true). */
     allowWithinProvider?: boolean;

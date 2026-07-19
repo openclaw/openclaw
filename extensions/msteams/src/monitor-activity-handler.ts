@@ -3,7 +3,8 @@ import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 /** Build the minimal ActivityHandler-compatible object used by the Teams SDK adapter. */
 export function buildMSTeamsActivityHandler(): MSTeamsActivityHandler {
   type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
-  const messageHandlers: Handler[] = [];
+  type MessageHandler = Parameters<MSTeamsActivityHandler["onMessage"]>[0];
+  const messageHandlers: MessageHandler[] = [];
   const membersAddedHandlers: Handler[] = [];
   const membersRemovedHandlers: Handler[] = [];
   const installationUpdateHandlers: Handler[] = [];
@@ -35,14 +36,17 @@ export function buildMSTeamsActivityHandler(): MSTeamsActivityHandler {
       reactionsRemovedHandlers.push(cb);
       return handler;
     },
-    async run(context: unknown) {
+    async run(context: unknown, turnAdoptionLifecycle) {
       const ctx = context as { activity?: { type?: string } };
       const activityType = ctx.activity?.type;
       const noop = async () => {};
 
       if (activityType === "message") {
         for (const callback of messageHandlers) {
-          await callback(context, noop);
+          const result = await callback(context, noop, turnAdoptionLifecycle);
+          if (result) {
+            return result;
+          }
         }
       } else if (activityType === "conversationUpdate") {
         const activity = ctx.activity as
@@ -77,6 +81,7 @@ export function buildMSTeamsActivityHandler(): MSTeamsActivityHandler {
           }
         }
       }
+      return undefined;
     },
   };
 

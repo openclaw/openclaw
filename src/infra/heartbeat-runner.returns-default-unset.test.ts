@@ -1435,6 +1435,7 @@ describe("runHeartbeatOnce", () => {
     fileState: HeartbeatFileState;
     source?: "notifications-event";
     reason?: "interval" | "wake";
+    unscheduled?: boolean;
     queueCronEvent?: boolean;
     queueSystemEvent?: boolean;
     replyText?: string;
@@ -1500,7 +1501,7 @@ describe("runHeartbeatOnce", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          heartbeat: { every: "5m", target: "whatsapp" },
+          ...(params.unscheduled ? {} : { heartbeat: { every: "5m", target: "whatsapp" } }),
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -1535,6 +1536,8 @@ describe("runHeartbeatOnce", () => {
             ? { source: "interval" as const, intent: "scheduled" as const }
             : {}),
       reason: params.reason,
+      ...(params.source ? { sessionKey } : {}),
+      ...(params.source ? { heartbeat: { target: "last" as const } } : {}),
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
     });
     return { res, replySpy, sendWhatsApp, workspaceDir };
@@ -1691,6 +1694,7 @@ tasks:
       fileState: HeartbeatFileState;
       reason?: "interval" | "wake";
       source?: "notifications-event";
+      unscheduled?: boolean;
       queueCronEvent?: boolean;
       queueSystemEvent?: boolean;
       expectedStatus: "ran" | "skipped";
@@ -1734,15 +1738,16 @@ tasks:
         replyText: "wake event processed",
       },
       {
-        name: "empty file + notification event runs",
+        name: "empty file + post-update notification wake runs",
         fileState: "empty",
         source: "notifications-event",
         reason: "wake",
+        unscheduled: true,
         queueSystemEvent: true,
         expectedStatus: "ran",
         expectedSendCalls: 1,
         expectedReplyCalls: 1,
-        replyText: "notification event processed",
+        replyText: "post-update event processed",
       },
       {
         name: "empty file + queued cron interval runs",

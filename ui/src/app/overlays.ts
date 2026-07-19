@@ -15,14 +15,14 @@ import {
   type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
 import {
+  clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
-  dismissExecApprovalPrompt,
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
-  parseExecApprovalRequested,
+  parseApprovalRequestedEvent,
   parseExecApprovalResolved,
-  parsePluginApprovalRequested,
   refreshPendingApprovalQueue,
+  resolveApprovalRequest,
   type ExecApprovalDecision,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
@@ -41,7 +41,8 @@ type ApplicationOverlaySnapshot = {
   updateStatusBanner: ApplicationStatusBanner | null;
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
-  approvalError: string | null;
+  approvalErrors: ReadonlyMap<string, string>;
+  approvalNowMs: number;
   devicePairSetupOpen: boolean;
   devicePairSetupLoading: boolean;
   devicePairSetupError: string | null;
@@ -54,7 +55,7 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   runUpdate: () => Promise<void>;
-  decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
+  decideApproval: (decision: ExecApprovalDecision, approvalId?: string) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
   setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
@@ -130,6 +131,8 @@ function resolveUpdateStatusBanner(params: {
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      "managed-service-handoff-already-running":
+        "Another managed update is already running. Wait for it to complete, then refresh update status.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
     }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
   return {
@@ -219,7 +222,8 @@ export function createApplicationOverlays(
     updateStatusBanner: null,
     approvalQueue: [],
     approvalBusy: false,
-    approvalError: null,
+    approvalErrors: new Map(),
+    approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
     devicePairSetupLoading: false,
     devicePairSetupError: null,
@@ -253,7 +257,8 @@ export function createApplicationOverlays(
     client: activeClient,
     execApprovalQueue: [],
     execApprovalBusy: false,
-    execApprovalError: null,
+    execApprovalErrors: new Map(),
+    execApprovalNowMs: Date.now(),
     execApprovalExpiryTimers: new Map(),
   };
 
@@ -267,14 +272,15 @@ export function createApplicationOverlays(
       updateStatusBanner: snapshot.updateStatusBanner,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
-      approvalError: promptState.execApprovalError,
+      approvalErrors: new Map(promptState.execApprovalErrors),
+      approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
       ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
     for (const listener of listeners) {
       listener(snapshot);
     }
   };
-  promptState.execApprovalExpired = publish;
+  promptState.execApprovalChanged = publish;
   const publishDevicePairSetupOperation = async (operation: Promise<void>) => {
     publish();
     await operation;
@@ -474,12 +480,9 @@ export function createApplicationOverlays(
     if (!next.connected || !next.client) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
-      promptState.execApprovalError = null;
+      promptState.execApprovalErrors.clear();
       snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
-      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
-        globalThis.clearTimeout(timer);
-      }
-      promptState.execApprovalExpiryTimers?.clear();
+      clearExecApprovalTimers(promptState);
       publish();
       return;
     }
@@ -508,23 +511,17 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    if (event.event === "exec.approval.requested") {
-      const entry = parseExecApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
+    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
+    if (requestedApproval) {
+      enqueueExecApprovalPrompt(promptState, requestedApproval);
+      publish();
       return;
     }
-    if (event.event === "plugin.approval.requested") {
-      const entry = parsePluginApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
-      return;
-    }
-    if (event.event === "exec.approval.resolved" || event.event === "plugin.approval.resolved") {
+    if (
+      event.event === "exec.approval.resolved" ||
+      event.event === "plugin.approval.resolved" ||
+      event.event === "openclaw.approval.resolved"
+    ) {
       const resolved = parseExecApprovalResolved(event.payload);
       if (resolved) {
         clearResolvedExecApprovalPrompt(promptState, resolved.id);
@@ -632,14 +629,16 @@ export function createApplicationOverlays(
         }
       }
     },
-    async decideApproval(decision) {
-      const active = promptState.execApprovalQueue[0];
+    async decideApproval(decision, approvalId) {
+      const active = approvalId
+        ? promptState.execApprovalQueue.find((entry) => entry.id === approvalId)
+        : promptState.execApprovalQueue[0];
       const client = gateway.snapshot.client;
       if (!active || !client || promptState.execApprovalBusy || disposed) {
         return;
       }
       promptState.execApprovalBusy = true;
-      promptState.execApprovalError = null;
+      promptState.execApprovalErrors.delete(active.id);
       const operation = { client, epoch: connectedEpoch, id: active.id };
       approvalDecision = operation;
       const isCurrentOperation = () =>
@@ -648,19 +647,17 @@ export function createApplicationOverlays(
         isCurrentClient(operation.client);
       publish();
       try {
-        const method =
-          active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-        await client.request(method, { id: active.id, decision });
+        await resolveApprovalRequest(client, active, decision);
         if (!isCurrentOperation()) {
           return;
         }
-        dismissExecApprovalPrompt(promptState, active.id);
+        clearResolvedExecApprovalPrompt(promptState, active.id);
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
           if (!isCurrentOperation()) {
             return;
           }
-          dismissExecApprovalPrompt(promptState, active.id);
+          clearResolvedExecApprovalPrompt(promptState, active.id);
           const currentClient = activeClient;
           const epoch = connectedEpoch;
           if (currentClient && isCurrentOperation()) {
@@ -668,8 +665,14 @@ export function createApplicationOverlays(
           }
           return;
         }
-        if (isCurrentOperation() && promptState.execApprovalQueue[0]?.id === active.id) {
-          promptState.execApprovalError = `Approval failed: ${error instanceof Error ? error.message : String(error)}`;
+        if (
+          isCurrentOperation() &&
+          promptState.execApprovalQueue.some((entry) => entry.id === active.id)
+        ) {
+          promptState.execApprovalErrors.set(
+            active.id,
+            `Approval failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       } finally {
         // Reconnect can admit a new decision while this request is still settling.
@@ -718,10 +721,8 @@ export function createApplicationOverlays(
       closeDevicePairSetupState(devicePairSetupState);
       stopGateway();
       stopEvents();
-      for (const timer of promptState.execApprovalExpiryTimers?.values() ?? []) {
-        globalThis.clearTimeout(timer);
-      }
-      promptState.execApprovalExpiryTimers?.clear();
+      clearExecApprovalTimers(promptState);
+      promptState.execApprovalErrors.clear();
       listeners.clear();
     },
   };

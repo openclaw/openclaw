@@ -304,6 +304,13 @@ export type PresenceEntry = {
   reason?: string | null;
   text?: string | null;
   ts?: number | null;
+  user?: {
+    id: string;
+    email?: string | null;
+    name?: string | null;
+    avatarUrl?: string | null;
+  } | null;
+  watchedSessions?: string[] | null;
 };
 
 export type GatewaySessionsDefaults = {
@@ -475,15 +482,23 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Collector swarm group that owns this child session, when applicable. */
+  swarmGroupId?: string;
+  parentSessionKey?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: { id: string; branch: string; repoRoot: string };
   /** Session-scoped exec node binding (exec host=node routing). */
   execNode?: string;
+  spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
+  execCwd?: string;
+  placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   displayName?: string;
+  derivedTitle?: string;
   channel?: string;
   surface?: string;
   subject?: string;
@@ -497,6 +512,7 @@ export type GatewaySessionRow = {
   archivedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
+  icon?: string;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -517,6 +533,8 @@ export type GatewaySessionRow = {
   totalTokensFresh?: boolean;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  /** Compact user-facing reason for the latest failed or timed-out run. */
+  lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
@@ -526,11 +544,15 @@ export type GatewaySessionRow = {
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
+  /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
+  runtimeSampledAt?: number;
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
   modelSelectionLocked?: boolean;
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
+  effectiveQueueMode?: "steer" | "followup" | "collect" | "interrupt";
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;
@@ -568,6 +590,16 @@ export type SessionsCompactionRestoreResult = {
     updatedAt: number;
   } & Record<string, unknown>;
 };
+
+export type SessionsRewindResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;
+export type SessionsForkResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsForkResult;
+export type SessionBranch = import("../../../packages/gateway-protocol/src/index.js").SessionBranch;
+export type SessionsBranchesListResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesListResult;
+export type SessionsBranchesSwitchResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesSwitchResult;
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
@@ -859,6 +891,7 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
   apiKeySupported?: boolean;
 };
@@ -880,4 +913,17 @@ export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
 export type ModelsProbeResult =
   import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
+export type SystemAgentSetupActivateParams =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateParams;
+export type SystemAgentSetupActivateResult =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateResult;
+export type SystemAgentSetupAuthStartResult =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupAuthStartResult;
+export type SystemAgentSetupDetectResult =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupDetectResult;
+export type SystemAgentSetupVerifyResult =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupVerifyResult;
+export type WizardNextResult =
+  import("../../../packages/gateway-protocol/src/schema.js").WizardNextResult;
+export type WizardStep = import("../../../packages/gateway-protocol/src/schema.js").WizardStep;
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

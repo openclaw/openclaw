@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceSessionEntry,
+  loadSessionEntry as loadInternalSessionEntry,
+  patchSessionEntry as patchInternalSessionEntry,
+  replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { SessionEntry as ConfigSessionEntry } from "./config-types.js";
 import {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntry,
@@ -20,7 +23,6 @@ import {
   resolveSessionStoreEntry,
   resolveSessionStoreBackupPaths,
   resolveStorePath,
-  resetSessionEntryLifecycle,
   updateSessionStore,
   updateSessionStoreEntry,
   upsertSessionEntry,
@@ -29,6 +31,14 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
+const sessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof SessionEntry
+  ? false
+  : true = true;
+const configSessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof ConfigSessionEntry
+  ? false
+  : true = true;
+void sessionEntryKeepsRecoveryPrivate;
+void configSessionEntryKeepsRecoveryPrivate;
 
 describe("session-store-runtime compatibility surface", () => {
   let tempDir: string;
@@ -50,6 +60,21 @@ describe("session-store-runtime compatibility surface", () => {
       storePath,
       entry,
     });
+  }
+
+  function expectRecoveryCleared(params: {
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }): void {
+    const entry = loadInternalSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    expect(entry).toMatchObject({ sessionId: params.sessionId });
+    expect(entry?.abortedLastRun).not.toBe(true);
+    expect(entry?.restartRecoveryRuns).toBeUndefined();
+    expect(entry).not.toHaveProperty("mainRestartRecovery");
   }
 
   it("keeps the public session read shape while using accessor-backed exports", async () => {
@@ -148,7 +173,7 @@ describe("session-store-runtime compatibility surface", () => {
       agentId: "main",
       sessionsDir: path.dirname(storePath),
     });
-    expect(transcriptPath).toBe(path.join(tempDir, `${sessionId}.jsonl`));
+    expect(transcriptPath).toBe(path.join(fs.realpathSync(tempDir), `${sessionId}.jsonl`));
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
     expect(
       fs
@@ -165,7 +190,9 @@ describe("session-store-runtime compatibility surface", () => {
     ]);
     const codexSidecarPath = `${transcriptPath}.codex-app-server.json`;
     fs.writeFileSync(codexSidecarPath, "{}\n", { mode: 0o600 });
-    expect(codexSidecarPath).toBe(path.join(tempDir, `${sessionId}.jsonl.codex-app-server.json`));
+    expect(codexSidecarPath).toBe(
+      path.join(fs.realpathSync(tempDir), `${sessionId}.jsonl.codex-app-server.json`),
+    );
   });
 
   it("preserves beta.5 doctor archives after deleting the compatibility row", async () => {
@@ -321,6 +348,104 @@ describe("session-store-runtime compatibility surface", () => {
     expect(getSessionEntry({ sessionKey: "agent:main:remove", storePath })).toBeUndefined();
     expect(getSessionEntry({ sessionKey: "agent:main:update", storePath })?.model).toBe("gpt-5.6");
     expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("keeps recovery state private across deprecated whole-store mutations", async () => {
+    const keptKey = "agent:main:telegram:direct:compat-recovery";
+    const removedKey = "agent:main:telegram:direct:compat-removed";
+    const mainRestartRecovery = {
+      chargedAttempts: 2,
+      cycleId: "compat-cycle",
+      revision: 4,
+    };
+    await seedSessionEntry(keptKey, {
+      abortedLastRun: true,
+      model: "gpt-5.5",
+      restartRecoveryRuns: [{ lifecycleGeneration: "compat-generation", runId: "compat-run" }],
+      sessionId: "compat-recovery-session",
+      updatedAt: 10,
+    });
+    await patchInternalSessionEntry(
+      { agentId: "main", sessionKey: keptKey, storePath },
+      () => ({ mainRestartRecovery }) as Partial<InternalSessionEntry>,
+    );
+    await seedSessionEntry(removedKey, {
+      sessionId: "compat-removed-session",
+      updatedAt: 10,
+    });
+
+    const compatibilityStore = loadSessionStore(storePath);
+    expect(Object.keys(compatibilityStore)).toContain(keptKey);
+    expect(compatibilityStore[keptKey]).not.toHaveProperty("mainRestartRecovery");
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        expect(store[keptKey]).not.toHaveProperty("mainRestartRecovery");
+        const escapedStore = store as unknown as Record<string, InternalSessionEntry>;
+        escapedStore[keptKey] = {
+          mainRestartRecovery: {
+            chargedAttempts: 99,
+            cycleId: "injected-cycle",
+            revision: 99,
+          },
+          model: "gpt-5.6",
+          sessionId: "compat-recovery-session",
+          updatedAt: 20,
+        };
+        delete escapedStore[removedKey];
+        escapedStore["agent:main:telegram:direct:compat-created"] = {
+          mainRestartRecovery: {
+            chargedAttempts: 1,
+            cycleId: "created-injection",
+            revision: 1,
+          },
+          sessionId: "compat-created-session",
+          updatedAt: 20,
+        };
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(loadInternalSessionEntry({ sessionKey: keptKey, storePath })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery,
+      model: "gpt-5.6",
+      restartRecoveryRuns: [{ lifecycleGeneration: "compat-generation", runId: "compat-run" }],
+    });
+    expect(loadInternalSessionEntry({ sessionKey: removedKey, storePath })).toBeUndefined();
+    expect(
+      loadInternalSessionEntry({
+        sessionKey: "agent:main:telegram:direct:compat-created",
+        storePath,
+      }),
+    ).not.toHaveProperty("mainRestartRecovery");
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const escapedStore = store as unknown as Record<string, InternalSessionEntry>;
+        escapedStore[keptKey] = {
+          ...escapedStore[keptKey]!,
+          mainRestartRecovery: {
+            chargedAttempts: 99,
+            cycleId: "replacement-injection",
+            revision: 99,
+          },
+          sessionId: "compat-replacement-session",
+        };
+      },
+      { skipMaintenance: true },
+    );
+    expect(loadInternalSessionEntry({ sessionKey: keptKey, storePath })).toMatchObject({
+      abortedLastRun: false,
+      sessionId: "compat-replacement-session",
+    });
+    const replacedEntry = loadInternalSessionEntry({
+      sessionKey: keptKey,
+      storePath,
+    }) as InternalSessionEntry | undefined;
+    expect(replacedEntry?.mainRestartRecovery).toBeUndefined();
+    expect(replacedEntry?.restartRecoveryRuns).toBeUndefined();
   });
 
   it("serializes compatibility callbacks with concurrent row writes", async () => {
@@ -486,6 +611,205 @@ describe("session-store-runtime compatibility surface", () => {
     });
   });
 
+  it("hides core recovery state and preserves it across public mutations", async () => {
+    const sessionKey = "agent:main:recovery-owned";
+    const mainRestartRecovery = {
+      chargedAttempts: 1,
+      cycleId: "cycle-1",
+      reservation: {
+        attempt: 1,
+        lifecycleGeneration: "generation-1",
+        runId: "run-1",
+      },
+      revision: 1,
+    };
+    await replaceInternalSessionEntry({ sessionKey, storePath }, {
+      abortedLastRun: true,
+      mainRestartRecovery,
+      model: "gpt-5.5",
+      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
+      sessionId: "session-recovery",
+      updatedAt: 10,
+    } as InternalSessionEntry);
+
+    expect(getSessionEntry({ sessionKey, storePath })).not.toHaveProperty("mainRestartRecovery");
+    expect(listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty("mainRestartRecovery");
+
+    await patchSessionEntry({
+      sessionKey,
+      storePath,
+      update: (entry) => {
+        entry.restartRecoveryRuns?.splice(0);
+        return {
+          abortedLastRun: false,
+          mainRestartRecovery: undefined,
+          model: "gpt-5.6",
+          restartRecoveryRuns: undefined,
+        } as unknown as Partial<SessionEntry>;
+      },
+    });
+    expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery,
+      model: "gpt-5.6",
+      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
+    });
+
+    await updateSessionStoreEntry({
+      sessionKey,
+      storePath,
+      update: () => ({ abortedLastRun: false, restartRecoveryRuns: undefined }),
+    });
+    expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery,
+      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
+    });
+
+    await upsertSessionEntry({
+      sessionKey,
+      storePath,
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 20,
+      },
+    });
+    expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery,
+      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
+      sessionId: "session-recovery",
+      updatedAt: 20,
+    });
+    expect(loadInternalSessionEntry({ sessionKey, storePath })?.model).toBeUndefined();
+  });
+
+  it("clears core recovery state when public replacements change session identity", async () => {
+    const patchKey = "agent:main:telegram:direct:patch-rotation";
+    const upsertKey = "agent:main:telegram:direct:upsert-rotation";
+    const upsertStorePath = path.join(tempDir, "upsert-sessions.json");
+    const mainRestartRecovery = {
+      chargedAttempts: 1,
+      cycleId: "rotation-cycle",
+      revision: 1,
+    };
+    await seedSessionEntry(patchKey, {
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
+      sessionId: "patch-before",
+      updatedAt: 10,
+    });
+    await patchInternalSessionEntry(
+      { agentId: "main", sessionKey: patchKey, storePath },
+      () =>
+        ({
+          abortedLastRun: true,
+          mainRestartRecovery,
+          restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
+        }) as Partial<InternalSessionEntry>,
+    );
+    await upsertSessionEntry({
+      agentId: "main",
+      entry: { sessionId: "upsert-before", updatedAt: 10 },
+      sessionKey: upsertKey,
+      storePath: upsertStorePath,
+    });
+    await patchInternalSessionEntry(
+      { agentId: "main", sessionKey: upsertKey, storePath: upsertStorePath },
+      () =>
+        ({
+          abortedLastRun: true,
+          mainRestartRecovery,
+          restartRecoveryRuns: [{ lifecycleGeneration: "upsert-generation", runId: "upsert-run" }],
+        }) as Partial<InternalSessionEntry>,
+    );
+
+    await patchSessionEntry({
+      replaceEntry: true,
+      sessionKey: patchKey,
+      storePath,
+      update: () => ({ sessionId: "patch-after", updatedAt: 20 }),
+    });
+    await upsertSessionEntry({
+      entry: {
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ lifecycleGeneration: "upsert-generation", runId: "upsert-run" }],
+        sessionId: "upsert-after",
+        updatedAt: 20,
+      },
+      sessionKey: upsertKey,
+      storePath: upsertStorePath,
+    });
+
+    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectRecoveryCleared({
+      sessionId: "upsert-after",
+      sessionKey: upsertKey,
+      storePath: upsertStorePath,
+    });
+  });
+
+  it("clears core recovery state when public patches change session identity", async () => {
+    const patchKey = "agent:main:telegram:direct:patch-rotation";
+    const updateKey = "agent:main:telegram:direct:update-rotation";
+    const updateStorePath = path.join(tempDir, "update-patch-sessions.json");
+    const mainRestartRecovery = {
+      chargedAttempts: 1,
+      cycleId: "rotation-cycle",
+      revision: 1,
+    };
+    await seedSessionEntry(patchKey, {
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
+      sessionId: "patch-before",
+      updatedAt: 10,
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      entry: { sessionId: "update-before", updatedAt: 10 },
+      sessionKey: updateKey,
+      storePath: updateStorePath,
+    });
+    await patchInternalSessionEntry(
+      { agentId: "main", sessionKey: patchKey, storePath },
+      () =>
+        ({
+          abortedLastRun: true,
+          mainRestartRecovery,
+          restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
+        }) as Partial<InternalSessionEntry>,
+    );
+    await patchInternalSessionEntry(
+      { agentId: "main", sessionKey: updateKey, storePath: updateStorePath },
+      () =>
+        ({
+          abortedLastRun: true,
+          mainRestartRecovery,
+          restartRecoveryRuns: [{ lifecycleGeneration: "update-generation", runId: "update-run" }],
+        }) as Partial<InternalSessionEntry>,
+    );
+
+    await patchSessionEntry({
+      sessionKey: patchKey,
+      skipMaintenance: true,
+      storePath,
+      update: () => ({ sessionId: "patch-after", updatedAt: 20 }),
+    });
+    await updateSessionStoreEntry({
+      sessionKey: updateKey,
+      skipMaintenance: true,
+      storePath: updateStorePath,
+      update: () => ({ sessionId: "update-after", updatedAt: 20 }),
+    });
+
+    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectRecoveryCleared({
+      sessionId: "update-after",
+      sessionKey: updateKey,
+      storePath: updateStorePath,
+    });
+  });
+
   it("preserves resolved maintenance settings through entry patches", async () => {
     const staleSessionKey = "agent:main:stale";
     const activeSessionKey = "agent:main:active";
@@ -561,217 +885,6 @@ describe("session-store-runtime compatibility surface", () => {
     });
   });
 
-  it("resets a session through the lifecycle owner without retaining the old transcript", async () => {
-    const sessionKey = "agent:main:main";
-    const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
-    fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"old-session"}\n', "utf-8");
-    await upsertSessionEntry({
-      sessionKey,
-      storePath,
-      entry: {
-        label: "Dale",
-        sessionFile: oldTranscriptPath,
-        sessionId: "old-session",
-        updatedAt: 10,
-      },
-    });
-
-    const result = await resetSessionEntryLifecycle({
-      expectedSessionId: "old-session",
-      expectedUpdatedAt: 10,
-      sessionKey,
-      storePath,
-      update: (entry) => ({
-        label: entry.label,
-        updatedAt: 0,
-      }),
-    });
-
-    expect(result).toMatchObject({
-      label: "Dale",
-      updatedAt: 0,
-    });
-    expect(result?.sessionId).not.toBe("old-session");
-    expect(result?.sessionFile).toContain(`${result?.sessionId}.jsonl`);
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionFile: result?.sessionFile,
-      sessionId: result?.sessionId,
-    });
-    expect(result?.sessionFile).not.toBe(oldTranscriptPath);
-  });
-
-  it("interrupts active work before lifecycle reset rotation", async () => {
-    const sessionKey = "agent:main:main";
-    const oldTranscriptPath = path.join(tempDir, "active-old-session.jsonl");
-    fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"active-old-session"}\n', "utf-8");
-    await upsertSessionEntry({
-      sessionKey,
-      storePath,
-      entry: {
-        sessionFile: oldTranscriptPath,
-        sessionId: "active-old-session",
-        updatedAt: 10,
-      },
-    });
-
-    let interrupted = false;
-    let releaseAdmission = () => {};
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [sessionKey, "active-old-session"],
-      assertAllowed: () => {},
-      onInterrupt: () => {
-        interrupted = true;
-        releaseAdmission();
-      },
-    });
-    releaseAdmission = admission.release;
-
-    try {
-      const result = await resetSessionEntryLifecycle({
-        expectedSessionId: "active-old-session",
-        expectedUpdatedAt: 10,
-        sessionKey,
-        storePath,
-        update: () => ({ updatedAt: 0 }),
-      });
-
-      expect(interrupted).toBe(true);
-      expect(result).toMatchObject({ updatedAt: 0 });
-      expect(result?.sessionId).not.toBe("active-old-session");
-    } finally {
-      admission.release();
-    }
-  });
-
-  it("rejects locked harness lifecycle reset without a physical owner release hook", async () => {
-    const sessionKey = "agent:main:harness:codex:thread";
-    await seedSessionEntry(sessionKey, {
-      agentHarnessId: "codex",
-      lifecycleRevision: "original-revision",
-      modelSelectionLocked: true,
-      sessionId: "locked-old-session",
-      updatedAt: 10,
-    });
-
-    await expect(
-      resetSessionEntryLifecycle({
-        expectedSessionId: "locked-old-session",
-        expectedUpdatedAt: 10,
-        sessionKey,
-        storePath,
-        update: () => ({ updatedAt: 0 }),
-      }),
-    ).rejects.toThrow("requires physical owner release");
-
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      lifecycleRevision: "original-revision",
-      sessionId: "locked-old-session",
-    });
-  });
-
-  it("rolls back the lifecycle reservation when physical owner release fails", async () => {
-    const sessionKey = "agent:main:harness:codex:thread";
-    await seedSessionEntry(sessionKey, {
-      agentHarnessId: "codex",
-      lifecycleRevision: "original-revision",
-      modelSelectionLocked: true,
-      sessionId: "locked-old-session",
-      updatedAt: 10,
-    });
-
-    await expect(
-      resetSessionEntryLifecycle({
-        expectedSessionId: "locked-old-session",
-        expectedUpdatedAt: 10,
-        releasePhysicalOwner: () => {
-          throw new Error("native reset failed");
-        },
-        sessionKey,
-        storePath,
-        update: () => ({ updatedAt: 0 }),
-      }),
-    ).rejects.toThrow("native reset failed");
-
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      lifecycleRevision: "original-revision",
-      sessionId: "locked-old-session",
-    });
-  });
-
-  it("releases locked physical ownership before publishing the replacement session", async () => {
-    const sessionKey = "agent:main:harness:codex:thread";
-    const releaseCalls: Array<{ sessionId: string; lifecycleRevision?: string }> = [];
-    await seedSessionEntry(sessionKey, {
-      agentHarnessId: "codex",
-      lifecycleRevision: "original-revision",
-      modelSelectionLocked: true,
-      sessionId: "locked-old-session",
-      updatedAt: 10,
-    });
-
-    const result = await resetSessionEntryLifecycle({
-      expectedSessionId: "locked-old-session",
-      expectedUpdatedAt: 10,
-      releasePhysicalOwner: (context) => {
-        releaseCalls.push({
-          lifecycleRevision: context.entry.lifecycleRevision,
-          sessionId: context.sessionId,
-        });
-      },
-      sessionKey,
-      storePath,
-      update: () => ({ label: "rotated", updatedAt: 0 }),
-    });
-
-    expect(releaseCalls).toEqual([
-      {
-        lifecycleRevision: "original-revision",
-        sessionId: "locked-old-session",
-      },
-    ]);
-    expect(result).toMatchObject({
-      label: "rotated",
-      updatedAt: 0,
-    });
-    expect(result?.sessionId).not.toBe("locked-old-session");
-    expect(result?.lifecycleRevision).toBeUndefined();
-  });
-
-  it("rejects row changes after physical owner release but before lifecycle finalization", async () => {
-    const sessionKey = "agent:main:harness:codex:thread";
-    await seedSessionEntry(sessionKey, {
-      agentHarnessId: "codex",
-      lifecycleRevision: "original-revision",
-      modelSelectionLocked: true,
-      sessionId: "locked-old-session",
-      updatedAt: 10,
-    });
-
-    await expect(
-      resetSessionEntryLifecycle({
-        expectedSessionId: "locked-old-session",
-        expectedUpdatedAt: 10,
-        releasePhysicalOwner: async () => {
-          const entry = getSessionEntry({ sessionKey, storePath });
-          if (!entry) {
-            throw new Error("expected reserved session entry");
-          }
-          await replaceSessionEntry({ sessionKey, storePath }, { ...entry, updatedAt: 11 });
-        },
-        sessionKey,
-        storePath,
-        update: () => ({ updatedAt: 0 }),
-      }),
-    ).rejects.toThrow("skipped after physical owner release");
-
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      lifecycleRevision: "original-revision",
-      sessionId: "locked-old-session",
-      updatedAt: 11,
-    });
-  });
-
   it("accepts pre-model-run maintenance configs through entry patches", async () => {
     const staleModelRunKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
     const activeSessionKey = "agent:main:active";
@@ -821,6 +934,53 @@ describe("session-store-runtime compatibility surface", () => {
     await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(true);
     await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(false);
     expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
+  it("guards entry deletion against a concurrent session update", async () => {
+    const sessionKey = "agent:main:delete-guarded";
+    const updatedAt = Date.now();
+    await seedSessionEntry(sessionKey, { sessionId: "session-delete-guarded", updatedAt });
+
+    await expect(
+      deleteSessionEntry({
+        expectedSessionId: "older-session",
+        expectedUpdatedAt: updatedAt - 1,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toBe(false);
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "session-delete-guarded",
+      updatedAt,
+    });
+
+    await expect(
+      deleteSessionEntry({
+        expectedSessionId: "session-delete-guarded",
+        expectedUpdatedAt: updatedAt,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("guards entry deletion when the earlier snapshot had no session id", async () => {
+    const sessionKey = "agent:main:delete-guarded-absent-id";
+    const updatedAt = Date.now();
+    await seedSessionEntry(sessionKey, { sessionId: "replacement-session", updatedAt });
+
+    await expect(
+      deleteSessionEntry({
+        expectedSessionId: null,
+        expectedUpdatedAt: updatedAt,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toBe(false);
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "replacement-session",
+      updatedAt,
+    });
   });
 
   it("resolves agent-scoped custom SQLite stores for backups", () => {

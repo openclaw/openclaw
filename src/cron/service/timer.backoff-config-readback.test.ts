@@ -3,7 +3,7 @@
 // computed in memory by applyJobResult.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
@@ -59,7 +59,7 @@ describe("recurring error backoff floor persistence", () => {
           cronConfig: { retry: { backoffMs: [300_000] } },
         });
 
-        // mode "due" (not "force") keeps preserveSchedule false, so the error
+        // mode "due" (not "force") advances cadence, so the error
         // path computes the safety-net backoff floor rather than preserving the
         // recurring anchor.
         await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
