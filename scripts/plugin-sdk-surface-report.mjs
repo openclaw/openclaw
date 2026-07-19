@@ -284,7 +284,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: SwarmConfig exposes the tools.swarm contract through config-types.
       // +3: harness sessionFork capability params, result, and failure-code contracts.
       // +2: upstream-link registry write/delete for harness-owned session forks.
-      8183,
+      // Harvest: mention-pattern schemas and helper exports -3.
+      8179,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
