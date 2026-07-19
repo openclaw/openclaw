@@ -76,7 +76,13 @@ const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
     packageName,
     targetDir: "/tmp/plugin",
     extensions: [],
-    clawhub: { integrity: pluginIntegrity },
+    clawhub: {
+      source: "clawhub" as const,
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: packageName,
+      clawhubFamily: "code-plugin" as const,
+      integrity: pluginIntegrity,
+    },
   };
 });
 
