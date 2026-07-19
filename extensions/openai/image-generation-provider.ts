@@ -577,7 +577,9 @@ function decodeCodexImagePayload(payload: string): Buffer {
   if (payload.length > MAX_CODEX_IMAGE_BASE64_CHARS) {
     throw new Error("OpenAI Codex image generation result exceeded size limit");
   }
-  const canonicalPayload = canonicalizeBase64(payload);
+  // Match Codex's decoder contract: it trims surrounding Unicode whitespace
+  // before applying strict standard-Base64 decoding.
+  const canonicalPayload = canonicalizeBase64(payload.trim());
   if (!canonicalPayload) {
     throw new Error("OpenAI Codex image generation returned malformed base64 image data");
   }
