@@ -69,6 +69,53 @@ function okResponse(body = "ok"): Response {
   return new Response(body, { status: 200 });
 }
 
+function createResponseWithRejectingCancel(
+  bodyInit: BodyInit | null = null,
+  init?: ResponseInit,
+): Response {
+  const chunks: Uint8Array[] = [];
+  if (bodyInit !== null) {
+    if (typeof bodyInit === "string") {
+      chunks.push(new TextEncoder().encode(bodyInit));
+    } else if (bodyInit instanceof Uint8Array) {
+      chunks.push(bodyInit);
+    } else if (bodyInit instanceof ArrayBuffer) {
+      chunks.push(new Uint8Array(bodyInit));
+    }
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+    cancel() {
+      return Promise.reject(new Error("body cancel rejected"));
+    },
+  });
+
+  return new Response(stream, init);
+}
+
+function watchUnhandledRejections(): {
+  unhandled: unknown[];
+  detach: () => void;
+} {
+  const unhandled: unknown[] = [];
+  const handler = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", handler);
+  return {
+    unhandled,
+    detach: () => {
+      process.off("unhandledRejection", handler);
+    },
+  };
+}
+
 async function raceWithTimeoutResult<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -2300,6 +2347,35 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(lookupFn).toHaveBeenCalledOnce();
     await result.release();
+  });
+
+  it("follows a redirect when the redirect body cancel() rejects and preserves no unhandled rejection", async () => {
+    const watcher = watchUnhandledRejections();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          createResponseWithRejectingCancel("redirect body", {
+            status: 302,
+            headers: { location: "https://public.example/final" },
+          }),
+        )
+        .mockResolvedValueOnce(okResponse("final"));
+
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/start",
+        fetchImpl,
+      });
+
+      expect(result.response.status).toBe(200);
+      expect(await result.response.text()).toBe("final");
+      expect(result.finalUrl).toBe("https://public.example/final");
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      await result.release();
+    } finally {
+      watcher.detach();
+    }
+    expect(watcher.unhandled).toEqual([]);
   });
 });
 

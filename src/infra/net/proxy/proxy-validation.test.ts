@@ -4,7 +4,71 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn());
+const createHttp1ProxyAgentMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    close: vi.fn(async () => {}),
+  })),
+);
+
+vi.mock("../runtime-fetch.js", () => ({
+  fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
+  isMockedFetch: () => false,
+}));
+
+vi.mock("../undici-runtime.js", () => ({
+  createHttp1ProxyAgent: createHttp1ProxyAgentMock,
+}));
+
 import { runProxyValidation } from "./proxy-validation.js";
+
+function createResponseWithRejectingCancel(
+  bodyInit: BodyInit | null = null,
+  init?: ResponseInit,
+): Response {
+  const chunks: Uint8Array[] = [];
+  if (bodyInit !== null) {
+    if (typeof bodyInit === "string") {
+      chunks.push(new TextEncoder().encode(bodyInit));
+    } else if (bodyInit instanceof Uint8Array) {
+      chunks.push(bodyInit);
+    } else if (bodyInit instanceof ArrayBuffer) {
+      chunks.push(new Uint8Array(bodyInit));
+    }
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+    cancel() {
+      return Promise.reject(new Error("body cancel rejected"));
+    },
+  });
+
+  return new Response(stream, init);
+}
+
+function watchUnhandledRejections(): {
+  unhandled: unknown[];
+  detach: () => void;
+} {
+  const unhandled: unknown[] = [];
+  const handler = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", handler);
+  return {
+    unhandled,
+    detach: () => {
+      process.off("unhandledRejection", handler);
+    },
+  };
+}
 
 describe("proxy validation", () => {
   const tempDirs: string[] = [];
@@ -630,5 +694,47 @@ describe("proxy validation", () => {
         error: "HTTP/1.1 403 Forbidden",
       },
     ]);
+  });
+
+  it("preserves the fetch probe result when the proxy response body cancel() rejects", async () => {
+    const watcher = watchUnhandledRejections();
+    try {
+      fetchWithRuntimeDispatcherMock.mockResolvedValueOnce(
+        createResponseWithRejectingCancel("allowed body", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      );
+
+      const result = await runProxyValidation({
+        proxyUrlOverride: "http://proxy.example:3128",
+        allowedUrls: ["https://example.com/"],
+        deniedUrls: [],
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.checks).toEqual([
+        {
+          kind: "allowed",
+          url: "https://example.com/",
+          ok: true,
+          status: 200,
+        },
+      ]);
+      expect(createHttp1ProxyAgentMock).toHaveBeenCalledWith(
+        { uri: "http://proxy.example:3128" },
+        5000,
+      );
+      expect(fetchWithRuntimeDispatcherMock).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({
+          redirect: "manual",
+          dispatcher: expect.any(Object),
+        }),
+      );
+    } finally {
+      watcher.detach();
+    }
+    expect(watcher.unhandled).toEqual([]);
   });
 });
