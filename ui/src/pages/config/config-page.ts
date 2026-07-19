@@ -338,10 +338,9 @@ export class ConfigPage extends OpenClawLightDomElement {
         avatar,
       });
     } catch (error) {
-      // Persistence failures (e.g. storage quota or security restrictions)
-      // must not be swallowed: surface them and keep the prior avatar so the
-      // UI does not claim a save that did not happen. The reporter saw the
-      // avatar silently fail to appear after reload with no error (#110662).
+      // Preserve the previously saved avatar if persistence fails (e.g. storage
+      // quota or security restrictions) and surface the error to the UI instead
+      // of silently losing it, so the UI never claims a save that did not happen.
       this.userAvatarError = error instanceof Error ? error.message : "Failed to save user avatar";
       this.requestUpdate();
       return;
