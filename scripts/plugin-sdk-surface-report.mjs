@@ -136,21 +136,24 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: session-discussion binds one external discussion provider to sessions.
-      140,
+      // +1: session-transcript-runtime exposes identity-scoped transcript operations.
+      141,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
-      4721,
+      // +32: session-transcript-runtime identity, read, write, and cursor contracts.
+      4753,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
-      2879,
+      // +14: session-transcript-runtime identity, read, write, and cursor helpers.
+      2893,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
