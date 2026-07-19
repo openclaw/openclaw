@@ -168,7 +168,8 @@ describe("downloadLineMedia", () => {
     const content = cancellableResponse(200, [Buffer.from("oversized")]);
     fetchMock.mockResolvedValueOnce(content.response);
     saveMediaStreamMock.mockImplementationOnce(async (stream: AsyncIterable<Buffer>) => {
-      for await (const _chunk of stream) {
+      for await (const chunk of stream) {
+        expect(chunk).toEqual(Buffer.from("oversized"));
         throw new Error("Media exceeds 0MB limit");
       }
       throw new Error("Expected media content");
