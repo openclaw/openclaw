@@ -16369,6 +16369,16 @@
       "translated": "OpenClaw を更新中"
     },
     {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "確認が必要です"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClawは利用できません"
+    },
+    {
       "id": "native.apple.8a944b06087fe8ef",
       "source": "Microphone input format unavailable",
       "translated": "マイク入力形式を利用できません"

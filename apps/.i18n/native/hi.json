@@ -16369,6 +16369,16 @@
       "translated": "OpenClaw अपडेट किया जा रहा है"
     },
     {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "पुष्टि आवश्यक है"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw उपलब्ध नहीं है"
+    },
+    {
       "id": "native.apple.8a944b06087fe8ef",
       "source": "Microphone input format unavailable",
       "translated": "माइक्रोफ़ोन इनपुट फ़ॉर्मैट उपलब्ध नहीं है"

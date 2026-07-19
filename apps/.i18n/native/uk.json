@@ -16369,6 +16369,16 @@
       "translated": "Оновлення OpenClaw"
     },
     {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "Потрібне підтвердження"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw недоступний"
+    },
+    {
       "id": "native.apple.8a944b06087fe8ef",
       "source": "Microphone input format unavailable",
       "translated": "Формат вхідного сигналу мікрофона недоступний"

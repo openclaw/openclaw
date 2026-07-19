@@ -6197,6 +6197,14 @@
       ]
     },
     {
+      "locale": "ko",
+      "source": "OpenClaw unavailable",
+      "translations": [
+        "OpenClaw를 사용할 수 없습니다",
+        "OpenClaw을 사용할 수 없습니다"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Opens Settings / Gateway",
       "translations": [

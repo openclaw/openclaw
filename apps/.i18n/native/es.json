@@ -16369,6 +16369,16 @@
       "translated": "Actualizando OpenClaw"
     },
     {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "Se necesita confirmación"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw no está disponible"
+    },
+    {
       "id": "native.apple.8a944b06087fe8ef",
       "source": "Microphone input format unavailable",
       "translated": "El formato de entrada del micrófono no está disponible"
