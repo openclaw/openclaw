@@ -1,35 +1,19 @@
-// Control UI component renders exec approval surfaces.
+// Control UI modal queues approvals that are not currently inline in chat.
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { modalApprovalQueue } from "../app/approval-presentation.ts";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalRequestPayload,
-} from "../app/exec-approval.ts";
+import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import {
+  approvalRemainingLabel,
+  approvalTitle,
+  formatApprovalCountdown,
+  renderExecApprovalCard,
+  resolveApprovalDecisions,
+} from "./exec-approval-card.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 import "./modal-dialog.ts";
-
-const DEFAULT_EXEC_APPROVAL_DECISIONS = [
-  "allow-once",
-  "allow-always",
-  "deny",
-] as const satisfies readonly ExecApprovalDecision[];
-
-const APPROVAL_DECISION_CLASSES: Record<ExecApprovalDecision, string> = {
-  "allow-once": "btn primary",
-  "allow-always": "btn",
-  deny: "btn danger",
-};
-
-const APPROVAL_DECISION_SHORTCUTS: Record<ExecApprovalDecision, string> = {
-  "allow-once": "Ctrl/Cmd+Enter",
-  "allow-always": "Ctrl/Cmd+Shift+Enter",
-  deny: "Ctrl/Cmd+D",
-};
 
 type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
@@ -39,200 +23,6 @@ type ExecApprovalProps = {
   inlineApprovalId?: string | null;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
-
-type ExecApprovalCardProps = {
-  approval: ExecApprovalRequest;
-  busy: boolean;
-  error: string | null;
-  nowMs: number;
-  variant: "inline" | "modal";
-  queueCount?: number;
-  onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
-};
-
-function formatApprovalCountdown(expiresAtMs: number, nowMs: number): string {
-  const totalSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
-  return expiresAtMs > nowMs
-    ? t("execApproval.expiresIn", { time: formatApprovalCountdown(expiresAtMs, nowMs) })
-    : t("execApproval.expired");
-}
-
-function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
-  if (!value) {
-    return nothing;
-  }
-  const displayValue = opts?.path ? formatApprovalDisplayPath(value) : value;
-  return html`<div class="exec-approval-meta-row">
-    <span>${label}</span><span>${displayValue}</span>
-  </div>`;
-}
-
-function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
-  const commandSpans = [...(request.commandSpans ?? [])]
-    .filter(
-      (span) =>
-        Number.isSafeInteger(span.startIndex) &&
-        Number.isSafeInteger(span.endIndex) &&
-        span.startIndex >= 0 &&
-        span.endIndex > span.startIndex &&
-        span.endIndex <= request.command.length,
-    )
-    .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-  const accepted: typeof commandSpans = [];
-  let cursor = 0;
-  for (const span of commandSpans) {
-    if (span.startIndex < cursor) {
-      continue;
-    }
-    accepted.push(span);
-    cursor = span.endIndex;
-  }
-  if (accepted.length === 0) {
-    return html`<div class="exec-approval-command mono">${request.command}</div>`;
-  }
-  const parts = [];
-  cursor = 0;
-  for (const span of accepted) {
-    if (span.startIndex > cursor) {
-      parts.push(request.command.slice(cursor, span.startIndex));
-    }
-    parts.push(
-      html`<mark class="exec-approval-command-span"
-        >${request.command.slice(span.startIndex, span.endIndex)}</mark
-      >`,
-    );
-    cursor = span.endIndex;
-  }
-  if (cursor < request.command.length) {
-    parts.push(request.command.slice(cursor));
-  }
-  return html`<div class="exec-approval-command mono">${parts}</div>`;
-}
-
-function renderExecBody(request: ExecApprovalRequestPayload) {
-  return html`
-    ${renderCommandWithSpans(request)}
-    <div class="exec-approval-meta">
-      ${renderMetaRow(t("execApproval.labels.host"), request.host)}
-      ${renderMetaRow(t("execApproval.labels.agent"), request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), request.sessionKey)}
-      ${renderMetaRow(t("execApproval.labels.cwd"), request.cwd, { path: true })}
-      ${renderMetaRow(t("execApproval.labels.resolved"), request.resolvedPath, { path: true })}
-      ${renderMetaRow(t("execApproval.labels.security"), request.security)}
-      ${renderMetaRow(t("execApproval.labels.ask"), request.ask)}
-    </div>
-  `;
-}
-
-function renderPluginBody(active: ExecApprovalRequest) {
-  return html`
-    ${active.pluginDescription
-      ? html`<pre class="exec-approval-command mono" style="white-space:pre-wrap">
-${active.pluginDescription}</pre>`
-      : nothing}
-    <div class="exec-approval-meta">
-      ${renderMetaRow(t("execApproval.labels.severity"), active.pluginSeverity)}
-      ${renderMetaRow(t("execApproval.labels.plugin"), active.pluginId)}
-      ${renderMetaRow(t("execApproval.labels.agent"), active.request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}
-    </div>
-  `;
-}
-
-function approvalDecisionLabel(decision: ExecApprovalDecision): string {
-  const labels: Record<ExecApprovalDecision, string> = {
-    "allow-once": t("execApproval.allowOnce"),
-    "allow-always": t("execApproval.alwaysAllow"),
-    deny: t("execApproval.deny"),
-  };
-  return labels[decision];
-}
-
-function approvalDecisionClass(decision: ExecApprovalDecision): string {
-  return APPROVAL_DECISION_CLASSES[decision];
-}
-
-function approvalDecisionShortcut(decision: ExecApprovalDecision): string {
-  return APPROVAL_DECISION_SHORTCUTS[decision];
-}
-
-function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApprovalDecision[] {
-  if (active.request.allowedDecisions?.length) {
-    return active.request.allowedDecisions;
-  }
-  if (active.kind === "exec" && active.request.ask === "always") {
-    return ["allow-once", "deny"];
-  }
-  return DEFAULT_EXEC_APPROVAL_DECISIONS;
-}
-
-function renderUnavailableDecisionWarning(
-  active: ExecApprovalRequest,
-  decisions: readonly ExecApprovalDecision[],
-) {
-  return active.kind !== "exec" || decisions.includes("allow-always")
-    ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
-}
-
-function approvalTitle(active: ExecApprovalRequest): string {
-  return active.kind !== "exec"
-    ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
-    : t("execApproval.execApprovalNeeded");
-}
-
-export function renderExecApprovalCard(props: ExecApprovalCardProps) {
-  const active = props.approval;
-  const decisions = resolveApprovalDecisions(active);
-  // Countdown stays role=timer without aria-live: per-second announcements
-  // would monopolize the screen-reader queue for every visible approval.
-  const remaining = approvalRemainingLabel(active.expiresAtMs, props.nowMs);
-  const title = approvalTitle(active);
-  return html`
-    <div
-      class="exec-approval-card exec-approval-card--${props.variant}"
-      data-approval-id=${active.id}
-    >
-      <div class="exec-approval-header">
-        <div>
-          <div class="exec-approval-title">${title}</div>
-          <div class="exec-approval-sub exec-approval-countdown" role="timer">${remaining}</div>
-        </div>
-        ${(props.queueCount ?? 0) > 1
-          ? html`<div class="exec-approval-queue">
-              ${t("execApproval.pending", { count: String(props.queueCount) })}
-            </div>`
-          : nothing}
-      </div>
-      ${active.kind === "exec" ? renderExecBody(active.request) : renderPluginBody(active)}
-      ${renderUnavailableDecisionWarning(active, decisions)}
-      ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
-      <div class="exec-approval-actions">
-        ${decisions.map((decision) => {
-          const label = approvalDecisionLabel(decision);
-          const shortcut = approvalDecisionShortcut(decision);
-          return html`
-            <button
-              class=${approvalDecisionClass(decision)}
-              type="button"
-              ?disabled=${props.busy}
-              title=${props.variant === "modal" ? `${label} (${shortcut})` : label}
-              @click=${() => props.onDecision(active.id, decision)}
-            >
-              <span>${label}</span>
-            </button>
-          `;
-        })}
-      </div>
-    </div>
-  `;
-}
 
 function compactCommand(command: string): string {
   const singleLine = command.replace(/\s+/g, " ").trim();

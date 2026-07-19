@@ -64,6 +64,14 @@ export const APPROVAL_PAGE_ELEMENT = {
   loadModule: () => import("../pages/approval/approval-page-registration.ts"),
 } satisfies OptionalCustomElement;
 
+// The card is in the chat graph, but modal-only queue controls stay off the
+// startup path until an approval is actually pending.
+export const EXEC_APPROVAL_ELEMENT = {
+  tagName: "openclaw-exec-approval",
+  label: "exec approval modal",
+  loadModule: () => import("../components/exec-approval.ts"),
+} satisfies OptionalCustomElement;
+
 const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();
 
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {
