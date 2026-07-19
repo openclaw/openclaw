@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 
-const LINE_TEST_CFG = { channels: { line: { channelAccessToken: "line-token" } } };
+const LINE_TEST_CFG = { channels: { line: {} } };
 
 function createReplyChunksHarness() {
   const replyMessageLine = vi.fn(async () => ({}));
