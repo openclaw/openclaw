@@ -1,7 +1,13 @@
 // Plugins CLI uninstall tests cover plugin removal selection and uninstall output.
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { persistClawPackageRef } from "../claws/provenance.js";
+import type { ClawAddPlan } from "../claws/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   buildPluginDiagnosticsReport,
@@ -53,6 +59,7 @@ describe("plugins cli uninstall", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
       delete process.env.OPENCLAW_NIX_MODE;
     } else {
@@ -208,6 +215,76 @@ describe("plugins cli uninstall", () => {
       installRecords: {},
       reason: "source-changed",
     });
+  });
+
+  it("warns but proceeds when a shared plugin has an uncertain Claw reference", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = mkdtempSync(join(tmpdir(), "openclaw-claw-plugin-ref-"));
+    closeOpenClawStateDatabaseForTest();
+    try {
+      const installRecord = {
+        source: "clawhub" as const,
+        spec: "clawhub:@owner/audit@2.0.1",
+        clawhubPackage: "@owner/audit",
+        version: "2.0.1",
+        installPath: ALPHA_INSTALL_PATH,
+      };
+      const baseConfig = {
+        plugins: {
+          entries: { alpha: { enabled: true } },
+          installs: { alpha: installRecord },
+        },
+      } as OpenClawConfig;
+      loadConfig.mockReturnValue(baseConfig);
+      setInstalledPluginIndexInstallRecords({ alpha: installRecord });
+      buildPluginSnapshotReport.mockReturnValue({
+        plugins: [{ id: "alpha", name: "alpha" }],
+        diagnostics: [],
+      });
+      planPluginUninstall.mockReturnValue({
+        ok: true,
+        config: { plugins: { entries: {}, installs: {} } } as OpenClawConfig,
+        actions: {
+          entry: true,
+          install: true,
+          allowlist: false,
+          denylist: false,
+          loadPath: false,
+          memorySlot: false,
+          contextEngineSlot: false,
+          channelConfig: false,
+          directory: false,
+        },
+        directoryRemoval: null,
+      });
+      persistClawPackageRef(
+        {
+          agent: { finalId: "audit-agent" },
+          claw: { name: "@owner/audit-claw" },
+        } as ClawAddPlan,
+        {
+          kind: "plugin",
+          source: "clawhub",
+          ref: "@owner/audit",
+          version: "2.0.1",
+          integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        { status: "failed" },
+      );
+
+      await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
+
+      expectRuntimeLogIncludes('Warning: plugin "alpha" is referenced by Claw: @owner/audit-claw.');
+      expectRuntimeLogIncludes("Uninstalling it may break those Claws");
+      expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it("exits cleanly when confirmation input closes before an answer", async () => {
