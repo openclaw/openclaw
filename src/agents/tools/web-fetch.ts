@@ -562,6 +562,13 @@ async function normalizeProviderWebFetchPayload(params: {
   };
 }
 
+function cancelUnreadWebFetchBody(response: Response): void {
+  // Provider fallback may return early without reading the upstream body; cancel
+  // so release() does not leave the stream open. Do not await cancel() — mocked or
+  // non-compliant streams can leave it unsettled and hang a successful fallback.
+  void response.body?.cancel().catch(() => undefined);
+}
+
 async function maybeFetchProviderWebFetchPayload(
   params: WebFetchRuntimeParams & {
     urlToFetch: string;
@@ -683,6 +690,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         tookMs: Date.now() - start,
       });
       if (payload) {
+        cancelUnreadWebFetchBody(res);
         return payload;
       }
       const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
@@ -740,6 +748,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             payload = null;
           }
           if (payload) {
+            cancelUnreadWebFetchBody(res);
             return payload;
           }
           const basic = await extractBasicHtmlContent({
@@ -766,6 +775,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           tookMs: Date.now() - start,
         });
         if (payload) {
+          cancelUnreadWebFetchBody(res);
           return payload;
         }
         throw new Error(
