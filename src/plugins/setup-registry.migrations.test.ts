@@ -22,6 +22,7 @@ describe("bundled setup config migrations", () => {
           "minimax-portal": {
             baseUrl: "https://api.minimax.io/anthropic",
             api: "anthropic-messages",
+            authHeader: true,
             models: [],
           },
         },
@@ -38,32 +39,22 @@ describe("bundled setup config migrations", () => {
     );
   });
 
-  test("preserves user-defined MiniMax OAuth model catalogs", () => {
+  test("preserves intentionally empty custom MiniMax OAuth model catalogs", () => {
     const result = runMigration({
       models: {
         providers: {
           "minimax-portal": {
             baseUrl: "https://example.com/anthropic",
             api: "anthropic-messages",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom Model",
-                reasoning: false,
-                input: ["text"],
-                contextWindow: 1234,
-                maxTokens: 256,
-              },
-            ],
+            authHeader: true,
+            models: [],
           },
         },
       },
     });
 
     expect(result.changes).toEqual([]);
-    expect(result.config.models?.providers?.["minimax-portal"]?.models).toEqual([
-      expect.objectContaining({ id: "custom-model", contextWindow: 1234 }),
-    ]);
+    expect(result.config.models?.providers?.["minimax-portal"]?.models).toEqual([]);
   });
 
   test("repairs Tencent TokenHub model defaults", () => {
