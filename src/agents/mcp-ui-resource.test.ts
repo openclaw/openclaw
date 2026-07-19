@@ -67,6 +67,7 @@ describe("MCP App UI resources", () => {
       serverName: "demo",
       toolName: "show",
       uiResourceUri: "ui://demo/app",
+      toolCallId: "call-1",
       toolInput: { city: "Paris" },
       toolResult: { content: [{ type: "text", text: "ok" }] },
     });
@@ -74,6 +75,7 @@ describe("MCP App UI resources", () => {
     expect(result?.viewId).toMatch(/^mcp-app-/u);
     expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)).toMatchObject({
       html: "<html>demo</html>",
+      toolCallId: "call-1",
       toolInput: { city: "Paris" },
       permissions: { geolocation: {} },
     });

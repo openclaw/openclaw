@@ -48,9 +48,9 @@ describe("in-memory board store", () => {
           serverName: "server",
           toolName: "tool",
           uiResourceUri: "ui://resource",
-          originSessionKey: "origin",
           toolCallId: "call",
         },
+        interactive: false,
       },
     });
     expect(store.readWidgetHtml("session", "html")).toMatchObject({
@@ -58,12 +58,12 @@ describe("in-memory board store", () => {
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(store.readWidgetHtml("session", "app")).toEqual({
+    expect(store.readWidgetHtml("session", "app")).toBeUndefined();
+    expect(store.readWidgetMcpApp("session", "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
         uiResourceUri: "ui://resource",
-        originSessionKey: "origin",
         toolCallId: "call",
       },
       revision: 1,

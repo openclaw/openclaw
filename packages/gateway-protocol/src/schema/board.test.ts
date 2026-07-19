@@ -2,6 +2,8 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   BoardSnapshotSchema,
+  BoardWidgetAppViewParamsSchema,
+  BoardWidgetContentSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetPutParamsSchema,
 } from "./board.js";
@@ -75,6 +77,18 @@ describe("BoardWidgetPutParamsSchema", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts a transient MCP App pin descriptor with a live view id", () => {
+    const content = { kind: "mcp-app", viewId: "mcp-app-live" };
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        sessionKey: "agent:main:main",
+        name: "demo",
+        content,
+      }),
+    ).toBe(true);
+    expect(Value.Check(BoardWidgetContentSchema, content)).toBe(false);
+  });
 });
 
 describe("BoardWidgetGrantParamsSchema", () => {
@@ -94,5 +108,32 @@ describe("BoardWidgetGrantParamsSchema", () => {
         decision: "granted",
       }),
     ).toBe(false);
+  });
+
+  it("accepts an MCP App instance id without requiring it for HTML grants", () => {
+    expect(
+      Value.Check(BoardWidgetGrantParamsSchema, {
+        sessionKey: "agent:main:main",
+        name: "app",
+        decision: "granted",
+        revision: 1,
+        instanceId: "instance-1",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("BoardWidgetAppViewParamsSchema", () => {
+  it("requires the exact widget revision and instance", () => {
+    const params = {
+      sessionKey: "agent:main:main",
+      name: "app",
+      revision: 1,
+      instanceId: "instance-1",
+    };
+    expect(Value.Check(BoardWidgetAppViewParamsSchema, params)).toBe(true);
+    expect(Value.Check(BoardWidgetAppViewParamsSchema, { ...params, instanceId: undefined })).toBe(
+      false,
+    );
   });
 });

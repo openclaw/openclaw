@@ -27,6 +27,7 @@ vi.mock("../mcp-app-standalone.js", () => ({
   createMcpAppStandaloneTicket: mocks.createMcpAppStandaloneTicket,
 }));
 
+import { resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 
 const view = {
@@ -37,6 +38,7 @@ const view = {
   uiResourceUri: "ui://demo/app",
   html: "<html>demo</html>",
   allowedAppToolNames: new Set(["shared", "app-only"]) as ReadonlySet<string> | undefined,
+  authorizeAppInteraction: undefined as (() => boolean | Promise<boolean>) | undefined,
   readOnly: undefined as boolean | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "ok" }] },
@@ -110,6 +112,7 @@ describe("MCP App gateway bridge", () => {
     view.toolCallCount = 0;
     view.activeRequests = 0;
     view.allowedAppToolNames = new Set(["shared", "app-only"]);
+    view.authorizeAppInteraction = undefined;
     view.readOnly = undefined;
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
@@ -301,6 +304,56 @@ describe("MCP App gateway bridge", () => {
 
     const denied = await invoke("mcp.app.callTool", { ...params, toolName: "app-only" });
     expect(denied.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("rechecks a board widget grant before every App tool call", async () => {
+    view.authorizeAppInteraction = vi.fn(async () => false);
+    const denied = await invoke("mcp.app.callTool", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+      toolName: "shared",
+    });
+
+    expect(denied.mock.calls[0]?.[0]).toBe(false);
+    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
+    expect(mocks.peekSessionMcpRuntime.mock.results[0]?.value.callTool).not.toHaveBeenCalled();
+  });
+
+  it("rechecks board authority for model-context updates and advertised interaction", async () => {
+    view.authorizeAppInteraction = vi.fn(async () => false);
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+
+    const payload = await invoke("mcp.app.view", params);
+    expect(payload.mock.calls[0]?.[1]).toMatchObject({
+      messageSupported: false,
+      updateModelContextSupported: false,
+    });
+    const update = await invoke("mcp.app.updateModelContext", {
+      ...params,
+      content: [{ type: "text", text: "stale" }],
+    });
+    expect(update.mock.calls[0]?.[0]).toBe(false);
+    const listed = await invoke("mcp.app.listTools", params);
+    expect(listed.mock.calls[0]?.[0]).toBe(false);
+    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(3);
+  });
+
+  it("snapshots only app-visible tools allowed by the originating view", async () => {
+    const activeRuntime = runtime();
+    const activeView = {
+      ...view,
+      allowedAppToolNames: new Set(["app-only", "model-only"]),
+    };
+
+    await expect(
+      resolveMcpAppAllowedToolNames({ runtime: activeRuntime as never, view: activeView as never }),
+    ).resolves.toEqual(["app-only"]);
+    await expect(
+      resolveMcpAppAllowedToolNames({
+        runtime: activeRuntime as never,
+        view: { ...activeView, readOnly: true } as never,
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("rejects views that are not backed by the transcript", async () => {

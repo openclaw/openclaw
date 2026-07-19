@@ -11,6 +11,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { McpAppActiveView } from "../mcp-app-operations.js";
+import type { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import { createBoardHandlers } from "./board.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -26,10 +28,48 @@ vi.mock("./sessions.runtime.js", () => ({
   })),
 }));
 
-function createHarness(readCanvasHtml?: Parameters<typeof createBoardHandlers>[2]) {
+function createMcpAppDependencies() {
+  let lease = 0;
+  const runtime = { getCatalog: vi.fn() };
+  return {
+    resolveActiveView: vi.fn(
+      async ({ viewId }: { viewId: string }) =>
+        ({
+          runtime,
+          view: {
+            viewId,
+            serverName: "demo",
+            toolName: "show",
+            uiResourceUri: "ui://demo/app",
+            toolCallId: "call-1",
+            allowedAppToolNames: new Set(["refresh", "search"]),
+          },
+        }) as unknown as McpAppActiveView,
+    ),
+    resolveAllowedToolNames: vi.fn(async () => ["refresh", "search"]),
+    mintFromTranscript: vi.fn(
+      async ({ readOnly }: Parameters<typeof mintMcpAppViewFromTranscript>[0]) => {
+        lease += 1;
+        return {
+          runtime,
+          view: {
+            viewId: `mcp-app-board-${lease}`,
+            expiresAtMs: 10_000 + lease,
+            ...(readOnly ? { readOnly: true as const } : {}),
+          },
+        } as unknown as Awaited<ReturnType<typeof mintMcpAppViewFromTranscript>>;
+      },
+    ),
+  };
+}
+
+function createHarness(
+  readCanvasHtml?: Parameters<typeof createBoardHandlers>[2],
+  mcpApp = createMcpAppDependencies(),
+) {
   const store = new InMemoryBoardStore();
   const broadcast = vi.fn();
-  const handlers = createBoardHandlers(store, undefined, readCanvasHtml);
+  const handlers = createBoardHandlers(store, undefined, readCanvasHtml, mcpApp);
   const invoke = async (method: string, params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
     await handlers[method]!({
@@ -38,11 +78,14 @@ function createHarness(readCanvasHtml?: Parameters<typeof createBoardHandlers>[2
       client: null,
       isWebchatConnect: () => false,
       respond,
-      context: { broadcast } as unknown as GatewayRequestContext,
+      context: {
+        broadcast,
+        getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
+      } as unknown as GatewayRequestContext,
     });
     return respond;
   };
-  return { store, broadcast, invoke };
+  return { store, broadcast, invoke, mcpApp };
 }
 
 describe("board gateway methods", () => {
@@ -61,15 +104,21 @@ describe("board gateway methods", () => {
   it("registers every contract method with its required scope", () => {
     expect(
       Object.fromEntries(
-        ["board.get", "board.update", "board.widget.put", "board.widget.grant", "board.event"].map(
-          (method) => [method, resolveCoreOperatorGatewayMethodScope(method)],
-        ),
+        [
+          "board.get",
+          "board.update",
+          "board.widget.put",
+          "board.widget.grant",
+          "board.widget.appView",
+          "board.event",
+        ].map((method) => [method, resolveCoreOperatorGatewayMethodScope(method)]),
       ),
     ).toEqual({
       "board.get": "operator.read",
       "board.update": "operator.write",
       "board.widget.put": "operator.write",
       "board.widget.grant": "operator.approvals",
+      "board.widget.appView": "operator.read",
       "board.event": "operator.write",
     });
   });
@@ -105,13 +154,7 @@ describe("board gateway methods", () => {
       name: "app",
       content: {
         kind: "mcp-app",
-        descriptor: {
-          serverName: "server",
-          toolName: "tool",
-          uiResourceUri: "ui://resource",
-          originSessionKey: "origin",
-          toolCallId: "call",
-        },
+        viewId: "mcp-app-live",
       },
     });
     await invoke("board.widget.put", {
@@ -232,6 +275,253 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       revision: 2,
     });
+  });
+
+  it("admits only the originating live MCP App and persists a server-derived descriptor", async () => {
+    const { invoke, mcpApp, store } = createHarness();
+    const response = await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "demo-app",
+      content: { kind: "mcp-app", viewId: "mcp-app-live" },
+      declared: { tools: ["client-selected"] },
+    });
+
+    expect(response.mock.calls[0]?.[0]).toBe(true);
+    expect(response.mock.calls[0]?.[1]).toMatchObject({
+      widgets: [
+        {
+          name: "demo-app",
+          grantState: "pending",
+          declaredSummary: ["Tool access: refresh", "Tool access: search"],
+          instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
+        },
+      ],
+    });
+    expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:main", viewId: "mcp-app-live" }),
+    );
+    expect(store.readWidgetMcpApp("agent:main:main", "demo-app")).toMatchObject({
+      descriptor: {
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolCallId: "call-1",
+      },
+      declaredTools: ["refresh", "search"],
+      interactive: true,
+    });
+    expect(store.readWidgetMcpApp("agent:main:main", "demo-app")).not.toHaveProperty(
+      "descriptor.viewId",
+    );
+
+    vi.mocked(mcpApp.resolveActiveView).mockRejectedValueOnce(new Error("wrong session"));
+    const rejected = await invoke("board.widget.put", {
+      sessionKey: "agent:main:other",
+      name: "rejected-app",
+      content: { kind: "mcp-app", viewId: "mcp-app-live" },
+    });
+    expect(rejected.mock.calls[0]?.[0]).toBe(false);
+
+    vi.mocked(mcpApp.resolveActiveView).mockResolvedValueOnce({
+      runtime: { getCatalog: vi.fn() },
+      view: {
+        viewId: "mcp-app-live",
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        allowedAppToolNames: new Set(),
+      },
+    } as never);
+    const missingToolCall = await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "missing-tool-call",
+      content: { kind: "mcp-app", viewId: "mcp-app-live" },
+    });
+    expect(missingToolCall.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("never upgrades a restart-reconstructed read-only source", async () => {
+    const mcpApp = createMcpAppDependencies();
+    mcpApp.resolveActiveView.mockResolvedValueOnce({
+      runtime: { getCatalog: vi.fn() },
+      view: {
+        viewId: "mcp-app-restored",
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolCallId: "call-1",
+        allowedAppToolNames: new Set(),
+        readOnly: true,
+      },
+    } as never);
+    mcpApp.resolveAllowedToolNames.mockResolvedValueOnce([]);
+    const { invoke, store } = createHarness(undefined, mcpApp);
+    const put = await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "restored",
+      content: { kind: "mcp-app", viewId: "mcp-app-restored" },
+    });
+    const widget = (put.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+    expect(widget.grantState).toBe("none");
+    expect(store.readWidgetMcpApp("agent:main:main", "restored")).toMatchObject({
+      interactive: false,
+      declaredTools: [],
+    });
+
+    const grant = await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "restored",
+      decision: "granted",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(grant.mock.calls[0]?.[0]).toBe(false);
+    await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "restored",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true, allowedAppToolNames: new Set() }),
+    );
+  });
+
+  it("pins a revoked reminted source as read-only", async () => {
+    const mcpApp = createMcpAppDependencies();
+    mcpApp.resolveActiveView.mockResolvedValueOnce({
+      runtime: { getCatalog: vi.fn() },
+      view: {
+        viewId: "mcp-app-revoked",
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolCallId: "call-1",
+        allowedAppToolNames: new Set(["refresh"]),
+        authorizeAppInteraction: vi.fn(async () => false),
+      },
+    } as never);
+    const { invoke, store } = createHarness(undefined, mcpApp);
+
+    const put = await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "revoked",
+      content: { kind: "mcp-app", viewId: "mcp-app-revoked" },
+    });
+
+    expect((put.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.grantState).toBe("none");
+    expect(mcpApp.resolveAllowedToolNames).not.toHaveBeenCalled();
+    expect(store.readWidgetMcpApp("agent:main:main", "revoked")).toMatchObject({
+      interactive: false,
+      declaredTools: [],
+    });
+  });
+
+  it("remints read-only MCP App views and binds granted calls to revision and instance", async () => {
+    const { invoke, mcpApp, store } = createHarness();
+    const pin = {
+      sessionKey: "agent:main:main",
+      name: "demo-app",
+      content: { kind: "mcp-app", viewId: "mcp-app-live" },
+    };
+    const put = await invoke("board.widget.put", pin);
+    const widget = (put.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+
+    const readOnly = await invoke("board.widget.appView", {
+      sessionKey: pin.sessionKey,
+      name: pin.name,
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(readOnly).toHaveBeenCalledWith(true, {
+      viewId: "mcp-app-board-1",
+      expiresAtMs: 10_001,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allowedAppToolNames: new Set(),
+        readOnly: true,
+      }),
+    );
+
+    await invoke("board.widget.grant", {
+      sessionKey: pin.sessionKey,
+      name: pin.name,
+      decision: "granted",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    const interactive = await invoke("board.widget.appView", {
+      sessionKey: pin.sessionKey,
+      name: pin.name,
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(interactive).toHaveBeenCalledWith(true, {
+      viewId: "mcp-app-board-2",
+      expiresAtMs: 10_002,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allowedAppToolNames: new Set(["refresh", "search"]),
+        readOnly: false,
+      }),
+    );
+    const authorizeAppInteraction = vi
+      .mocked(mcpApp.mintFromTranscript)
+      .mock.calls.at(-1)?.[0].authorizeAppInteraction;
+    expect(await authorizeAppInteraction?.()).toBe(true);
+
+    await invoke("board.widget.put", pin);
+    expect(store.getSnapshot(pin.sessionKey).widgets[0]?.instanceId).not.toBe(widget.instanceId);
+    expect(await authorizeAppInteraction?.()).toBe(false);
+    const stale = await invoke("board.widget.appView", {
+      sessionKey: pin.sessionKey,
+      name: pin.name,
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(stale.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("keeps zero-tool MCP Apps read-only until an explicit grant", async () => {
+    const mcpApp = createMcpAppDependencies();
+    mcpApp.resolveAllowedToolNames.mockResolvedValue([]);
+    const { invoke } = createHarness(undefined, mcpApp);
+    const put = await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "viewer",
+      content: { kind: "mcp-app", viewId: "mcp-app-live" },
+    });
+    const widget = (put.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+    expect(widget.grantState).toBe("pending");
+
+    await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "viewer",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true, allowedAppToolNames: new Set() }),
+    );
+
+    await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "viewer",
+      decision: "granted",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "viewer",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: false, allowedAppToolNames: new Set() }),
+    );
   });
 
   it("materializes canvas document sources before storing and broadcasting", async () => {

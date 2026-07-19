@@ -42,9 +42,9 @@ beforeAll(async () => {
         serverName: "server",
         toolName: "tool",
         uiResourceUri: "ui://resource",
-        originSessionKey: "origin",
         toolCallId: "call",
       },
+      interactive: false,
     },
   });
   store.putWidget({
@@ -89,7 +89,7 @@ afterAll(async () => {
 
 function ticketFor(name: string, revision = 1, issuedAtMs = nowMs): string {
   const document = store.readWidgetHtml("agent:main:main", name);
-  if (!document || !("html" in document)) {
+  if (!document) {
     throw new Error(`missing HTML widget: ${name}`);
   }
   return createBoardViewTicket({

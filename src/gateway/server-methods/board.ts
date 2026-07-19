@@ -3,6 +3,7 @@ import {
   errorShape,
   formatValidationErrors,
   type BoardEventParams,
+  type BoardWidgetAppViewParams,
   type BoardUpdateParams,
   type BoardWidgetGrantParams,
   type BoardWidgetMaterializedPutParams,
@@ -11,6 +12,7 @@ import {
   validateBoardGetParams,
   validateBoardUpdateParams,
   validateBoardWidgetContent,
+  validateBoardWidgetAppViewParams,
   validateBoardWidgetGrantParams,
   validateBoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -20,10 +22,27 @@ import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { boardStore } from "../board-store.js";
 import { buildBoardWidgetFrameUrl, createBoardViewTicket } from "../board-view-ticket.js";
+import {
+  requireMcpAppInteraction,
+  resolveMcpAppActiveView,
+  resolveMcpAppAllowedToolNames,
+} from "../mcp-app-operations.js";
+import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type NoticeAppender = typeof appendBoardEventNotice;
 type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
+type McpAppDependencies = {
+  resolveActiveView: typeof resolveMcpAppActiveView;
+  resolveAllowedToolNames: typeof resolveMcpAppAllowedToolNames;
+  mintFromTranscript: typeof mintMcpAppViewFromTranscript;
+};
+
+const defaultMcpAppDependencies: McpAppDependencies = {
+  resolveActiveView: resolveMcpAppActiveView,
+  resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
+  mintFromTranscript: mintMcpAppViewFromTranscript,
+};
 
 function invalidParams(
   method: string,
@@ -55,6 +74,7 @@ export function createBoardHandlers(
   store: BoardStore,
   appendNotice: NoticeAppender = appendBoardEventNotice,
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
+  mcpApp: McpAppDependencies = defaultMcpAppDependencies,
 ): GatewayRequestHandlers {
   return {
     "board.get": ({ params, respond }) => {
@@ -68,7 +88,7 @@ export function createBoardHandlers(
           continue;
         }
         const document = store.readWidgetHtml(snapshot.sessionKey, widget.name);
-        if (!document || !("html" in document) || document.revision !== widget.revision) {
+        if (!document || document.revision !== widget.revision) {
           continue;
         }
         const { ticket } = createBoardViewTicket({
@@ -111,7 +131,10 @@ export function createBoardHandlers(
       }
       try {
         const requestParams = params as BoardWidgetPutParams;
+        const boardSessionKey = store.getSnapshot(requestParams.sessionKey).sessionKey;
+        const { declared: requestDeclared, ...requestWithoutDeclared } = requestParams;
         let content: BoardWidgetMaterializedPutParams["content"];
+        let declared = requestDeclared;
         if (requestParams.content.kind === "canvas-doc") {
           const document = await readCanvasDocument(requestParams.content.docId);
           if (document.cspSandbox !== "scripts") {
@@ -121,14 +144,55 @@ export function createBoardHandlers(
             );
           }
           content = { kind: "html", html: document.html };
+        } else if (requestParams.content.kind === "mcp-app") {
+          const active = await mcpApp.resolveActiveView({
+            sessionKey: boardSessionKey,
+            viewId: requestParams.content.viewId,
+            cfg: context.getRuntimeConfig(),
+          });
+          const { view } = active;
+          if (!view.toolCallId) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              "MCP App view is missing its originating tool call",
+            );
+          }
+          let interactive = false;
+          try {
+            await requireMcpAppInteraction(view);
+            interactive = true;
+          } catch {
+            // Reconstructed or revoked source leases may be pinned only as read-only content.
+          }
+          const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
+          content = {
+            kind: "mcp-app",
+            descriptor: {
+              serverName: view.serverName,
+              toolName: view.toolName,
+              uiResourceUri: view.uiResourceUri,
+              toolCallId: view.toolCallId,
+            },
+            interactive,
+          };
+          declared = allowedTools.length > 0 ? { tools: allowedTools } : undefined;
         } else {
           content = requestParams.content;
         }
-        if (!validateBoardWidgetContent(content)) {
+        const persistedContent =
+          content.kind === "mcp-app"
+            ? { kind: content.kind, descriptor: content.descriptor }
+            : content;
+        if (!validateBoardWidgetContent(persistedContent)) {
           invalidParams("board.widget.put content", validateBoardWidgetContent.errors, respond);
           return;
         }
-        const boardParams: BoardWidgetMaterializedPutParams = { ...requestParams, content };
+        const boardParams: BoardWidgetMaterializedPutParams = {
+          ...requestWithoutDeclared,
+          sessionKey: boardSessionKey,
+          content,
+          ...(declared ? { declared } : {}),
+        };
         const snapshot = store.putWidget(boardParams);
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
@@ -152,12 +216,68 @@ export function createBoardHandlers(
           boardParams.name,
           boardParams.decision,
           boardParams.revision,
+          boardParams.instanceId,
         );
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
           revision: snapshot.revision,
         });
         respond(true, snapshot);
+      } catch (error) {
+        respondBoardError(error, respond);
+      }
+    },
+    "board.widget.appView": async ({ params, respond, context }) => {
+      if (!validateBoardWidgetAppViewParams(params)) {
+        invalidParams("board.widget.appView", validateBoardWidgetAppViewParams.errors, respond);
+        return;
+      }
+      try {
+        const boardParams = params as BoardWidgetAppViewParams;
+        const snapshot = store.getSnapshot(boardParams.sessionKey);
+        const widget = snapshot.widgets.find((candidate) => candidate.name === boardParams.name);
+        const document = store.readWidgetMcpApp(snapshot.sessionKey, boardParams.name);
+        if (
+          !widget ||
+          widget.contentKind !== "mcp-app" ||
+          widget.revision !== boardParams.revision ||
+          widget.instanceId !== boardParams.instanceId ||
+          !document ||
+          document.revision !== boardParams.revision ||
+          document.instanceId !== boardParams.instanceId
+        ) {
+          throw new BoardValidationError(
+            "not_found",
+            `board MCP App widget not found: ${boardParams.name}`,
+          );
+        }
+        const interactive = document.interactive && document.grantState === "granted";
+        const authorizeAppInteraction = interactive
+          ? () => {
+              const current = store.readWidgetMcpApp(snapshot.sessionKey, boardParams.name);
+              return (
+                current?.interactive === true &&
+                current.grantState === "granted" &&
+                current.revision === boardParams.revision &&
+                current.instanceId === boardParams.instanceId
+              );
+            }
+          : undefined;
+        const minted = await mcpApp.mintFromTranscript({
+          cfg: context.getRuntimeConfig(),
+          sessionKey: snapshot.sessionKey,
+          descriptor: document.descriptor,
+          allowedAppToolNames: new Set(interactive ? document.declaredTools : []),
+          ...(authorizeAppInteraction ? { authorizeAppInteraction } : {}),
+          readOnly: !interactive,
+        });
+        if (!minted) {
+          throw new Error("Pinned MCP App source is no longer available");
+        }
+        respond(true, {
+          viewId: minted.view.viewId,
+          expiresAtMs: minted.view.expiresAtMs,
+        });
       } catch (error) {
         respondBoardError(error, respond);
       }

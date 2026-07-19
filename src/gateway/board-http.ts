@@ -69,7 +69,6 @@ export function handleBoardHttpRequest(
   const document = (opts.store ?? boardStore).readWidgetHtml(path.sessionKey, path.name);
   if (
     !document ||
-    !("html" in document) ||
     (document.grantState !== "none" && document.grantState !== "granted") ||
     document.revision !== claims.revision ||
     document.viewGeneration !== claims.viewGeneration

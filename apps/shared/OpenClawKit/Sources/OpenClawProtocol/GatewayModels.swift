@@ -244,6 +244,7 @@ public struct BoardWidget: Codable, Sendable {
     public let position: Int
     public let grantstate: AnyCodable
     public let revision: Int
+    public let instanceid: String?
     public let declaredsummary: [String]?
     public let frameurl: String?
 
@@ -257,6 +258,7 @@ public struct BoardWidget: Codable, Sendable {
         position: Int,
         grantstate: AnyCodable,
         revision: Int,
+        instanceid: String? = nil,
         declaredsummary: [String]? = nil,
         frameurl: String? = nil)
     {
@@ -269,6 +271,7 @@ public struct BoardWidget: Codable, Sendable {
         self.position = position
         self.grantstate = grantstate
         self.revision = revision
+        self.instanceid = instanceid
         self.declaredsummary = declaredsummary
         self.frameurl = frameurl
     }
@@ -283,6 +286,7 @@ public struct BoardWidget: Codable, Sendable {
         case position
         case grantstate = "grantState"
         case revision
+        case instanceid = "instanceId"
         case declaredsummary = "declaredSummary"
         case frameurl = "frameUrl"
     }
@@ -484,20 +488,17 @@ public struct BoardMcpAppDescriptor: Codable, Sendable {
     public let servername: String
     public let toolname: String
     public let uiresourceuri: String
-    public let originsessionkey: String
     public let toolcallid: String
 
     public init(
         servername: String,
         toolname: String,
         uiresourceuri: String,
-        originsessionkey: String,
         toolcallid: String)
     {
         self.servername = servername
         self.toolname = toolname
         self.uiresourceuri = uiresourceuri
-        self.originsessionkey = originsessionkey
         self.toolcallid = toolcallid
     }
 
@@ -505,7 +506,6 @@ public struct BoardMcpAppDescriptor: Codable, Sendable {
         case servername = "serverName"
         case toolname = "toolName"
         case uiresourceuri = "uiResourceUri"
-        case originsessionkey = "originSessionKey"
         case toolcallid = "toolCallId"
     }
 }
@@ -543,6 +543,24 @@ public struct BoardWidgetMcpAppContent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case kind
         case descriptor
+    }
+}
+
+public struct BoardWidgetMcpAppPutContent: Codable, Sendable {
+    public let kind: String
+    public let viewid: String
+
+    public init(
+        kind: String,
+        viewid: String)
+    {
+        self.kind = kind
+        self.viewid = viewid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case viewid = "viewId"
     }
 }
 
@@ -635,17 +653,20 @@ public struct BoardWidgetGrantParams: Codable, Sendable {
     public let name: String
     public let decision: AnyCodable
     public let revision: Int
+    public let instanceid: String?
 
     public init(
         sessionkey: String,
         name: String,
         decision: AnyCodable,
-        revision: Int)
+        revision: Int,
+        instanceid: String? = nil)
     {
         self.sessionkey = sessionkey
         self.name = name
         self.decision = decision
         self.revision = revision
+        self.instanceid = instanceid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -653,6 +674,51 @@ public struct BoardWidgetGrantParams: Codable, Sendable {
         case name
         case decision
         case revision
+        case instanceid = "instanceId"
+    }
+}
+
+public struct BoardWidgetAppViewParams: Codable, Sendable {
+    public let sessionkey: String
+    public let name: String
+    public let revision: Int
+    public let instanceid: String
+
+    public init(
+        sessionkey: String,
+        name: String,
+        revision: Int,
+        instanceid: String)
+    {
+        self.sessionkey = sessionkey
+        self.name = name
+        self.revision = revision
+        self.instanceid = instanceid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case name
+        case revision
+        case instanceid = "instanceId"
+    }
+}
+
+public struct BoardWidgetAppViewResult: Codable, Sendable {
+    public let viewid: String
+    public let expiresatms: Int
+
+    public init(
+        viewid: String,
+        expiresatms: Int)
+    {
+        self.viewid = viewid
+        self.expiresatms = expiresatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case viewid = "viewId"
+        case expiresatms = "expiresAtMs"
     }
 }
 
@@ -15578,7 +15644,7 @@ public enum BoardWidgetContent: Codable, Sendable {
 
 public enum BoardWidgetPutContent: Codable, Sendable {
     case html(BoardWidgetHtmlContent)
-    case mcpApp(BoardWidgetMcpAppContent)
+    case mcpApp(BoardWidgetMcpAppPutContent)
     case canvasDoc(BoardCanvasDocumentSource)
 
     private enum CodingKeys: String, CodingKey {
@@ -15590,7 +15656,7 @@ public enum BoardWidgetPutContent: Codable, Sendable {
         let discriminator = try container.decode(String.self, forKey: .discriminator)
         switch discriminator {
         case "html": self = try .html(BoardWidgetHtmlContent(from: decoder))
-        case "mcp-app": self = try .mcpApp(BoardWidgetMcpAppContent(from: decoder))
+        case "mcp-app": self = try .mcpApp(BoardWidgetMcpAppPutContent(from: decoder))
         case "canvas-doc": self = try .canvasDoc(BoardCanvasDocumentSource(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(

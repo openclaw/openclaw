@@ -123,9 +123,9 @@ describe.each([
           serverName: "server",
           toolName: "tool",
           uiResourceUri: "ui://resource",
-          originSessionKey: "agent:main:origin",
           toolCallId: "call",
         },
+        interactive: false,
       },
       placement: { tabId: "notes" },
     });
@@ -133,15 +133,65 @@ describe.each([
       expect.objectContaining({ name: "first", tabId: "main", position: 0 }),
       expect.objectContaining({ name: "app", tabId: "notes", position: 0 }),
     ]);
-    expect(store.readWidgetHtml("agent:main:board", "app")).toEqual({
+    expect(store.readWidgetHtml("agent:main:board", "app")).toBeUndefined();
+    expect(store.readWidgetMcpApp("agent:main:board", "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
         uiResourceUri: "ui://resource",
-        originSessionKey: "agent:main:origin",
         toolCallId: "call",
       },
       revision: 1,
+    });
+  });
+
+  it("binds durable MCP App grants to one stable descriptor and widget instance", () => {
+    const store = createStore();
+    const descriptor = {
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolCallId: "call-1",
+    };
+    const first = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "app",
+      content: { kind: "mcp-app", descriptor, interactive: true },
+      declared: { tools: ["refresh", "search"] },
+    });
+    const instanceId = first.widgets[0]?.instanceId;
+    expect(instanceId).toMatch(/^[a-f0-9]{32}$/u);
+    expect(first.widgets[0]).toMatchObject({ grantState: "pending", revision: 1 });
+    expect(store.readWidgetMcpApp("agent:main:board", "app")).toEqual({
+      descriptor,
+      revision: 1,
+      instanceId,
+      grantState: "pending",
+      declaredTools: ["refresh", "search"],
+      interactive: true,
+    });
+
+    expect(() => store.grant("agent:main:board", "app", "granted", 1)).toThrow("instance changed");
+    expect(() => store.grant("agent:main:board", "app", "granted", 1, "wrong-instance")).toThrow(
+      "instance changed",
+    );
+    expect(
+      store.grant("agent:main:board", "app", "granted", 1, instanceId).widgets[0],
+    ).toMatchObject({ grantState: "granted", instanceId });
+
+    const replacement = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "app",
+      content: { kind: "mcp-app", descriptor, interactive: true },
+      declared: { tools: ["refresh"] },
+    });
+    expect(replacement.widgets[0]).toMatchObject({ revision: 2, grantState: "granted" });
+    expect(replacement.widgets[0]?.instanceId).not.toBe(instanceId);
+    expect(store.readWidgetMcpApp("agent:main:board", "app")).toMatchObject({
+      revision: 2,
+      instanceId: replacement.widgets[0]?.instanceId,
+      grantState: "granted",
+      declaredTools: ["refresh"],
     });
   });
 
@@ -324,6 +374,38 @@ describe("SqliteBoardStore persistence", () => {
       ),
     ).toBe(false);
     expect(existsSync(path.join(stateDir, "agents", "attacker-selected"))).toBe(false);
+  });
+
+  it("drops MCP App rows without the canonical interactive marker", () => {
+    const stateDir = tempDirs.make("openclaw-board-mcp-canonical-row-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:board";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          serverName: "demo",
+          toolName: "show",
+          uiResourceUri: "ui://demo/app",
+          toolCallId: "call-1",
+        },
+        interactive: true,
+      },
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE board_widgets SET manifest = '{}' WHERE session_key = ? AND name = 'app'")
+      .run(sessionKey);
+
+    expect(store.getSnapshot(sessionKey).widgets).toEqual([]);
+    expect(store.readWidgetMcpApp(sessionKey, "app")).toBeUndefined();
   });
 
   it("canonicalizes aliases before reading and writing board rows", () => {
