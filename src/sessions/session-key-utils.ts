@@ -61,7 +61,14 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   // #82853 — Signal group IDs (opaque). Encoded to match prior behavior exactly.
   { channel: "signal", peerKinds: new Set(["group"]), span: "segment", unscoped: true },
   // #75670 — Matrix room IDs (opaque, embedded `:server`) plus thread event suffix.
-  { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
+  // #102313 — Matrix MXIDs on DM keys that carry the channel (per-channel-peer,
+  // per-account-channel-peer). Channel-agnostic per-peer keys cannot enroll here.
+  {
+    channel: "matrix",
+    peerKinds: new Set(["channel", "group", "direct", "dm"]),
+    span: "tail",
+    unscoped: true,
+  },
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
@@ -81,6 +88,81 @@ function findCasePreservingPeerDescriptor(
   const c = normalizeLowercaseStringOrEmpty(channel);
   const k = normalizeLowercaseStringOrEmpty(peerKind);
   return CASE_PRESERVING_PEERS.find((d) => d.channel === c && d.peerKinds.has(k));
+}
+
+const DIRECT_PEER_KINDS = new Set(["direct", "dm"]);
+
+function isDirectPeerKind(peerKind: string | undefined | null): boolean {
+  return DIRECT_PEER_KINDS.has(normalizeLowercaseStringOrEmpty(peerKind));
+}
+
+/** Percent-encode an identity-link canonical label so it cannot masquerade as a
+ *  native Matrix MXID DM tail. A raw leading `@` marks a native MXID that the
+ *  store path preserves case-sensitively; the encoded `%40` marks opaque config
+ *  text that folds. `%` is escaped first (`%25`) so the encoding is injective:
+ *  without it a literal `%40person` label and an `@person` label would collide on
+ *  one session. `decodeLinkedCanonicalLabel` is its exact inverse. */
+export function encodeLinkedCanonicalLabel(label: string): string {
+  const pctEscaped = label.replace(/%/g, "%25");
+  const leadingSigils = pctEscaped.length - pctEscaped.replace(/^@+/, "").length;
+  return leadingSigils === 0
+    ? pctEscaped
+    : `${"%40".repeat(leadingSigils)}${pctEscaped.slice(leadingSigils)}`;
+}
+
+/** Inverse of `encodeLinkedCanonicalLabel`: recover the pre-encoding label text.
+ *  Returns the input unchanged when it carries no encoded sigil, which also means
+ *  a key tail equal to its decode is not an escaped identity-link label. */
+export function decodeLinkedCanonicalLabel(encoded: string): string {
+  const leadingPct40 = (encoded.match(/^(?:%40)+/)?.[0].length ?? 0) / 3;
+  const withSigils = "@".repeat(leadingPct40) + encoded.slice(leadingPct40 * 3);
+  return withSigils.replace(/%25/g, "%");
+}
+
+/** A Matrix DM tail is a native MXID, which the spec always sigil-prefixes with
+ *  `@`. An identityLinks canonical label is opaque config text, not an MXID, so
+ *  it must fold like any lowercase-canonical peer: preserving its case (or
+ *  proving it against the native origin MXID) would reject the peer's own
+ *  session on every turn. Room/group ids (channel/group kinds) are unaffected. */
+function directTailPreservesCase(peerId: string | undefined | null): boolean {
+  return normalizeOptionalString(peerId)?.startsWith("@") === true;
+}
+
+type KeyBodyCasePreservingMatch = {
+  descriptor: CasePreservingPeerDescriptor;
+  peerKind: string;
+  /** Offset from the channel segment to the first peer-id segment. */
+  peerOffset: number;
+};
+
+/** Resolve the descriptor for a key body, allowing the account-scoped DM shape
+ *  `<channel>:<account>:<direct|dm>:<peer>` that parseSessionDeliveryRoute also
+ *  disambiguates. Without it an account-scoped DM key claims no proof is needed
+ *  and a folded sibling peer's session is adopted and deleted. */
+function matchKeyBodyCasePreservingPeer(
+  channel: string | undefined,
+  peerKindOrAccount: string | undefined,
+  accountScopedPeerKind: string | undefined,
+): KeyBodyCasePreservingMatch | undefined {
+  const scopedKind = normalizeOptionalLowercaseString(accountScopedPeerKind);
+  // The third segment is authoritative for account-scoped DMs. Check it first
+  // so an account literally named `direct` or `dm` is not mistaken for the
+  // short form's peer kind, which would shift proof onto the wrong segment.
+  if (isDirectPeerKind(scopedKind)) {
+    const scoped = findCasePreservingPeerDescriptor(channel, scopedKind);
+    if (scoped) {
+      return { descriptor: scoped, peerKind: scopedKind ?? "", peerOffset: 3 };
+    }
+  }
+  const direct = findCasePreservingPeerDescriptor(channel, peerKindOrAccount);
+  if (!direct) {
+    return undefined;
+  }
+  return {
+    descriptor: direct,
+    peerKind: normalizeLowercaseStringOrEmpty(peerKindOrAccount),
+    peerOffset: 2,
+  };
 }
 
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
@@ -103,11 +185,20 @@ export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefine
       bodyStartIndex += 1;
     }
   }
-  const descriptor = findCasePreservingPeerDescriptor(
+  const match = matchKeyBodyCasePreservingPeer(
     parts[bodyStartIndex],
     parts[bodyStartIndex + 1],
+    parts[bodyStartIndex + 2],
   );
-  return descriptor?.span === "tail";
+  if (match?.descriptor.span !== "tail") {
+    return false;
+  }
+  // Only native MXID DM tails preserve case and need case-distinct proof; a
+  // linked canonical label folds, so it never carries a case-distinct sibling.
+  if (isDirectPeerKind(match.peerKind)) {
+    return directTailPreservesCase(parts[bodyStartIndex + match.peerOffset]);
+  }
+  return true;
 }
 
 export function normalizeSessionPeerId(params: {
@@ -119,9 +210,13 @@ export function normalizeSessionPeerId(params: {
   if (!peerId) {
     return "";
   }
-  return isCasePreservingPeer(params.channel, params.peerKind)
-    ? peerId
-    : normalizeLowercaseStringOrEmpty(peerId);
+  if (!isCasePreservingPeer(params.channel, params.peerKind)) {
+    return normalizeLowercaseStringOrEmpty(peerId);
+  }
+  if (isDirectPeerKind(params.peerKind) && !directTailPreservesCase(peerId)) {
+    return normalizeLowercaseStringOrEmpty(peerId);
+  }
+  return peerId;
 }
 
 function escapeRegExp(value: string): string {
@@ -186,6 +281,11 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
           if (tailStart >= raw.length) {
             return;
           }
+          // DM tails preserve case only for native MXIDs (`@`-sigil); a linked
+          // canonical label folds like any lowercase peer.
+          if (isDirectPeerKind(peerKind) && raw[tailStart] !== "@") {
+            return;
+          }
           // Preserve Matrix room/event IDs, but keep structural thread marker
           // casing canonical so `:Thread:` cannot fork a session key.
           const tail = raw.slice(tailStart);
@@ -203,10 +303,23 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
         };
         // Preserve tails behind nested or malformed ownership wrappers without
         // treating an inner channel-shaped identity as a runtime route.
-        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
-        const scopedMatch = scopedRe.exec(raw);
-        if (scopedMatch) {
+        const scopedPatterns = isDirectPeerKind(peerKind)
+          ? [
+              `^(?:agent:[^:]*:)+:*${channel}:[^:]+:${kind}:`,
+              `^(?:agent:[^:]*:)+:*${channel}:${kind}:`,
+            ]
+          : [`^(?:agent:[^:]*:)+:*${channel}:${kind}:`];
+        let collectedScopedTail = false;
+        for (const pattern of scopedPatterns) {
+          const scopedMatch = new RegExp(pattern, "i").exec(raw);
+          if (!scopedMatch) {
+            continue;
+          }
           collectTailSpan(scopedMatch[0].length);
+          collectedScopedTail = true;
+          break;
+        }
+        if (collectedScopedTail) {
           continue;
         }
         if (descriptor.unscoped) {

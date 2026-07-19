@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import {
+  encodeLinkedCanonicalLabel,
   isCronRunSessionKey,
   normalizeSessionPeerId,
   normalizeSessionKeyPreservingOpaquePeerIds,
@@ -211,10 +212,28 @@ export function buildAgentPeerSessionKey(params: {
             channel: params.channel,
             peerId,
           });
-    if (linkedPeerId) {
-      peerId = linkedPeerId;
+    const isIdentityLinked = linkedPeerId !== null;
+    if (isIdentityLinked) {
+      // A canonical identity label is opaque config text, not a native user id.
+      // Percent-encode a leading MXID sigil so a label like "@alice:hs.example"
+      // cannot masquerade as a native Matrix MXID in the DM key. Left intact it
+      // revives the case-preserving path against a linked tail, so the peer's own
+      // persisted row (whose origin is the native MXID, not the label) fails the
+      // case-distinct delivery proof and its session is dropped every turn, and
+      // the label collides with an unrelated native peer's DM key. The injective
+      // encoding keeps `@person`, `person`, and `%40person` on separate sessions.
+      peerId = encodeLinkedCanonicalLabel(linkedPeerId);
     }
-    peerId = normalizeLowercaseStringOrEmpty(peerId);
+    // Case is preserved only for channel-bearing DM scopes, whose keys carry the
+    // Matrix channel and round-trip through the case-preserving store normalizer.
+    // per-peer keys are channel-agnostic and persisted folded, so preserving case
+    // here would hand ResolvedAgentRoute/ctx.SessionKey two case-distinct route
+    // keys for one persisted session.
+    const preservesCase = dmScope === "per-channel-peer" || dmScope === "per-account-channel-peer";
+    peerId =
+      preservesCase && !isIdentityLinked
+        ? normalizeSessionPeerId({ channel: params.channel, peerKind: "direct", peerId })
+        : normalizeLowercaseStringOrEmpty(peerId);
     if (dmScope === "per-account-channel-peer" && peerId) {
       const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
       const accountId = normalizeAccountId(params.accountId);
