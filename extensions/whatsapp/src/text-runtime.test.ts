@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
+  isSelfChatMode,
   jidToE164,
   markdownToWhatsApp,
   resolveEquivalentWhatsAppDirectChatJids,
@@ -91,6 +92,15 @@ describe("assertWebChannel", () => {
   });
 });
 
+describe("isSelfChatMode", () => {
+  it("accepts PN forms but not same-digit LID forms", () => {
+    expect(isSelfChatMode("+15551230000", ["15551230000:3@c.us"])).toBe(true);
+    expect(isSelfChatMode("+15551230000", ["15551230000:4@hosted"])).toBe(true);
+    expect(isSelfChatMode("+15551230000", ["15551230000@lid"])).toBe(false);
+    expect(isSelfChatMode("+15551230000", ["15551230000@hosted.lid"])).toBe(false);
+  });
+});
+
 describe("toWhatsappJid", () => {
   it("strips formatting and prefixes", () => {
     expect(toWhatsappJid("whatsapp:+555 123 4567")).toBe("5551234567@s.whatsapp.net");
@@ -100,6 +110,12 @@ describe("toWhatsappJid", () => {
     expect(toWhatsappJid("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
+    expect(toWhatsappJid("1555123:3@c.us")).toBe("1555123@s.whatsapp.net");
+    expect(toWhatsappJid("1555123:4@hosted")).toBe("1555123@hosted");
+  });
+
+  it("rejects malformed existing JIDs", () => {
+    expect(() => toWhatsappJid("1555123:bad@s.whatsapp.net")).toThrow("Invalid WhatsApp JID");
   });
 });
 
@@ -149,9 +165,16 @@ describe("jidToE164", () => {
     expect(jidToE164("1555000:2@hosted")).toBe("+1555000");
   });
 
+  it("accepts legacy c.us PN JIDs and rejects malformed users", () => {
+    expect(jidToE164("1555000:2@c.us")).toBe("+1555000");
+    expect(jidToE164("not-a-phone@s.whatsapp.net")).toBeNull();
+    expect(jidToE164("1555000:bad@s.whatsapp.net")).toBeNull();
+  });
+
   it("falls back through lidMappingDirs in order", async () => {
     await withTempDir("openclaw-lid-a-", async (first) => {
       await withTempDir("openclaw-lid-b-", (second) => {
+        fs.writeFileSync(path.join(first, "lid-mapping-321_reverse.json"), JSON.stringify("bad"));
         const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
         fs.writeFileSync(mappingPath, JSON.stringify("123321"));
         expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
@@ -169,8 +192,9 @@ describe("toWhatsappJidWithLid (issue #67378)", () => {
     });
   });
 
-  it("falls back to PN s.whatsapp.net JID when no forward mapping exists", async () => {
+  it("falls back to PN when the forward mapping is missing or malformed", async () => {
     await withTempDir("openclaw-fwd-", (authDir) => {
+      fs.writeFileSync(path.join(authDir, "lid-mapping-33123456789.json"), JSON.stringify("bad"));
       expect(toWhatsappJidWithLid("+33123456789", { authDir })).toBe("33123456789@s.whatsapp.net");
     });
   });
@@ -229,11 +253,27 @@ describe("resolveEquivalentWhatsAppDirectChatJids", () => {
     ["15551230000:2@hosted", "15551230000@hosted"],
     ["777:1@lid", "777@lid"],
     ["777:2@hosted.lid", "777@hosted.lid"],
-  ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
-    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
-      observedJid,
-      bareJid,
+  ])("canonicalizes the direct-chat candidate for %s", async (observedJid, bareJid) => {
+    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([bareJid]);
+  });
+
+  it("keeps same-digit PN and LID identities distinct without a mapping", async () => {
+    await expect(resolveEquivalentWhatsAppDirectChatJids("123@s.whatsapp.net")).resolves.toEqual([
+      "123@s.whatsapp.net",
     ]);
+    await expect(resolveEquivalentWhatsAppDirectChatJids("123@lid")).resolves.toEqual(["123@lid"]);
+  });
+
+  it("uses a prepared E164 without consulting the LID mapping store", async () => {
+    const getPNForLID = vi.fn();
+
+    await expect(
+      resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", {
+        knownE164: "+15551230000",
+        lidLookup: { getPNForLID },
+      }),
+    ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
+    expect(getPNForLID).not.toHaveBeenCalled();
   });
 
   it("preserves hosted direct-chat domains for local PN/LID mappings", async () => {

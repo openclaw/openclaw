@@ -1,5 +1,5 @@
 // Whatsapp plugin module implements group session contract behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { canonicalizeWhatsAppGroupJid } from "./whatsapp-jid-syntax.js";
 
 export function resolveLegacyGroupSessionKey(ctx: { From?: string }): {
   key: string;
@@ -7,15 +7,14 @@ export function resolveLegacyGroupSessionKey(ctx: { From?: string }): {
   id: string;
   chatType: "group";
 } | null {
-  const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
-  const normalized = normalizeLowercaseStringOrEmpty(from);
-  if (!from || from.includes(":") || !normalized.endsWith("@g.us")) {
+  const groupJid = canonicalizeWhatsAppGroupJid(ctx.From);
+  if (!groupJid) {
     return null;
   }
   return {
-    key: `whatsapp:group:${normalized}`,
+    key: `whatsapp:group:${groupJid}`,
     channel: "whatsapp",
-    id: normalized,
+    id: groupJid,
     chatType: "group",
   };
 }
