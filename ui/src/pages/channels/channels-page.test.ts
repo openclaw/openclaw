@@ -50,11 +50,7 @@ function stubHangingFetch() {
         if (!signal) {
           throw new Error("Expected Nostr profile request to carry an AbortSignal");
         }
-        signal.addEventListener(
-          "abort",
-          () => reject(new Error("Nostr profile request timed out after 30 seconds")),
-          { once: true },
-        );
+        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
       }),
   );
   vi.stubGlobal("fetch", fetchMock);
@@ -263,8 +259,8 @@ describe("ChannelsPage lifecycle", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(page.nostrProfileFormState?.saving).toBe(false);
-    expect(page.nostrProfileFormState?.error).toContain(
-      "Nostr profile request timed out after 30 seconds",
+    expect(page.nostrProfileFormState?.error).toBe(
+      "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
     );
     source.runtimeConfig.dispose();
     source.channels.dispose();
@@ -287,8 +283,8 @@ describe("ChannelsPage lifecycle", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(page.nostrProfileFormState?.importing).toBe(false);
-    expect(page.nostrProfileFormState?.error).toContain(
-      "Nostr profile request timed out after 30 seconds",
+    expect(page.nostrProfileFormState?.error).toBe(
+      "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
     );
     source.runtimeConfig.dispose();
     source.channels.dispose();
