@@ -1438,7 +1438,7 @@ function isVllmQwenThinkingCompat(
   compat?: { thinkingFormat?: unknown } | null,
 ): boolean {
   return (
-    providerId === "vllm" &&
+    (providerId === "vllm" || providerId === "bailian") &&
     (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
   );
 }
