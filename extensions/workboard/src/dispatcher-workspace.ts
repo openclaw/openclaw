@@ -1,7 +1,11 @@
+import path from "node:path";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard dispatch workspace helpers keep authority resolution outside the orchestration loop.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/security-runtime";
 import type { WorkboardStore } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -27,14 +31,45 @@ export function managedWorktreeName(cardId: string): string {
   return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
 }
 
+async function cardArtifactsReferenceWorkspace(
+  card: WorkboardCard,
+  workspacePath: string,
+): Promise<boolean> {
+  const artifactPaths = (card.metadata?.artifacts ?? []).flatMap((artifact) =>
+    artifact.path ? [artifact.path] : [],
+  );
+  if (artifactPaths.length === 0) {
+    return false;
+  }
+  const workspaceRoot = path.resolve(workspacePath);
+  try {
+    const canonicalWorkspaceRoot = await canonicalPathFromExistingAncestor(workspaceRoot);
+    for (const artifact of artifactPaths) {
+      const artifactPath = path.resolve(workspaceRoot, artifact);
+      const canonicalArtifactPath = await canonicalPathFromExistingAncestor(artifactPath);
+      if (isPathInside(canonicalWorkspaceRoot, canonicalArtifactPath)) {
+        return true;
+      }
+    }
+  } catch {
+    // Cleanup is destructive, so an unresolved artifact alias must preserve the worktree.
+    return true;
+  }
+  return false;
+}
+
 export async function cleanupWorkboardRunWorktree(params: {
   store: WorkboardStore;
-  worktrees: Pick<PluginRuntime["worktrees"], "removeIfLossless">;
+  worktrees: Pick<PluginRuntime["worktrees"], "release" | "removeIfLossless">;
   runId: string;
 }): Promise<void> {
   const card = (await params.store.list()).find((entry) => entry.runId === params.runId);
   const workspace = card?.metadata?.automation?.workspace;
   if (!card || workspace?.kind !== "worktree" || !workspace.path) {
+    return;
+  }
+  if (await cardArtifactsReferenceWorkspace(card, workspace.path)) {
+    await params.worktrees.release({ path: workspace.path });
     return;
   }
   await params.worktrees.removeIfLossless({
