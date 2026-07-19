@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
+import { injectSandboxDocumentGuard } from "../agents/sandbox-host.js";
 import { createMcpAppSandboxHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -39,6 +40,32 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("document.referrer"));
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("sandbox-proxy-ready"));
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("allow-scripts allow-forms"));
+    expect(result.end).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw:widget-bridge-port-offer"),
+    );
+    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("widgetBridgePortOffered"));
+    const proxyHtml = String(result.end.mock.calls.at(-1)?.[0]);
+    expect(proxyHtml).toContain("RTCPeerConnection");
+    expect(proxyHtml).toContain("sandbox WebRTC isolation failed");
+    expect(proxyHtml).toContain("nextInner.srcdoc = guardDocument(params.html)");
+  });
+
+  it("injects the network guard after a leading doctype and before executable content", () => {
+    const guarded = injectSandboxDocumentGuard(
+      `\uFEFF \n<!-- retained --><!DOCTYPE html PUBLIC "quoted > marker"><html><script>untrusted()</script>`,
+    );
+
+    expect(guarded).toMatch(
+      /^\uFEFF \n<!-- retained --><!DOCTYPE html PUBLIC "quoted > marker"><script>/u,
+    );
+    expect(guarded.indexOf("sandbox WebRTC isolation failed")).toBeLessThan(
+      guarded.indexOf("untrusted()"),
+    );
+    const withoutDoctype = injectSandboxDocumentGuard("<script>untrusted()</script>");
+    expect(withoutDoctype).toMatch(/^<script>/u);
+    expect(withoutDoctype.indexOf("WebRTC isolation")).toBeLessThan(
+      withoutDoctype.indexOf("untrusted"),
+    );
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
@@ -53,5 +80,23 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(request(`${buildMcpAppSandboxPath()}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
     expect(request(`${buildMcpAppSandboxPath()}?csp=`).res.statusCode).toBe(400);
     expect(request("http://[", "GET").res.statusCode).toBe(400);
+    const unsafeHeaderPolicy = Buffer.from(
+      JSON.stringify({ connectDomains: ["https://api.\nexample.com"] }),
+      "utf8",
+    ).toString("base64url");
+    expect(request(`${buildMcpAppSandboxPath()}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(
+      400,
+    );
+  });
+
+  it("emits canonical ASCII origins for validated CSP domains", () => {
+    const result = request(
+      buildMcpAppSandboxPath({ connectDomains: ["https://b\u00fccher.example"] }),
+    );
+
+    expect(result.setHeader).toHaveBeenCalledWith(
+      "Content-Security-Policy",
+      expect.stringContaining("connect-src https://xn--bcher-kva.example"),
+    );
   });
 });
