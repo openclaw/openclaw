@@ -294,7 +294,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired tuning-knob config types -10.
       // Harvest: removed process-global API-provider publication functions -2.
       // +4: session discussion state, info, provider, and registration contracts.
-      8184,
+      // +2: structured media placeholder formatter and its text-fact contract.
+      8186,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -345,7 +346,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: lifecycle-owned prepared model catalog sync and async readers.
       // Harvest: removed process-global API-provider publication functions -2.
       // +1: session discussion provider registration.
-      4556,
+      // +1: structured media placeholder formatter for text-only channel carriers.
+      4557,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

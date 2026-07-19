@@ -204,6 +204,7 @@ export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
   buildChannelInboundMediaPayload,
+  formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
   // @deprecated Prefer `buildChannelInboundMediaPayload`.
   buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
@@ -213,6 +214,7 @@ export type {
   ChannelInboundMediaInput as ChannelTurnMediaInput,
   ChannelInboundMediaPayload,
   ChannelInboundMediaPayload as ChannelTurnMediaPayload,
+  MediaPlaceholderTextFact,
 } from "../channels/inbound-event/media.js";
 export type {
   CommandFacts,
