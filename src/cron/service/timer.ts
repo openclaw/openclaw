@@ -35,6 +35,7 @@ import {
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -757,13 +758,17 @@ export function applyJobResult(
   opts?: {
     // Manual force runs update outcome state but are out-of-band for cadence.
     scheduleMode?: "advance" | "preserve";
+    // A completed run may no longer own schedule policy after an in-flight edit.
+    scheduleOwnership?: "current" | "stale";
     // Startup replay restores alert cooldown bookkeeping without redelivery.
     replayFailureAlertAtMs?: number;
   },
 ): boolean {
   const previousScheduleState = {
+    enabled: job.enabled,
     nextRunAtMs: job.state.nextRunAtMs,
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
+    forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
@@ -857,11 +862,20 @@ export function applyJobResult(
 
   // The gateway watcher disables on-exit jobs before firing; successful removal here
   // completes the same deleteAfterRun contract as a one-shot at schedule.
+  const ownsSchedule = opts?.scheduleOwnership !== "stale";
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
-  const shouldDelete = isOneShotSchedule && job.deleteAfterRun === true && result.status === "ok";
+  const shouldDelete =
+    ownsSchedule && isOneShotSchedule && job.deleteAfterRun === true && result.status === "ok";
   const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
 
-  if (!shouldDelete) {
+  if (!ownsSchedule) {
+    // The run still owns its outcome metadata, but an edit made while it was
+    // active owns all future scheduling state and terminal one-shot policy.
+    job.enabled = previousScheduleState.enabled;
+    job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
+    job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
+    job.state.forcePreservedNextRunAtMs = previousScheduleState.forcePreservedNextRunAtMs;
+  } else if (!shouldDelete) {
     if (job.schedule.kind === "at") {
       if (retryDisabledHeartbeatOneShot) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
@@ -1122,6 +1136,7 @@ function applyTriggerEvaluationState(
 export function applyTriggerRunResult(
   job: CronJob,
   result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
+  opts?: { scheduleOwnership?: "current" | "stale" },
 ): void {
   if (!result.triggerEval) {
     return;
@@ -1136,7 +1151,12 @@ export function applyTriggerRunResult(
   applyTriggerEvaluationState(job, persistedEval, result.endedAt);
   // A once trigger disarms only after the fired payload succeeds. Errors keep
   // it armed so the normal backoff path can evaluate and retry later.
-  if (result.triggerEval.fired && job.trigger?.once === true && result.status === "ok") {
+  if (
+    opts?.scheduleOwnership !== "stale" &&
+    result.triggerEval.fired &&
+    job.trigger?.once === true &&
+    result.status === "ok"
+  ) {
     job.enabled = false;
     job.state.nextRunAtMs = undefined;
   }
@@ -1234,21 +1254,29 @@ function applyOutcomeToStoredJob(
     return undefined;
   }
 
+  const scheduleOwnership = cronSchedulingInputsEqual(result.job, job) ? "current" : "stale";
+
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     // Quiet trigger ticks intentionally emit no finished event: run history,
     // plugin hooks, and completion notifications represent payload runs only.
-    applyTriggerNoFireResult(state, job, {
-      startedAt: result.startedAt,
-      endedAt: result.endedAt,
-      triggerEval: result.triggerEval,
-    });
+    applyTriggerNoFireResult(
+      state,
+      job,
+      {
+        startedAt: result.startedAt,
+        endedAt: result.endedAt,
+        triggerEval: result.triggerEval,
+      },
+      {
+        scheduleMode: scheduleOwnership === "current" ? "advance" : "preserve",
+      },
+    );
     job.state.startupCatchupAtMs = undefined;
-    job.state.pacedNextRunAtMs = undefined;
     return undefined;
   }
 
-  const shouldDelete = applyJobResult(state, job, result);
-  applyTriggerRunResult(job, result);
+  const shouldDelete = applyJobResult(state, job, result, { scheduleOwnership });
+  applyTriggerRunResult(job, result, { scheduleOwnership });
   applyScriptRunResult(job, result);
   job.state.startupCatchupAtMs = undefined;
 
