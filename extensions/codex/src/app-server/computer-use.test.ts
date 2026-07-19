@@ -1405,183 +1405,87 @@ function pluginSummary(
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-// ---------------------------------------------------------------------------
-// killStaleComputerUseMcpChildren — SIGTERM → SIGKILL escalation
-// ---------------------------------------------------------------------------
-
+// killStaleComputerUseMcpChildren — SIGTERM → revalidated SIGKILL escalation
 const runExecMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
-  runExec: runExecMock,
-}));
-
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runExec: runExecMock }));
 import { killStaleComputerUseMcpChildren } from "./computer-use.js";
 
-describe("killStaleComputerUseMcpChildren", () => {
-  // lstart format: Ddd Mmm DD HH:MM:SS YYYY (5 space-separated tokens)
-  const LSTART_1234 = "Sat Jul 18 14:00:00 2026";
-  const LSTART_5678 = "Sat Jul 18 14:00:01 2026";
-  const LSTART_9999 = "Sat Jul 18 14:00:02 2026";
-  const DEFAULT_PS_OUTPUT = [
-    `  1234     1 ${LSTART_1234} /usr/bin/node SkyComputerUseClient mcp --flag`,
-    `  5678     1 ${LSTART_5678} /bin/bash`,
-    `  9999  1234 ${LSTART_9999} /usr/bin/node SkyComputerUseClient something-else`,
+describe("killStaleComputerUseMcpChildren SIGKILL escalation", () => {
+  const LSTART = "Sat Jul 18 14:00:00 2026";
+  const PS = [
+    `  1234     1 ${LSTART} /usr/bin/node SkyComputerUseClient mcp --flag`,
+    `  5678     1 Sat Jul 18 14:00:01 2026 /bin/bash`,
   ].join("\n");
-
-  function assertSIGTERM(mock: ReturnType<typeof vi.fn>, pid: number) {
-    expect(mock).toHaveBeenCalledWith(pid, "SIGTERM");
-  }
-
-  function assertSIGKILL(mock: ReturnType<typeof vi.fn>, pid: number) {
-    expect(mock).toHaveBeenCalledWith(pid, "SIGKILL");
-  }
 
   let platformSpy: ReturnType<typeof vi.spyOn>;
   beforeAll(() => {
     platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   });
-
   afterAll(() => {
     platformSpy.mockRestore();
   });
-
   afterEach(() => {
     runExecMock.mockReset();
+    vi.useRealTimers();
   });
 
-  it("sends SIGTERM to a stale MCP child", async () => {
-    runExecMock.mockResolvedValueOnce({ stdout: DEFAULT_PS_OUTPUT });
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-    await killStaleComputerUseMcpChildren({ ancestorPid: 1 });
-
-    assertSIGTERM(killSpy, 1234);
-    killSpy.mockRestore();
-  });
-
-  it("revalidates process identity and sends SIGKILL when still scoped", async () => {
+  async function runWithTimers(killImpl: typeof process.kill) {
     vi.useFakeTimers();
-    // First ps call: find stale process
-    runExecMock.mockResolvedValueOnce({ stdout: DEFAULT_PS_OUTPUT });
-    // Second ps call (revalidation): same process still present
-    runExecMock.mockResolvedValueOnce({ stdout: DEFAULT_PS_OUTPUT });
-
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(killImpl);
     const promise = killStaleComputerUseMcpChildren({ ancestorPid: 1 });
     await vi.advanceTimersByTimeAsync(0);
     await promise;
-
-    // SIGTERM sent
-    assertSIGTERM(killSpy, 1234);
-
-    // Advance 2 seconds — quick existence check passes, revalidation ps runs, SIGKILL sent
     await vi.advanceTimersByTimeAsync(2_000);
-    // Wait for the async IIFE inside setTimeout to complete
     await vi.advanceTimersByTimeAsync(0);
-    assertSIGKILL(killSpy, 1234);
-    // Verify the existence check was called: process.kill(1234, 0)
+    return killSpy;
+  }
+
+  it("SIGTERM then SIGKILL after revalidating the same scoped child", async () => {
+    runExecMock.mockResolvedValueOnce({ stdout: PS }).mockResolvedValueOnce({ stdout: PS });
+    const killSpy = await runWithTimers(() => true);
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGTERM");
     expect(killSpy).toHaveBeenCalledWith(1234, 0);
-
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGKILL");
     killSpy.mockRestore();
-    vi.useRealTimers();
   });
 
-  it("skips SIGKILL when the process already exited", async () => {
-    vi.useFakeTimers();
-    runExecMock.mockResolvedValueOnce({ stdout: DEFAULT_PS_OUTPUT });
-
-    let callCount = 0;
-    const killSpy = vi
-      .spyOn(process, "kill")
-      .mockImplementation((_pid: number, signal?: string | number) => {
-        callCount++;
-        // The timed callback's quick existence check (signal 0) throws ESRCH
-        if (callCount === 2 && signal === 0) {
-          const err = new Error("ESRCH") as NodeJS.ErrnoException;
-          err.code = "ESRCH";
-          throw err;
-        }
-        return true;
-      });
-
-    const promise = killStaleComputerUseMcpChildren({ ancestorPid: 1 });
-    await vi.advanceTimersByTimeAsync(0);
-    await promise;
-    assertSIGTERM(killSpy, 1234);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(0);
-
-    // SIGKILL was never sent
-    const sigkillCall = killSpy.mock.calls.find(
-      (call) => call[0] === 1234 && call[1] === "SIGKILL",
+  it.each([
+    {
+      name: "process already exited",
+      setupKill: () => {
+        let n = 0;
+        return (_pid: number, signal?: string | number) => {
+          n += 1;
+          if (n === 2 && signal === 0) {
+            const err = new Error("ESRCH") as NodeJS.ErrnoException;
+            err.code = "ESRCH";
+            throw err;
+          }
+          return true;
+        };
+      },
+      revalidateStdout: undefined as string | undefined,
+    },
+    {
+      name: "command no longer matches stale MCP child",
+      setupKill: () => () => true,
+      revalidateStdout: `  1234     1 ${LSTART} /usr/bin/node something-else`,
+    },
+    {
+      name: "PID reused with same command but different lstart",
+      setupKill: () => () => true,
+      revalidateStdout: `  1234     1 Sat Jul 18 14:00:05 2026 /usr/bin/node SkyComputerUseClient mcp --flag`,
+    },
+  ])("skips SIGKILL when $name", async ({ setupKill, revalidateStdout }) => {
+    runExecMock.mockResolvedValueOnce({ stdout: PS });
+    if (revalidateStdout !== undefined) {
+      runExecMock.mockResolvedValueOnce({ stdout: revalidateStdout });
+    }
+    const killSpy = await runWithTimers(setupKill());
+    expect(killSpy).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(killSpy.mock.calls.some((call) => call[0] === 1234 && call[1] === "SIGKILL")).toBe(
+      false,
     );
-    expect(sigkillCall).toBeUndefined();
-
     killSpy.mockRestore();
-    vi.useRealTimers();
-  });
-
-  it("skips SIGKILL when the process identity changed", async () => {
-    vi.useFakeTimers();
-    runExecMock.mockResolvedValueOnce({ stdout: DEFAULT_PS_OUTPUT });
-    // Revalidation ps: PID 1234 now has a different command (not stale MCP child)
-    runExecMock.mockResolvedValueOnce({
-      stdout: [`  1234     1 ${LSTART_1234} /usr/bin/node something-else`].join("\n"),
-    });
-
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-    const promise = killStaleComputerUseMcpChildren({ ancestorPid: 1 });
-    await vi.advanceTimersByTimeAsync(0);
-    await promise;
-    assertSIGTERM(killSpy, 1234);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(0);
-
-    // SIGKILL was never sent — identity check blocked it
-    const sigkillCall = killSpy.mock.calls.find(
-      (call) => call[0] === 1234 && call[1] === "SIGKILL",
-    );
-    expect(sigkillCall).toBeUndefined();
-
-    killSpy.mockRestore();
-    vi.useRealTimers();
-  });
-
-  it("skips SIGKILL when PID was reused by another matching MCP child (same command, different lstart)", async () => {
-    vi.useFakeTimers();
-    runExecMock.mockResolvedValueOnce({ stdout: DEFAULT_PS_OUTPUT });
-    // Revalidation ps: PID 1234 still has a matching MCP command,
-    // but the start time differs (PID was reused by a replacement child).
-    const REPLACEMENT_LSTART = "Sat Jul 18 14:00:05 2026";
-    runExecMock.mockResolvedValueOnce({
-      stdout: [
-        `  1234     1 ${REPLACEMENT_LSTART} /usr/bin/node SkyComputerUseClient mcp --flag`,
-        `  5678     1 ${LSTART_5678} /bin/bash`,
-      ].join("\n"),
-    });
-
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-
-    const promise = killStaleComputerUseMcpChildren({ ancestorPid: 1 });
-    await vi.advanceTimersByTimeAsync(0);
-    await promise;
-    assertSIGTERM(killSpy, 1234);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(0);
-
-    // SIGKILL was never sent — lstart mismatch blocked it even though
-    // command and ancestry still match.
-    const sigkillCall = killSpy.mock.calls.find(
-      (call) => call[0] === 1234 && call[1] === "SIGKILL",
-    );
-    expect(sigkillCall).toBeUndefined();
-
-    killSpy.mockRestore();
-    vi.useRealTimers();
   });
 });
