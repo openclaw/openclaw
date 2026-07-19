@@ -107,6 +107,15 @@ Source: `extensions/openrouter/index.ts` (`OPENROUTER_CACHE_TTL_MODEL_PREFIXES`)
 
 DeepSeek cache construction on OpenRouter is best-effort and can take a few seconds; an immediate follow-up request may still show `cached_tokens: 0`. Verify with a repeated same-prefix request after a short delay, using `usage.prompt_tokens_details.cached_tokens` as the cache-hit signal.
 
+### LiteLLM
+
+LiteLLM routes use the OpenAI-compatible transport, so OpenClaw cannot safely infer the backend's
+cache-control contract from the model name. For a LiteLLM route backed by Anthropic, set
+`compat.cacheControlFormat: "anthropic"` on the model and configure `cacheRetention` explicitly.
+`"short"` sends Anthropic's default ephemeral marker; `"long"` also sends `ttl: "1h"` unless
+`compat.supportsLongCacheRetention` is `false`. See [LiteLLM](/providers/litellm) for a complete
+configuration example.
+
 ### Google Gemini (direct API)
 
 - Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits through upstream `cachedContentTokenCount`, mapped to `cacheRead`.

@@ -8824,6 +8824,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: OpenAI (direct API)
   - H3: Amazon Bedrock
   - H3: OpenRouter
+  - H3: LiteLLM
   - H3: Google Gemini (direct API)
   - H3: CLI-harness providers (Claude Code, Gemini CLI)
   - H3: Other providers

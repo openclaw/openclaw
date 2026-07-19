@@ -1,3 +1,4 @@
+import type { ModelCompatConfig } from "../../../config/types.models.js";
 /**
  * Selects and configures the provider transport for one embedded attempt.
  */
@@ -171,11 +172,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
       codeModeToolSurfaceEnabled: true,
     });
   }
+  const modelCompat = attempt.model.compat as ModelCompatConfig | undefined;
   const effectivePromptCacheRetention = resolveCacheRetention(
     effectiveExtraParams,
     attempt.provider,
     attempt.model.api,
     attempt.modelId,
+    modelCompat?.supportsPromptCacheKey,
+    modelCompat?.cacheControlFormat,
   );
   const agentTransportOverride = resolveAgentTransportOverride({
     settingsManager: input.settingsManager,

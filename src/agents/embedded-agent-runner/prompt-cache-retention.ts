@@ -27,6 +27,7 @@ export function resolveCacheRetention(
   modelApi?: string,
   modelId?: string,
   supportsPromptCacheKey?: boolean,
+  cacheControlFormat?: "anthropic",
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -45,8 +46,9 @@ export function resolveCacheRetention(
   // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
   // the flag unset, so the existing family gate still applies to them.
   const cacheKeyEligible = supportsPromptCacheKey === true;
+  const anthropicCacheControlEligible = cacheControlFormat === "anthropic";
 
-  if (!family && !googleEligible && !cacheKeyEligible) {
+  if (!family && !googleEligible && !cacheKeyEligible && !anthropicCacheControlEligible) {
     return undefined;
   }
 
@@ -56,10 +58,10 @@ export function resolveCacheRetention(
   }
 
   const legacy = extraParams?.cacheControlTtl;
-  if (legacy === "5m" && (family || googleEligible)) {
+  if (legacy === "5m" && (family || googleEligible || anthropicCacheControlEligible)) {
     return "short";
   }
-  if (legacy === "1h" && (family || googleEligible)) {
+  if (legacy === "1h" && (family || googleEligible || anthropicCacheControlEligible)) {
     return "long";
   }
 

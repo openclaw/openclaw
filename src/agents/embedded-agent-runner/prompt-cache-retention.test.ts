@@ -74,6 +74,48 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
+  it("passes explicit cacheRetention through for LiteLLM models with Anthropic cache capability (issue #37966)", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "short" },
+        "litellm",
+        "openai-completions",
+        "claude-sonnet-4-6",
+        undefined,
+        "anthropic",
+      ),
+    ).toBe("short");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "litellm",
+        "openai-completions",
+        "anthropic/claude-opus-4-6",
+        undefined,
+        "anthropic",
+      ),
+    ).toBe("long");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "litellm",
+        "openai-completions",
+        "litellm/claude-haiku-4-6",
+        undefined,
+        "anthropic",
+      ),
+    ).toBe("none");
+  });
+
+  it("keeps LiteLLM cacheRetention disabled without explicit cache capability", () => {
+    expect(
+      resolveCacheRetention({ cacheRetention: "long" }, "litellm", "openai-completions", "gpt-5.5"),
+    ).toBeUndefined();
+    expect(
+      resolveCacheRetention(undefined, "litellm", "openai-completions", "claude-sonnet-4-6"),
+    ).toBeUndefined();
+  });
+
   it("does not honor explicit cacheRetention for openai-completions without supportsPromptCacheKey", () => {
     // Providers that route via openai-completions but do not advertise prompt
     // caching must keep retention out of outgoing payloads.

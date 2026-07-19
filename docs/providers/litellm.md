@@ -63,6 +63,10 @@ spend limits, and backend failover without changing OpenClaw config.
             input: ["text", "image"],
             contextWindow: 200000,
             maxTokens: 64000,
+            compat: {
+              cacheControlFormat: "anthropic",
+              supportsLongCacheRetention: true,
+            },
           },
           {
             id: "gpt-4o",
@@ -175,8 +179,11 @@ without a global private-network override. For a LAN-hosted proxy, set
     - LiteLLM runs on `http://localhost:4000` by default.
     - OpenClaw connects through LiteLLM's proxy-style OpenAI-compatible `/v1` endpoint.
     - Native-OpenAI-only request shaping does not apply through a configured LiteLLM base URL:
-      no `service_tier`, no Responses `store`, no prompt-cache hints, no OpenAI reasoning-effort
-      payload shaping.
+      no `service_tier`, no Responses `store`, no OpenAI reasoning-effort payload shaping. Anthropic
+      `cache_control` prompt-cache hints are only forwarded when the model explicitly sets
+      `compat.cacheControlFormat: "anthropic"` and `cacheRetention` is configured. Set
+      `compat.supportsLongCacheRetention: false` if the proxy/backend does not accept Anthropic's
+      one-hour `ttl: "1h"` cache control.
     - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) are only sent to
       verified native OpenAI endpoints, so they are not injected on a custom LiteLLM base URL.
   </Accordion>

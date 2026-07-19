@@ -124,6 +124,7 @@ type ResolvedOpenAICompletionsCompat = Omit<
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   sessionAffinityFormat: "openai" | "openrouter";
+  requiresExplicitCacheConfigForCacheControl: boolean;
 };
 
 type EncryptedReasoningDetail = {
@@ -703,7 +704,9 @@ function buildParams(
   compat: ResolvedOpenAICompletionsCompat = getCompat(model),
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
-  const cacheControl = getCompatCacheControl(compat, cacheRetention);
+  const cacheControl = getCompatCacheControl(compat, cacheRetention, {
+    hasExplicitCacheConfig: options?.cacheRetention !== undefined,
+  });
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheOptOutIndexes = new Set<number>();
@@ -889,8 +892,12 @@ function clampOpenAICompletionsMaxTokens(
 function getCompatCacheControl(
   compat: ResolvedOpenAICompletionsCompat,
   cacheRetention: CacheRetention,
+  options: { hasExplicitCacheConfig: boolean },
 ): OpenAICompatCacheControl | undefined {
   if (compat.cacheControlFormat !== "anthropic" || cacheRetention === "none") {
+    return undefined;
+  }
+  if (compat.requiresExplicitCacheConfigForCacheControl && !options.hasExplicitCacheConfig) {
     return undefined;
   }
 
@@ -1428,6 +1435,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     model.compat?.openRouterRouting !== undefined;
   const cacheControlFormat =
     provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
+  const isLiteLLM = provider === "litellm";
 
   return {
     supportsStore: !isNonStandard,
@@ -1456,6 +1464,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     zaiToolStream: false,
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
+    requiresExplicitCacheConfigForCacheControl: isLiteLLM,
     sendSessionAffinityHeaders: false,
     sessionAffinityFormat: usesOpenRouterSessionAffinity ? "openrouter" : "openai",
     supportsPromptCacheKey: false,
@@ -1494,6 +1503,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     zaiToolStream: model.compat.zaiToolStream ?? detected.zaiToolStream,
     supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
     cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
+    requiresExplicitCacheConfigForCacheControl: detected.requiresExplicitCacheConfigForCacheControl,
     sendSessionAffinityHeaders:
       model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
     sessionAffinityFormat: detected.sessionAffinityFormat,
