@@ -4,7 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
   deriveApprovalBadgeSnapshot,
@@ -42,6 +42,11 @@ import {
   type SidebarSessionMutationScope,
   type SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
+import {
+  type PresenceViewer,
+  projectPresenceViewers,
+  readPresenceEntries,
+} from "./viewer-facepile.ts";
 
 /** Gateway-backed session and external-catalog synchronization. */
 export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
@@ -60,6 +65,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   @state() protected sessionCatalogs: SessionCatalog[] = [];
   @state() protected loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   @state() protected sessionMutationError: string | null = null;
+  @state() protected onlinePresenceViewers: readonly PresenceViewer[] = [];
+  @state() protected selfPresenceUserId?: string;
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
@@ -97,6 +104,13 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   protected abstract promoteCreatedSession(sessionKey: string): void;
   protected abstract selectedAgentIdForSessions(): string;
 
+  protected presenceViewersForSession(sessionKey: string): readonly PresenceViewer[] {
+    return this.onlinePresenceViewers.filter(
+      (viewer) =>
+        viewer.id !== this.selfPresenceUserId && viewer.watchedSessions.includes(sessionKey),
+    );
+  }
+
   constructor() {
     super();
     this.subscriptions
@@ -122,11 +136,14 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
               this.applySessionCatalogHostEvent(event.payload);
               return;
             }
-            if (
-              event.event === "presence" &&
-              this.sessionCatalogLive.observePresence(event.payload)
-            ) {
-              this.requestSessionCatalogRefresh();
+            if (event.event === "presence") {
+              const entries = readPresenceEntries(event.payload);
+              if (entries) {
+                this.updatePresenceViewers(entries);
+              }
+              if (this.sessionCatalogLive.observePresence(event.payload)) {
+                this.requestSessionCatalogRefresh();
+              }
             }
           }),
       )
@@ -522,6 +539,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.connected;
+    const clientChanged = client !== this.gatewayClient;
+    const connectedStarted = connected && !this.gatewayConnected;
     const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
     const connectionChanged = connected !== this.gatewayConnected;
     if (!sourceOrClientChanged && !connectionChanged) {
@@ -531,6 +550,14 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
+    if (!connected) {
+      this.updatePresenceViewers([] satisfies PresenceEntry[]);
+    } else if (clientChanged || connectedStarted) {
+      const initialPresence = readPresenceEntries(gateway.snapshot.hello?.snapshot);
+      if (initialPresence) {
+        this.updatePresenceViewers(initialPresence);
+      }
+    }
     if (!sourceOrClientChanged) {
       return;
     }
@@ -542,6 +569,12 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogPageDepths.clear();
     this.sessionCatalogRevisions.clear();
+  }
+
+  private updatePresenceViewers(entries: readonly PresenceEntry[]) {
+    const projection = projectPresenceViewers(entries, this.gatewayClient?.instanceId);
+    this.onlinePresenceViewers = projection.users;
+    this.selfPresenceUserId = projection.selfUserId;
   }
 
   private clearSessionCache() {

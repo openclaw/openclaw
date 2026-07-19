@@ -21,6 +21,7 @@ import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
+import "./viewer-facepile.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -294,6 +295,13 @@ class AppSidebar extends AppSidebarSessionListElement {
           />
           <openclaw-lobster-logo-standin .visit=${this.logoVisit}></openclaw-lobster-logo-standin>
         </span>
+        ${this.onlinePresenceViewers.length > 0
+          ? html`<openclaw-viewer-facepile
+              .users=${this.onlinePresenceViewers}
+              .maxVisible=${5}
+              variant="footer"
+            ></openclaw-viewer-facepile>`
+          : nothing}
         <openclaw-sidebar-build-chip
           .basePath=${this.basePath}
           .gatewayVersion=${this.gatewayVersion}

@@ -31,6 +31,7 @@ describe("createSessionMessageSubscriberRegistry", () => {
     subscribers.subscribe("conn-other", "agent:main:child", { includeApprovals: true });
 
     subscribers.unsubscribeAll("conn-reviewer");
+    expect([...subscribers.getForConnection("conn-reviewer")]).toEqual([]);
     expect([...subscribers.get("agent:main:main")]).toEqual([]);
     expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
     expect([...subscribers.get("agent:main:child")]).toEqual(["conn-other"]);
@@ -47,17 +48,26 @@ describe("createSessionMessageSubscriberRegistry", () => {
     const removeNew = subscribers.subscribe("conn-new", "agent:main:main", {
       includeApprovals: true,
     });
+    subscribers.subscribe("conn-new", "agent:main:other");
     removeNew?.();
     expect([...subscribers.get("agent:main:main")]).toEqual([]);
     expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+    expect([...subscribers.getForConnection("conn-new")]).toEqual(["agent:main:other"]);
 
     subscribers.subscribe("conn-plain", "agent:main:main");
+    subscribers.subscribe("conn-plain", "agent:main:child");
     const restorePlain = subscribers.subscribe("conn-plain", "agent:main:main", {
       includeApprovals: true,
     });
+    subscribers.subscribe("conn-plain", "agent:main:other");
     restorePlain?.();
     expect([...subscribers.get("agent:main:main")]).toEqual(["conn-plain"]);
     expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+    expect([...subscribers.getForConnection("conn-plain")]).toEqual([
+      "agent:main:main",
+      "agent:main:child",
+      "agent:main:other",
+    ]);
 
     subscribers.subscribe("conn-reviewer", "agent:main:main", { includeApprovals: true });
     const restoreReviewer = subscribers.subscribe("conn-reviewer", "agent:main:main");

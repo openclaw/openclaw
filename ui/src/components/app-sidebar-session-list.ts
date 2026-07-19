@@ -37,6 +37,7 @@ import {
   resolveSidebarSessionSubtitle,
 } from "./session-row-subtitle.ts";
 import "./elapsed-time.ts";
+import "./viewer-facepile.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
@@ -161,6 +162,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
                 >${icons.barChart}</span
               >`
             : nothing}
+          <openclaw-viewer-facepile
+            .users=${this.presenceViewersForSession(session.key)}
+            .maxVisible=${3}
+            variant="session"
+          ></openclaw-viewer-facepile>
           ${session.pinned ? nothing : sessionState}
           ${renderSessionRowBadges({
             ...session,
