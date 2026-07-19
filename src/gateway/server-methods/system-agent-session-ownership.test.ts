@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({ verifySetupInference: vi.fn() }));
 const delegatedInferenceMocks = vi.hoisted(() => ({
@@ -104,6 +104,7 @@ async function callChat(
   client: GatewayClient | null = defaultClient,
 ): Promise<RespondCall> {
   const calls: RespondCall[] = [];
+  const respond: RespondFn = (ok, payload, error) => calls.push({ ok, payload, error });
   await expectDefined(
     systemAgentHandlers["openclaw.chat"],
     'systemAgentHandlers["openclaw.chat"] test invariant',
@@ -111,7 +112,7 @@ async function callChat(
     params,
     client,
     context,
-    respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+    respond,
   } as never);
   return expectDefined(calls[0], "system-agent response");
 }
