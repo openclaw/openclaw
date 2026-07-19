@@ -26,6 +26,7 @@ vi.mock("../adapter/index.js", () => ({
   }),
 }));
 
+import { QQBOT_MEDIA_FETCH_TIMEOUTS } from "../../media-fetch-timeouts.js";
 import {
   checkFileSize,
   downloadFile,
@@ -106,7 +107,7 @@ describe("qqbot file-utils downloadFile", () => {
         ],
         allowRfc2544BenchmarkRange: true,
       },
-      responseHeaderTimeoutMs: 120_000,
+      ...QQBOT_MEDIA_FETCH_TIMEOUTS,
     });
   });
 

@@ -9,6 +9,7 @@ import {
   readRegularFile,
   statRegularFileSync,
 } from "openclaw/plugin-sdk/security-runtime";
+import { QQBOT_MEDIA_FETCH_TIMEOUTS } from "../../media-fetch-timeouts.js";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { MediaFileType } from "../types.js";
@@ -69,8 +70,6 @@ const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
   hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
   allowRfc2544BenchmarkRange: true,
 };
-
-const QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 /** Result of local file-size validation. */
 interface FileSizeCheckResult {
@@ -185,7 +184,7 @@ export async function downloadFile(
       url: parsedUrl.toString(),
       filePathHint: originalFilename,
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
-      responseHeaderTimeoutMs: QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+      ...QQBOT_MEDIA_FETCH_TIMEOUTS,
     });
 
     let filename = normalizeOptionalString(originalFilename) ?? "";

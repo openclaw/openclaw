@@ -38,6 +38,7 @@ import {
   type PlatformAdapter,
 } from "../engine/adapter/index.js";
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
+import { QQBOT_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 import { getBridgeLogger } from "./logger.js";
 
 const loadReadRemoteMediaBuffer = createLazyRuntimeNamedExport(
@@ -59,8 +60,13 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async downloadFile(url: string, destDir: string, filename?: string): Promise<string> {
+      // Same shared policy as fetchMedia defaults — a stalled body must not hang forever.
       const readRemoteMediaBuffer = await loadReadRemoteMediaBuffer();
-      const result = await readRemoteMediaBuffer({ url, filePathHint: filename });
+      const result = await readRemoteMediaBuffer({
+        url,
+        filePathHint: filename,
+        ...QQBOT_MEDIA_FETCH_TIMEOUTS,
+      });
       const fs = await import("node:fs");
       const path = await import("node:path");
       if (!fs.existsSync(destDir)) {
@@ -79,7 +85,12 @@ function createBuiltinAdapter(): PlatformAdapter {
         maxBytes: options.maxBytes,
         maxRedirects: options.maxRedirects,
         timeoutMs: options.timeoutMs,
-        responseHeaderTimeoutMs: options.responseHeaderTimeoutMs,
+        // Default at the adapter boundary so callers that omit timeouts
+        // (image probes, downloadFile helpers) still match channel media policy.
+        responseHeaderTimeoutMs:
+          options.responseHeaderTimeoutMs ?? QQBOT_MEDIA_FETCH_TIMEOUTS.responseHeaderTimeoutMs,
+        readIdleTimeoutMs:
+          options.readIdleTimeoutMs ?? QQBOT_MEDIA_FETCH_TIMEOUTS.readIdleTimeoutMs,
         ssrfPolicy: options.ssrfPolicy,
         requestInit: options.requestInit,
       });
