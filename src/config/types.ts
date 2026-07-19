@@ -12,7 +12,6 @@ export * from "./types.marketplaces.js";
 export * from "./types.channels.js";
 export * from "./types.cli.js";
 export * from "./types.commitments.js";
-export * from "./types.durable.js";
 export * from "./types.openclaw.js";
 export * from "./types.cron.js";
 export * from "./types.discord.js";

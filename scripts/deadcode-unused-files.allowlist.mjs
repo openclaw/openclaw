@@ -23,7 +23,6 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/commands/doctor/shared/deprecation-compat.ts",
   "src/config/doc-baseline.runtime.ts",
   "src/config/doc-baseline.ts",
-  "src/durable/config.ts",
   "src/durable/runtime-ids.ts",
   "src/durable/schema.generated.ts",
   "src/durable/schema.ts",
