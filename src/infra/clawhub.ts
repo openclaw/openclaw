@@ -1947,7 +1947,7 @@ export async function fetchClawHubPromotionsFeed(
     timeoutMs: params.timeoutMs,
     resourceLabel: "promotions feed",
   });
-  const payload = new TextDecoder().decode(buffer);
+  const payload = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(payload);
