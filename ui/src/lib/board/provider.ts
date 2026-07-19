@@ -251,7 +251,7 @@ class MockBoardProvider implements BoardProvider {
       frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}`,
     });
     this.snapshotSignal.set(
-      normalizeMockSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
+      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
     );
   }
 
