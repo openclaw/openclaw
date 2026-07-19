@@ -432,7 +432,11 @@ enum ChatToolDiff {
             }
         }
         for section in sections {
-            if sections.count > 1 || (section.operation == .delete && section.lines.isEmpty) {
+            // Header rows also carry move-only and header-only sections that
+            // would otherwise render nothing.
+            let isHeaderOnly = section.lines.isEmpty &&
+                (section.operation == .delete || section.path != section.sourcePath)
+            if sections.count > 1 || isHeaderOnly {
                 if !lines.isEmpty, lines.last?.kind != .skip {
                     append(ChatToolDiffLine(kind: .skip, text: ""))
                 }
@@ -444,7 +448,10 @@ enum ChatToolDiff {
             lines.append(ChatToolDiffLine(kind: .skip, text: ""))
         }
         guard lines.contains(where: { $0.kind == .add || $0.kind == .del || $0.kind == .file }) else { return nil }
-        return (lines, clipped || hasHeaderOnlyDelete ? nil : self.stat(for: lines))
+        let stat = self.stat(for: lines)
+        // Zero/zero (move-only) and unknowable header-only-delete stats read as noise or lies.
+        let statMeaningful = !clipped && !hasHeaderOnlyDelete && (stat.added > 0 || stat.removed > 0)
+        return (lines, statMeaningful ? stat : nil)
     }
 
     private static func patchSectionLabel(_ section: PatchSection) -> String {

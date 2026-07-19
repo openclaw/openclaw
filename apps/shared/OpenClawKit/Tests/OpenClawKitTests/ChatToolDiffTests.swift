@@ -200,6 +200,16 @@ struct ChatToolDiffTests {
             details: AnyCodable(["diff": AnyCodable("+1 added\n-1 removed")])) == nil)
     }
 
+    @Test func `move only patches render the file header`() throws {
+        let patch = "*** Begin Patch\n*** Update File: a/old.txt\n*** Move to: a/new.txt\n*** End Patch"
+        let resolved = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: AnyCodable(["input": AnyCodable(patch)]),
+            details: nil))
+        #expect(resolved.lines == [ChatToolDiffLine(kind: .file, text: "Move a/old.txt → a/new.txt")])
+        #expect(resolved.stat == nil)
+    }
+
     @Test func `patch tools resolve persisted details`() throws {
         let resolved = try #require(ChatToolDiff.resolveDiff(
             name: "apply_patch",
