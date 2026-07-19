@@ -14,6 +14,7 @@ import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
+import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
@@ -513,8 +514,21 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
+  const rawOpenClawMeta = m["__openclaw"];
+  const openClawMeta =
+    rawOpenClawMeta && typeof rawOpenClawMeta === "object" && !Array.isArray(rawOpenClawMeta)
+      ? (rawOpenClawMeta as Record<string, unknown>)
+      : undefined;
+  const sender = normalizeSenderIdentity({
+    id: openClawMeta?.senderId,
+    name: openClawMeta?.senderName,
+    username: openClawMeta?.senderUsername,
+    profileAvatarUrl: openClawMeta?.senderProfileAvatarUrl,
+  });
   const senderLabel =
-    typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
+    typeof m.senderLabel === "string" && m.senderLabel.trim()
+      ? m.senderLabel.trim()
+      : formatSenderLabel(sender);
 
   content = stripMessageDisplayMetadata(content);
 
@@ -524,6 +538,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     timestamp,
     id,
     senderLabel,
+    ...(sender ? { sender } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };

@@ -56,13 +56,17 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
+  "cross-process SQLite coordination locks": ["src/infra/device-identity-coordinator.ts"],
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
     "src/snapshot/local-repository.ts",
   ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
-  "read-only shared state database access": ["src/state/openclaw-state-db-readonly.ts"],
+  "read-only shared state database access": [
+    "src/state/openclaw-agent-db-readonly.ts",
+    "src/state/openclaw-state-db-readonly.ts",
+  ],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
@@ -90,6 +94,7 @@ const rawSqliteAllowPathGroups = {
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
+    "src/state/user-profiles.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",

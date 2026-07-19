@@ -47,7 +47,8 @@ function renderSecurityOverview(props: SecurityViewProps) {
     renderSettingsRow({
       title: t("quickSettings.security.gatewayAuth"),
       control: renderSettingsStatus({
-        kind: gatewayAuth !== "none" ? "ok" : "warn",
+        // "unknown" is a pre-hello placeholder, not a healthy auth mode.
+        kind: gatewayAuth === "none" ? "warn" : gatewayAuth === "unknown" ? "muted" : "ok",
         label: gatewayAuth,
       }),
     }),

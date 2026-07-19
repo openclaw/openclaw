@@ -198,7 +198,7 @@ function createConfigModuleMock() {
 
 function createModelCatalogModuleMock() {
   return {
-    loadModelCatalog: async () => [
+    loadPreparedModelCatalog: async () => [
       {
         provider: "anthropic",
         id: "claude-sonnet-4-6",
@@ -313,7 +313,7 @@ function createCommandsStatusRuntimeModuleMock() {
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
-vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
+vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));

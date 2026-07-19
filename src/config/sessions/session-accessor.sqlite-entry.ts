@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -62,6 +63,8 @@ import {
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -76,6 +79,18 @@ export function loadSqliteSessionEntry(scope: SessionAccessScope): SessionEntry 
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return readSessionEntryRow(database, resolved.sessionKey)?.entry;
+}
+
+/** Loads one session entry without opening its agent database writable. */
+export function loadSqliteSessionEntryReadOnly(
+  scope: SessionAccessScope,
+): SessionEntry | undefined {
+  const resolved = resolveSqliteScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionEntryRow(database, resolved.sessionKey)?.entry,
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
 }
 
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
@@ -287,6 +302,11 @@ export async function patchSqliteSessionEntry(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }
@@ -357,6 +377,11 @@ export async function patchSqliteSessionEntryTarget(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }

@@ -11,6 +11,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
+  "meta.migrations": "System-managed completion markers for one-time config migrations.",
+  "meta.migrations.modelPolicyAllowlist":
+    "Records that doctor preserved or evaluated legacy default and per-agent model-map override restrictions.",
   marketplaces:
     "Marketplace feed and local package source profile settings. Feeds provide package selection and governance metadata, while sources define the local source names that install candidates may reference.",
   "marketplaces.feeds":
@@ -154,6 +157,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.deviceAutoApprove":
+    "Optional policy for automatically approving new Control UI and WebChat device identities after trusted-proxy authentication. Existing-device scope upgrades always remain manual.",
+  "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
+    "Automatically approves new browser device identities after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
+  "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
+    "Maximum scopes granted to auto-approved browser devices. Requested scopes are capped to this list; requests without scopes receive this list. operator.admin is rejected and must be approved manually.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":
@@ -237,8 +246,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Realtime provider speaker voice name override for browser or Gateway-owned Talk sessions.",
   "talk.realtime.speakerVoiceId":
     "Realtime provider speaker voice id override for browser or Gateway-owned Talk sessions.",
-  "talk.realtime.voice":
-    "Deprecated realtime provider voice override. Use talk.realtime.speakerVoice.",
   "talk.realtime.instructions":
     "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",

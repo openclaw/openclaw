@@ -11,7 +11,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
+  consumeCronNextCheckProposal,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   releaseAgentRunContext,
@@ -509,6 +510,19 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nYour response will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+// Static per job class on purpose: the free-form job name must not be promoted
+// into the trusted suffix past the external-content fence, and byte-identical
+// suffixes keep prompt caching effective. External-hook runs get only the
+// common core: deferring to "the job's instructions" or advertising job
+// removal would hand fenced webhook content an override lever or a
+// destructive action inside the trusted suffix.
+function appendCronUnattendedRunPreamble(commandBody: string, opts: { externalHook: boolean }) {
+  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${HEARTBEAT_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
+  const trustedExtra =
+    " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the cron tool.";
+  return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;
+}
+
 function resolvePositiveContextTokens(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
@@ -624,13 +638,16 @@ async function prepareCronRunContext(params: {
     ...runtimeCfg,
     agents: Object.assign({}, runtimeCfg.agents, { defaults: agentCfg }),
   };
-  let catalog: Awaited<ReturnType<CronModelCatalogRuntime["loadModelCatalog"]>> | undefined;
+  let catalog: Awaited<ReturnType<CronModelCatalogRuntime["loadPreparedModelCatalog"]>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {
       catalog = await (
         await loadCronModelCatalogRuntime()
-      ).loadModelCatalog({
-        config: cfgWithAgentDefaults,
+      ).loadPreparedModelCatalog({
+        config: runtimeCfg,
+        agentId,
+        agentDir,
+        readOnly: true,
       });
     }
     return catalog;
@@ -666,8 +683,8 @@ async function prepareCronRunContext(params: {
   const hookExternalContentSource =
     payloadHookExternalContentSource ?? resolveHookExternalContentSource(baseSessionKey);
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(input.cfg, agentId);
-  const agentDir = resolveAgentDir(input.cfg, agentId);
+  const workspaceDirRaw = resolveAgentWorkspaceDir(runtimeCfg, agentId);
+  const agentDir = resolveAgentDir(runtimeCfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !params.isFastTestEnv,
@@ -756,13 +773,18 @@ async function prepareCronRunContext(params: {
   }
 
   const resolvedModelSelection = await resolveCronModelSelection({
-    cfg: input.cfg,
+    // Authorization needs the unflattened active config so inherited policy
+    // aliases cannot be rebound by the selected agent's metadata aliases.
+    cfg: runtimeCfg,
+    catalogConfig: runtimeCfg,
     cfgWithAgentDefaults,
     agentConfigOverride,
     sessionEntry: cronSession.sessionEntry,
     payload: input.job.payload,
     isGmailHook,
     agentId,
+    agentDir,
+    workspaceDir,
   });
   if (!resolvedModelSelection.ok) {
     return {
@@ -978,6 +1000,7 @@ async function prepareCronRunContext(params: {
     sourceDelivery,
     toolsAllow: agentPayload?.toolsAllow,
   });
+  commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
   commandBody = appendCronDeliveryInstruction({
     commandBody,
     deliveryRequested,
@@ -1231,9 +1254,7 @@ async function finalizeCronRun(params: {
     const totalTokens =
       typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
         ? lastCallTotalTokens
-        : lastCallUsage?.contextUsage?.state === "unavailable"
-          ? undefined
-          : deriveSessionTotalTokens({ usage, contextTokens, promptTokens });
+        : undefined;
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
         usage,
@@ -1757,6 +1778,9 @@ export async function runCronIsolatedAgentTurn(params: {
             : existingRunContext.sessionKey,
         sessionId: initialSessionId,
         lifecycleGeneration: runLifecycleGeneration,
+        cronRunsByJobId: new Map([
+          [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+        ]),
       },
       {
         trackOwner: true,
@@ -1832,8 +1856,12 @@ export async function runCronIsolatedAgentTurn(params: {
       outcome = "error";
       outcomeError = finalized.error;
     }
-    return finalized;
+    const delayMs = consumeCronNextCheckProposal(initialSessionId, params.job.id);
+    return finalized.status !== "ok" || delayMs === undefined
+      ? finalized
+      : { ...finalized, nextCheck: { delayMs } };
   } catch (err) {
+    consumeCronNextCheckProposal(initialSessionId, params.job.id);
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
     const error = isCronLaneTimeout ? abortReason() : String(err);
     outcome = "error";

@@ -35,6 +35,8 @@ describe("server pref extraction", () => {
           locale: "de",
           chatShowThinking: false,
           chatSendShortcut: "modifier-enter",
+          sidebarLiveActivity: false,
+          sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
           bogus: true,
         }),
         { onApplied },
@@ -47,6 +49,8 @@ describe("server pref extraction", () => {
       locale: "de",
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
+      sidebarLiveActivity: false,
+      sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
   });
 
@@ -130,6 +134,28 @@ describe("changedServerUiPrefs", () => {
     const next = { ...previous, themeMode: "dark" as const, navCollapsed: !previous.navCollapsed };
     expect(changedServerUiPrefs(previous, next)).toEqual({ themeMode: "dark" });
     expect(changedServerUiPrefs(previous, { ...previous })).toBeNull();
+  });
+
+  it("syncs canonical sidebar entries without treating equal arrays as changes", () => {
+    const previous = loadSettings();
+    const sidebarEntries = ["route:usage", "session:agent:main:test"];
+    expect(changedServerUiPrefs(previous, { ...previous, sidebarEntries })).toEqual({
+      sidebarEntries,
+    });
+    expect(
+      changedServerUiPrefs(
+        { ...previous, sidebarEntries },
+        { ...previous, sidebarEntries: [...sidebarEntries] },
+      ),
+    ).toBeNull();
+  });
+
+  it("syncs the live sidebar activity preference", () => {
+    const previous = loadSettings();
+    expect(previous.sidebarLiveActivity).toBe(true);
+    expect(changedServerUiPrefs(previous, { ...previous, sidebarLiveActivity: false })).toEqual({
+      sidebarLiveActivity: false,
+    });
   });
 
   it("syncs chat behavior prefs and pushes clearable resets as null", () => {

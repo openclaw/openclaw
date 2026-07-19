@@ -5,6 +5,9 @@ import Testing
 
 private actor SessionActionTransportState {
     var forkedParentKeys: [String] = []
+    var rewoundMessages: [(sessionKey: String, entryID: String)] = []
+    var forkedMessages: [(sessionKey: String, entryID: String)] = []
+    var historySessionKeys: [String] = []
     var patchedKeys: [String] = []
     var deletedKeys: [String] = []
     var groupPuts: [[String]] = []
@@ -13,6 +16,18 @@ private actor SessionActionTransportState {
 
     func recordFork(_ key: String) {
         self.forkedParentKeys.append(key)
+    }
+
+    func recordRewind(sessionKey: String, entryID: String) {
+        self.rewoundMessages.append((sessionKey, entryID))
+    }
+
+    func recordForkAtMessage(sessionKey: String, entryID: String) {
+        self.forkedMessages.append((sessionKey, entryID))
+    }
+
+    func recordHistory(_ sessionKey: String) {
+        self.historySessionKeys.append(sessionKey)
     }
 
     func recordPatch(_ key: String) {
@@ -33,16 +48,64 @@ private actor SessionActionTransportState {
     }
 }
 
+/// Signals the exact suspension point before fork completion, then holds it so
+/// navigation can advance deterministically before the stale result resumes.
+private struct SessionActionForkGate: Sendable {
+    private let startedStream: AsyncStream<Void>
+    private let startedContinuation: AsyncStream<Void>.Continuation
+    private let releaseStream: AsyncStream<Void>
+    private let releaseContinuation: AsyncStream<Void>.Continuation
+
+    init() {
+        let started = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        self.startedStream = started.stream
+        self.startedContinuation = started.continuation
+        let release = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        self.releaseStream = release.stream
+        self.releaseContinuation = release.continuation
+    }
+
+    func suspendCompletion() async {
+        self.startedContinuation.yield()
+        var iterator = self.releaseStream.makeAsyncIterator()
+        _ = await iterator.next()
+    }
+
+    func waitUntilStarted() async -> Bool {
+        var iterator = self.startedStream.makeAsyncIterator()
+        return await iterator.next() != nil
+    }
+
+    func release() {
+        self.releaseContinuation.yield()
+    }
+}
+
 private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state = SessionActionTransportState()
-    private let forkDelay: Duration?
+    private let forkGate: SessionActionForkGate?
+    private let forkAtMessageGate: SessionActionForkGate?
+    private let rewindEditorText: String?
+    private let forkAtMessageSessionKey: String
+    private let forkAtMessageEditorText: String?
 
-    init(forkDelay: Duration? = nil) {
-        self.forkDelay = forkDelay
+    init(
+        forkGate: SessionActionForkGate? = nil,
+        forkAtMessageGate: SessionActionForkGate? = nil,
+        rewindEditorText: String? = "rewound draft",
+        forkAtMessageSessionKey: String = "forked-at-message",
+        forkAtMessageEditorText: String? = "forked draft")
+    {
+        self.forkGate = forkGate
+        self.forkAtMessageGate = forkAtMessageGate
+        self.rewindEditorText = rewindEditorText
+        self.forkAtMessageSessionKey = forkAtMessageSessionKey
+        self.forkAtMessageEditorText = forkAtMessageEditorText
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        OpenClawChatHistoryPayload(
+        await self.state.recordHistory(sessionKey)
+        return OpenClawChatHistoryPayload(
             sessionKey: sessionKey,
             sessionId: "session-\(sessionKey)",
             messages: [],
@@ -61,10 +124,27 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func forkSession(parentKey: String) async throws -> String {
         await self.state.recordFork(parentKey)
-        if let forkDelay {
-            try await Task.sleep(for: forkDelay)
-        }
+        await self.forkGate?.suspendCompletion()
         return "forked"
+    }
+
+    func rewindSession(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatRewindResponse
+    {
+        await self.state.recordRewind(sessionKey: sessionKey, entryID: entryId)
+        return OpenClawChatRewindResponse(editorText: self.rewindEditorText)
+    }
+
+    func forkSessionAtMessage(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatForkAtMessageResponse
+    {
+        await self.state.recordForkAtMessage(sessionKey: sessionKey, entryID: entryId)
+        await self.forkAtMessageGate?.suspendCompletion()
+        return OpenClawChatForkAtMessageResponse(
+            sessionKey: self.forkAtMessageSessionKey,
+            editorText: self.forkAtMessageEditorText)
     }
 
     func patchSession(
@@ -92,13 +172,14 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
                     ok: true,
                     groups: names.enumerated().map {
                         OpenClawChatSessionGroup(name: $0.element, position: $0.offset)
-                    })
+                    },
+                    updatedSessions: nil)
             },
             renameGroup: { _, _ in
-                OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [])
+                OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
             },
             deleteGroup: { _ in
-                OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [])
+                OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
             })
     }
 
@@ -130,6 +211,18 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func forkedParentKeys() async -> [String] {
         await self.state.forkedParentKeys
+    }
+
+    func rewoundMessages() async -> [(sessionKey: String, entryID: String)] {
+        await self.state.rewoundMessages
+    }
+
+    func forkedMessages() async -> [(sessionKey: String, entryID: String)] {
+        await self.state.forkedMessages
+    }
+
+    func historySessionKeys() async -> [String] {
+        await self.state.historySessionKeys
     }
 
     func patchedKeys() async -> [String] {
@@ -269,7 +362,7 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.createdAgentIDs() == ["worker"])
     }
 
-    @Test func `unsupported create with advanced options fails without resetting`() async throws {
+    @Test func `unsupported create with advanced options fails without resetting`() async {
         // SessionActionTransport relies on the protocol's default createSession,
         // which throws the canonical unsupported error; the worktree request must
         // surface it instead of taking the plain-new reset fallback.
@@ -317,6 +410,77 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.createdParentKeys() == ["main"])
     }
 
+    @Test func `rewind seeds editor and refreshes history`() async {
+        let transport = SessionActionTransport(rewindEditorText: "edit this turn")
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.input = "old draft"
+
+        await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
+
+        #expect(viewModel.input == "edit this turn")
+        #expect(await transport.rewoundMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
+        #expect(await transport.historySessionKeys() == ["main"])
+    }
+
+    @Test func `rewind does not dispatch while busy`() async {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.isSending = true
+
+        await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
+
+        #expect(await transport.rewoundMessages().isEmpty)
+        #expect(await transport.historySessionKeys().isEmpty)
+    }
+
+    @Test func `fork at message switches and seeds editor`() async {
+        let transport = SessionActionTransport(
+            forkAtMessageSessionKey: "agent:main:forked",
+            forkAtMessageEditorText: "continue here")
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        await viewModel.forkAtMessage(self.userMessage(entryID: "message-42"))
+
+        #expect(viewModel.sessionKey == "agent:main:forked")
+        #expect(viewModel.input == "continue here")
+        #expect(await transport.forkedMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
+    }
+
+    @Test func `fork at message completion does not override newer navigation`() async {
+        let forkGate = SessionActionForkGate()
+        let transport = SessionActionTransport(
+            forkAtMessageGate: forkGate,
+            forkAtMessageSessionKey: "agent:main:forked")
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        let fork = Task { await viewModel.forkAtMessage(self.userMessage(entryID: "message-42")) }
+        guard await self.waitForForkStart(forkGate) else {
+            forkGate.release()
+            fork.cancel()
+            Issue.record("timed out waiting for fork start signal")
+            return
+        }
+        viewModel.switchSession(to: "other")
+        forkGate.release()
+        await fork.value
+
+        #expect(viewModel.sessionKey == "other")
+        #expect(viewModel.input.isEmpty)
+        #expect(await transport.forkedMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
+    }
+
+    @Test func `remote rewind refreshes current transcript only`() async {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "rewind")))
+        viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "rewind")))
+
+        let refreshed = await self.waitForHistoryRequest(transport)
+        #expect(refreshed)
+        #expect(await transport.historySessionKeys() == ["main"])
+    }
+
     @Test func `fork does not mutate gateway while session switching is blocked`() async {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
@@ -336,29 +500,64 @@ struct ChatViewModelSessionActionTests {
             localized: "Remove attachments or wait for delivery to resolve before starting a new chat."))
     }
 
-    @Test func `fork completion does not override newer navigation`() async throws {
-        let transport = SessionActionTransport(forkDelay: .milliseconds(50))
+    @Test func `fork completion does not override newer navigation`() async {
+        let forkGate = SessionActionForkGate()
+        let transport = SessionActionTransport(forkGate: forkGate)
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         let fork = Task { await viewModel.forkSession(key: "main") }
-        try await self.waitUntil { await transport.forkedParentKeys() == ["main"] }
+        guard await self.waitForForkStart(forkGate) else {
+            forkGate.release()
+            fork.cancel()
+            Issue.record("timed out waiting for fork start signal")
+            return
+        }
         viewModel.switchSession(to: "other")
+        forkGate.release()
         await fork.value
 
         #expect(viewModel.sessionKey == "other")
+        #expect(await transport.forkedParentKeys() == ["main"])
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(2),
-        condition: @escaping @MainActor () async -> Bool) async throws
+    private func waitForForkStart(
+        _ gate: SessionActionForkGate,
+        timeout: Duration = .seconds(15)) async -> Bool
+    {
+        // The stream controls ordering; this deadline only bounds a broken fake or call path.
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await gate.waitUntilStarted() }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let started = await group.next() ?? false
+            group.cancelAll()
+            return started
+        }
+    }
+
+    private func waitForHistoryRequest(
+        _ transport: SessionActionTransport,
+        timeout: Duration = .seconds(15)) async -> Bool
     {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
+        let deadline = clock.now + timeout
         while clock.now < deadline {
-            if await condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
+            if await transport.historySessionKeys().isEmpty == false {
+                return true
+            }
+            await Task.yield()
         }
-        Issue.record("timed out waiting for session action condition")
+        return false
+    }
+
+    private func userMessage(entryID: String) -> OpenClawChatMessage {
+        OpenClawChatMessage(
+            role: "user",
+            content: [],
+            timestamp: nil,
+            transcriptMessageID: entryID)
     }
 
     private func entry(key: String) -> OpenClawChatSessionEntry {
