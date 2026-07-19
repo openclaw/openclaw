@@ -127,7 +127,7 @@
     "type": "function"
   },
   {
-    "description": "List ids allowed for `sessions_spawn(runtime:\"subagent\")`.",
+    "description": "List ids allowed for `sessions_spawn(runtime:\"subagent\")`, including configured names and descriptions when present.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},

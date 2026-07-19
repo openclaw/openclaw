@@ -13,6 +13,7 @@ type AgentListDetails = {
   agents?: Array<{
     id?: string;
     name?: string;
+    description?: string;
     configured?: boolean;
     model?: string;
     agentRuntime?: { id?: string; source?: string };
@@ -63,7 +64,7 @@ describe("agents_list tool", () => {
       required: ["requester", "allowAny", "agents"],
     });
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ agents: Array<{ configured: boolean; id: string; agentRuntime?: { id: string; source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key" }; model?: string; name?: string }>; allowAny: boolean; requester: string }',
+      '{ agents: Array<{ configured: boolean; id: string; agentRuntime?: { id: string; source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key" }; description?: string; model?: string; name?: string }>; allowAny: boolean; requester: string }',
     );
     const result = await tool.execute("call", {});
     const details = result.details as AgentListDetails;
@@ -109,6 +110,42 @@ describe("agents_list tool", () => {
       allowAny: false,
       agents: [],
     });
+  });
+
+  it("returns configured agent descriptions", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          subagents: { allowAgents: ["codex", "blank"] },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "codex",
+            name: "Codex",
+            description: "Code implementation and review",
+          },
+          {
+            id: "blank",
+            name: "Blank",
+            description: "   ",
+          },
+        ],
+      },
+    } satisfies OpenClawConfig);
+
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    const details = result.details as AgentListDetails;
+
+    expect(details.agents?.find((agent) => agent.id === "codex")).toMatchObject({
+      id: "codex",
+      name: "Codex",
+      description: "Code implementation and review",
+    });
+    expect(details.agents?.find((agent) => agent.id === "blank")).not.toHaveProperty("description");
   });
 
   it("returns requester as the only target when no subagent allowlist is configured", async () => {

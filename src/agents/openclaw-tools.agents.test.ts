@@ -37,8 +37,13 @@ describe("agents_list", () => {
 
   function readAgentList(result: unknown) {
     // Tool results expose the machine-readable agent list in details.
-    return (result as { details?: { agents?: Array<{ id: string; configured?: boolean }> } })
-      .details?.agents;
+    return (
+      result as {
+        details?: {
+          agents?: Array<{ id: string; configured?: boolean; name?: string; description?: string }>;
+        };
+      }
+    ).details?.agents;
   }
 
   it("defaults to the requester agent only", async () => {
@@ -143,5 +148,51 @@ describe("agents_list", () => {
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual([]);
+  });
+
+  it("includes configured descriptions", async () => {
+    setConfigWithAgentList([
+      {
+        id: "main",
+        name: "Main",
+        description: "Coordinates specialist agents",
+        subagents: {
+          allowAgents: ["*"],
+        },
+      },
+      {
+        id: "research",
+        name: "Research",
+        description: "Finds and synthesizes external evidence",
+      },
+    ]);
+
+    const tool = createTool();
+    const result = await tool.execute("call5", {});
+    const agents = readAgentList(result);
+    expect(agents?.find((agent) => agent.id === "main")?.description).toBe(
+      "Coordinates specialist agents",
+    );
+    expect(agents?.find((agent) => agent.id === "research")?.description).toBe(
+      "Finds and synthesizes external evidence",
+    );
+  });
+
+  it("omits blank configured descriptions", async () => {
+    setConfigWithAgentList([
+      {
+        id: "main",
+        name: "Main",
+        description: "   ",
+        subagents: {
+          allowAgents: ["*"],
+        },
+      },
+    ]);
+
+    const tool = createTool();
+    const result = await tool.execute("call6", {});
+    const agents = readAgentList(result);
+    expect(agents?.find((agent) => agent.id === "main")?.description).toBeUndefined();
   });
 });
