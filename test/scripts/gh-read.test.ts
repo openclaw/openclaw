@@ -67,7 +67,33 @@ describe("gh-read helpers", () => {
     expect(
       runGitHubCli(["run", "watch", "123"], "test-fixture-credential", { spawnSyncImpl }),
     ).toBe(0);
-    expect(spawnSyncImpl.mock.calls[0]?.[2].timeout).toBe(900_000);
+    expect(spawnSyncImpl).toHaveBeenCalledWith("gh", ["run", "watch", "123"], {
+      env: expect.any(Object),
+      killSignal: "SIGKILL",
+      stdio: "inherit",
+      timeout: 900_000,
+    });
+  });
+
+  it("preserves the unbounded default for long-lived GitHub CLI commands", () => {
+    const spawnSyncImpl = vi.fn(() => ({ status: 0 }));
+
+    expect(
+      runGitHubCli(
+        ["--repo", "openclaw/openclaw", "run", "watch", "123"],
+        "test-fixture-credential",
+        { spawnSyncImpl },
+      ),
+    ).toBe(0);
+    expect(spawnSyncImpl).toHaveBeenCalledWith(
+      "gh",
+      ["--repo", "openclaw/openclaw", "run", "watch", "123"],
+      {
+        env: expect.any(Object),
+        killSignal: "SIGKILL",
+        stdio: "inherit",
+      },
+    );
   });
 
   it("rejects invalid operator-selected GitHub CLI timeouts", () => {

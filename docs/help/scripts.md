@@ -37,7 +37,7 @@ Optional env:
 
 - `OPENCLAW_GH_READ_INSTALLATION_ID` when you want to skip repo-based installation lookup
 - `OPENCLAW_GH_READ_PERMISSIONS` as a comma-separated override for the read permission subset to request
-- `OPENCLAW_GH_READ_COMMAND_TIMEOUT_MS` as a positive integer deadline for the delegated `gh` command (default: `120000`); set a larger finite value for intentionally long-lived reads such as `gh run watch`
+- `OPENCLAW_GH_READ_COMMAND_TIMEOUT_MS` as a positive integer deadline for the delegated `gh` command. Ordinary finite reads default to `120000`; known long-lived commands such as `gh run watch` preserve their unbounded default unless this variable selects a finite budget.
 
 Repo resolution order:
 

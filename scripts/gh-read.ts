@@ -68,7 +68,7 @@ type GitHubCliSpawn = (
     env: NodeJS.ProcessEnv;
     killSignal: "SIGKILL";
     stdio: "inherit";
-    timeout: number;
+    timeout?: number;
   },
 ) => {
   error?: Error;
@@ -126,7 +126,37 @@ export function resolveGitHubFetchTimeoutMs(raw = process.env.OPENCLAW_GH_READ_F
   });
 }
 
-function resolveGitHubCommandTimeoutMs(raw = process.env[COMMAND_TIMEOUT_ENV]) {
+function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
+  const commandPath: string[] = [];
+  for (let index = 0; index < ghArgs.length && commandPath.length < 2; index += 1) {
+    const arg = expectDefined(ghArgs[index], `GitHub CLI argument at index ${index}`);
+    if (arg === "-R" || arg === "--repo" || arg === "--hostname") {
+      index += 1;
+      continue;
+    }
+    if (
+      arg.startsWith("-R") ||
+      arg.startsWith("--repo=") ||
+      arg.startsWith("--hostname=") ||
+      arg.startsWith("-")
+    ) {
+      continue;
+    }
+    commandPath.push(arg);
+  }
+
+  // `gh run watch` streams until the workflow completes, so preserving its
+  // historical unbounded default avoids surprising existing automation.
+  return commandPath[0] === "run" && commandPath[1] === "watch";
+}
+
+function resolveGitHubCommandTimeoutMs(
+  ghArgs: readonly string[],
+  raw = process.env[COMMAND_TIMEOUT_ENV],
+): number | undefined {
+  if (!raw?.trim()) {
+    return isLongLivedGitHubCommand(ghArgs) ? undefined : DEFAULT_GH_COMMAND_TIMEOUT_MS;
+  }
   return parseStrictIntegerOption({
     fallback: DEFAULT_GH_COMMAND_TIMEOUT_MS,
     label: COMMAND_TIMEOUT_ENV,
@@ -397,7 +427,8 @@ export function runGitHubCli(
   } = {},
 ): number {
   const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
-  const child = spawnSyncImpl("gh", ghArgs, {
+  const timeoutMs = options.timeoutMs ?? resolveGitHubCommandTimeoutMs(ghArgs);
+  const spawnOptions: Parameters<GitHubCliSpawn>[2] = {
     stdio: "inherit",
     env: {
       ...process.env,
@@ -405,8 +436,11 @@ export function runGitHubCli(
       GITHUB_TOKEN: token,
     },
     killSignal: "SIGKILL",
-    timeout: options.timeoutMs ?? resolveGitHubCommandTimeoutMs(),
-  });
+  };
+  if (timeoutMs !== undefined) {
+    spawnOptions.timeout = timeoutMs;
+  }
+  const child = spawnSyncImpl("gh", ghArgs, spawnOptions);
 
   if (child.error) {
     throw child.error;
