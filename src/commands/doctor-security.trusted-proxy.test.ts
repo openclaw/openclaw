@@ -45,6 +45,7 @@ type TrustedProxyBoundaryOptions = {
   customBindHost?: string;
   tailscaleMode?: "serve" | "funnel";
   secrets?: OpenClawConfig["secrets"];
+  allowExecSecretRefs?: boolean;
 };
 
 const trustedProxyBoundaryCases: Array<
@@ -297,6 +298,19 @@ const trustedProxyBoundaryCases: Array<
         providers: { vault: { source: "exec", command: "/nonexistent-doctor-exec-probe" } },
       },
     },
+    ["Doctor cannot verify", "active exec SecretRef was skipped"],
+  ],
+  [
+    "executes exec-backed trusted-proxy password SecretRefs only when allowed",
+    {
+      trustedProxies: ["192.0.2.10"],
+      password: { source: "exec", provider: "vault", id: "gateway/password" },
+      secrets: {
+        providers: { vault: { source: "exec", command: "/nonexistent-doctor-exec-probe" } },
+      },
+      allowExecSecretRefs: true,
+    },
+    ["fails gateway startup validation", "SecretRef is unresolved (exec:vault:gateway/password)"],
   ],
 ];
 
@@ -325,6 +339,7 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
       customBindHost,
       tailscaleMode,
       secrets,
+      allowExecSecretRefs,
     } = options;
     const networkInterfacesSpy = vi.spyOn(os, "networkInterfaces");
     if (interfaceLookupFails) {
@@ -347,22 +362,25 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
       );
     }
     try {
-      await noteSecurityWarnings({
-        secrets,
-        gateway: {
-          bind: bind ?? "lan",
-          customBindHost,
-          tailscale: tailscaleMode ? { mode: tailscaleMode } : undefined,
-          trustedProxies,
-          controlUi: controlUi ?? { allowedOrigins: ["https://control.example.test"] },
-          auth: {
-            mode: "trusted-proxy",
-            token,
-            password,
-            trustedProxy: trustedProxy ?? { userHeader: "x-forwarded-user" },
+      await noteSecurityWarnings(
+        {
+          secrets,
+          gateway: {
+            bind: bind ?? "lan",
+            customBindHost,
+            tailscale: tailscaleMode ? { mode: tailscaleMode } : undefined,
+            trustedProxies,
+            controlUi: controlUi ?? { allowedOrigins: ["https://control.example.test"] },
+            auth: {
+              mode: "trusted-proxy",
+              token,
+              password,
+              trustedProxy: trustedProxy ?? { userHeader: "x-forwarded-user" },
+            },
           },
-        },
-      } as OpenClawConfig);
+        } as OpenClawConfig,
+        { allowExecSecretRefs },
+      );
     } finally {
       networkInterfacesSpy.mockRestore();
     }

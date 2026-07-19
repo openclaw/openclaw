@@ -22,38 +22,53 @@ import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 /**
  * Mirrors gateway startup: seed runtime-only Control UI origins first, then run the real
  * runtime resolver. Skipping the seeding step would report startup failures for configs the
- * Gateway actually accepts. Returns the runtime rejection message, or undefined when startable.
+ * Gateway actually accepts. Exec-backed refs remain explicitly unverified unless the operator
+ * allows their provider to run.
  */
-export async function resolveGatewayStartupValidationProblem(
+export async function resolveGatewayStartupValidation(
   cfg: OpenClawConfig,
-): Promise<string | undefined> {
+  options: { allowExecSecretRefs?: boolean; env?: NodeJS.ProcessEnv } = {},
+): Promise<
+  | { status: "ready" }
+  | { status: "invalid"; problem: string }
+  | { status: "unverified"; problem: string }
+> {
   const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(cfg, { isContainerEnvironment });
   // Startup lazy-loads this resolver; keep the doctor on the same dynamic boundary.
   const { resolveGatewayRuntimeConfig } = await import("../gateway/server-runtime-config.js");
-  // Doctor guardrail: default doctor must never execute exec SecretRef providers
-  // (sibling checks skip exec-backed gateway checks without --allow-exec), so
-  // exec-backed active refs skip the preflight; the resolver never resolves refs.
-  const env = process.env;
-  const canPreflightAuthSecretRefs = canMaterializeGatewayAuthSecretRefsWithoutExec({
-    cfg: seeded.config,
-    env,
-    mode: seeded.config.gateway?.auth?.mode,
-    hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
-    hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
-  });
+  const env = options.env ?? process.env;
+  const canPreflightAuthSecretRefs =
+    options.allowExecSecretRefs === true ||
+    canMaterializeGatewayAuthSecretRefsWithoutExec({
+      cfg: seeded.config,
+      env,
+      mode: seeded.config.gateway?.auth?.mode,
+      hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
+      hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
+    });
   try {
     // Same order as gateway startup: the auth secret preflight throws on unresolvable
     // active refs (trusted-proxy treats password refs as active) before the resolver runs.
     if (canPreflightAuthSecretRefs) {
-      await ensureGatewayStartupAuth({ cfg: seeded.config, warn: () => {} });
+      await ensureGatewayStartupAuth({ cfg: seeded.config, env, warn: () => {} });
     }
     await resolveGatewayRuntimeConfig({
       cfg: seeded.config,
       port: resolveGatewayPortWithDefault(cfg.gateway?.port),
     });
-    return undefined;
+    if (!canPreflightAuthSecretRefs) {
+      return {
+        status: "unverified",
+        problem:
+          "Gateway startup auth readiness could not be verified because an active exec SecretRef was skipped.",
+      };
+    }
+    return { status: "ready" };
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return {
+      status: "invalid",
+      problem: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

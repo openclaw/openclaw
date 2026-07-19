@@ -26,7 +26,7 @@ import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 import {
-  resolveGatewayStartupValidationProblem,
+  resolveGatewayStartupValidation,
   resolveTrustedProxyReadiness,
 } from "./doctor-trusted-proxy-readiness.js";
 
@@ -246,6 +246,7 @@ function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): string[] {
 export async function collectSecurityWarnings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
+  options: { allowExecSecretRefs?: boolean } = {},
 ): Promise<string[]> {
   const warnings: string[] = [];
 
@@ -346,7 +347,12 @@ export async function collectSecurityWarnings(
       // A config the Gateway refuses to start (tailscale bind/auth rules, custom-bind
       // validation) must never be downgraded to the healthy trusted-proxy warning.
       // Readiness owns auth-shape diagnostics; only surface resolver errors it missed.
-      const startupProblem = await resolveGatewayStartupValidationProblem(cfg);
+      const startupValidation = await resolveGatewayStartupValidation(cfg, {
+        env,
+        allowExecSecretRefs: options.allowExecSecretRefs,
+      });
+      const startupProblem =
+        startupValidation.status === "invalid" ? startupValidation.problem : undefined;
       const startupOnlyProblem =
         startupProblem !== undefined && !trustedProxyReadiness.problems.includes(startupProblem)
           ? startupProblem
@@ -358,13 +364,20 @@ export async function collectSecurityWarnings(
           "  Fix: resolve the startup error above; the Gateway refuses to start with this configuration.",
         );
       }
+      if (startupValidation.status === "unverified") {
+        warnings.push(
+          `- CRITICAL: Gateway bound to ${bindDescriptor} with startup authentication that Doctor cannot verify without executing a configured secret provider.`,
+          `  ${startupValidation.problem}`,
+          "  Fix: rerun Doctor with --allow-exec to verify the provider before exposing this port.",
+        );
+      }
       if (trustedProxyReadiness.problems.length > 0) {
         warnings.push(
           `- CRITICAL: Gateway bound to ${bindDescriptor} with unsafe or incomplete trusted-proxy authentication.`,
           ...trustedProxyReadiness.problems.map((problem) => `  ${problem}`),
           "  Fix: correct gateway.auth.trustedProxy and gateway.trustedProxies before exposing this port.",
         );
-      } else if (startupOnlyProblem === undefined) {
+      } else if (startupValidation.status === "ready") {
         warnings.push(
           `- WARNING: Gateway bound to ${bindDescriptor} with trusted-proxy authentication configured.`,
           "  The Gateway validates each request's proxy source and identity headers; review the deep security audit before exposing this port.",
@@ -514,8 +527,11 @@ export async function collectSecurityWarnings(
 }
 
 /** Emits security warnings plus the deep audit follow-up command. */
-export async function noteSecurityWarnings(cfg: OpenClawConfig) {
-  const warnings = await collectSecurityWarnings(cfg);
+export async function noteSecurityWarnings(
+  cfg: OpenClawConfig,
+  options: { allowExecSecretRefs?: boolean; env?: NodeJS.ProcessEnv } = {},
+) {
+  const warnings = await collectSecurityWarnings(cfg, options.env, options);
   if (warnings.length > 0) {
     warnings.push(`- Run: ${formatCliCommand("openclaw security audit --deep")}`);
     note(warnings.join("\n"), "Security");
