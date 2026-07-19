@@ -66,6 +66,14 @@ describe("session reset policy", () => {
       sessionCfg: { resetByType: { group: { atHour: 6 } } },
       resetType: "group" as const,
     },
+    {
+      name: "a type override above a disabled base policy",
+      sessionCfg: {
+        reset: { mode: "none" as const },
+        resetByType: { group: { atHour: 6 } },
+      },
+      resetType: "group" as const,
+    },
   ])("preserves the daily fallback when $name omits mode", ({ sessionCfg, resetType }) => {
     expect(resolveSessionResetPolicy({ sessionCfg, resetType })).toMatchObject({
       mode: "daily",
@@ -130,6 +138,23 @@ describe("session reset policy", () => {
     expect(
       resolveSessionResetPolicy({ sessionCfg, resetType: "direct", resetOverride }),
     ).toMatchObject({ mode: "daily", atHour: 6, configured: true });
+
+    const modeLessSessionCfg = {
+      reset: { mode: "none" as const },
+      resetByChannel: { discord: { atHour: 7 } },
+    };
+    const modeLessOverride = resolveChannelResetConfig({
+      sessionCfg: modeLessSessionCfg,
+      channel: "discord",
+    });
+
+    expect(
+      resolveSessionResetPolicy({
+        sessionCfg: modeLessSessionCfg,
+        resetType: "direct",
+        resetOverride: modeLessOverride,
+      }),
+    ).toMatchObject({ mode: "daily", atHour: 7, configured: true });
   });
 
   it("accepts none in the session schema and ignores reset deadlines", () => {

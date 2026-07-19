@@ -56,8 +56,9 @@ export function resolveSessionResetPolicy(params: {
   // Legacy `idleMinutes` implied idle reset only when no modern reset block was configured.
   const mode =
     typeReset?.mode ??
+    (typeReset ? "daily" : undefined) ??
     baseReset?.mode ??
-    (typeReset || baseReset
+    (baseReset
       ? "daily"
       : !hasExplicitReset && legacyIdleMinutes != null
         ? "idle"
