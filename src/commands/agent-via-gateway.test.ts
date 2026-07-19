@@ -6,6 +6,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { GatewayRequestFunction } from "../gateway/call.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -1812,6 +1813,121 @@ describe("agentCliCommand", () => {
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });
+
+  it("surfaces a replay-recovered terminal failure after the wait transport fails", async () => {
+    await withTempStore(async () => {
+      const recoveredFailure = Object.assign(new Error("original provider failure"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+      });
+      callGateway
+        .mockImplementationOnce(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+          onAccepted?.({
+            status: "accepted",
+            runId: "accepted-run",
+            sessionKey: "agent:main:incident-42",
+          });
+          throw createGatewayClosedError();
+        })
+        .mockRejectedValueOnce(createGatewayClosedError())
+        .mockRejectedValueOnce(recoveredFailure);
+
+      await expect(
+        agentCliCommand(
+          { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
+          runtime,
+        ),
+      ).rejects.toBe(recoveredFailure);
+
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(callGateway.mock.calls[2]?.[0]).toMatchObject({
+        method: "agent",
+        params: { idempotencyKey: "accepted-run", replayOnly: true },
+      });
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["agent.wait", "agent replay"] as const)(
+    "aborts the accepted run when SIGTERM interrupts %s recovery",
+    async (recoveryPhase) => {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        let sameConnectionAbort:
+          | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+          | undefined;
+        const waitForRecoveryAbort = async (request: Record<string, unknown>) => {
+          const signal = request.signal as AbortSignal | undefined;
+          const onSignalAbort = request.onSignalAbort as
+            | ((request: GatewayRequestFunction) => Promise<void>)
+            | undefined;
+          return await new Promise((_, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                void (async () => {
+                  await onSignalAbort?.(async (method, params, opts) => {
+                    sameConnectionAbort = { method, params, opts };
+                    return { ok: true, aborted: true, runIds: ["accepted-run"] };
+                  });
+                  const error = new Error("gateway recovery aborted");
+                  error.name = "AbortError";
+                  reject(error);
+                })();
+              },
+              { once: true },
+            );
+          });
+        };
+        callGateway.mockImplementation(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          if (request.method === "agent") {
+            const params = requireRecord(request.params, "gateway agent params");
+            if (params.replayOnly === true) {
+              return await waitForRecoveryAbort(request);
+            }
+            const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+            onAccepted?.({
+              status: "accepted",
+              runId: "accepted-run",
+              sessionKey: "agent:main:incident-42",
+            });
+            throw createGatewayClosedError();
+          }
+          if (request.method === "agent.wait") {
+            return recoveryPhase === "agent.wait"
+              ? await waitForRecoveryAbort(request)
+              : { runId: "accepted-run", status: "ok" };
+          }
+          throw new Error(`unexpected gateway method ${String(request.method)}`);
+        });
+
+        const expectedGatewayCalls = recoveryPhase === "agent.wait" ? 2 : 3;
+        const run = agentCliCommand(
+          { message: "hi", sessionKey: "agent:main:incident-42", runId: "accepted-run" },
+          runtime,
+          { process: signals.processLike },
+        );
+        await waitForGatewayCall(expectedGatewayCalls);
+        signals.emit("SIGTERM");
+
+        await run;
+        expect(callGateway).toHaveBeenCalledTimes(expectedGatewayCalls);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+        expect(sameConnectionAbort).toEqual({
+          method: "chat.abort",
+          params: {
+            sessionKey: "agent:main:incident-42",
+            runId: "accepted-run",
+          },
+          opts: { timeoutMs: 2_000 },
+        });
+      });
+    },
+  );
 
   it("recovers when a handshake retry finds the original run in flight", async () => {
     vi.useFakeTimers();

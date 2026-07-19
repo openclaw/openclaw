@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -442,6 +443,14 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
+function isRecoveredGatewayAgentTerminalFailure(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.name === "GatewayClientRequestError" &&
+    (err as { gatewayCode?: unknown }).gatewayCode === ErrorCodes.UNAVAILABLE
+  );
+}
+
 function readAcceptedRunContext(payload: unknown): {
   runId?: string;
   sessionKey?: string;
@@ -837,6 +846,29 @@ async function agentViaGatewayCommand(
     cleanupBundleMcpOnRunEnd: true,
     idempotencyKey,
   };
+  const abortAcceptedRunOnActiveConnection = async (request: GatewayRequestFunction) => {
+    activeConnectionAbortAttempted = true;
+    activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
+      runId: acceptedRunId,
+      sessionKey: acceptedSessionKey,
+      signal: signalBridge.getReceivedSignal(),
+      runtime,
+      request,
+    });
+  };
+  const abortAcceptedRunAfterRecoverySignal = async () => {
+    if (activeConnectionAbortSucceeded) {
+      return;
+    }
+    await abortAcceptedGatewayAgentRunWithGatewayCall({
+      runId: acceptedRunId,
+      sessionKey: acceptedSessionKey,
+      signal: signalBridge.getReceivedSignal(),
+      runtime,
+      gatewayIdentity,
+      config: cfg,
+    });
+  };
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {
@@ -858,16 +890,7 @@ async function agentViaGatewayCommand(
             acceptedRunId = accepted.runId ?? acceptedRunId;
             acceptedSessionKey = accepted.sessionKey ?? acceptedSessionKey;
           },
-          onSignalAbort: async (request) => {
-            activeConnectionAbortAttempted = true;
-            activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
-              runId: acceptedRunId,
-              sessionKey: acceptedSessionKey,
-              signal: signalBridge.getReceivedSignal(),
-              runtime,
-              request,
-            });
-          },
+          onSignalAbort: abortAcceptedRunOnActiveConnection,
           ...gatewayIdentity,
         }),
     );
@@ -888,14 +911,15 @@ async function agentViaGatewayCommand(
         timeoutMs: resolveTimerTimeoutMs(remainingMs + 10_000, 10_000, 10_000),
         config: cfg,
         signal: signalBridge.signal,
+        onSignalAbort: abortAcceptedRunOnActiveConnection,
         ...gatewayIdentity,
       });
     } catch (waitError) {
-      if (isAbortError(waitError)) {
-        throw waitError;
-      }
-      if (signalBridge.signal.aborted) {
-        throw createAbortError("gateway agent recovery aborted");
+      if (isAbortError(waitError) || signalBridge.signal.aborted) {
+        await abortAcceptedRunAfterRecoverySignal();
+        throw isAbortError(waitError)
+          ? waitError
+          : createAbortError("gateway agent recovery aborted");
       }
     }
     if (waitResponse?.status === "error") {
@@ -910,14 +934,18 @@ async function agentViaGatewayCommand(
         timeoutMs: 10_000,
         config: cfg,
         signal: signalBridge.signal,
+        onSignalAbort: abortAcceptedRunOnActiveConnection,
         ...gatewayIdentity,
       });
     } catch (replayError) {
-      if (isAbortError(replayError)) {
-        throw replayError;
+      if (isAbortError(replayError) || signalBridge.signal.aborted) {
+        await abortAcceptedRunAfterRecoverySignal();
+        throw isAbortError(replayError)
+          ? replayError
+          : createAbortError("gateway agent recovery aborted");
       }
-      if (signalBridge.signal.aborted) {
-        throw createAbortError("gateway agent recovery aborted");
+      if (isRecoveredGatewayAgentTerminalFailure(replayError)) {
+        throw replayError;
       }
       throw new GatewayAgentOutcomeUnknownError({
         cause: replayError,
