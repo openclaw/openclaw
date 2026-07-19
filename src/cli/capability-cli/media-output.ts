@@ -51,18 +51,13 @@ export async function writeOutputAsset(params: {
   };
 }
 
-// Cap individual CLI input files at 100 MiB — media and document files
-// passed via --file to openclaw capability commands.
-const MAX_CLI_INPUT_FILE_BYTES = 100 * 1024 * 1024;
-// Aggregate budget for a single --file invocation to prevent OOM when
-// multiple permitted inputs are provided together.
-const MAX_TOTAL_CLI_INPUT_FILE_BYTES = 500 * 1024 * 1024;
-
-/** Read a user-supplied input file with a size pre-check to prevent OOM. */
-async function readCliInputFileSafely(
-  filePath: string,
-  budget: { remaining: number },
-): Promise<Buffer> {
+/**
+ * Read a user-supplied input file through an open descriptor, binding the
+ * read to the size observed at open time. This closes the race where a file
+ * is substituted or grown between validation and consumption while preserving
+ * the existing unlimited-input contract.
+ */
+async function readCliInputFileSafely(filePath: string): Promise<Buffer> {
   const resolvedPath = path.resolve(filePath);
   const handle = await fs.open(resolvedPath, "r");
   try {
@@ -70,18 +65,18 @@ async function readCliInputFileSafely(
     if (!stat.isFile()) {
       throw new Error(`not a regular file: ${resolvedPath}`);
     }
-    if (stat.size > MAX_CLI_INPUT_FILE_BYTES) {
-      throw new Error(
-        `file too large: ${resolvedPath} is ${stat.size} bytes (max ${MAX_CLI_INPUT_FILE_BYTES})`,
-      );
+    const size = stat.size;
+    const buffer = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
+      if (bytesRead === 0) {
+        // File shrank after stat; return the bytes we actually read.
+        return buffer.subarray(0, offset);
+      }
+      offset += bytesRead;
     }
-    if (stat.size > budget.remaining) {
-      throw new Error(
-        `file too large: ${resolvedPath} is ${stat.size} bytes (max remaining total budget ${budget.remaining})`,
-      );
-    }
-    budget.remaining -= stat.size;
-    return await handle.readFile();
+    return buffer;
   } finally {
     await handle.close();
   }
@@ -90,15 +85,12 @@ async function readCliInputFileSafely(
 export async function readInputFiles(
   files: string[],
 ): Promise<Array<{ path: string; buffer: Buffer }>> {
-  // Process files sequentially with an aggregate byte budget so one command
-  // invocation cannot allocate more than MAX_TOTAL_CLI_INPUT_FILE_BYTES.
-  const budget = { remaining: MAX_TOTAL_CLI_INPUT_FILE_BYTES };
   const result: Array<{ path: string; buffer: Buffer }> = [];
   for (const filePath of files) {
     const resolvedPath = path.resolve(filePath);
     result.push({
       path: resolvedPath,
-      buffer: await readCliInputFileSafely(resolvedPath, budget),
+      buffer: await readCliInputFileSafely(resolvedPath),
     });
   }
   return result;
