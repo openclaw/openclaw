@@ -25,6 +25,13 @@ export function classifyCustodianSendFailure(
   return "unknown";
 }
 
+export function questionUncertainty(previous: boolean, outcome: CustodianSendOutcome): boolean {
+  if (outcome === "sent") {
+    return false;
+  }
+  return outcome === "unknown" ? true : previous;
+}
+
 export function reconcileCustodianEventNudge(
   current: CustodianEventNudge | null,
   pending: CustodianEventNudge | null,

@@ -547,7 +547,7 @@ describe("custodian page nudges", () => {
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
   });
 
-  it("keeps event nudges blocked after a question reply has an uncertain failure", async () => {
+  it("keeps nudges blocked after an uncertain question reply and rejected retry", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -562,7 +562,10 @@ describe("custodian page nudges", () => {
           isOther: false,
         },
       })
-      .mockRejectedValueOnce(new Error("Request failed"));
+      .mockRejectedValueOnce(new Error("Request failed"))
+      .mockRejectedValueOnce(
+        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
+      );
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -585,6 +588,18 @@ describe("custodian page nudges", () => {
     await page.updateComplete;
 
     expect(request).toHaveBeenCalledTimes(2);
+
+    const input = page.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox textarea",
+    )!;
+    input.value = "Try again";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    await page.updateComplete;
+    expect(page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.disabled).toBe(true);
   });
 
   it("restores a closed question after its reply is explicitly rejected", async () => {

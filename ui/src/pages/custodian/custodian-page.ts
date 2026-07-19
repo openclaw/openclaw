@@ -490,6 +490,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     // meaningful whitespace and must reach the agent exactly as entered.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
+    const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
     if (questionReply) {
       // A failed wizard reply may have arrived, so block nudges until the session outcome is known.
       this.questionReplyUncertain = true;
@@ -500,7 +501,6 @@ export class CustodianPage extends OpenClawLightDomElement {
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
     // A new operator turn supersedes any abandoned-turn unknown-outcome warning.
     this.abandonedTurnOutcomeUnknown = false;
-    const answeredQuestions = this.answeredQuestions;
     this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.messages = [
       ...this.messages,
@@ -521,9 +521,9 @@ export class CustodianPage extends OpenClawLightDomElement {
     const replyEpoch = this.requestEpoch;
     const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
-      this.questionReplyUncertain = outcome === "unknown";
+      this.questionReplyUncertain = eventNudgeState.questionUncertainty(questionState[1], outcome);
       if (outcome === "rejected") {
-        this.answeredQuestions = answeredQuestions;
+        this.answeredQuestions = questionState[0];
       }
     }
     return outcome;
