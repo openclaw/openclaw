@@ -248,6 +248,7 @@ async function runBenchmarkDriver(args) {
     for (const signal of FORWARDED_SIGNALS) {
       const handler = () => {
         receivedSignal ??= signal;
+        clearTimeout(deadlineTimer);
         terminateDriver(signal);
       };
       signalHandlers.set(signal, handler);

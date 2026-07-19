@@ -227,6 +227,38 @@ describe("test-update-cli-startup-bench", () => {
     },
   );
 
+  it("preserves an interrupt that arrives just before the startup deadline", async () => {
+    process.env.VITEST = "true";
+    process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS = "200";
+    process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS = "150";
+    const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-signal-race-"));
+    const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
+    const child = Object.assign(new EventEmitter(), {
+      connected: false,
+      disconnect: vi.fn(),
+      pid: 123_456,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+    spawnMock.mockReturnValue(child);
+    setSuccessfulUpdateArgv(outputPath);
+
+    try {
+      const updatePromise = import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+      process.emit("SIGINT");
+      await updatePromise;
+
+      expect(process.exitCode).toBe(130);
+      expect(terminateManagedChildMock).toHaveBeenCalledWith(child, "SIGINT");
+      expect(terminateManagedChildMock).toHaveBeenCalledWith(child, "SIGKILL");
+      expect(child.unref).toHaveBeenCalledOnce();
+    } finally {
+      child.emit("close", 1, null);
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("cleans the reported active sample when the driver crashes", async () => {
     const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-driver-crash-"));
     const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
