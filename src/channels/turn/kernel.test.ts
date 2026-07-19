@@ -200,6 +200,15 @@ function finalizeResult(value: unknown): FinalizeResult {
   return value as FinalizeResult;
 }
 
+function expectDispatched<TDispatchResult>(
+  result: ChannelTurnResult<TDispatchResult>,
+): asserts result is Extract<ChannelTurnResult<TDispatchResult>, { dispatched: true }> {
+  expect(result.dispatched).toBe(true);
+  if (!result.dispatched) {
+    throw new Error("expected dispatch");
+  }
+}
+
 function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
   return log.mock.calls.map(([event]) => {
     const entry = event as TurnLogEvent;
@@ -673,7 +682,7 @@ describe("channel turn kernel", () => {
       },
     });
 
-    expect(result.dispatched).toBe(true);
+    expectDispatched(result);
     expect(result.dispatchResult?.counts.final).toBe(1);
     expect(events).toEqual(["record", "dispatch", "deliver"]);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
@@ -711,6 +720,7 @@ describe("channel turn kernel", () => {
     });
 
     expect(events).toEqual(["record", "dispatch"]);
+    expectDispatched(result);
     expect(result.dispatchResult?.queuedFinal).toBe(true);
     expect(loggedEvents(log)).toEqual([
       { stage: "record", event: "start", messageId: "msg-1" },
@@ -856,6 +866,7 @@ describe("channel turn kernel", () => {
       },
     });
 
+    expectDispatched(result);
     expect(result.dispatchResult?.queuedFinal).toBe(false);
     expect(log.mock.calls).toContainEqual([
       expect.objectContaining({
@@ -893,6 +904,7 @@ describe("channel turn kernel", () => {
       },
     });
 
+    expectDispatched(result);
     expect(result.dispatchResult?.observedReplyDelivery).toBe(true);
     expect(log.mock.calls).not.toContainEqual([
       expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
@@ -924,6 +936,7 @@ describe("channel turn kernel", () => {
       },
     });
 
+    expectDispatched(result);
     expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
     expect(log.mock.calls).toContainEqual([
       expect.objectContaining({
@@ -1106,7 +1119,7 @@ describe("channel turn kernel", () => {
     expect(runDispatch).not.toHaveBeenCalled();
     expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
     expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
-    expect(result.dispatched).toBe(true);
+    expectDispatched(result);
     expect(result.dispatchResult).toBe(observeOnlyDispatchResult);
     expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
   });
