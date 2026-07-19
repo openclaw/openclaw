@@ -351,6 +351,20 @@ describe("sessions-list-tool", () => {
     expect(getSessionsListDetails(result).sessions?.[0]).not.toHaveProperty("archivedAt");
   });
 
+  it("clamps pathological limit values before the gateway call", async () => {
+    mocks.gatewayCall.mockResolvedValue({ path: "/tmp/sessions.json", sessions: [] });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    await tool.execute("call-clamp", { limit: 1_000_000_000_000 });
+
+    expect(mocks.gatewayCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.list",
+        params: expect.objectContaining({ limit: 1000 }),
+      }),
+    );
+  });
+
   it.each([
     [{ limit: 1.5 }, "limit must be a positive integer"],
     [{ activeMinutes: 0 }, "activeMinutes must be a positive integer"],

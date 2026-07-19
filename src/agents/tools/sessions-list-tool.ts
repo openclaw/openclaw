@@ -172,7 +172,11 @@ export function createSessionsListTool(opts?: {
       );
       const allowedKinds = allowedKindsList.length ? new Set(allowedKindsList) : undefined;
 
-      const limit = readPositiveIntegerParam(params, "limit");
+      // Model-supplied limits are clamped before they reach the gateway session
+      // store, same shape as the messageLimit cap below; direct RPC callers keep
+      // the unbounded sessions.list contract.
+      const limitRaw = readPositiveIntegerParam(params, "limit");
+      const limit = limitRaw === undefined ? undefined : Math.min(limitRaw, 1000);
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
       const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
