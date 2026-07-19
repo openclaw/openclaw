@@ -71,24 +71,21 @@ interface RedactedArrayOriginalResolver {
 
 /**
  * Builds a resolver mapping each edited array item to the original item it may
- * restore redacted values from. Identity-keyed arrays match by `id`; unmatched,
- * renamed, or duplicated ids resolve to `undefined` so redacted placeholders
- * fail closed. Non-identity arrays resolve positionally, preserving existing
- * behaviour.
+ * restore redacted values from.
  *
- * Whether the array is identity-keyed is decided from the authoritative original
- * array, so a client cannot flip the whole array to positional by crafting an
- * `id`. (A client can still send a bare value for one row, which resolves that
- * row positionally — unchanged from before this indirection.) `visibleIdOf`
- * returns an original item's id
- * as the client receives it — the redactor's own output, so redaction rules are
- * never re-implemented here. Ids that redact away collapse to one sentinel key,
- * which reads as duplicate and keeps the array positional (unchanged saves are
- * not rejected). Otherwise identity applies per row only to object rows that
- * carry an id: a bare value (a whole-item redaction sentinel, or a sensitive
- * string array element) has no identity and restores positionally, exactly as
- * before; an object row missing or duplicating an `id` resolves to no original
- * so its redacted fields fail closed.
+ * An identity lookup is built only when the authoritative original array yields a
+ * unique, non-empty, client-visible id for every item. `visibleIdOf` reports each
+ * id as the redactor renders it, so redaction rules are never re-implemented
+ * here, and ids that redact away collapse to a single key and read as ambiguous.
+ * When identity cannot be established that way, the array resolves positionally
+ * and the caller's existing behaviour is untouched.
+ *
+ * With identity established, an object row matches its original by id, while a
+ * row whose id is missing, duplicated or absent from the original resolves to no
+ * original so its redacted placeholders fail closed rather than inheriting
+ * another row's value; a bare value carries no id and resolves positionally. The
+ * resolver only selects which original a row may draw from — values the client
+ * submitted explicitly are never replaced.
  */
 export function createRedactedArrayOriginalResolver(
   originalArray: unknown[],
