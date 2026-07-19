@@ -3170,6 +3170,16 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("checks native and Node state schema versions in the macOS lane", () => {
+    const workflow = readCiWorkflow();
+    const schemaVersionStep = workflow.jobs["macos-swift"].steps.find(
+      (step: WorkflowStep) => step.name === "Native state schema version contract",
+    );
+
+    expect(schemaVersionStep.run).toContain("node scripts/check-native-state-schema-version.mjs");
+    expect(schemaVersionStep.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
+  });
+
   it("resets SwiftPM state between macOS release build retries", () => {
     const workflow = readCiWorkflow();
     const macosInstallStep = workflow.jobs["macos-swift"].steps.find(

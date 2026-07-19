@@ -594,7 +594,7 @@ class NodeRuntime private constructor(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val canvas = CanvasController()
-  val camera = CameraCaptureManager(appContext)
+  val camera = CameraCaptureManager(appContext) { prefs.preferredCameraFacing.value }
   val location = LocationCaptureManager(appContext)
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
@@ -629,6 +629,8 @@ class NodeRuntime private constructor(
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = _voiceCaptureMode.asStateFlow()
+  private val _activeAudioInputDevicePreference = MutableStateFlow<String?>(null)
+  val activeAudioInputDevicePreference: StateFlow<String?> = _activeAudioInputDevicePreference.asStateFlow()
 
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
@@ -1545,6 +1547,12 @@ class NodeRuntime private constructor(
     MicCaptureManager(
       context = appContext,
       scope = scope,
+      preferredAudioInputDevice = { prefs.preferredAudioInputDevice.value },
+      onAppliedAudioInputChanged = { key ->
+        if (_voiceCaptureMode.value == VoiceCaptureMode.ManualMic) {
+          _activeAudioInputDevicePreference.value = key
+        }
+      },
       createTranscriptionSession = {
         val gatewayId = connectedEndpoint?.stableId ?: error("not connected")
         val params =
@@ -1652,6 +1660,12 @@ class NodeRuntime private constructor(
       session = operatorSession,
       isConnected = { gatewayConnectionDisplay.value.isConnected },
       gatewayStableId = { connectedEndpoint?.stableId },
+      preferredAudioInputDevice = { prefs.preferredAudioInputDevice.value },
+      onAppliedAudioInputChanged = { key ->
+        if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode) {
+          _activeAudioInputDevicePreference.value = key
+        }
+      },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
@@ -3239,6 +3253,12 @@ class NodeRuntime private constructor(
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
 
+  val preferredCameraFacing: StateFlow<String>
+    get() = prefs.preferredCameraFacing
+
+  val preferredAudioInputDevice: StateFlow<String?>
+    get() = prefs.preferredAudioInputDevice
+
   fun setSpeakerEnabled(value: Boolean) {
     prefs.setSpeakerEnabled(value)
     if (voiceReplySpeakerLazy.isInitialized()) {
@@ -3246,6 +3266,14 @@ class NodeRuntime private constructor(
     }
     // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
+  }
+
+  fun setPreferredCameraFacing(value: String) {
+    prefs.setPreferredCameraFacing(value)
+  }
+
+  fun setPreferredAudioInputDevice(value: String?) {
+    prefs.setPreferredAudioInputDevice(value)
   }
 
   fun setVoiceWakeEnabled(value: Boolean) {
@@ -3462,6 +3490,7 @@ class NodeRuntime private constructor(
         if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
         talkPttOwnership.set(null)
         _voiceCaptureMode.value = captureMode
+        _activeAudioInputDevicePreference.value = null
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false

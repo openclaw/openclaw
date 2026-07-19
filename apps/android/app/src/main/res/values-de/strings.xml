@@ -68,6 +68,7 @@
     <string name="native_088e0e5ebc96c6ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway-Einrichtung ersetzen?"</string>
     <string name="native_08a5391c1de3078a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automationen konnten nicht geladen werden."</string>
     <string name="native_08b041935798fbf6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Du"</string>
+    <string name="native_08ea63ee26954dca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Integriertes Mikrofon"</string>
     <string name="native_0905f7f59021c2a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oberfläche"</string>
     <string name="native_0929c9dc7f794852" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keine Vorschläge"</string>
     <string name="native_0979c6fdbdca1675" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chat öffnen"</string>
@@ -116,6 +117,7 @@
     <string name="native_11e18d6748aa9128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Version und Update"</string>
     <string name="native_11e47358a692d81b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fasse die letzten Sitzungen und nächsten Schritte zusammen."</string>
     <string name="native_11f37f9652a47b5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw zeigt hier Genehmigungen, fehlgeschlagene Aufträge und Kanalprobleme an."</string>
+    <string name="native_11f6dc0befae5081" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"USB-Mikrofon"</string>
     <string name="native_1242bf5561713a98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zu viele Freigaben warten darauf, hinzugefügt zu werden."</string>
     <string name="native_1251aefc12b2b10e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sitzung löschen?"</string>
     <string name="native_12698ce1ea5cd4ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Übersprungen"</string>
@@ -136,6 +138,7 @@
     <string name="native_16524d7409d37507" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sitzungsziel"</string>
     <string name="native_1669ad8d6f188594" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub-Skill prüfen"</string>
     <string name="native_16a0eeb0791b6c92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"snapshot"</string>
+    <string name="native_16b1a05e1d987ed1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bevorzugtes Mikrofon"</string>
     <string name="native_170421cc4a4c2f30" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Node-Host"</string>
     <string name="native_1709305c9fa966d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stufe"</string>
     <string name="native_172b997ffbc8c9a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"App-Auswahl schließen"</string>
@@ -155,6 +158,7 @@
     <string name="native_18f2a0947f9d6523" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Blockiert"</string>
     <string name="native_18f6e5973bc41268" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktivierungswort oder -phrase"</string>
     <string name="native_1906b261e6e0fdd0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway benötigt eine Gerätefreigabe"</string>
+    <string name="native_19408baaf5c2e446" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Externes Mikrofon"</string>
     <string name="native_194a05367fb28913" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s bereit"</string>
     <string name="native_199e261f8ee0e97f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbunden (Operator offline)"</string>
     <string name="native_19fc7a47df16fb1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Funktion nicht genehmigt"</string>
@@ -611,6 +615,7 @@
     <string name="native_67a926f7008e2b0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nicht verfügbar"</string>
     <string name="native_67fa416afa64d304" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Token einfügen"</string>
     <string name="native_6827238fea72c88b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keine Anbieter"</string>
+    <string name="native_68a0cdfcc76d6ebd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bluetooth-Mikrofon"</string>
     <string name="native_690dbe9dc0993c42" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zuletzt verwendet"</string>
     <string name="native_69384c1c4d99f6eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ergebnis der Auflösung unbekannt. Aktionen bleiben deaktiviert, bis der Gateway-Eintrag verifiziert wurde."</string>
     <string name="native_6940189433657105" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"dialog"</string>
@@ -692,6 +697,7 @@
     <string name="native_746f71ec623adc37" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Epoch-Millisekunden (optional)"</string>
     <string name="native_7491b353909c1147" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keine Modelle konfiguriert. Aktualisieren Sie, um die Verfügbarkeit erneut zu prüfen."</string>
     <string name="native_74a883a037bc227f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Einstellungen"</string>
+    <string name="native_74c372f29b83df94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rückkamera"</string>
     <string name="native_74cdd65b358733f1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sitzungslayout umschalten"</string>
     <string name="native_74e21680eac7385c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"approve"</string>
     <string name="native_74e492d5d0df0bab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bevor du beginnst"</string>
@@ -844,6 +850,7 @@
     <string name="native_8f54b0d1e30092d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sprachnachricht"</string>
     <string name="native_8fa196125b734940" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nichts erfordert deine Aufmerksamkeit"</string>
     <string name="native_8fce9ec6fd5432df" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw benötigt %1$s-Berechtigungen, um fortzufahren."</string>
+    <string name="native_8fe42acb8573244e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mikrofon des kabelgebundenen Headsets"</string>
     <string name="native_906115657390f367" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zugestellt"</string>
     <string name="native_9071738f145962a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fällig"</string>
     <string name="native_90bf81305006e6ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill-Details sind im aktuellen Skills-Status nicht verfügbar."</string>
@@ -1017,6 +1024,7 @@
     <string name="native_adca3171c270301a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mit dieser Gateway-Anmeldung können verbundene Knoten aufgelistet, aber keine neuen Telefonkopplungen genehmigt werden. Koppeln Sie neue Telefone über eine Gateway-Admin-Sitzung. Die Genehmigung von Knotenfunktionen erfolgt separat und verwendet weiterhin nodes approve &lt;request id&gt;."</string>
     <string name="native_ade9248e0132b411" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vertrauen"</string>
     <string name="native_ae27fa789a03c1db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dieser QR-Code ist kein OpenClaw-Einrichtungs-QR-Code. Generiere mit openclaw qr einen neuen Code und versuche es erneut."</string>
+    <string name="native_ae38b50b9a3a0a2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bevorzugtes Mikrofon nicht verfügbar; automatische Audioausgabe wird verwendet."</string>
     <string name="native_ae86062126fc1a52" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sitzungen in \"%1$s\" bleiben erhalten und werden zurück in „Nicht gruppiert“ verschoben."</string>
     <string name="native_aea4a04a80426ed8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abgelehnt"</string>
     <string name="native_aed306fbb63c0c68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android- und Hintergrundpakete einschließen."</string>
@@ -1053,6 +1061,7 @@
     <string name="native_b4aca584eecea590" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aufgabendetails konnten nicht geladen werden"</string>
     <string name="native_b51702b087112113" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agentennachricht"</string>
     <string name="native_b538b9d40695a6fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway erfordert diese Geräteidentität. Authentifizieren Sie sich erneut oder setzen Sie diese Gateway-Verbindung zurück."</string>
+    <string name="native_b53b35163f7588c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nächste Sitzung"</string>
     <string name="native_b55dae19fcb48a4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbindungssicherheit"</string>
     <string name="native_b5a229ac8becc603" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Website"</string>
     <string name="native_b5af0517c02601fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbinden Sie die Gateway, um Genehmigungsanfragen in der App zu laden."</string>
@@ -1084,6 +1093,7 @@
     <string name="native_bb4f2558e4333834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Widget-Bild unter Downloads gespeichert"</string>
     <string name="native_bbe5fc3b9ef39f99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wird gestartet…"</string>
     <string name="native_bc19cec293228fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Clientfehler"</string>
+    <string name="native_bc6618670f3e8a17" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bluetooth-LE-Mikrofon"</string>
     <string name="native_bcb06651437caa15" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s %2$s"</string>
     <string name="native_bd08450d63406844" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Die Automation wurde aktiviert."</string>
     <string name="native_bd6719b455bcc898" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memory Get"</string>
@@ -1230,6 +1240,7 @@
     <string name="native_d3974fd6d3b6c81f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ausführung ausstehend"</string>
     <string name="native_d3f75e24411053c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Persönliche KI auf deinen Geräten"</string>
     <string name="native_d406ade2958cb5b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Attach"</string>
+    <string name="native_d461a493a3753877" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automatisch"</string>
     <string name="native_d4b1ea5708dd5329" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Übersicht"</string>
     <string name="native_d53167a3f66debec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wiederherstellung konnte nicht angefordert werden. Zum erneuten Versuchen tippen."</string>
     <string name="native_d588c689e03132fb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s\n\n"</string>
@@ -1421,6 +1432,7 @@
     <string name="native_f4db1e48476f6075" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Beenden"</string>
     <string name="native_f4ef7a41caa88dd1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keine Anbieter bereit"</string>
     <string name="native_f502267deff4108d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Noch keine Sitzungen"</string>
+    <string name="native_f503d14f0c32a9c0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Priorisiert verbundene Bluetooth-Mikrofone."</string>
     <string name="native_f5171b47ebca6202" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s App ist für die Weiterleitung blockiert."</string>
     <string name="native_f532ee1f7288365e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nachrichtenaktionen"</string>
     <string name="native_f5387f9bb6ed7031" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Art"</string>
@@ -1468,6 +1480,7 @@
     <string name="native_fcdeb9947bc94101" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Test, Test, 1, 2, 3"</string>
     <string name="native_fcea13c79c2f85a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub-Skills konnten nicht gesucht werden."</string>
     <string name="native_fd175ecd65f7353d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kein Prompt"</string>
+    <string name="native_fd301dc5d0e7ccf1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Frontkamera"</string>
     <string name="native_fda8fc3b85420d14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Protokolleintrag öffnen"</string>
     <string name="native_fdd0d769c49517c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Netzwerk-Zeitüberschreitung"</string>
     <string name="native_fe18013d93d22f4f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jetzt"</string>
