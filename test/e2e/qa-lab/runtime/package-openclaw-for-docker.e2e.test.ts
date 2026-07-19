@@ -13,12 +13,34 @@ import {
   parseArgs,
   prepareBundledAiRuntimePackage,
   runCommandForTest,
+  resolveSpawnInvocation,
   writePackageInventoryForDocker,
 } from "../../../../scripts/package-openclaw-for-docker.mjs";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("resolves package-manager shims portably", () => {
+  expect(resolveSpawnInvocation("pnpm", ["pack"], "win32", "C:\\Node\\node.exe")).toEqual({
+    command: "C:\\Node\\node.exe",
+    args: ["C:\\Node\\node_modules\\corepack\\dist\\pnpm.js", "pack"],
+  });
+  expect(resolveSpawnInvocation("npm", ["pack"], "win32", "C:\\Node\\node.exe")).toEqual({
+    command: "C:\\Node\\node.exe",
+    args: ["C:\\Node\\node_modules\\npm\\bin\\npm-cli.js", "pack"],
+  });
+  expect(resolveSpawnInvocation("pnpm", ["pack"], "linux", "/usr/bin/node")).toEqual({
+    command: "pnpm",
+    args: ["pack"],
+  });
+  expect(
+    resolveSpawnInvocation(process.execPath, ["--version"], "win32", "C:\\Node\\node.exe"),
+  ).toEqual({
+    command: process.execPath,
+    args: ["--version"],
+  });
+});
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) {

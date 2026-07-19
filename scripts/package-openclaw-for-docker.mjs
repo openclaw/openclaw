@@ -210,6 +210,33 @@ export function parseArgs(argv) {
   return options;
 }
 
+export function resolveSpawnInvocation(
+  command,
+  args,
+  platform = process.platform,
+  nodeExecutable = process.execPath,
+) {
+  if (platform === "win32" && command === "pnpm") {
+    return {
+      command: nodeExecutable,
+      args: [
+        path.join(path.dirname(nodeExecutable), "node_modules", "corepack", "dist", "pnpm.js"),
+        ...args,
+      ],
+    };
+  }
+  if (platform === "win32" && command === "npm") {
+    return {
+      command: nodeExecutable,
+      args: [
+        path.join(path.dirname(nodeExecutable), "node_modules", "npm", "bin", "npm-cli.js"),
+        ...args,
+      ],
+    };
+  }
+  return { command, args };
+}
+
 function run(command, args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
@@ -218,7 +245,8 @@ function run(command, args, cwd, options = {}) {
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );
     const useProcessGroup = process.platform !== "win32";
-    const child = spawn(command, args, {
+    const invocation = resolveSpawnInvocation(command, args);
+    const child = spawn(invocation.command, invocation.args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: options.env ?? process.env,

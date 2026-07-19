@@ -87,6 +87,16 @@ describe("generate-npm-shrinkwrap", () => {
     }
   });
 
+  it("ships root relative file dependencies in the published package", () => {
+    const packageJson = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+    const relativeFileDependencies = Object.values(packageJson.dependencies)
+      .filter((spec): spec is string => typeof spec === "string" && spec.startsWith("file:"))
+      .map((spec) => spec.slice("file:".length));
+
+    expect(relativeFileDependencies).not.toEqual([]);
+    expect(packageJson.files).toEqual(expect.arrayContaining(relativeFileDependencies));
+  });
+
   it.each([
     ["absolute POSIX paths", "file:/tmp/contracts.tgz"],
     ["absolute Windows paths", "file:C:\\temp\\contracts.tgz"],

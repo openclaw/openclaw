@@ -34,6 +34,7 @@
     "pnpm-workspace.yaml",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
+    "vendor/packages/openclaw-contracts-0.1.0.tgz",
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
