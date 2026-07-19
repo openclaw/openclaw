@@ -158,13 +158,17 @@ describe("DefaultResourceLoader", () => {
     }
   });
 
-  it("skips oversized AGENTS.md files during context file loading", async () => {
+  it("loads large AGENTS.md files during context file loading", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const root = tempDirs.make("openclaw-resource-loader-ctx-");
 
-    // Write an AGENTS.md that exceeds the 1 MiB context file limit.
+    // Write an AGENTS.md larger than 1 MiB — project-context files are loaded
+    // without a size cap to preserve existing project instructions.
     const agentsPath = path.join(root, "AGENTS.md");
-    fs.writeFileSync(agentsPath, Buffer.alloc(2 * 1024 * 1024));
+    const largeContent = Buffer.alloc(2 * 1024 * 1024);
+    const marker = Buffer.from("# Large project rules\n");
+    marker.copy(largeContent, 0);
+    fs.writeFileSync(agentsPath, largeContent);
 
     try {
       const loader = new DefaultResourceLoader({
@@ -179,12 +183,11 @@ describe("DefaultResourceLoader", () => {
 
       await loader.reload();
 
-      // The oversized AGENTS.md at our test path should NOT appear in results.
-      // (Other AGENTS.md files may exist in ancestor directories — we only assert
-      // that our oversized one is skipped.)
+      // The large AGENTS.md should be loaded (no size cap for context files).
       const foundOversized = loader.getAgentsFiles().agentsFiles.some((f) => f.path === agentsPath);
-      expect(foundOversized).toBe(false);
-      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("File too large"));
+      expect(foundOversized).toBe(true);
+      // The "File too large" warning should NOT appear for context files.
+      expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining("File too large"));
     } finally {
       consoleError.mockRestore();
     }

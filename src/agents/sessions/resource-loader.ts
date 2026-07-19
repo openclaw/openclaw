@@ -13,9 +13,7 @@ import {
   statSync,
 } from "node:fs";
 
-// Cap AGENTS.md/CLAUDE.md reads at 1 MiB — project context files are not meant to be large.
 // Cap user-supplied prompt input files at 10 MiB.
-const MAX_CONTEXT_FILE_BYTES = 1 * 1024 * 1024;
 const MAX_PROMPT_INPUT_FILE_BYTES = 10 * 1024 * 1024;
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -64,15 +62,19 @@ export interface ResourceLoader {
 }
 
 /**
- * Read a text file with a size cap to prevent OOM from oversized files.
+ * Read a text file with an optional size cap to prevent OOM from oversized files.
  * Opens the file first, stats the descriptor, then reads into a bounded buffer —
  * this avoids the TOCTOU race where the file is replaced between check and read
  * because the file descriptor is atomically bound to the opened inode.
  *
- * Returns the file content when the file is a regular file within the byte limit.
- * Returns undefined when the file is missing, not a regular file, or exceeds the limit.
+ * When `maxBytes` is provided, the file is rejected (returns undefined) if its
+ * size exceeds the limit. Without a cap, the full file is read through the
+ * descriptor with no upper bound (callers should apply their own policy).
+ *
+ * Returns the file content when the file is a regular file (within the optional
+ * byte limit). Returns undefined when the file is missing or not a regular file.
  */
-function readTextFileSafely(filePath: string, maxBytes: number): string | undefined {
+function readTextFileSafely(filePath: string, maxBytes?: number): string | undefined {
   let fd: number | undefined;
   try {
     fd = openSync(filePath, "r");
@@ -81,7 +83,7 @@ function readTextFileSafely(filePath: string, maxBytes: number): string | undefi
       console.error(chalk.yellow(`Warning: Could not read ${filePath}: not a regular file`));
       return undefined;
     }
-    if (stats.size > maxBytes) {
+    if (maxBytes !== undefined && stats.size > maxBytes) {
       console.error(
         chalk.yellow(
           `Warning: File too large (${stats.size} bytes > ${maxBytes} byte limit): ${filePath}`,
@@ -132,7 +134,12 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
   const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
   for (const filename of candidates) {
     const filePath = join(dir, filename);
-    const content = readTextFileSafely(filePath, MAX_CONTEXT_FILE_BYTES);
+    // Project-context files use descriptor-level reads for TOCTOU safety but
+    // without a size cap — they are user-authored workspace files that may be
+    // large, and skipping them would silently change project instructions.
+    // Prompt-input files (--system-prompt, discovered SYSTEM.md) still use the
+    // capped variant in resolvePromptInput.
+    const content = readTextFileSafely(filePath);
     if (content !== undefined) {
       return { path: filePath, content };
     }
