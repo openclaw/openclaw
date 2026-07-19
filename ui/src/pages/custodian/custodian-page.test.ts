@@ -141,7 +141,7 @@ describe("custodian page", () => {
 
   it("keeps rows for a same-ownership client replacement and requests a fresh welcome", async () => {
     let chatCalls = 0;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "openclaw.chat.history") {
         return { turns: [{ role: "assistant", text: "Earlier state", at: 1 }] };
       }

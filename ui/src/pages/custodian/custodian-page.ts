@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import type {
   SystemAgentChatParams,
   SystemAgentChatResult,
+  SystemChangeEntry,
   SystemChangesListResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
