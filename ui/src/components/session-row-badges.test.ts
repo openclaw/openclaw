@@ -129,4 +129,13 @@ describe("session row placement badges", () => {
       "Cloud worker: active · 1 workspace conflict",
     );
   });
+
+  it("keeps retained workspace conflicts visible after reclaim", () => {
+    renderBadges("reclaimed", 2);
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.placementState).toBe("reclaimed");
+    expect(badge?.dataset.workspaceConflicts).toBe("2");
+    expect(badge?.getAttribute("title")).toBe("Cloud worker: reclaimed · 2 workspace conflicts");
+  });
 });

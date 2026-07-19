@@ -29,22 +29,29 @@ export function renderSessionRowBadges(params: {
   const cloudPlacementState = isCloudWorkerPlacementState(placementState)
     ? placementState
     : undefined;
-  if (!hasAutomation && !params.hasOpenPullRequest && !params.hasApproval && !cloudPlacementState) {
+  const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
+  const displayedPlacementState =
+    cloudPlacementState ?? (workspaceConflictCount > 0 ? placementState : undefined);
+  if (
+    !hasAutomation &&
+    !params.hasOpenPullRequest &&
+    !params.hasApproval &&
+    !displayedPlacementState
+  ) {
     return nothing;
   }
-  const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
-  const cloudLabel = cloudPlacementState
+  const cloudLabel = displayedPlacementState
     ? workspaceConflictCount > 0
       ? t(
           workspaceConflictCount === 1
             ? "sessionsView.cloudWorkerPlacementConflict"
             : "sessionsView.cloudWorkerPlacementConflicts",
           {
-            state: cloudPlacementState,
+            state: displayedPlacementState,
             count: String(workspaceConflictCount),
           },
         )
-      : t("sessionsView.cloudWorkerPlacement", { state: cloudPlacementState })
+      : t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
     : "";
   return html`<span class="session-row-badges">
     ${hasAutomation
@@ -74,10 +81,10 @@ export function renderSessionRowBadges(params: {
           >${icons.alertTriangle}</span
         >`
       : nothing}
-    ${cloudPlacementState
+    ${displayedPlacementState
       ? html`<span
           class="session-row-badge session-row-badge--cloud"
-          data-placement-state=${cloudPlacementState}
+          data-placement-state=${displayedPlacementState}
           data-workspace-conflicts=${workspaceConflictCount > 0
             ? String(workspaceConflictCount)
             : nothing}
