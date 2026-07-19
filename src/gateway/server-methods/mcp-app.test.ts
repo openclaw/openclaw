@@ -173,12 +173,15 @@ describe("MCP App gateway bridge", () => {
       sessionKey: "agent:main:main",
       viewId: "cv_app",
       toolName: "shared",
+      arguments: { city: "Paris" },
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       content: [{ type: "text", text: "shared" }],
     });
+    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
+    expect(activeRuntime.callTool).toHaveBeenCalledWith("demo", "shared", { city: "Paris" });
   });
 
   it("rejects non-object tool arguments before executing app tools", async () => {
