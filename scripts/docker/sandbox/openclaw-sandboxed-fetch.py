@@ -6,12 +6,28 @@ at runtime. Emits exactly one JSON object on stdout; never raises to the
 caller (all failures become {"ok": false, "error": "..."}).
 """
 import json
+import os
+import select
 import subprocess
 import sys
+import time
 from html.parser import HTMLParser
 
 FETCH_TIMEOUT_SECONDS = 15
-MAX_RESPONSE_BYTES = 2_000_000  # independent cap; do not trust the caller's maxChars alone
+# Backstop only: curl's own --max-time already enforces FETCH_TIMEOUT_SECONDS.
+# This bounds how long we block in the read loop below if curl ever hangs
+# without honoring --max-time or without closing its stdout pipe.
+FETCH_HARD_TIMEOUT_SECONDS = FETCH_TIMEOUT_SECONDS + 5
+# Enforced by the streaming read loop in fetch() below, not by curl's
+# --max-filesize: that flag only aborts a transfer that has a known
+# Content-Length up front. For chunked-encoded responses (no Content-Length
+# header -- the ordinary shape of dynamic/streamed HTTP/1.1 content) curl
+# 7.88.1 (and other tested versions) silently ignores --max-filesize and
+# lets the full body through. Reading the body ourselves in bounded chunks
+# and aborting once the running total exceeds this cap is correct
+# regardless of whether the response declares its length.
+MAX_RESPONSE_BYTES = 2_000_000
+READ_CHUNK_BYTES = 65536
 STRIP_TAGS = {"script", "style", "nav", "header", "footer", "noscript"}
 
 
@@ -69,11 +85,47 @@ def fetch(url: str, pinned_ip: str | None) -> str:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         args += ["--resolve", f"{parsed.hostname}:{port}:{pinned_ip}"]
     args.append(url)
-    result = subprocess.run(args, capture_output=True, timeout=FETCH_TIMEOUT_SECONDS + 5)
-    if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"curl failed (exit {result.returncode}): {stderr or 'no stderr'}")
-    return result.stdout.decode("utf-8", errors="replace")
+
+    # Popen (not subprocess.run/capture_output) so the body is streamed to us
+    # chunk by chunk: we enforce MAX_RESPONSE_BYTES ourselves below instead of
+    # trusting curl's --max-filesize, which is a no-op for chunked responses.
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    body = bytearray()
+    deadline = time.monotonic() + FETCH_HARD_TIMEOUT_SECONDS
+    error: Exception | None = None
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                error = TimeoutError("fetch timed out")
+                break
+            ready, _, _ = select.select([proc.stdout], [], [], remaining)
+            if not ready:
+                error = TimeoutError("fetch timed out")
+                break
+            chunk = os.read(proc.stdout.fileno(), READ_CHUNK_BYTES)
+            if not chunk:
+                break  # curl closed stdout: transfer finished (success or curl-level error)
+            body += chunk
+            if len(body) > MAX_RESPONSE_BYTES:
+                error = ValueError("response exceeded size limit")
+                break
+    finally:
+        # Always tear the child down and drain stderr, whether we broke out
+        # normally, on our own size/time limit, or via an unexpected error.
+        if proc.poll() is None:
+            proc.kill()
+        proc.stdout.close()
+        stderr_bytes = proc.stderr.read()
+        proc.stderr.close()
+        proc.wait()
+
+    if error is not None:
+        raise error
+    if proc.returncode != 0:
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"curl failed (exit {proc.returncode}): {stderr_text or 'no stderr'}")
+    return bytes(body).decode("utf-8", errors="replace")
 
 
 def main() -> None:
@@ -92,8 +144,6 @@ def main() -> None:
         html = fetch(url, pinned_ip)
         text = extract_clean_text(html, max_chars)
         print(json.dumps({"ok": True, "text": text}))
-    except subprocess.TimeoutExpired:
-        print(json.dumps({"ok": False, "error": "fetch timed out"}))
     except Exception as exc:  # noqa: BLE001 -- must never raise past this boundary
         print(json.dumps({"ok": False, "error": str(exc)}))
 
