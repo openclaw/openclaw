@@ -1,4 +1,5 @@
 // Openshell plugin module implements fs bridge behavior.
+import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
@@ -30,6 +31,27 @@ export function createOpenShellFsBridge(params: {
 }
 
 const MAX_SANDBOX_READ_BYTES = 100 * 1024 * 1024;
+
+/** Read a file descriptor in chunks, capping the total at `maxBytes`.
+ * Enforces the cap at read time (not via a pre-read stat) to avoid
+ * TOCTOU races between checking file size and allocating the read buffer. */
+function readHandleBoundedSync(fd: number, maxBytes: number, containerPath: string): Buffer {
+  const CHUNK_SIZE = 64 * 1024;
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const scratch = Buffer.allocUnsafe(CHUNK_SIZE);
+  while (true) {
+    const bytesRead = fs.readSync(fd, scratch, 0, CHUNK_SIZE, null);
+    if (bytesRead === 0) {
+      return Buffer.concat(chunks, total);
+    }
+    total += bytesRead;
+    if (total > maxBytes) {
+      throw new RangeError(`file too large: ${containerPath} (max ${maxBytes} bytes)`);
+    }
+    chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
+  }
+}
 
 class OpenShellFsBridge implements SandboxFsBridge {
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
@@ -71,16 +93,11 @@ class OpenShellFsBridge implements SandboxFsBridge {
         hardlinks: "reject",
       });
       try {
-        const stat = await opened.handle.stat();
-        if (!stat.isFile()) {
-          throw new Error(`not a regular file: ${target.containerPath}`);
-        }
-        if (stat.size > MAX_SANDBOX_READ_BYTES) {
-          throw new Error(
-            `file too large: ${target.containerPath} is ${stat.size} bytes (max ${MAX_SANDBOX_READ_BYTES})`,
-          );
-        }
-        return (await opened.handle.readFile()) as Buffer;
+        return readHandleBoundedSync(
+          opened.handle.fd,
+          MAX_SANDBOX_READ_BYTES,
+          target.containerPath,
+        );
       } finally {
         await opened.handle.close();
       }
