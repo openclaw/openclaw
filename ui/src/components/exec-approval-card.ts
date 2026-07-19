@@ -36,7 +36,9 @@ export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): stri
 }
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
-  if (!value) return nothing;
+  if (!value) {
+    return nothing;
+  }
   return html`<div class="exec-approval-meta-row">
     <span>${label}</span><span>${opts?.path ? formatApprovalDisplayPath(value) : value}</span>
   </div>`;
@@ -61,12 +63,15 @@ function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
       cursor = span.endIndex;
     }
   }
-  if (!accepted.length)
+  if (!accepted.length) {
     return html`<div class="exec-approval-command mono">${request.command}</div>`;
+  }
   const parts = [];
   cursor = 0;
   for (const span of accepted) {
-    if (span.startIndex > cursor) parts.push(request.command.slice(cursor, span.startIndex));
+    if (span.startIndex > cursor) {
+      parts.push(request.command.slice(cursor, span.startIndex));
+    }
     parts.push(
       html`<mark class="exec-approval-command-span"
         >${request.command.slice(span.startIndex, span.endIndex)}</mark
@@ -74,7 +79,9 @@ function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
     );
     cursor = span.endIndex;
   }
-  if (cursor < request.command.length) parts.push(request.command.slice(cursor));
+  if (cursor < request.command.length) {
+    parts.push(request.command.slice(cursor));
+  }
   return html`<div class="exec-approval-command mono">${parts}</div>`;
 }
 
@@ -129,7 +136,9 @@ function decisionShortcut(decision: ExecApprovalDecision) {
 export function resolveApprovalDecisions(
   active: ExecApprovalRequest,
 ): readonly ExecApprovalDecision[] {
-  if (active.request.allowedDecisions?.length) return active.request.allowedDecisions;
+  if (active.request.allowedDecisions?.length) {
+    return active.request.allowedDecisions;
+  }
   return active.kind === "exec" && active.request.ask === "always"
     ? ["allow-once", "deny"]
     : DEFAULT_EXEC_APPROVAL_DECISIONS;
