@@ -60,7 +60,7 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
       const valueLines: string[] = [];
       while (i + 1 < lines.length) {
         const line = lines.at(i + 1);
-        if (line === undefined || !/^[ \t]/.test(line)) {
+        if (line === undefined || (line && !/^[ \t]/.test(line))) {
           break;
         }
         valueLines.push(line);
