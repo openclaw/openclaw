@@ -398,12 +398,14 @@ async function startManagedServiceAutoUpdateHandoff(params: {
     });
     // Pair helper creation with restart scheduling before any state persistence
     // can fail and leave an indefinite handoff waiting on a live parent.
-    scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "update.auto",
-      skipCooldown: true,
-      skipDeferral: true,
-    });
+    if (started.status === "started") {
+      scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "update.auto",
+        skipCooldown: true,
+        skipDeferral: true,
+      });
+    }
     return {
       ok: true,
       code: 0,

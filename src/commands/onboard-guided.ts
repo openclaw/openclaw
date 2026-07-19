@@ -482,7 +482,7 @@ async function runGuidedOnboardingFlow(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       )
     : workspace;
-  if (opts.tui !== true && (deps.platform ?? process.platform) === "darwin") {
+  if (opts.tui !== true) {
     const probeBrowserHandoffGateway =
       deps.probeBrowserHandoffGateway ??
       (await import("./onboard-browser-handoff.js")).probeBrowserHatchGateway;

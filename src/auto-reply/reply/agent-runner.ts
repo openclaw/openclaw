@@ -24,6 +24,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
@@ -2198,6 +2199,18 @@ export async function runReplyAgent(params: {
       clearCliSessionBinding,
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
+    if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
+      // A completed run that executed the persisted selection consumes the
+      // pending live-switch flag; CLI harness runs never hit the embedded
+      // attempt-recovery clear, so /status would report the switch forever.
+      await consolidateLiveModelSwitchAfterRun({
+        cfg,
+        sessionKey,
+        agentId: followupRun.run.agentId,
+        providerUsed,
+        modelUsed,
+      });
+    }
 
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,

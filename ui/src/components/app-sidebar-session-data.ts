@@ -77,6 +77,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   private sessionMutationEpoch = 0;
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
+  private sessionsScrollStateFrame: number | null = null;
   private readonly sessionCatalogLive = new SessionCatalogLiveState();
   private sessionCatalogAgentId: string | null = null;
   private sessionCatalogGeneration = 0;
@@ -161,6 +162,10 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     this.sessionsScrollResizeObserver?.disconnect();
     this.sessionsScrollResizeObserver = null;
     this.sessionsScrollElement = null;
+    if (this.sessionsScrollStateFrame !== null) {
+      cancelAnimationFrame(this.sessionsScrollStateFrame);
+      this.sessionsScrollStateFrame = null;
+    }
     if (this.activeSessionLineageRetryTimer) {
       globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
       this.activeSessionLineageRetryTimer = null;
@@ -170,18 +175,24 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
 
   override updated() {
     this.syncSessionsScrollObserver();
-    const snapshot = this.context?.gateway.snapshot;
     if (this.context) {
       this.synchronizeSessionCatalogAgent(this.expandedAgentId());
     }
     if (
-      !sessionCatalogListClient(snapshot, this.connected) ||
+      !this.visibleSessionCatalogClient() ||
       this.sessionCatalogLive.timer ||
       this.sessionCatalogLive.requestGeneration === this.sessionCatalogGeneration
     ) {
       return;
     }
     void this.refreshSessionCatalogs();
+  }
+
+  private visibleSessionCatalogClient(): GatewayBrowserClient | null {
+    if (document.visibilityState === "hidden") {
+      return null;
+    }
+    return sessionCatalogListClient(this.context?.gateway.snapshot, this.connected);
   }
 
   private synchronizeSessionCatalogAgent(agentId: string) {
@@ -260,7 +271,9 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   }
 
   private async refreshSessionCatalogs() {
-    const client = sessionCatalogListClient(this.context?.gateway.snapshot, this.connected);
+    // Hidden pages resume through the coalesced activation handler. Starting
+    // here without a timer makes catalog state updates poll at request latency.
+    const client = this.visibleSessionCatalogClient();
     if (!client) {
       return;
     }
@@ -384,8 +397,23 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       }
     }
     if (element) {
-      this.updateSessionsScrollState(element);
+      this.scheduleSessionsScrollStateSync();
     }
+  }
+
+  // Reading scrollHeight/scrollTop inside updated() forces a layout flush per
+  // render; one rAF-coalesced read rides the layout computed for paint anyway.
+  private scheduleSessionsScrollStateSync() {
+    if (this.sessionsScrollStateFrame !== null) {
+      return;
+    }
+    this.sessionsScrollStateFrame = requestAnimationFrame(() => {
+      this.sessionsScrollStateFrame = null;
+      const element = this.sessionsScrollElement;
+      if (element?.isConnected) {
+        this.updateSessionsScrollState(element);
+      }
+    });
   }
 
   protected updateSessionsScrollState(element: HTMLElement) {

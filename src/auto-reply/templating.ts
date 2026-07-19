@@ -1,6 +1,6 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import type { ReplyToMode } from "../config/types.base.js";
+import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -116,6 +116,8 @@ export type MsgContext = {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /** Effective routed DM scope, including binding overrides. */
+  DmScope?: DmScope;
   /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.

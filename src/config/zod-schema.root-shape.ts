@@ -59,6 +59,11 @@ export const OpenClawSchemaShape = {
             .pipe(z.string()),
         ])
         .optional(),
+      migrations: z
+        .strictObject({
+          modelPolicyAllowlist: z.literal(true).optional(),
+        })
+        .optional(),
     })
     .optional(),
   env: z
@@ -82,6 +87,7 @@ export const OpenClawSchemaShape = {
       lastRunCommit: z.string().optional(),
       lastRunCommand: z.string().optional(),
       lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+      localModelLeanAutoModel: z.string().optional(),
       securityAcknowledgedAt: z.string().optional(),
     })
     .optional(),
@@ -275,6 +281,28 @@ export const OpenClawSchemaShape = {
         .strictObject({
           name: z.string().max(50).optional(),
           avatar: z.string().max(2_000_000).optional(),
+        })
+        .optional(),
+      // Operator display prefs. Canonical here (agent-writable via approval,
+      // synced across devices); the Control UI mirrors them into local
+      // storage for instant boot and offline fallback.
+      prefs: z
+        .strictObject({
+          theme: z
+            .union([z.literal("claw"), z.literal("knot"), z.literal("dash"), z.literal("custom")])
+            .optional(),
+          themeMode: z
+            .union([z.literal("light"), z.literal("dark"), z.literal("system")])
+            .optional(),
+          textScale: z
+            .union([z.literal(90), z.literal(100), z.literal(110), z.literal(125), z.literal(140)])
+            .optional(),
+          locale: z.string().max(20).optional(),
+          chatShowThinking: z.boolean().optional(),
+          chatShowToolCalls: z.boolean().optional(),
+          chatPersistCommentary: z.boolean().optional(),
+          chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
+          chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
         })
         .optional(),
     })

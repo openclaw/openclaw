@@ -7,11 +7,13 @@ import {
   estimateContextTokens,
   prepareCompaction,
   shouldCompact,
+  type CompactionPreparation,
   type CompactionResult,
 } from "../runtime/index.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
+import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
@@ -141,23 +143,17 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    let preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
-    if (!preparation && isManual) {
-      // An explicit request should compact the smallest valid history instead of
-      // relying on the old empty-summary behavior when the whole session fits the keep budget.
-      preparation = unwrapCoreResult(
-        prepareCompaction(pathEntries, { ...options.settings, keepRecentTokens: 0 }),
-      );
+    let preparation: CompactionPreparation | undefined;
+    if (isManual) {
+      const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
+      if (!manualPreflight.compactable) {
+        throw new Error(manualPreflight.reason);
+      }
+      preparation = manualPreflight.preparation;
+    } else {
+      preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
     }
     if (!preparation) {
-      if (isManual) {
-        const lastEntry = pathEntries[pathEntries.length - 1];
-        throw new Error(
-          lastEntry?.type === "compaction"
-            ? "Already compacted"
-            : "Nothing to compact (session too small)",
-        );
-      }
       return { status: "skipped" };
     }
 

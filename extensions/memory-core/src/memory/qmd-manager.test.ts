@@ -59,9 +59,11 @@ type LeaseCall = Parameters<PluginStateLeaseRunner>;
 type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
 
 interface MockChild extends EventEmitter {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
   stdout: MockStream;
   stderr: MockStream;
-  kill: (signal?: NodeJS.Signals) => void;
+  kill: (signal?: NodeJS.Signals) => boolean;
   closeWith: (code?: number | null) => void;
 }
 
@@ -69,13 +71,18 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
   const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child: MockChild = Object.assign(new EventEmitter(), {
+    exitCode: null,
+    signalCode: null,
     stdout,
     stderr,
     closeWith: (code: number | null = 0) => {
-      child.emit("close", code);
+      child.exitCode = code;
+      child.emit("close", code, child.signalCode);
     },
-    kill: () => {
+    kill: (signal: NodeJS.Signals = "SIGTERM") => {
+      child.signalCode = signal;
       // Let timeout rejection win in tests that simulate hung QMD commands.
+      return true;
     },
   });
   if (params?.autoClose !== false) {
@@ -737,6 +744,44 @@ describe("QmdMemoryManager", () => {
     expect(secondDebug.at(-1)?.qmd?.searchPlan?.sources).toEqual(["sessions"]);
   });
 
+  it("keeps remember-only session exports out of ordinary manager searches", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: [{ id: "main", memorySearch: { rememberAcrossConversations: true } }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+    const { manager } = await createManager({ mode: "cli" });
+
+    await manager.search("remember-only", {
+      sessionKey: "agent:main:cli:direct:memory-search",
+    });
+
+    const searchCalls = spawnMock.mock.calls
+      .filter(([, args]) => args[0] === "search")
+      .map(([, args]) => args);
+    expect(searchCalls.some((args) => args.includes("workspace-main"))).toBe(true);
+    expect(searchCalls.some((args) => args.includes("sessions-main"))).toBe(false);
+    await manager.close();
+  });
+
   it("rewrites stale multi-collection probe cache when combined filters are rejected", async () => {
     await configureMemoryCoreDreamingStateForTests();
     const otherWorkspaceDir = path.join(tmpRoot, "other-workspace");
@@ -835,7 +880,20 @@ describe("QmdMemoryManager", () => {
     cfg?: OpenClawConfig;
     agentId?: string;
   }) {
-    const cfgToUse = params?.cfg ?? cfg;
+    const sourceCfg = params?.cfg ?? cfg;
+    const cfgToUse: OpenClawConfig = {
+      ...sourceCfg,
+      agents: {
+        ...sourceCfg.agents,
+        defaults: {
+          ...sourceCfg.agents?.defaults,
+          memorySearch: {
+            rememberAcrossConversations: false,
+            ...sourceCfg.agents?.defaults?.memorySearch,
+          },
+        },
+      },
+    };
     const selectedAgentId = params?.agentId ?? agentId;
     const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId: selectedAgentId });
     const manager = trackManager(
@@ -899,6 +957,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+            rememberAcrossConversations: false,
             store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
@@ -6533,6 +6592,56 @@ describe("QmdMemoryManager", () => {
     await expect(manager.readFile({ relPath: "qmd/workspace-main/link.md" })).rejects.toThrow(
       "path required",
     );
+
+    await manager.close();
+  });
+
+  it("blocks memory_get reads of remember-only session exports", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: [{ id: "main", memorySearch: { rememberAcrossConversations: true } }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager();
+
+    // Remember-only export is search-only for trusted recall; ordinary
+    // memory_get must not read transcript exports the operator never opted into.
+    await expect(manager.readFile({ relPath: "qmd/sessions-main/export.md" })).rejects.toThrow(
+      "path required",
+    );
+
+    await manager.close();
+  });
+
+  it("keeps explicitly configured session exports readable via memory_get", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          sessions: { enabled: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager();
+
+    await expect(manager.readFile({ relPath: "qmd/sessions-main/export.md" })).resolves.toEqual({
+      path: "qmd/sessions-main/export.md",
+      text: "",
+    });
 
     await manager.close();
   });
