@@ -776,6 +776,42 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.warn).not.toHaveBeenCalled();
   });
 
+  it("does not let a superseded owner hide a genuine sibling refresh failure", async () => {
+    const config = {};
+    const supersededDir = "/tmp/prepared-model-runtime-auth-superseded-sibling";
+    const failingDir = "/tmp/prepared-model-runtime-auth-failing-sibling";
+    await publishPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
+    await publishPreparedModelRuntimeSnapshot({ config, agentDir: failingDir });
+    let finishSupersededRefresh: (() => void) | undefined;
+    let failSiblingRefresh: (() => void) | undefined;
+    mocks.ensureOpenClawModelsJson
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<{ agentDir: string; wrote: false }>((resolve) => {
+            finishSupersededRefresh = () => resolve({ agentDir: supersededDir, wrote: false });
+          }),
+      )
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<{ agentDir: string; wrote: false }>((_resolve, reject) => {
+            failSiblingRefresh = () => reject(new Error("genuine sibling refresh failure"));
+          }),
+      );
+
+    mocks.mutationListener?.({ affectsInheritedStores: true });
+    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
+    mocks.mutationListener?.({ agentDir: supersededDir, affectsInheritedStores: false });
+    finishSupersededRefresh?.();
+    failSiblingRefresh?.();
+
+    await vi.waitFor(() =>
+      expect(mocks.warn).toHaveBeenCalledWith(
+        expect.stringContaining("genuine sibling refresh failure"),
+      ),
+    );
+    expect(mocks.warn).toHaveBeenCalledOnce();
+  });
+
   it("refreshes owners that inherit the mutated auth directory", async () => {
     const config = {};
     const agentDir = "/tmp/prepared-model-runtime-custom-agent";
