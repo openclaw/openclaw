@@ -10,7 +10,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createStructuredOutputTool } from "./tools/structured-output-tool.js";
 
 export function createOpenClawSwarmToolGroups(params: {
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   effectiveRequesterAgentId: string;
   agentSessionKey?: string;
   runSessionKey?: string;
