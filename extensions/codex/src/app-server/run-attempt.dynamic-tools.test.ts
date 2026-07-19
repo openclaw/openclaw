@@ -249,18 +249,16 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     const harness = createStartedThreadHarness();
     const echoTool = createRuntimeDynamicTool("echo");
     type EchoToolResult = Awaited<ReturnType<typeof echoTool.execute>>;
-    let resolveTool: (() => void) | undefined;
-    const execute = vi.fn<typeof echoTool.execute>(
-      () =>
-        new Promise<EchoToolResult>((resolve) => {
-          resolveTool = () => {
-            resolve({
-              content: [{ type: "text", text: "tool output" }],
-              details: {},
-            });
-          };
-        }),
-    );
+    let resolveTool!: () => void;
+    const toolResult = new Promise<EchoToolResult>((resolve) => {
+      resolveTool = () => {
+        resolve({
+          content: [{ type: "text", text: "tool output" }],
+          details: {},
+        });
+      };
+    });
+    const execute = vi.fn<typeof echoTool.execute>(() => toolResult);
     dynamicToolBuildState.openClawCodingToolsFactory = () => [
       {
         ...echoTool,
@@ -274,9 +272,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentToolResult = vi.fn();
-    const allocateToolOutcomeOrdinal = vi.fn((toolCallId) =>
-      toolCallId === "call-1" ? 11 : 12,
-    );
+    const allocateToolOutcomeOrdinal = vi.fn((toolCallId) => (toolCallId === "call-1" ? 11 : 12));
     params.allocateToolOutcomeOrdinal = allocateToolOutcomeOrdinal;
     params.onToolOutcome = vi.fn();
 
@@ -308,12 +304,12 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         arguments: { mode: "full", topic: "AGENTS.md" },
       },
     });
-    await vi.waitFor(() => expect(allocateToolOutcomeOrdinal).toHaveBeenCalledWith("call-2"));
-    expect(execute).toHaveBeenCalledTimes(1);
-    resolveTool?.();
+    resolveTool();
 
     const [firstResponse, secondResponse] = await Promise.all([first, second]);
 
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(allocateToolOutcomeOrdinal).toHaveBeenCalledWith("call-2");
     expect(firstResponse).toEqual({
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
