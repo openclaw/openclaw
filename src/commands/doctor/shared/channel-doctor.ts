@@ -328,6 +328,9 @@ export function collectChannelDoctorCompatibilityMutations(
   for (const entry of listChannelDoctorEntries(channelIds, { cfg, env: options.env })) {
     const mutation = entry.doctor.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {
+      if (mutation?.warnings?.length) {
+        mutations.push({ config: nextCfg, changes: [], warnings: mutation.warnings });
+      }
       continue;
     }
     mutations.push(mutation);

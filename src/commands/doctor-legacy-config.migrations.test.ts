@@ -62,6 +62,7 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
   applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
     next: cfg,
     changes: [],
+    warnings: [],
   }),
 }));
 

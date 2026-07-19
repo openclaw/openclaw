@@ -6,14 +6,7 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-
-/**
- * Config returned after a bundled channel normalizes legacy compatibility state.
- */
-type BundledChannelDoctorCompatibilityMutation = {
-  config: OpenClawConfig;
-  changes: string[];
-};
+import type { ChannelDoctorConfigMutation } from "./types.adapters.js";
 
 /**
  * Public doctor hooks exported by bundled channel plugins.
@@ -23,9 +16,7 @@ type BundledChannelDoctorCompatibilityMutation = {
  */
 type BundledChannelDoctorContractApi = {
   legacyConfigRules?: readonly LegacyConfigRule[];
-  normalizeCompatibilityConfig?: (params: {
-    cfg: OpenClawConfig;
-  }) => BundledChannelDoctorCompatibilityMutation;
+  normalizeCompatibilityConfig?: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;
 };
 
 /**

@@ -55,8 +55,10 @@ export function normalizeCompatibilityConfigValues(
 ): {
   config: OpenClawConfig;
   changes: string[];
+  warnings: string[];
 } {
   const changes: string[] = [];
+  const warnings: string[] = [];
   let next = normalizeBaseCompatibilityConfigValues(
     cfg,
     changes,
@@ -73,6 +75,7 @@ export function normalizeCompatibilityConfigValues(
     options.blockedModelIdentities,
   );
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  warnings.push(...channelMigrations.warnings);
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
@@ -86,5 +89,5 @@ export function normalizeCompatibilityConfigValues(
   next = repairNullAgentWorkspaces(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 
-  return { config: next, changes };
+  return { config: next, changes, warnings };
 }

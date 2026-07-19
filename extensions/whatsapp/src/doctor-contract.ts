@@ -7,6 +7,10 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  migrateWhatsAppLidAllowlistsConfig,
+  whatsAppLidAllowlistLegacyRules,
+} from "./allowlist-doctor.js";
 import { normalizeCompatibilityConfig as normalizeAckReactionConfig } from "./doctor.js";
 
 // WhatsApp's nested streaming schema is delivery-only ({chunkMode, block});
@@ -25,6 +29,7 @@ const hasExposeErrorText = (value: unknown): boolean =>
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
+  ...whatsAppLidAllowlistLegacyRules,
   {
     path: ["channels", "whatsapp", "exposeErrorText"],
     message:
@@ -159,12 +164,15 @@ export function normalizeCompatibilityConfig({
     cfg: retiredConfig,
     changes: ackReaction.changes,
   });
-  return {
-    config: materializeMigratedAccountStreaming({
-      cfg: aliases.config,
-      accountsBefore,
-      changes: aliases.changes,
-    }),
+  const materialized = materializeMigratedAccountStreaming({
+    cfg: aliases.config,
+    accountsBefore,
     changes: aliases.changes,
+  });
+  const lidAllowlists = migrateWhatsAppLidAllowlistsConfig(materialized);
+  return {
+    config: lidAllowlists.config,
+    changes: [...aliases.changes, ...lidAllowlists.changes],
+    warnings: lidAllowlists.warnings,
   };
 }

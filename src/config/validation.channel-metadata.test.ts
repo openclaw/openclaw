@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -240,7 +241,11 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
   collectRelevantDoctorPluginIds: () => [],
   listPluginDoctorLegacyConfigRules: () => [],
-  applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+  applyPluginDoctorCompatibilityMigrations: (config: OpenClawConfig) => ({
+    config,
+    changes: [],
+    warnings: [],
+  }),
 }));
 
 vi.mock("../secrets/target-registry-data.js", () => ({

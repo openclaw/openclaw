@@ -437,6 +437,7 @@ describe("doctor-contract-registry module loader", () => {
           },
         },
         changes: ["normalized ollama cloud provider endpoint"],
+        warnings: ["review the remaining ollama cloud settings"],
       }),
     }));
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -468,10 +469,38 @@ describe("doctor-contract-registry module loader", () => {
     });
 
     expect(result.changes).toEqual(["normalized ollama cloud provider endpoint"]);
+    expect(result.warnings).toEqual(["review the remaining ollama cloud settings"]);
     expect(result.config.models?.providers?.["ollama-cloud"]).toEqual({
       baseUrl: "https://ollama.com",
       models: [],
     });
+  });
+
+  it("preserves warning-only plugin compatibility results without applying their config", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        config: { ...cfg, gateway: { mode: "local" as const } },
+        changes: [],
+        warnings: ["replace the unresolved plugin identity manually"],
+      }),
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "warning-only", rootDir: pluginRoot, channels: ["warning-only"] }],
+      diagnostics: [],
+    });
+    const config = { channels: { "warning-only": {} } };
+
+    const result = applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds: ["warning-only"],
+    });
+
+    expect(result.config).toBe(config);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual(["replace the unresolved plugin identity manually"]);
   });
 
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
