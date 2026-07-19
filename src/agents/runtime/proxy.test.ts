@@ -510,6 +510,58 @@ describe("streamProxy", () => {
     expect(cancel).toHaveBeenCalledWith(expect.any(Error));
   });
 
+  it("keeps the SSE idle stall error when reader.cancel rejects", async () => {
+    vi.useFakeTimers();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            body: {
+              getReader: () =>
+                ({
+                  read: vi.fn(
+                    async () => await new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
+                  ),
+                  cancel,
+                  releaseLock: vi.fn(),
+                }) as unknown as ReadableStreamDefaultReader<Uint8Array>,
+            },
+          }) as Response,
+      ),
+    );
+
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const stream = streamProxy(model, context, {
+        authToken: "token",
+        proxyUrl: "https://proxy.example",
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(await settledResult(stream)).toMatchObject({
+        stopReason: "error",
+        errorMessage: "Proxy SSE stream stalled: no data received for 120000ms",
+      });
+      expect(cancel).toHaveBeenCalledWith(expect.any(Error));
+      // Node reports unhandled rejections after the current turn; leave fake timers first.
+      vi.useRealTimers();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("honors a longer configured SSE read idle timeout", async () => {
     vi.useFakeTimers();
     const cancel = vi.fn(async () => undefined);
@@ -682,5 +734,98 @@ describe("streamProxy loopback /api/stream", () => {
       stopReason: "aborted",
       errorMessage: "Request aborted by user",
     });
+  });
+
+  it("preserves idle stall when a native ReadableStream cancel rejects", async () => {
+    const idleMs = 80;
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+
+    let postSeen = false;
+    let cancelCalled = false;
+    let resolvePostSeen: (() => void) | undefined;
+    const postSeenPromise = new Promise<void>((resolve) => {
+      resolvePostSeen = resolve;
+    });
+
+    server = http.createServer((req, res) => {
+      res.on("error", () => {});
+      if (req.method !== "POST" || req.url !== "/api/stream") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      postSeen = true;
+      resolvePostSeen?.();
+      req.resume();
+      // Real proxy accepts the POST; streamProxy consumes the native Response body below.
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const proxyUrl = `http://127.0.0.1:${address.port}`;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url !== `${proxyUrl}/api/stream`) {
+        return await originalFetch(input, init);
+      }
+      // Put the production request on the wire against node:http.
+      void originalFetch(input, {
+        method: init?.method,
+        headers: init?.headers,
+        body: init?.body,
+        signal: AbortSignal.timeout(250),
+      })
+        .then((response) => response.body?.cancel().catch(() => undefined))
+        .catch(() => undefined);
+
+      const body = new ReadableStream<Uint8Array>({
+        start() {
+          // Never enqueue: idle timer must fire.
+        },
+        cancel() {
+          cancelCalled = true;
+          return Promise.reject(new Error("cancel failed"));
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    };
+
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const stream = streamProxy(model, context, {
+        authToken: "token",
+        proxyUrl,
+        timeoutMs: idleMs,
+      });
+      await postSeenPromise;
+      const result = await stream.result();
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorMessage: `Proxy SSE stream stalled: no data received for ${idleMs}ms`,
+      });
+      expect(postSeen).toBe(true);
+      expect(cancelCalled).toBe(true);
+      // Full event-loop turn: Node surfaces unhandled rejections after the current turn.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandledRejections).toStrictEqual([]);
+      console.log(
+        `[proxy sse idle cancel-reject native proof] stall_preserved=true cancel_called=true post_seen=true unhandled_rejections=0 errorMessage=Proxy SSE stream stalled: no data received for ${idleMs}ms`,
+      );
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      globalThis.fetch = originalFetch;
+    }
   });
 });

@@ -202,8 +202,12 @@ async function readProxyErrorData(
 }
 
 async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read" | "cancel">,
+  reader: Pick<SseByteGuard, "read">,
   readIdleTimeoutMs: number,
+  // Idle cleanup cancels the raw upstream reader (same surface as pending-buffer overflow).
+  // createSseByteGuard.cancel already swallows rejects; canceling the raw reader here keeps
+  // the stall path aligned with that sibling and needs an explicit .catch.
+  cancelReader: Pick<ReadableStreamDefaultReader<Uint8Array>, "cancel">,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -213,7 +217,9 @@ async function readProxySseChunk(
     );
     timeoutId = setTimeout(() => {
       timedOut = true;
-      void reader.cancel(timeoutError);
+      // Cancellation is best-effort cleanup; a reject here must not replace the stall error
+      // (sibling pending-buffer path already uses .catch on the raw reader).
+      void cancelReader.cancel(timeoutError);
       reject(timeoutError);
     }, readIdleTimeoutMs);
     void reader.read().then(
@@ -341,7 +347,8 @@ export function streamProxy(
       }
 
       reader = response.body!.getReader();
-      const sseReader = createSseByteGuard(reader, {
+      const upstreamReader = reader;
+      const sseReader = createSseByteGuard(upstreamReader, {
         maxBytes: PROXY_SSE_STREAM_MAX_BYTES,
         onOverflow: ({ maxBytes }) => new Error(`Proxy SSE stream exceeded ${maxBytes} bytes`),
       });
@@ -367,7 +374,11 @@ export function streamProxy(
       };
 
       while (true) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs);
+        const { done, value } = await readProxySseChunk(
+          sseReader,
+          readIdleTimeoutMs,
+          upstreamReader,
+        );
         if (done) {
           break;
         }
@@ -379,7 +390,7 @@ export function streamProxy(
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        assertProxySsePendingBufferWithinLimit(buffer, reader);
+        assertProxySsePendingBufferWithinLimit(buffer, upstreamReader);
 
         for (const line of lines) {
           processSseLine(line);
