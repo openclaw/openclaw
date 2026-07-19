@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     errors,
     runtime,
     loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
+    listConfiguredMcpServers: vi.fn(),
     applyClawAddPlan: vi.fn(),
     readClawStatus: vi.fn(),
     buildClawRemovePlan: vi.fn(),
@@ -45,6 +46,11 @@ vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+}));
+
+vi.mock("../config/mcp-config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/mcp-config.js")>("../config/mcp-config.js")),
+  listConfiguredMcpServers: mocks.listConfiguredMcpServers,
 }));
 
 vi.mock("../claws/add.js", async () => ({
@@ -67,6 +73,7 @@ vi.mock("../claws/export.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
+const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const minimalManifest = { schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } };
@@ -141,6 +148,13 @@ describe("claws cli", () => {
     mocks.runtime.exit.mockClear();
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({});
+    mocks.listConfiguredMcpServers.mockReset();
+    mocks.listConfiguredMcpServers.mockResolvedValue({
+      ok: true,
+      path: "config",
+      config: {},
+      mcpServers: {},
+    });
     mocks.applyClawAddPlan.mockReset();
     mocks.applyClawAddPlan.mockImplementation(async (plan) => ({
       schemaVersion: "openclaw.clawAddResult.v1",
@@ -189,6 +203,8 @@ describe("claws cli", () => {
       agentRemoved: true,
       workspaceFiles: [],
       packages: [],
+      mcpServers: [],
+      cronJobs: [],
       packageRefsReleased: 1,
     });
     mocks.exportClawAgent.mockReset();
@@ -264,6 +280,28 @@ describe("claws cli", () => {
       summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("redacts credential-bearing remote MCP URLs in add previews", async () => {
+    const manifestPath = await writeManifest({
+      schemaVersion: 1,
+      agent: { id: "demo-agent", name: "Demo Agent" },
+      mcpServers: {
+        remote: {
+          url: "https://example.com/mcp?token=abc123&mode=ok",
+          transport: "streamable-http",
+        },
+      },
+    });
+    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
+
+    await runClawsAddCommand(manifestPath, { dryRun: true, workspace }, mocks.runtime);
+
+    const output = mocks.logs.join("\n");
+    expect(output).toContain("MCP remote:");
+    expect(output).toContain("example.com");
+    expect(output).not.toContain("abc123");
+    expect(output).toContain("token=***");
   });
 
   it("blocks adding into an existing agent instead of merging", async () => {
@@ -687,6 +725,7 @@ describe("claws cli", () => {
 
     expect(mocks.exportClawAgent).toHaveBeenCalledWith("demo-agent", "/tmp/exported", {
       config: {},
+      sourceMcpServers: {},
     });
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       schemaVersion: "openclaw.clawExportResult.v1",
