@@ -1798,13 +1798,11 @@ describe("agentCliCommand", () => {
 
   it("surfaces a recovered terminal failure without rerunning it", async () => {
     await withTempStore(async () => {
-      callGateway
-        .mockRejectedValueOnce(createGatewayClosedError())
-        .mockResolvedValueOnce({
-          runId: "idem-1",
-          status: "error",
-          error: "original provider failure",
-        });
+      callGateway.mockRejectedValueOnce(createGatewayClosedError()).mockResolvedValueOnce({
+        runId: "idem-1",
+        status: "error",
+        error: "original provider failure",
+      });
 
       await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
         "original provider failure",
