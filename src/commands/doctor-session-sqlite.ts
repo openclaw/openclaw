@@ -351,24 +351,14 @@ function readLegacySessionRecords(
   issues: DoctorSessionSqliteIssue[],
   options: { allowMissingStore?: boolean } = {},
 ): LegacySessionRecord[] {
-  // Pre-check file size to avoid OOM on corrupted or malicious store files.
-  // Every metadata failure must stay on the store_unreadable recovery path:
-  // statSync only suppresses ENOENT, and a recovery command that crashes on
-  // EACCES/ENOTDIR/ELOOP would be worse than the unreadable store itself.
-  let storeStat: fs.Stats | undefined;
+  // Open a file descriptor first, then stat and read through it to eliminate
+  // the TOCTOU race where a file can change between size validation and read.
+  let fd: number | undefined;
   try {
-    storeStat = fs.statSync(target.storePath, { throwIfNoEntry: false });
+    fd = fs.openSync(target.storePath, "r");
   } catch (err) {
-    issues.push({
-      code: "store_unreadable",
-      message: `${target.storePath}: ${String(err)}`,
-    });
-    return [];
-  }
-  if (!storeStat) {
-    if (options.allowMissingStore === true) {
-      // When the parent directory is inaccessible (e.g. it is a regular file),
-      // statSync with throwIfNoEntry: false returns undefined without throwing.
+    const nodeErr = err as NodeJS.ErrnoException;
+    if (options.allowMissingStore === true && nodeErr.code === "ENOENT") {
       // Check the parent to distinguish genuine missing stores from corrupt paths.
       let parentStat: fs.Stats | undefined;
       try {
@@ -387,67 +377,67 @@ function readLegacySessionRecords(
     }
     issues.push({
       code: "store_unreadable",
-      message: `${target.storePath}: file not found`,
-    });
-    return [];
-  }
-  if (!storeStat.isFile()) {
-    issues.push({
-      code: "store_unreadable",
-      message: `${target.storePath}: not a regular file`,
-    });
-    return [];
-  }
-  if (storeStat.size > MAX_LEGACY_SESSION_STORE_BYTES) {
-    issues.push({
-      code: "store_unreadable",
-      message: `${target.storePath}: file too large (${storeStat.size} bytes, max ${MAX_LEGACY_SESSION_STORE_BYTES})`,
-    });
-    return [];
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(target.storePath, "utf-8"));
-  } catch (err) {
-    if (
-      options.allowMissingStore === true &&
-      (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
-    ) {
-      return [];
-    }
-    issues.push({
-      code: "store_unreadable",
       message: `${target.storePath}: ${String(err)}`,
     });
     return [];
   }
-  if (!isRecord(parsed)) {
-    issues.push({
-      code: "store_not_object",
-      message: `${target.storePath} does not contain an object session store.`,
-    });
-    return [];
-  }
-  const records: LegacySessionRecord[] = [];
-  for (const [sessionKey, value] of Object.entries(parsed)) {
-    if (!isSessionEntry(value)) {
+
+  try {
+    const storeStat = fs.fstatSync(fd);
+    if (!storeStat.isFile()) {
       issues.push({
-        code: "entry_invalid",
-        message: "Session entry is missing a valid sessionId.",
-        sessionKey,
+        code: "store_unreadable",
+        message: `${target.storePath}: not a regular file`,
       });
-      continue;
+      return [];
     }
-    records.push({
-      // Import is the migration boundary: repair legacy delivery/route shapes
-      // here because the SQLite runtime read path assumes canonical entries.
-      entry: normalizeSessionEntryDelivery(value),
-      sessionKey,
-      transcriptPath: resolveLegacyTranscriptPath(target, value),
-    });
+    if (storeStat.size > MAX_LEGACY_SESSION_STORE_BYTES) {
+      issues.push({
+        code: "store_unreadable",
+        message: `${target.storePath}: file too large (${storeStat.size} bytes, max ${MAX_LEGACY_SESSION_STORE_BYTES})`,
+      });
+      return [];
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(fd, "utf-8"));
+    } catch (err) {
+      issues.push({
+        code: "store_unreadable",
+        message: `${target.storePath}: ${String(err)}`,
+      });
+      return [];
+    }
+    if (!isRecord(parsed)) {
+      issues.push({
+        code: "store_not_object",
+        message: `${target.storePath} does not contain an object session store.`,
+      });
+      return [];
+    }
+    const records: LegacySessionRecord[] = [];
+    for (const [sessionKey, value] of Object.entries(parsed)) {
+      if (!isSessionEntry(value)) {
+        issues.push({
+          code: "entry_invalid",
+          message: "Session entry is missing a valid sessionId.",
+          sessionKey,
+        });
+        continue;
+      }
+      records.push({
+        // Import is the migration boundary: repair legacy delivery/route shapes
+        // here because the SQLite runtime read path assumes canonical entries.
+        entry: normalizeSessionEntryDelivery(value),
+        sessionKey,
+        transcriptPath: resolveLegacyTranscriptPath(target, value),
+      });
+    }
+    return records;
+  } finally {
+    fs.closeSync(fd);
   }
-  return records;
 }
 
 function isLegacySessionRecordOwnedByTarget(
