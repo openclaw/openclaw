@@ -248,20 +248,20 @@ async function readLegacyReefReviews(filePath: string): Promise<Map<string, Reef
     throw new Error("invalid Reef reviews file");
   }
   const records = new Map<string, ReefReviewRecord>();
-  for (const [digest, raw] of Object.entries(value)) {
-    if (!isRecord(raw) || !isRecord(raw.review)) {
+  for (const [digest, entry] of Object.entries(value)) {
+    if (!isRecord(entry) || !isRecord(entry.review)) {
       throw new Error(`invalid Reef review ${digest}`);
     }
-    const review = raw.review as unknown as ReviewRequest;
+    const review = entry.review as unknown as ReviewRequest;
     if (
       review.approvalDigest !== digest ||
-      (raw.approved !== undefined && typeof raw.approved !== "boolean")
+      (entry.approved !== undefined && typeof entry.approved !== "boolean")
     ) {
       throw new Error(`invalid Reef review ${digest}`);
     }
     records.set(digest, {
       review,
-      ...(typeof raw.approved === "boolean" ? { approved: raw.approved } : {}),
+      ...(typeof entry.approved === "boolean" ? { approved: entry.approved } : {}),
     });
   }
   return records;
