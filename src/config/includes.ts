@@ -17,6 +17,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { mergeDeep as mergeDeepValues } from "../infra/deep-merge.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -427,13 +428,19 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
   if (!canUseRootFileOpen(ioFs)) {
-    const raw = ioFs.readFileSync(params.resolvedPath, "utf-8");
+    // Fallback for limited fs shims that lack openSync/realpathSync.
+    // Still enforces regular-file checks and the same maxBytes cap as the
+    // openRootFileSync path so unbounded reads are never reachable.
+    const result = readRegularFileSync({
+      filePath: params.resolvedPath,
+      maxBytes,
+    });
     try {
       params.onResolvedPath?.(path.normalize(ioFs.realpathSync(params.resolvedPath)));
     } catch {
       // The guarded read succeeded; target tracking is best-effort on reduced fs shims.
     }
-    return raw;
+    return result.buffer.toString("utf-8");
   }
 
   const opened = openRootFileSync({
@@ -473,7 +480,8 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
 // ============================================================================
 
 const defaultResolver: IncludeResolver = {
-  readFile: (p) => fs.readFileSync(p, "utf-8"),
+  readFile: (p) =>
+    readRegularFileSync({ filePath: p, maxBytes: MAX_INCLUDE_FILE_BYTES }).buffer.toString("utf-8"),
   readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
     readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
   parseJson: parseJsonWithJson5Fallback,
