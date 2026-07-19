@@ -91,9 +91,11 @@ async function collectViolations() {
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
   const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
+  // Workspace packages resolve private facades through root TS paths and bundle them into dist;
+  // live jiti source stages inject the same private map. Core src callers must stay relative.
   const coreRuntimeFiles = new Set(
     (
-      await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src", "packages"]), {
+      await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), {
         includeTests: false,
         extraTestSuffixes: [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"],
       })

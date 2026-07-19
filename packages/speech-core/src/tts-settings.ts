@@ -27,7 +27,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveConfigDir, resolveUserPath } from "../../../src/plugin-sdk/text-utility-runtime.js";
+import { resolveConfigDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withSpeakerSelectionCompat } from "../speaker.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
