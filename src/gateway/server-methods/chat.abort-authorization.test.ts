@@ -32,7 +32,7 @@ async function invokeAbort({
   deviceId,
   preserveSideRuns,
   scopes = ["operator.write"],
-  onAuthorizedBeforeSessionAbort,
+  onAuthorizedAfterQueuedAbort,
 }: {
   context: ReturnType<typeof createChatAbortContext>;
   sessionKey?: string;
@@ -41,12 +41,12 @@ async function invokeAbort({
   deviceId: string;
   preserveSideRuns?: boolean;
   scopes?: string[];
-  onAuthorizedBeforeSessionAbort?: () => boolean;
+  onAuthorizedAfterQueuedAbort?: () => boolean;
 }) {
   return await invokeChatAbortHandler({
-    handler: onAuthorizedBeforeSessionAbort
+    handler: onAuthorizedAfterQueuedAbort
       ? (options) =>
-          handleChatAbortRequestWithLifecycle(options, { onAuthorizedBeforeSessionAbort })
+          handleChatAbortRequestWithLifecycle(options, { onAuthorizedAfterQueuedAbort })
       : expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
     context,
     request: {
@@ -342,61 +342,108 @@ describe("chat.abort authorization", () => {
 });
 
 describe("chat.abort queued-turn contract", () => {
-  it("runs authorized session cleanup before aborting the active run", async () => {
+  it("cancels queued turns before session cleanup and the active run", async () => {
     const order: string[] = [];
+    const queuedController = new AbortController();
+    queuedController.signal.addEventListener("abort", () => order.push("queued-abort"));
     const active = createActiveRun("main", {
       owner: { connId: "conn-owner", deviceId: "dev-owner" },
     });
     active.controller.signal.addEventListener("abort", () => order.push("active-abort"));
     const context = createChatAbortContext({
       chatAbortControllers: new Map([["active-1", active]]),
+      chatQueuedTurns: new Map([
+        [
+          "queued-1",
+          {
+            controller: queuedController,
+            sessionId: "main-session",
+            sessionKey: "main",
+            ownerConnId: "conn-owner",
+            ownerDeviceId: "dev-owner",
+          },
+        ],
+      ]),
     });
 
     const respond = await invokeAbort({
       context,
       connId: "conn-owner",
       deviceId: "dev-owner",
-      onAuthorizedBeforeSessionAbort: () => {
+      onAuthorizedAfterQueuedAbort: () => {
         order.push("session-cleanup");
         return true;
       },
     });
 
     expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expect(order).toEqual(["session-cleanup", "active-abort"]);
+    expect(order).toEqual(["queued-abort", "session-cleanup", "active-abort"]);
+  });
+
+  it("cancels a queued-only turn before session cleanup", async () => {
+    const order: string[] = [];
+    const queuedController = new AbortController();
+    queuedController.signal.addEventListener("abort", () => order.push("queued-abort"));
+    const context = createChatAbortContext({
+      chatQueuedTurns: new Map([
+        [
+          "queued-1",
+          {
+            controller: queuedController,
+            sessionId: "main-session",
+            sessionKey: "main",
+            ownerConnId: "conn-owner",
+            ownerDeviceId: "dev-owner",
+          },
+        ],
+      ]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+      onAuthorizedAfterQueuedAbort: () => {
+        order.push("session-cleanup");
+        return true;
+      },
+    });
+
+    expect(requireLastRespondCall(respond)[0]).toBe(true);
+    expect(order).toEqual(["queued-abort", "session-cleanup"]);
   });
 
   it("keeps a foreign chat run but still applies operator.write session cleanup", async () => {
-    const onAuthorizedBeforeSessionAbort = vi.fn(() => false);
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => false);
     const context = createSingleAbortContext();
 
     const respond = await invokeAbort({
       context,
       connId: "conn-other",
       deviceId: "dev-other",
-      onAuthorizedBeforeSessionAbort,
+      onAuthorizedAfterQueuedAbort,
     });
 
     expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: false, runIds: [] });
-    expect(onAuthorizedBeforeSessionAbort).toHaveBeenCalledTimes(1);
+    expect(onAuthorizedAfterQueuedAbort).toHaveBeenCalledTimes(1);
     expect(context.chatAbortControllers.has("run-1")).toBe(true);
   });
 
   it("allows operator.write session cleanup when no chat run is registered", async () => {
-    const onAuthorizedBeforeSessionAbort = vi.fn(() => true);
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const respond = await invokeAbort({
       context: createChatAbortContext(),
       connId: "conn-owner",
       deviceId: "dev-owner",
-      onAuthorizedBeforeSessionAbort,
+      onAuthorizedAfterQueuedAbort,
     });
 
-    expect(onAuthorizedBeforeSessionAbort).toHaveBeenCalledTimes(1);
+    expect(onAuthorizedAfterQueuedAbort).toHaveBeenCalledTimes(1);
     expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: true, runIds: [] });
   });
 
   it("keeps a worker run but still applies operator.write session cleanup", async () => {
-    const onAuthorizedBeforeSessionAbort = vi.fn(() => false);
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => false);
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
       workerEnvironmentService: {
@@ -409,11 +456,11 @@ describe("chat.abort queued-turn contract", () => {
       context,
       connId: "conn-other",
       deviceId: "dev-other",
-      onAuthorizedBeforeSessionAbort,
+      onAuthorizedAfterQueuedAbort,
     });
 
     expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: false, runIds: [] });
-    expect(onAuthorizedBeforeSessionAbort).toHaveBeenCalledTimes(1);
+    expect(onAuthorizedAfterQueuedAbort).toHaveBeenCalledTimes(1);
     expect(cancelInferenceForSession).not.toHaveBeenCalled();
   });
 

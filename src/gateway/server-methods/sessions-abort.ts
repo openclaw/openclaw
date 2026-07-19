@@ -270,7 +270,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     let chatAbortSucceeded = false;
     let responseMeta: Record<string, unknown> | undefined;
     const persistedSessionId = sessionEntry?.sessionId;
-    const onAuthorizedBeforeSessionAbort =
+    const onAuthorizedAfterQueuedAbort =
       !requestedRunId && canonicalKey !== "global" && (clearQueued || persistedSessionId)
         ? () => {
             let queueCleared = false;
@@ -349,7 +349,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         client,
         isWebchatConnect,
       },
-      onAuthorizedBeforeSessionAbort ? { onAuthorizedBeforeSessionAbort } : {},
+      onAuthorizedAfterQueuedAbort ? { onAuthorizedAfterQueuedAbort } : {},
     );
     if (!chatAbortSucceeded) {
       return;

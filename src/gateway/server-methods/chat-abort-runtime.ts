@@ -180,7 +180,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
   /** Internal sessions.* cleanup after exact agent/session resolution under operator.write. */
-  onAuthorizedBeforeAbort?: () => boolean;
+  onAuthorizedAfterQueuedAbort?: () => boolean;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
   const sessionKeys = [params.sessionKey, ...(params.sessionKeyAliases ?? [])];
   const queuedPlan = resolveAuthorizedQueuedTurnsForSession({
@@ -233,6 +233,8 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     authorizedPendingChatRuns.length === 0 &&
     queuedPlan.authorized.length === 0
   ) {
+    // The predicate above proves there is no authorized Gateway queued owner
+    // to cancel before this branch's injected session cleanup.
     const workerService = asWorkerInferenceControl(params.context.workerEnvironmentService);
     const hasWorkerRun = Boolean(
       params.sessionId && workerService?.hasInferenceForSession(params.sessionId),
@@ -240,8 +242,8 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     // With no connection-owned run, the exact persisted session is the owner
     // boundary, matching sessions.steer's operator.write behavior. Foreign
     // tracked chat/worker runs stay untouched, but do not block that cleanup.
-    const additionalAborted = params.onAuthorizedBeforeAbort?.() ?? false;
-    const hasAuthorizedSessionCleanup = params.onAuthorizedBeforeAbort !== undefined;
+    const additionalAborted = params.onAuthorizedAfterQueuedAbort?.() ?? false;
+    const hasAuthorizedSessionCleanup = params.onAuthorizedAfterQueuedAbort !== undefined;
     if (
       (unauthorizedOnly || (hasWorkerRun && !params.requester.isAdmin)) &&
       !hasAuthorizedSessionCleanup
@@ -261,9 +263,6 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       unauthorized: false,
     };
   }
-  // Authorization is now complete. Run injected session cleanup before any
-  // abort signal can let a draining active run promote queued successor work.
-  const additionalAborted = params.onAuthorizedBeforeAbort?.() ?? false;
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
@@ -271,13 +270,16 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     runIds: authorizedRunIdSet,
     abortOrigin: params.abortOrigin,
   });
-  // Queued cancellations stay first so they cannot promote between cleanup and
-  // the active abort, and callers retain the established runIds ordering.
+  // Abort queued owners before any active-work signal can promote a successor.
+  // Keep them first in the response to preserve the established runIds ordering.
   const runIds: string[] = abortQueuedChatTurns(
     ensureChatQueuedTurns(params.context),
     queuedPlan.authorized,
     params.stopReason,
   );
+  // Authorization and queued cancellation are complete. The injected cleanup
+  // may now abort registry-owned session work without reopening the queue race.
+  const additionalAborted = params.onAuthorizedAfterQueuedAbort?.() ?? false;
   for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
       runId,

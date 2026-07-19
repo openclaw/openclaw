@@ -39,7 +39,7 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 type ChatAbortLifecycle = {
-  onAuthorizedBeforeSessionAbort?: () => boolean;
+  onAuthorizedAfterQueuedAbort?: () => boolean;
 };
 
 export async function handleChatAbortRequestWithLifecycle(
@@ -126,7 +126,7 @@ export async function handleChatAbortRequestWithLifecycle(
       stopReason: "rpc",
       requester,
       preserveSideRuns,
-      onAuthorizedBeforeAbort: lifecycle.onAuthorizedBeforeSessionAbort,
+      onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
     });
     if (res.unauthorized) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));

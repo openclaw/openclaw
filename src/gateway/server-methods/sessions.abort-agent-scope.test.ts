@@ -166,9 +166,9 @@ function mockChatSuccess(mock: typeof chatAbortMock, payload: Record<string, unk
   mock.mockImplementationOnce(
     (
       { respond }: { respond: RespondFn },
-      lifecycle?: { onAuthorizedBeforeSessionAbort?: () => boolean },
+      lifecycle?: { onAuthorizedAfterQueuedAbort?: () => boolean },
     ) => {
-      const additionalAborted = lifecycle?.onAuthorizedBeforeSessionAbort?.() ?? false;
+      const additionalAborted = lifecycle?.onAuthorizedAfterQueuedAbort?.() ?? false;
       respond(true, additionalAborted ? { ...payload, aborted: true } : payload);
     },
   );
