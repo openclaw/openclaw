@@ -180,6 +180,22 @@ describe("delivery context helpers", () => {
       accountId: undefined,
       threadId: "777",
     });
+
+    expect(
+      deliveryContextFromSession({
+        origin: {
+          provider: "telegram",
+          to: " 5295861568 ",
+          accountId: " default ",
+          threadId: 42,
+        },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "5295861568",
+      accountId: "default",
+      threadId: 42,
+    });
   });
 
   it("prefers explicit external delivery context over stale webchat legacy fields", () => {
