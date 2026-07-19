@@ -24,6 +24,7 @@ import {
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
+import { splitArgumentsForStreaming } from "./openai-http.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -2760,5 +2761,98 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
     },
   );
+});
+
+describe("splitArgumentsForStreaming (unit)", () => {
+  it("splits normal ASCII input into 256-char chunks", () => {
+    const input = "a".repeat(600);
+    const chunks = splitArgumentsForStreaming(input);
+    expect(chunks.length).toBe(3);
+    expect(chunks[0]).toBe("a".repeat(256));
+    expect(chunks[1]).toBe("a".repeat(256));
+    expect(chunks[2]).toBe("a".repeat(88));
+    expect(chunks.join("")).toBe(input);
+  });
+
+  it("handles short ASCII input without splitting", () => {
+    const input = '{"city":"Taipei"}';
+    const chunks = splitArgumentsForStreaming(input);
+    expect(chunks.length).toBe(1);
+    expect(chunks[0]).toBe(input);
+  });
+
+  it("splits input with surrogate pairs at boundary positions", () => {
+    // 😀 is U+1F600, encoded as surrogate pair
+    // Build a string where a surrogate pair sits right at index 255
+    const emoji = "\u{1F600}";
+    const paddingLen = 255;
+    const padding = "x".repeat(paddingLen);
+    const input = padding + emoji + "y".repeat(255);
+    const chunks = splitArgumentsForStreaming(input);
+    // First chunk avoids splitting the surrogate pair: 255 units
+    // Remaining 257 (emoji[2] + 255 y's) split into 256 + 1
+    expect(chunks.length).toBe(3);
+    // First chunk should have the padding but NOT contain a broken surrogate
+    expect(chunks[0].length).toBe(255);
+    expect(chunks[0]).toBe(padding);
+    // Second chunk starts with the complete emoji then fills to 256
+    expect(chunks[1][0] + chunks[1][1]).toBe(emoji);
+    expect(chunks[1].slice(2)).toBe("y".repeat(254));
+    // Third chunk gets the trailing character
+    expect(chunks[2]).toBe("y");
+    expect(chunks.join("")).toBe(input);
+  });
+
+  it("splits input with non-surrogate multi-byte characters without breaking", () => {
+    // U+0800 (Samaritan letter alaf) is a single UTF-16 code unit,
+    // not a surrogate pair — no special boundary adjustment needed.
+    const char = "ࠀ";
+    // Build input where the character sits right at position 255
+    const input = "x".repeat(255) + char.repeat(2) + "z".repeat(254);
+    const chunks = splitArgumentsForStreaming(input);
+    // Single UTF-16 code units naturally don't get split at boundaries
+    expect(chunks.length).toBe(2);
+    expect(chunks[0].length).toBe(256);
+    expect(chunks[0]).toBe("x".repeat(255) + char);
+    expect(chunks[1]).toBe(char + "z".repeat(254));
+    expect(chunks.join("")).toBe(input);
+  });
+
+  it("handles emoji-only input of varying lengths", () => {
+    const emoji = "\u{1F600}";
+    const input = emoji.repeat(300);
+    const chunks = splitArgumentsForStreaming(input);
+    // Each emoji is 2 UTF-16 code units, so 256/2 = 128 emoji per chunk
+    expect(chunks.length).toBe(3);
+    expect(chunks[0].length).toBe(256);
+    expect(chunks[1].length).toBe(256);
+    expect(chunks[2].length).toBe(88);
+    // No partial surrogate pairs
+    for (const chunk of chunks) {
+      expect(chunk.normalize("NFC")).toBe(chunk);
+    }
+    expect(chunks.join("")).toBe(input);
+  });
+
+  it("returns [''] for empty string input", () => {
+    expect(splitArgumentsForStreaming("")).toEqual([""]);
+  });
+
+  it("handles input exactly one code unit over chunk boundary", () => {
+    // 257 chars — one past boundary
+    const input = "x".repeat(257);
+    const chunks = splitArgumentsForStreaming(input);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]).toBe("x".repeat(256));
+    expect(chunks[1]).toBe("x");
+  });
+
+  it("handles input exactly at chunk boundary", () => {
+    // Exactly 256 chars
+    const input = "x".repeat(256);
+    const chunks = splitArgumentsForStreaming(input);
+    expect(chunks.length).toBe(1);
+    expect(chunks[0]).toBe(input);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

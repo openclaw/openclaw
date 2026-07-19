@@ -315,7 +315,7 @@ function writeAssistantFinishChunk(
   });
 }
 
-function splitArgumentsForStreaming(argumentsValue: string): string[] {
+export function splitArgumentsForStreaming(argumentsValue: string): string[] {
   if (!argumentsValue) {
     return [""];
   }
