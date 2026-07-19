@@ -60,7 +60,7 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
 
 /** A caption paired with its 1-based album position. */
 /** @internal */
-export type MediaGroupCaption = {
+type MediaGroupCaption = {
   albumIndex: number;
   caption: string;
 };
