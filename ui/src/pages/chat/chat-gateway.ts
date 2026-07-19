@@ -14,6 +14,7 @@ import {
   type ChatState,
 } from "./chat-history.ts";
 import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
+import { preserveSteeredQueueItemsForRun } from "./queued-user-turn.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import {
@@ -394,6 +395,14 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     return null;
   }
   const activeRunIdBeforeEvent = state.chatRunId;
+  if (
+    isTerminalChatState(payload?.state) &&
+    !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
+  ) {
+    // A steered chip can be the only local copy while transcript persistence lags.
+    // Materialize it before the terminal assistant so user/assistant order stays stable.
+    preserveSteeredQueueItemsForRun(state, payload?.runId);
+  }
   const result = handleChatEvent(state, payload);
   if (
     isTerminalChatState(result) &&

@@ -3411,6 +3411,38 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("keeps a steered message visible when only the session row reports an active run", async () => {
+    let wireRunId: unknown;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        wireRunId = requireRecord(params, "steered chat send payload").idempotencyKey;
+        return { status: "started", runId: "steer-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "tighten the live plan",
+      chatRunId: null,
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", { hasActiveRun: true, status: "running" }),
+      ]),
+      settings: { chatFollowUpMode: "steer" },
+    });
+
+    await handleSendChat(host);
+    await waitForFast(() => expect(host.chatQueue[0]?.kind).toBe("steered"));
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      kind: "steered",
+      pendingRunId: "steer-run",
+      sendRunId: wireRunId,
+      text: "tighten the live plan",
+    });
+  });
+
   it("keeps busy sends queued in steer mode while disconnected", async () => {
     const host = makeHost({
       client: null,
@@ -7101,6 +7133,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.text).toBe("tighten the plan");
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+    expect(host.chatQueue[0]?.sendRunId).toBe(idempotencyKey);
   });
 
   it("steers a queued message when only the session row reports an active run", async () => {
@@ -7123,17 +7156,69 @@ describe("handleSendChat", () => {
 
     await steerQueuedChatMessage(host, original.id);
 
-    expect(request).toHaveBeenCalledWith(
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
       "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "tighten the plan",
-        deliver: false,
-      }),
+      "session-row steer payload",
     );
+    expect(payload).toMatchObject({
+      sessionKey: "agent:main:main",
+      message: "tighten the plan",
+      deliver: false,
+      queueMode: "steer",
+    });
     expect(host.chatRunId).toBeNull();
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        kind: "steered",
+        pendingRunId: "steer-run",
+        sendRunId: payload.idempotencyKey,
+        text: original.text,
+      }),
+    ]);
     expect(listStoredChatOutboxes(host)).toEqual([]);
+  });
+
+  it("materializes an immediately completed steer before retiring its queue row", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "ok", runId: "completed-steer-run" };
+      }
+      if (method === "chat.history") {
+        return idleChatHistory("agent:main:main");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const original = {
+      id: "completed-steer",
+      text: "record this completed steer",
+      createdAt: 1,
+      sendRunId: "completed-steer-run",
+      sendState: "waiting-idle" as const,
+      sessionKey: "agent:main:main",
+    };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [original],
+      chatRunId: "active-run",
+      sessionKey: original.sessionKey,
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await steerQueuedChatMessage(host, original.id);
+
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        __openclaw: { idempotencyKey: "completed-steer-run:user" },
+      }),
+    ]);
+    expect(JSON.stringify(host.chatMessages[0])).toContain(original.text);
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ sessionKey: original.sessionKey }),
+    );
   });
 
   it("does not steer a queued message without a durable claim", async () => {
@@ -7184,13 +7269,14 @@ describe("handleSendChat", () => {
 
     expect(listStoredChatOutboxes(host)).toEqual([]);
     expect(host.chatQueue).toEqual([
-      {
+      expect.objectContaining({
         id: original.id,
         text: original.text,
         createdAt: original.createdAt,
         kind: "steered",
         pendingRunId: "active-run",
-      },
+        sendRunId: original.sendRunId,
+      }),
     ]);
 
     clearPendingQueueItemsForRun(host, "active-run");
@@ -7201,7 +7287,7 @@ describe("handleSendChat", () => {
     expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
-  it("does not restore a steer indicator after its run ends before the acknowledgement", async () => {
+  it("restores a steer indicator when its only pending copy disappears before the acknowledgement", async () => {
     let resolveRequest: (value: { status: "started"; runId: string }) => void = () => {};
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -7237,7 +7323,176 @@ describe("handleSendChat", () => {
     await steering;
 
     expect(listStoredChatOutboxes(host)).toEqual([]);
+    // The captured run died mid-request, so the restored chip binds to the
+    // steer's own gateway lifecycle instead of the dead run id.
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        id: original.id,
+        kind: "steered",
+        pendingRunId: "steer-run",
+        sendRunId: original.sendRunId,
+        text: original.text,
+      }),
+    ]);
+  });
+
+  it("does not materialize an unacknowledged steer when its run terminates mid-request", async () => {
+    let resolveSteer: (value: { status: "error"; runId: string }) => void = () => {};
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return await new Promise<{ status: "error"; runId: string }>((resolve) => {
+          resolveSteer = resolve;
+        });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const original = {
+      id: "phantom-guard-steer",
+      text: "must not become a phantom turn",
+      createdAt: 1,
+      sendAttempts: 0,
+      sendRunId: "queued-run",
+      sendState: "waiting-idle" as const,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "active-run",
+      chatQueue: [original],
+      sessionKey: original.sessionKey,
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    const steering = steerQueuedChatMessage(host, original.id);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    handlePageGatewayEvent(
+      host as unknown as ChatPageHost,
+      {
+        event: "chat",
+        payload: {
+          state: "final",
+          runId: "active-run",
+          sessionKey: "agent:main:main",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "finished before the steer landed" }],
+            timestamp: 2,
+          },
+        },
+      } as Parameters<typeof handlePageGatewayEvent>[1],
+    );
+    const userTurns = () =>
+      host.chatMessages.filter((message) => (message as { role?: string }).role === "user");
+    expect(userTurns()).toEqual([]);
+
+    resolveSteer({ status: "error", runId: "steer-error" });
+    await steering;
+
+    expect(userTurns()).toEqual([]);
+    const restored = [
+      ...host.chatQueue,
+      ...listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue),
+    ].find((item) => item.id === original.id);
+    expect(restored?.text).toBe(original.text);
+  });
+
+  it("materializes a steered user turn before a terminal event clears its chip", () => {
+    const host = makeHost({
+      chatRunId: "active-run",
+      chatQueue: [
+        {
+          id: "terminal-steer",
+          text: "keep this visible",
+          createdAt: 1,
+          kind: "steered",
+          pendingRunId: "active-run",
+          sendRunId: "steer-send-run",
+          sessionKey: "agent:main:main",
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+
+    handlePageGatewayEvent(
+      host as unknown as ChatPageHost,
+      {
+        event: "chat",
+        payload: {
+          state: "final",
+          runId: "active-run",
+          sessionKey: "agent:main:main",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 2,
+          },
+        },
+      } as Parameters<typeof handlePageGatewayEvent>[1],
+    );
+
     expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessages).toHaveLength(2);
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      __openclaw: { idempotencyKey: "steer-send-run:user" },
+    });
+    expect(JSON.stringify(host.chatMessages[0])).toContain("keep this visible");
+  });
+
+  it("materializes both the run's queued turn and its steered follow-up at the terminal event", () => {
+    const original = {
+      id: "original-turn",
+      text: "original queued turn",
+      createdAt: 1,
+      sendRunId: "active-run",
+      sendState: "sending" as const,
+      sessionKey: "agent:main:main",
+    };
+    const host = makeHost({
+      chatRunId: "active-run",
+      chatQueue: [
+        original,
+        {
+          id: "steer-follow-up",
+          text: "steered follow-up",
+          createdAt: 2,
+          kind: "steered",
+          pendingRunId: "active-run",
+          sendRunId: "steer-send-run",
+          sessionKey: "agent:main:main",
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    handlePageGatewayEvent(
+      host as unknown as ChatPageHost,
+      {
+        event: "chat",
+        payload: {
+          state: "final",
+          runId: "active-run",
+          sessionKey: "agent:main:main",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 3,
+          },
+        },
+      } as Parameters<typeof handlePageGatewayEvent>[1],
+    );
+
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+    expect(host.chatQueue).toEqual([]);
+    const idempotencyKeys = host.chatMessages.map((message) => {
+      const marker = (message as { __openclaw?: { idempotencyKey?: string } }).__openclaw;
+      return marker?.idempotencyKey;
+    });
+    expect(idempotencyKeys.slice(0, 2)).toEqual(["active-run:user", "steer-send-run:user"]);
+    expect(JSON.stringify(host.chatMessages[0])).toContain("original queued turn");
+    expect(JSON.stringify(host.chatMessages[1])).toContain("steered follow-up");
   });
 
   it("resumes a restored steer after its active run ended before a terminal error", async () => {
