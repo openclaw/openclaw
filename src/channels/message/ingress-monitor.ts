@@ -247,6 +247,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           onAdopted: async () => {
             handedOff = true;
             await lifecycle.onAdopted();
+            requestDrain();
           },
           onDeferred: () => {
             handedOff = true;
@@ -262,6 +263,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             handedOff = true;
             deferredHandoff = true;
             await lifecycle.onAbandoned();
+            requestDrain();
           },
         };
 
@@ -287,6 +289,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         }
         if (isAborted() || lifecycle.abortSignal.aborted) {
           return { kind: "failed-retryable", error: createStoppedError() };
+        }
+        if (result?.kind === "completed") {
+          return result;
         }
         if (result?.kind === "deferred") {
           if (!deferredHandoff) {
@@ -334,8 +339,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
                 activeDeliveries.size >= options.drain.startLimit),
           }),
         );
-        await waitForActiveDeliveries();
-        await activeDrain.waitForIdle();
+        if (started > 0) {
+          // Failed-retryable delivery settles after the channel callback returns.
+          // Wake once the drain has released or failed those claims.
+          void activeDrain.waitForIdle().then(requestDrain);
+        }
         if (!running || isAborted() || (!requested && started === 0)) {
           break;
         }
@@ -458,6 +466,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       pollTimer.unref?.();
       requestDrain();
     },
+    requestDrain,
     pause,
     stop: () => {
       stopTask ??= (async () => {
@@ -478,10 +487,15 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       return stopTask;
     },
     waitForIdle: async () => {
-      await admissionTail;
-      await waitForPumpIdle();
-      await waitForActiveDeliveries();
-      await drain?.waitForIdle();
+      for (;;) {
+        await admissionTail;
+        await waitForPumpIdle();
+        await waitForActiveDeliveries();
+        await drain?.waitForIdle();
+        if (!pumping && activeDeliveries.size === 0 && !requested) {
+          return;
+        }
+      }
     },
     isRunning: () => running,
     isStopped: () => stopped,

@@ -153,4 +153,58 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
     });
   });
+
+  it("drains a newly admitted unrelated lane while another delivery is active", async () => {
+    await withQueue(async (queue) => {
+      let releaseFirst: (() => void) | undefined;
+      const firstDone = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const delivered: string[] = [];
+      const monitor = createMonitor(queue, async (raw, lifecycle) => {
+        delivered.push(raw.id);
+        if (raw.id === "event-first") {
+          await firstDone;
+        }
+        await lifecycle.onAdopted();
+      });
+      monitor.start();
+      await monitor.admit({ id: "event-first", lane: "a", text: "slow" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-first"]));
+
+      await monitor.admit({ id: "event-second", lane: "b", text: "fast" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-first", "event-second"]));
+
+      releaseFirst?.();
+      await monitor.waitForIdle();
+      await monitor.stop();
+    });
+  });
+
+  it("drains the next same-lane event after adoption while delivery remains active", async () => {
+    await withQueue(async (queue) => {
+      let releaseFirst: (() => void) | undefined;
+      const firstDone = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const delivered: string[] = [];
+      const monitor = createMonitor(queue, async (raw, lifecycle) => {
+        delivered.push(raw.id);
+        await lifecycle.onAdopted();
+        if (raw.id === "event-first") {
+          await firstDone;
+        }
+      });
+      monitor.start();
+      await monitor.admit({ id: "event-first", lane: "a", text: "slow" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-first"]));
+
+      await monitor.admit({ id: "event-second", lane: "a", text: "fast" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-first", "event-second"]));
+
+      releaseFirst?.();
+      await monitor.waitForIdle();
+      await monitor.stop();
+    });
+  });
 });
