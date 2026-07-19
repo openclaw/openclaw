@@ -1912,5 +1912,71 @@ describe("draft stream initial message debounce", () => {
       expectPreviewSend(api, "Hi");
     });
   });
+
+  describe("linkPreview: false", () => {
+    const disabledPreview = {
+      link_preview_options: { is_disabled: true },
+    };
+
+    it("disables link previews on initial send and every subsequent edit", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { linkPreview: false, throttleMs: 250 });
+
+      stream.update("See https://example.com/a");
+      await stream.flush();
+      expectPreviewSend(api, "See https://example.com/a", disabledPreview);
+
+      stream.update("See https://example.com/a and https://example.com/b");
+      await stream.flush();
+      expectPreviewEdit(
+        api,
+        "See https://example.com/a and https://example.com/b",
+        disabledPreview,
+      );
+    });
+
+    it("merges disabled preview into HTML send and edit params", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, {
+        linkPreview: false,
+        throttleMs: 250,
+        renderText: (text) => ({
+          text,
+          parseMode: "HTML",
+          markdownSource: { text },
+        }),
+      });
+
+      stream.update("See https://example.com/html");
+      await stream.flush();
+
+      await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+      const sendParams = api.sendMessage.mock.calls[0]?.[2] as Record<string, unknown>;
+      expect(sendParams).toMatchObject({
+        parse_mode: "HTML",
+        ...disabledPreview,
+      });
+
+      stream.update("See https://example.com/html-edit");
+      await stream.flush();
+      await vi.waitFor(() => expect(api.editMessageText).toHaveBeenCalled());
+      const editParams = api.editMessageText.mock.calls[0]?.[3] as Record<string, unknown>;
+      expect(editParams).toMatchObject({
+        parse_mode: "HTML",
+        ...disabledPreview,
+      });
+    });
+
+    it("does not attach link_preview_options when linkPreview is true", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { linkPreview: true, throttleMs: 250 });
+
+      stream.update("See https://example.com/enabled");
+      await stream.flush();
+      expectPreviewSend(api, "See https://example.com/enabled");
+      const sendParams = api.sendMessage.mock.calls[0]?.[2] as Record<string, unknown> | undefined;
+      expect(sendParams ?? {}).not.toHaveProperty("link_preview_options");
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

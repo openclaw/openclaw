@@ -127,6 +127,9 @@ export function createTelegramDraftController(params: {
           replyToMessageId: params.draftReplyToMessageId,
           replyToMode: params.replyToMode,
           richMessages: params.telegramCfg.richMessages,
+          // Stream path must honor the same config as durable send; otherwise
+          // in-place finals keep URL unfurls when linkPreview is false.
+          linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: params.streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS,
           renderText: renderStreamText,
           onRetainedPage: (page) => {
