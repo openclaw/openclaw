@@ -1016,6 +1016,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("delivers a recovered final answer after a tool-failure card close (#110352)", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    // First reply run: the tool-failure warning is the only final, and idle
+    // closes the streaming card with just the warning.
+    await options.onReplyStart?.();
+    await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
+    await options.onIdle?.();
+
+    // Follow-up run within the same inbound turn: the agent recovered and
+    // produced the real answer; the closed-streaming skip must not swallow it.
+    await options.onReplyStart?.();
+    await options.deliver({ text: "Recovered final answer" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(2);
+    expect(requireStreamingInstance(0).close).toHaveBeenCalledWith("⚠️ Exec failed", {
+      note: "Agent: agent",
+    });
+    expect(requireStreamingInstance(1).close).toHaveBeenCalledWith("Recovered final answer", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("skips final text already closed by idle streaming", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
