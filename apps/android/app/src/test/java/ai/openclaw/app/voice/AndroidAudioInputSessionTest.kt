@@ -134,7 +134,7 @@ class AndroidAudioInputSessionTest {
   fun stableInputKeyUsesDeviceAttributesInsteadOfRuntimeId() {
     val key = audioInputDeviceKey(type = 26, address = "usb:1", productName = "Desk Mic")
 
-    assertEquals("26\u001Fusb:1\u001FDesk Mic", key)
+    assertEquals("26|usb%3A1|Desk+Mic", key)
     assertEquals(AudioInputDeviceOption(key, "Desk Mic", 26), audioInputDeviceOptionFromKey(key))
   }
 

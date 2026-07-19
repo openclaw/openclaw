@@ -12,6 +12,8 @@ import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 internal data class AudioInputDeviceOption(
   val key: String,
@@ -395,11 +397,13 @@ internal fun audioInputDeviceKey(
   productName: String,
 ): String {
   // AudioDeviceInfo.id is per-boot; persist routing attributes and re-resolve each session.
-  return listOf(type.toString(), address, productName).joinToString("\u001F")
+  // Fields are URL-encoded so the key stays XML-safe in SharedPreferences; a raw
+  // control-char separator can corrupt the whole plain prefs file on reload.
+  return listOf(type.toString(), address, productName).joinToString("|") { URLEncoder.encode(it, "UTF-8") }
 }
 
 internal fun audioInputDeviceOptionFromKey(key: String): AudioInputDeviceOption? {
-  val parts = key.split("\u001F", limit = 3)
+  val parts = key.split("|", limit = 3).map { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: return null }
   if (parts.size != 3) return null
   return AudioInputDeviceOption(
     key = key,

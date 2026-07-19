@@ -115,11 +115,11 @@ class SecurePrefsTest {
     assertEquals(null, prefs.preferredAudioInputDevice.value)
 
     prefs.setPreferredCameraFacing("back")
-    prefs.setPreferredAudioInputDevice("7\u001Fusb:1\u001FDesk Mic")
+    prefs.setPreferredAudioInputDevice("7|usb%3A1|Desk+Mic")
 
     val restored = testPrefs(context)
     assertEquals("back", restored.preferredCameraFacing.value)
-    assertEquals("7\u001Fusb:1\u001FDesk Mic", restored.preferredAudioInputDevice.value)
+    assertEquals("7|usb%3A1|Desk+Mic", restored.preferredAudioInputDevice.value)
 
     restored.setPreferredCameraFacing("side")
     restored.setPreferredAudioInputDevice(null)
