@@ -58,6 +58,7 @@ import {
   AgentConfigPreconditionError,
   deleteAgentConfigEntry,
   isConfiguredAgent,
+  isUpdatableAgent,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
@@ -495,7 +496,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
-    if (!isConfiguredAgent(cfg, agentId)) {
+    if (!isUpdatableAgent(cfg, agentId)) {
       respondAgentNotFound(respond, agentId);
       return;
     }

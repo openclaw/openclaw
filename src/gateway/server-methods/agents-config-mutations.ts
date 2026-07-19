@@ -1,6 +1,10 @@
 // Agent config mutation helpers wrap retrying config writes for create/update/
 // delete flows and surface typed precondition failures to gateway handlers.
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   applyAgentConfig,
   findAgentEntryIndex,
@@ -27,6 +31,15 @@ export function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
 
+/** Allows updates to concrete agents and to the implicit default when no list exists yet. */
+export function isUpdatableAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  const agents = listAgentEntries(cfg);
+  return (
+    findAgentEntryIndex(agents, agentId) >= 0 ||
+    (agents.length === 0 && agentId === resolveDefaultAgentId(cfg))
+  );
+}
+
 /** Updates an existing agent entry while preserving omitted fields. */
 export async function updateAgentConfigEntry(params: {
   agentId: string;
@@ -38,7 +51,7 @@ export async function updateAgentConfigEntry(params: {
   await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
     mutate: (draft) => {
-      if (!isConfiguredAgent(draft, params.agentId)) {
+      if (!isUpdatableAgent(draft, params.agentId)) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
       }
       const latestNextConfig = applyAgentConfig(draft, {

@@ -145,6 +145,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentConfig: (cfg: unknown, agentId: string) =>
     getAgentList(cfg).find((entry) => entry.id === agentId),
+  resolveDefaultAgentId: (cfg: unknown) => getAgentList(cfg)[0]?.id ?? "main",
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 
@@ -759,6 +760,32 @@ describe("agents.update", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("materializes the implicit default agent when updating its identity", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: { workspace: "/workspace/main" },
+      },
+    };
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "main",
+      name: "Main Agent",
+      emoji: "🐾",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "main" });
+    const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+    const agents = expectRecordFields(persisted.agents, {});
+    expect(agents.list).toEqual([
+      {
+        id: "main",
+        name: "Main Agent",
+        identity: { name: "Main Agent", emoji: "🐾" },
+      },
+    ]);
   });
 
   it("rejects updating a nonexistent agent", async () => {
