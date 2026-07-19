@@ -1,7 +1,14 @@
 // Discord tests cover chunk plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
+import { chunkDiscordTextWithMode } from "./chunk.js";
+
+type ChunkOptions = Omit<Parameters<typeof chunkDiscordTextWithMode>[1], "chunkMode">;
+
+function chunkDiscordText(text: string, options: ChunkOptions = {}) {
+  return chunkDiscordTextWithMode(text, { ...options, chunkMode: "length" });
+}
 
 describe("chunkDiscordText", () => {
   it("splits tall messages even when under 2000 chars", () => {
@@ -148,9 +155,9 @@ describe("chunkDiscordText", () => {
     }
 
     // Ensure italics reopen on subsequent chunks
-    expect(chunks[0]).toContain("_1. line");
+    expect(expectDefined(chunks[0], "first Discord chunk")).toContain("_1. line");
     // Second chunk should reopen italics at the start
-    expect(chunks[1].trimStart().startsWith("_")).toBe(true);
+    expect(expectDefined(chunks[1], "second Discord chunk").trimStart().startsWith("_")).toBe(true);
   });
 
   it("keeps reasoning italics balanced when chunks split by char limit", () => {
@@ -200,7 +207,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1];
+    const second = expectDefined(chunks[1], "second Discord chunk");
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
   });
@@ -217,7 +224,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1].trimStart();
+    const second = expectDefined(chunks[1], "second Discord chunk").trimStart();
     expect(second.startsWith("```")).toBe(true);
     expect(second.startsWith("_```")).toBe(false);
     expect(second).toContain("```python");
@@ -240,7 +247,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1].trimStart();
+    const second = expectDefined(chunks[1], "second Discord chunk").trimStart();
     expect(second.startsWith("`")).toBe(true);
     expect(second.startsWith("_`")).toBe(false);
     expect(second).toContain("`inline_code_token`");
@@ -265,7 +272,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1].trimStart();
+    const second = expectDefined(chunks[1], "second Discord chunk").trimStart();
     expect(second.startsWith("```")).toBe(true);
     expect(second.startsWith("_```")).toBe(false);
     expect(second).toBe("```python\nprint(1)\n```\n_more reasoning_");
@@ -287,7 +294,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1].trimStart();
+    const second = expectDefined(chunks[1], "second Discord chunk").trimStart();
     expect(second.startsWith("~~~")).toBe(true);
     expect(second.startsWith("_~~~")).toBe(false);
     expect(second).toBe("~~~python\nprint(1)\n~~~");
@@ -310,7 +317,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1].trimStart();
+    const second = expectDefined(chunks[1], "second Discord chunk").trimStart();
     expect(second.startsWith("~~~")).toBe(true);
     expect(second.startsWith("_~~~")).toBe(false);
     expect(second).toBe("~~~python\nprint(1)\n~~~\n_more reasoning_");
@@ -333,7 +340,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1];
+    const second = expectDefined(chunks[1], "second Discord chunk");
     expect(second.trimStart().startsWith("```")).toBe(true);
     expect(second).not.toMatch(/_```/);
     // Indent preserved; italics reopen after the indented fence.
@@ -357,7 +364,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1].trimStart();
+    const second = expectDefined(chunks[1], "second Discord chunk").trimStart();
     expect(second.startsWith("```")).toBe(true);
     expect(second.startsWith("_```")).toBe(false);
     expect(second).toBe("```python\nprint(1)\n````\n_more reasoning_");
