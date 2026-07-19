@@ -52,6 +52,8 @@ type TerminalTabState = TerminalPanelTab &
   TerminalTabReadinessState & {
     gatewaySessionId: string;
     pendingInput: StartupInputBuffer;
+    /** Flush incomplete UTF-8 held by the startup TextDecoder. */
+    flushStartupInput: () => void;
     defaultColorQueries: ReturnType<typeof createTerminalDefaultColorQueryResponder>;
     controller: GhosttyTerminalController;
     shell: string;
@@ -602,6 +604,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       sequence: this.tabSeq,
       gatewaySessionId: "",
       pendingInput: startupInput.buffer,
+      flushStartupInput: startupInput.flush,
       defaultColorQueries,
       shellName: null,
       shell: "",
@@ -671,6 +674,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     // current grid now so a resize during the open/attach RPC is not lost.
     const { cols, rows } = tab.controller.terminal;
     void this.connection?.resize(result.sessionId, cols || 80, rows || 24);
+    // Drain only complete buffered text. Keep the streaming TextDecoder open
+    // across adoption so a multi-byte scalar that straddles pre-bind / post-bind
+    // chunks can still complete (flushing here would finalize as U+FFFD).
     for (const data of tab.pendingInput.drain()) {
       void this.connection?.input(result.sessionId, data);
     }
@@ -932,6 +938,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   private disposeTab(tab: TerminalTabState): void {
     this.readiness.stop(tab);
+    try {
+      tab.flushStartupInput();
+    } catch {
+      // Best-effort decoder flush; dispose must continue.
+    }
     try {
       tab.controller.dispose();
     } catch {
