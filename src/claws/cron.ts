@@ -1,3 +1,6 @@
+import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { normalizeCronJobCreate } from "../cron/normalize.js";
+import type { CronJob } from "../cron/types.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -35,6 +38,7 @@ type CronRefRow = {
 
 export type ClawCronGateway = {
   add: (input: Record<string, unknown>) => Promise<unknown>;
+  get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
   remove: (schedulerJobId: string) => Promise<unknown>;
 };
@@ -200,22 +204,24 @@ function schedulerJobByDeclarationKey(
   return match ? { id: match.id as string } : undefined;
 }
 
-function gatewayInput(plan: ClawAddPlan, ref: PersistedClawCronRef): Record<string, unknown> {
+export function clawCronGatewayInput(
+  agentId: string,
+  ref: PersistedClawCronRef,
+): Record<string, unknown> {
   const job = ref.job;
   return {
     name: job.name ?? job.id,
     declarationKey: ref.declarationKey,
     ...(job.name ? { displayName: job.name } : {}),
-    owner: { agentId: plan.agent.finalId },
+    owner: { agentId },
     enabled: true,
-    agentId: plan.agent.finalId,
+    agentId,
     schedule: {
       kind: "cron",
       expr: job.schedule.cron,
       ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
     },
-    sessionTarget:
-      job.session === "main" ? `session:agent:${plan.agent.finalId}:main` : job.session,
+    sessionTarget: job.session === "main" ? `session:agent:${agentId}:main` : job.session,
     wakeMode: "now",
     payload: { kind: "agentTurn", message: job.message },
     delivery: job.delivery
@@ -225,6 +231,40 @@ function gatewayInput(plan: ClawAddPlan, ref: PersistedClawCronRef): Record<stri
         }
       : { mode: "none" },
   };
+}
+
+export function clawCronGatewayJobMatchesRef(
+  agentId: string,
+  ref: PersistedClawCronRef,
+  value: unknown,
+): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const live = value as Partial<CronJob>;
+  const expected = normalizeCronJobCreate(clawCronGatewayInput(agentId, ref));
+  if (
+    !expected ||
+    typeof live.id !== "string" ||
+    typeof live.createdAtMs !== "number" ||
+    typeof live.updatedAtMs !== "number" ||
+    !live.state
+  ) {
+    return false;
+  }
+  try {
+    return (
+      resolveCronJobConfigRevision({
+        ...expected,
+        id: live.id,
+        createdAtMs: live.createdAtMs,
+        updatedAtMs: live.updatedAtMs,
+        state: live.state,
+      }) === resolveCronJobConfigRevision(live as CronJob)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export async function installClawCronJobs(
@@ -276,7 +316,9 @@ export async function installClawCronJobs(
           pending.declarationKey,
         );
       }
-      result ??= schedulerJobFromResult(await options.gateway.add(gatewayInput(plan, pending)));
+      result ??= schedulerJobFromResult(
+        await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, pending)),
+      );
       if (!result) {
         throw new Error("cron.add returned no scheduler job id");
       }

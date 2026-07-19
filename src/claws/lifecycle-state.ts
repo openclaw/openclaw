@@ -9,6 +9,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
+  clawCronGatewayJobMatchesRef,
   deleteClawCronRef,
   markClawCronRefRemoved,
   readClawCronRefs,
@@ -488,7 +489,7 @@ export async function applyClawRemovePlan(
     purgeSessions?: PurgeSessions;
     trashPath?: ClawTrashPath;
     consentPlanIntegrity?: string;
-    cronGateway?: Pick<ClawCronGateway, "remove">;
+    cronGateway?: Pick<ClawCronGateway, "get" | "remove">;
   } = {},
 ): Promise<ClawRemoveResult> {
   if (options.consentPlanIntegrity !== plan.planIntegrity) {
@@ -547,14 +548,20 @@ export async function applyClawRemovePlan(
         `Cron declaration ${JSON.stringify(cron.manifestId)} is not safely removable.`,
       );
     }
-    if (cron.status !== "removed" && !options.cronGateway) {
+    if (cron.status !== "removed" && (!options.cronGateway?.get || !options.cronGateway.remove)) {
       throw new ClawRemoveError(
         "cron_gateway_required",
-        "Claw cron jobs require the gateway-owned cron.remove API.",
+        "Claw cron jobs require the gateway-owned cron.get and cron.remove APIs.",
       );
     }
     try {
       if (cron.status !== "removed") {
+        const live = await options.cronGateway!.get!(cron.schedulerJobId!);
+        if (!clawCronGatewayJobMatchesRef(plan.agentId, cron, live)) {
+          throw new Error(
+            `Cron declaration ${JSON.stringify(cron.manifestId)} changed after planning.`,
+          );
+        }
         await options.cronGateway!.remove(cron.schedulerJobId!);
         markClawCronRefRemoved(plan.agentId, cron.manifestId, options);
       }
