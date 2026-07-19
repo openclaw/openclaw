@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { INTERNAL_RUNTIME_CONTEXT_END } from "./internal-runtime-context.js";
 import {
-  clearMcpAppModelContext,
   clearMcpAppModelContextForView,
   leaseMcpAppModelContextForTurn,
   revokeMcpAppModelContext,
@@ -110,7 +109,7 @@ describe("MCP App model context", () => {
       leaseMcpAppModelContextForTurn({ runtime: activeRuntime, prompt: "second turn" })?.prompt,
     ).toContain("newer");
 
-    clearMcpAppModelContext(activeRuntime);
+    updateMcpAppModelContext(activeRuntime, view, {});
     expect(
       leaseMcpAppModelContextForTurn({ runtime: activeRuntime, prompt: "third" }),
     ).toBeUndefined();

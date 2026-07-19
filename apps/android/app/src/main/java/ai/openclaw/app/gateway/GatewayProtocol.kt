@@ -231,6 +231,7 @@ enum class GatewayMethod(
   McpAppListResourceTemplates("mcp.app.listResourceTemplates"),
   McpAppReadResource("mcp.app.readResource"),
   McpAppCallTool("mcp.app.callTool"),
+  McpAppUpdateModelContext("mcp.app.updateModelContext"),
   BoardGet("board.get"),
   BoardUpdate("board.update"),
   BoardWidgetPut("board.widget.put"),

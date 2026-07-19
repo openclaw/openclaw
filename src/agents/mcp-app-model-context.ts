@@ -12,7 +12,7 @@ type UpdateModelContextParams = {
   structuredContent?: unknown;
 };
 
-export function clearMcpAppModelContext(runtime: SessionMcpRuntime): void {
+function clearMcpAppModelContext(runtime: SessionMcpRuntime): void {
   runtime.pendingMcpAppModelContext = undefined;
 }
 
