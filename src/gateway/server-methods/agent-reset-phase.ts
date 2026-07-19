@@ -77,7 +77,7 @@ export async function runAgentResetPhase(params: {
     params.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+      missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
     );
     return { ...base, stop: true, accepted: false };
   }

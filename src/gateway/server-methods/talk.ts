@@ -727,7 +727,10 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${TALK_SECRETS_SCOPE}`),
+        missingScopeErrorShape({
+          missingScope: TALK_SECRETS_SCOPE,
+          requiredScopes: [TALK_SECRETS_SCOPE],
+        }),
       );
       return;
     }
