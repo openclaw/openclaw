@@ -7154,6 +7154,36 @@
       "translated": "Rozpoznawanie mowy"
     },
     {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "Nie udało się skopiować obrazu widżetu"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "Nie udało się zapisać obrazu widżetu"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "Skopiowano obraz widżetu"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "Obraz widżetu zapisano w folderze Pobrane"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "Kopiuj obraz"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "Zapisz obraz"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "Widżet niedostępny"

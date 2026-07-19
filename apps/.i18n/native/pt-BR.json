@@ -7154,6 +7154,36 @@
       "translated": "Reconhecimento de fala"
     },
     {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "Não foi possível copiar a imagem do widget"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "Não foi possível salvar a imagem do widget"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "Imagem do widget copiada"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "Imagem do widget salva em Downloads"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "Copiar imagem"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "Salvar imagem"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "Widget indisponível"

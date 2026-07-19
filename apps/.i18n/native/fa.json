@@ -7154,6 +7154,36 @@
       "translated": "تشخیص گفتار"
     },
     {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "تصویر ویجت کپی نشد"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "تصویر ویجت ذخیره نشد"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "تصویر ویجت کپی شد"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "تصویر ویجت در Downloads ذخیره شد"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "کپی تصویر"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "ذخیره تصویر"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "ویجت در دسترس نیست"

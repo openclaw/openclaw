@@ -7154,6 +7154,36 @@
       "translated": "การรู้จำเสียงพูด"
     },
     {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "ไม่สามารถคัดลอกรูปภาพวิดเจ็ตได้"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "ไม่สามารถบันทึกรูปภาพวิดเจ็ตได้"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "คัดลอกรูปภาพวิดเจ็ตแล้ว"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "บันทึกรูปภาพวิดเจ็ตไปยัง Downloads แล้ว"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "คัดลอกรูปภาพ"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "บันทึกรูปภาพ"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "วิดเจ็ตไม่พร้อมใช้งาน"

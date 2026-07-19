@@ -7154,6 +7154,36 @@
       "translated": "Reconnaissance vocale"
     },
     {
+      "id": "native.android.5bbcfd75bf605de8",
+      "source": "Could not copy widget image",
+      "translated": "Impossible de copier l’image du widget"
+    },
+    {
+      "id": "native.android.43d98caa4a9fa44c",
+      "source": "Could not save widget image",
+      "translated": "Impossible d’enregistrer l’image du widget"
+    },
+    {
+      "id": "native.android.88e52d3ea4d2059a",
+      "source": "Widget image copied",
+      "translated": "Image du widget copiée"
+    },
+    {
+      "id": "native.android.04b164bc44c08e38",
+      "source": "Widget image saved to Downloads",
+      "translated": "Image du widget enregistrée dans Téléchargements"
+    },
+    {
+      "id": "native.android.a29e724e9e3b5cc9",
+      "source": "Copy image",
+      "translated": "Copier l’image"
+    },
+    {
+      "id": "native.android.6b45a391b1289aa5",
+      "source": "Save image",
+      "translated": "Enregistrer l’image"
+    },
+    {
       "id": "native.android.d1712183ebf86197",
       "source": "Widget unavailable",
       "translated": "Widget indisponible"
