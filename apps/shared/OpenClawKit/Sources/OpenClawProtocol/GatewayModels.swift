@@ -2222,6 +2222,8 @@ public struct AgentParams: Codable, Sendable {
     public let sessioneffects: AnyCodable?
     public let sourcereplydeliverymode: AnyCodable?
     public let disablemessagetool: Bool?
+    public let swarmcollector: Bool?
+    public let swarmoutputschema: [String: AnyCodable]?
     public let forcerestartsafetools: Bool?
     public let voicewaketrigger: String?
     public let idempotencykey: String
@@ -2267,6 +2269,8 @@ public struct AgentParams: Codable, Sendable {
         sessioneffects: AnyCodable? = nil,
         sourcereplydeliverymode: AnyCodable? = nil,
         disablemessagetool: Bool? = nil,
+        swarmcollector: Bool? = nil,
+        swarmoutputschema: [String: AnyCodable]? = nil,
         forcerestartsafetools: Bool? = nil,
         voicewaketrigger: String? = nil,
         idempotencykey: String,
@@ -2311,6 +2315,8 @@ public struct AgentParams: Codable, Sendable {
         self.sessioneffects = sessioneffects
         self.sourcereplydeliverymode = sourcereplydeliverymode
         self.disablemessagetool = disablemessagetool
+        self.swarmcollector = swarmcollector
+        self.swarmoutputschema = swarmoutputschema
         self.forcerestartsafetools = forcerestartsafetools
         self.voicewaketrigger = voicewaketrigger
         self.idempotencykey = idempotencykey
@@ -2357,6 +2363,8 @@ public struct AgentParams: Codable, Sendable {
         case sessioneffects = "sessionEffects"
         case sourcereplydeliverymode = "sourceReplyDeliveryMode"
         case disablemessagetool = "disableMessageTool"
+        case swarmcollector = "swarmCollector"
+        case swarmoutputschema = "swarmOutputSchema"
         case forcerestartsafetools = "forceRestartSafeTools"
         case voicewaketrigger = "voiceWakeTrigger"
         case idempotencykey = "idempotencyKey"
@@ -8108,6 +8116,7 @@ public struct TalkCatalogResult: Codable, Sendable {
 
 public struct TalkClientCreateParams: Codable, Sendable {
     public let sessionkey: String?
+    public let voicesessionid: String?
     public let provider: String?
     public let model: String?
     public let voice: String?
@@ -8118,10 +8127,11 @@ public struct TalkClientCreateParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let transport: AnyCodable?
     public let brain: AnyCodable?
-    public let capabilities: [String]?
+    public let capabilities: [AnyCodable]?
 
     public init(
         sessionkey: String? = nil,
+        voicesessionid: String? = nil,
         provider: String? = nil,
         model: String? = nil,
         voice: String? = nil,
@@ -8132,9 +8142,10 @@ public struct TalkClientCreateParams: Codable, Sendable {
         mode: AnyCodable? = nil,
         transport: AnyCodable? = nil,
         brain: AnyCodable? = nil,
-        capabilities: [String]? = nil)
+        capabilities: [AnyCodable]? = nil)
     {
         self.sessionkey = sessionkey
+        self.voicesessionid = voicesessionid
         self.provider = provider
         self.model = model
         self.voice = voice
@@ -8150,6 +8161,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case voicesessionid = "voiceSessionId"
         case provider
         case model
         case voice
@@ -8161,6 +8173,38 @@ public struct TalkClientCreateParams: Codable, Sendable {
         case transport
         case brain
         case capabilities
+    }
+}
+
+public struct TalkClientCloseParams: Codable, Sendable {
+    public let sessionkey: String
+    public let voicesessionid: String
+
+    public init(
+        sessionkey: String,
+        voicesessionid: String)
+    {
+        self.sessionkey = sessionkey
+        self.voicesessionid = voicesessionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case voicesessionid = "voiceSessionId"
+    }
+}
+
+public struct TalkClientMutationResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
     }
 }
 
@@ -8262,6 +8306,7 @@ public struct TalkAgentControlResult: Codable, Sendable {
 
 public struct TalkClientToolCallParams: Codable, Sendable {
     public let sessionkey: String
+    public let voicesessionid: String?
     public let callid: String
     public let name: String
     public let args: AnyCodable?
@@ -8269,12 +8314,14 @@ public struct TalkClientToolCallParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        voicesessionid: String? = nil,
         callid: String,
         name: String,
         args: AnyCodable? = nil,
         relaysessionid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.voicesessionid = voicesessionid
         self.callid = callid
         self.name = name
         self.args = args
@@ -8283,6 +8330,7 @@ public struct TalkClientToolCallParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case voicesessionid = "voiceSessionId"
         case callid = "callId"
         case name
         case args
@@ -8305,6 +8353,40 @@ public struct TalkClientToolCallResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct TalkClientTranscriptParams: Codable, Sendable {
+    public let sessionkey: String
+    public let voicesessionid: String
+    public let entryid: String
+    public let role: AnyCodable
+    public let text: String
+    public let timestamp: Double?
+
+    public init(
+        sessionkey: String,
+        voicesessionid: String,
+        entryid: String,
+        role: AnyCodable,
+        text: String,
+        timestamp: Double? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.voicesessionid = voicesessionid
+        self.entryid = entryid
+        self.role = role
+        self.text = text
+        self.timestamp = timestamp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case voicesessionid = "voiceSessionId"
+        case entryid = "entryId"
+        case role
+        case text
+        case timestamp
     }
 }
 

@@ -3518,6 +3518,19 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: color-mix(in srgb, var(--danger) 86%, var(--text));
 }
 
+.sidebar-recent-session__subtitle--narration {
+  animation: sidebar-narration-arrive var(--duration-fast) ease-out;
+}
+
+@keyframes sidebar-narration-arrive {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */
 .sidebar-agent-section__avatar {
   display: inline-flex;
