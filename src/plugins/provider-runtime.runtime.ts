@@ -5,8 +5,8 @@ type ProviderRuntimeModule = typeof import("./provider-runtime.js");
 
 type AugmentModelCatalogWithProviderPlugins =
   ProviderRuntimeModule["augmentModelCatalogWithProviderPlugins"];
-type AugmentModelCatalogWithProviderPluginsResult =
-  ProviderRuntimeModule["augmentModelCatalogWithProviderPluginsResult"];
+type AugmentModelCatalogWithProviderPluginsDegraded =
+  ProviderRuntimeModule["augmentModelCatalogWithProviderPluginsDegraded"];
 type BuildProviderAuthDoctorHintWithPlugin =
   ProviderRuntimeModule["buildProviderAuthDoctorHintWithPlugin"];
 type FormatProviderAuthProfileApiKeyWithPlugin =
@@ -33,12 +33,12 @@ export async function augmentModelCatalogWithProviderPlugins(
   return runtime.augmentModelCatalogWithProviderPlugins(...args);
 }
 
-/** Lazily augments the model catalog and reports whether every plugin completed. */
-export async function augmentModelCatalogWithProviderPluginsResult(
-  ...args: Parameters<AugmentModelCatalogWithProviderPluginsResult>
-): Promise<Awaited<ReturnType<AugmentModelCatalogWithProviderPluginsResult>>> {
+/** Lazily runs bounded provider hooks for callers that accept a degraded catalog. */
+export async function augmentModelCatalogWithProviderPluginsDegraded(
+  ...args: Parameters<AugmentModelCatalogWithProviderPluginsDegraded>
+): Promise<Awaited<ReturnType<AugmentModelCatalogWithProviderPluginsDegraded>>> {
   const runtime = await loadProviderRuntime();
-  return runtime.augmentModelCatalogWithProviderPluginsResult(...args);
+  return runtime.augmentModelCatalogWithProviderPluginsDegraded(...args);
 }
 
 /** Lazily builds doctor hint text for provider auth problems. */

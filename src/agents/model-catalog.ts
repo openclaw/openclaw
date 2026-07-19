@@ -21,7 +21,10 @@ import {
 } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { augmentModelCatalogWithProviderPluginsResult } from "../plugins/provider-runtime.runtime.js";
+import {
+  augmentModelCatalogWithProviderPlugins,
+  augmentModelCatalogWithProviderPluginsDegraded,
+} from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
@@ -92,6 +95,8 @@ export type LoadModelCatalogParams = {
   useCache?: boolean;
   cacheOnly?: boolean;
   readOnly?: boolean;
+  /** Exact by default; degraded mode is only for callers designed to accept omitted rows. */
+  providerCatalogMode?: "exact" | "degraded";
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
 };
@@ -688,6 +693,7 @@ export async function loadModelCatalogSnapshot(
       : EMPTY_DEGRADED_MODEL_CATALOG_SNAPSHOT;
   }
   const readOnly = params?.readOnly === true;
+  const degradedProviderCatalog = params?.providerCatalogMode === "degraded";
   if (readOnly) {
     try {
       return await loadReadOnlyPersistedModelCatalog(params);
@@ -701,7 +707,7 @@ export async function loadModelCatalogSnapshot(
     modelCatalogPromise = null;
     modelCatalogGeneration += 1;
   }
-  const useSharedCache = !readOnly && !params?.metadataSnapshot;
+  const useSharedCache = !readOnly && !params?.metadataSnapshot && !degradedProviderCatalog;
   if (useSharedCache && modelCatalogPromise) {
     return modelCatalogPromise;
   }
@@ -756,7 +762,7 @@ export async function loadModelCatalogSnapshot(
           | undefined;
         if (cachedSnapshot?.entries.length) {
           logStage("state-cache-hit", `entries=${cachedSnapshot.entries.length}`);
-          return { ...cachedSnapshot, authoritative: true };
+          return cachedSnapshot;
         }
       }
       if (!readOnly) {
@@ -781,7 +787,7 @@ export async function loadModelCatalogSnapshot(
             }) as { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] } | undefined;
             if (cachedSnapshot?.entries.length) {
               logStage("state-cache-hit", `entries=${cachedSnapshot.entries.length}`);
-              return { ...cachedSnapshot, authoritative: true };
+              return cachedSnapshot;
             }
           }
         }
@@ -892,7 +898,7 @@ export async function loadModelCatalogSnapshot(
           providerId?.trim()
             ? resolveProviderApiKeyForProvider(providerId)
             : { apiKey: undefined, discoveryApiKey: undefined };
-        const augmentation = await augmentModelCatalogWithProviderPluginsResult({
+        const augmentationParams = {
           config: cfg,
           workspaceDir,
           env: process.env,
@@ -904,7 +910,13 @@ export async function loadModelCatalogSnapshot(
             resolveProviderApiKey,
             entries: augmentEntries ?? [...models],
           },
-        });
+        };
+        const augmentation = degradedProviderCatalog
+          ? await augmentModelCatalogWithProviderPluginsDegraded(augmentationParams)
+          : {
+              entries: await augmentModelCatalogWithProviderPlugins(augmentationParams),
+              authoritative: true,
+            };
         const supplemental = augmentation.entries;
         catalogAuthoritative = augmentation.authoritative;
         if (supplemental.length > 0) {
@@ -935,10 +947,6 @@ export async function loadModelCatalogSnapshot(
           modelCatalogPromise = null;
         }
       }
-      if (!catalogAuthoritative && useSharedCache) {
-        modelCatalogPromise = null;
-      }
-
       const snapshot = createModelCatalogSnapshot(models, routeVariants, catalogAuthoritative);
       if (!readOnly && catalogAuthoritative) {
         writeCachedAgentModelCatalog({
@@ -966,7 +974,7 @@ export async function loadModelCatalogSnapshot(
     }
   };
 
-  if (readOnly || params?.metadataSnapshot) {
+  if (readOnly || params?.metadataSnapshot || degradedProviderCatalog) {
     return loadCatalog();
   }
 

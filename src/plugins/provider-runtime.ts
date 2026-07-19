@@ -111,12 +111,9 @@ type ProviderModelCatalogAugmentOutcome =
       value: Awaited<ReturnType<ProviderModelCatalogAugmentHook>>;
     }
   | { status: "rejected"; error: unknown }
-  | { status: "aborted" }
   | { status: "timed-out" };
 type ProviderModelCatalogAugmentInvocation = {
-  controller: AbortController;
   outcome: Promise<ProviderModelCatalogAugmentOutcome>;
-  settlement: Promise<ProviderModelCatalogAugmentOutcome>;
   timeoutWarningLogged: boolean;
 };
 type ProviderModelCatalogAugmentInFlight = {
@@ -138,7 +135,7 @@ type ProviderModelCatalogAugmentScope = {
   inFlight: Map<string, ProviderModelCatalogAugmentInFlight>;
 };
 // Retain hung calls only within one runtime/config/workspace scope so retries do
-// not overlap, while reloads can retire stale work and invoke replacements.
+// not overlap; a reload starts a fresh scope and can invoke replacement hooks.
 let providerModelCatalogAugmentScope: ProviderModelCatalogAugmentScope | undefined;
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
@@ -218,19 +215,8 @@ function resetExternalAuthFallbackWarningCacheForTest(): void {
   warnedExternalAuthFallbackPluginIds.clear();
 }
 
-function retireProviderModelCatalogAugmentScope(): void {
-  if (!providerModelCatalogAugmentScope) {
-    return;
-  }
-  for (const item of providerModelCatalogAugmentScope.inFlight.values()) {
-    item.invocation.controller.abort();
-  }
-  providerModelCatalogAugmentScope.inFlight.clear();
-  providerModelCatalogAugmentScope = undefined;
-}
-
 function resetProviderModelCatalogAugmentInFlightForTest(): void {
-  retireProviderModelCatalogAugmentScope();
+  providerModelCatalogAugmentScope = undefined;
 }
 
 export const testing = {
@@ -1192,7 +1178,6 @@ function resolveProviderModelCatalogAugmentInFlight(
     return current.inFlight;
   }
 
-  retireProviderModelCatalogAugmentScope();
   const inFlight = new Map<string, ProviderModelCatalogAugmentInFlight>();
   providerModelCatalogAugmentScope = {
     config,
@@ -1217,54 +1202,33 @@ function resolveProviderModelCatalogAugmentInvocation(params: {
     return existing.invocation;
   }
   if (existing) {
-    existing.invocation.controller.abort();
     params.inFlight.delete(key);
   }
 
-  const controller = new AbortController();
-  const signal = params.context.signal
-    ? AbortSignal.any([params.context.signal, controller.signal])
-    : controller.signal;
   const settlement = Promise.resolve()
-    .then(() =>
-      params.hook({
-        ...params.context,
-        signal,
-        timeoutMs: PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS,
-      }),
-    )
+    .then(() => params.hook(params.context))
     .then(
       (value): ProviderModelCatalogAugmentOutcome => ({ status: "fulfilled", value }),
       (error: unknown): ProviderModelCatalogAugmentOutcome => ({ status: "rejected", error }),
     );
-  let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let handleAbort: (() => void) | undefined;
   const interrupted = new Promise<ProviderModelCatalogAugmentOutcome>((resolve) => {
-    handleAbort = () => resolve({ status: timedOut ? "timed-out" : "aborted" });
-    controller.signal.addEventListener("abort", handleAbort, { once: true });
-    timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS);
+    timer = setTimeout(
+      () => resolve({ status: "timed-out" }),
+      PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS,
+    );
   });
   const invocation = {
-    controller,
     outcome: Promise.race([settlement, interrupted]).finally(() => {
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
       }
-      if (handleAbort) {
-        controller.signal.removeEventListener("abort", handleAbort);
-        handleAbort = undefined;
-      }
     }),
-    settlement,
     timeoutWarningLogged: false,
   } satisfies ProviderModelCatalogAugmentInvocation;
   params.inFlight.set(key, { hook: params.hook, invocation });
-  void invocation.settlement.then(() => {
+  void settlement.then(() => {
     if (params.inFlight.get(key)?.invocation === invocation) {
       params.inFlight.delete(key);
     }
@@ -1272,17 +1236,17 @@ function resolveProviderModelCatalogAugmentInvocation(params: {
   return invocation;
 }
 
-export async function augmentModelCatalogWithProviderPluginsResult(
+/** Runs bounded hooks for callers that explicitly accept incomplete catalog rows. */
+export async function augmentModelCatalogWithProviderPluginsDegraded(
   params: ProviderModelCatalogAugmentParams,
 ) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
   let authoritative = true;
-  const plugins = resolveProviderPluginsForCatalogHooks(params);
   const inFlight = resolveProviderModelCatalogAugmentInFlight(params);
-  const pending = plugins.flatMap((plugin) => {
+  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
     const hook = plugin.augmentModelCatalog;
     if (!hook) {
-      return [];
+      continue;
     }
     const invocation = resolveProviderModelCatalogAugmentInvocation({
       inFlight,
@@ -1290,23 +1254,9 @@ export async function augmentModelCatalogWithProviderPluginsResult(
       hook,
       context: params.context,
     });
-    return [{ plugin, invocation, result: invocation.outcome }];
-  });
-  const outcomes = await Promise.all(pending.map(({ result }) => result));
-  let firstRejection: { error: unknown } | undefined;
-  for (const [index, outcome] of outcomes.entries()) {
-    const pendingItem = pending[index];
-    if (!pendingItem) {
-      continue;
-    }
-    const { invocation, plugin } = pendingItem;
+    const outcome = await invocation.outcome;
     if (outcome.status === "rejected") {
-      firstRejection ??= { error: outcome.error };
-      continue;
-    }
-    if (outcome.status === "aborted") {
-      authoritative = false;
-      continue;
+      throw outcome.error;
     }
     if (outcome.status === "timed-out") {
       authoritative = false;
@@ -1314,7 +1264,7 @@ export async function augmentModelCatalogWithProviderPluginsResult(
         invocation.timeoutWarningLogged = true;
         const pluginId = plugin.pluginId ?? plugin.id;
         log.warn(
-          `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing catalog discovery`,
+          `Provider plugin "${sanitizeForLog(pluginId)}" augmentModelCatalog hook timed out after ${PROVIDER_MODEL_CATALOG_AUGMENT_TIMEOUT_MS}ms; skipping hook and continuing degraded catalog discovery`,
         );
       }
       continue;
@@ -1325,15 +1275,20 @@ export async function augmentModelCatalogWithProviderPluginsResult(
     }
     supplemental.push(...next);
   }
-  if (firstRejection) {
-    throw firstRejection.error;
-  }
   return { entries: supplemental, authoritative };
 }
 
 export async function augmentModelCatalogWithProviderPlugins(
-  params: Parameters<typeof augmentModelCatalogWithProviderPluginsResult>[0],
+  params: ProviderModelCatalogAugmentParams,
 ) {
-  return (await augmentModelCatalogWithProviderPluginsResult(params)).entries;
+  const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
+  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
+    const next = await plugin.augmentModelCatalog?.(params.context);
+    if (!next || next.length === 0) {
+      continue;
+    }
+    supplemental.push(...next);
+  }
+  return supplemental;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -9,6 +9,7 @@ type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
 type LoadModelCatalogSnapshot = (params: {
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
+  providerCatalogMode?: "exact" | "degraded";
 }) => Promise<ModelCatalogSnapshot>;
 type LoadGatewayModelCatalogParams = {
   getConfig?: () => GatewayModelCatalogConfig;
@@ -74,11 +75,17 @@ function startGatewayModelCatalogRefresh(
   const readOnly = params?.readOnly !== false;
   const refreshGeneration = cache.staleGeneration;
   const refresh = resolveLoadModelCatalogSnapshot(params)
-    .then((loadSnapshot) => loadSnapshot({ config, readOnly }))
+    .then((loadSnapshot) =>
+      loadSnapshot({
+        config,
+        readOnly,
+        // `models.list view=all` selects this full cache and must retain exact semantics.
+        ...(readOnly ? {} : { providerCatalogMode: "exact" as const }),
+      }),
+    )
     .then((snapshot) => {
       if (
         (readOnly || snapshot.entries.length > 0) &&
-        (readOnly || snapshot.authoritative !== false) &&
         refreshGeneration === cache.staleGeneration
       ) {
         cache.lastSuccessfulCatalog = snapshot;

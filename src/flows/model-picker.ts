@@ -197,6 +197,9 @@ function loadPickerModelCatalog(
           ? snapshot([])
           : loadModelCatalogSnapshot({
               config: cfg,
+              // The picker already offers static/manual fallbacks, so it can stay responsive
+              // with healthy provider rows when one optional legacy hook never settles.
+              providerCatalogMode: "degraded",
             });
       });
     }
@@ -214,6 +217,9 @@ function loadPickerModelCatalog(
   }
   return loadModelCatalogSnapshot({
     config: cfg,
+    // Full Gateway `models.list view=all` remains exact; only this fallback-friendly
+    // interactive surface opts into bounded partial provider discovery.
+    providerCatalogMode: "degraded",
   });
 }
 

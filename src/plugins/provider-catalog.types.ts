@@ -112,10 +112,6 @@ export type ProviderAugmentModelCatalogContext = {
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  /** Aborted when the runtime deadline for this catalog hook expires. */
-  signal?: AbortSignal;
-  /** Runtime-owned deadline budget for this hook invocation. */
-  timeoutMs?: number;
   resolveProviderApiKey?: ProviderCatalogContext["resolveProviderApiKey"];
   entries: ModelCatalogEntry[];
 };

@@ -1,6 +1,7 @@
 /** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -54,7 +55,7 @@ const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPoli
 const providerRuntimeWarnMock = vi.fn();
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
-let augmentModelCatalogWithProviderPluginsResult: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPluginsResult;
+let augmentModelCatalogWithProviderPluginsDegraded: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPluginsDegraded;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.js").buildProviderUnknownModelHintWithPlugin;
@@ -323,7 +324,7 @@ describe("provider-runtime", () => {
     }));
     ({
       augmentModelCatalogWithProviderPlugins,
-      augmentModelCatalogWithProviderPluginsResult,
+      augmentModelCatalogWithProviderPluginsDegraded,
       buildProviderAuthDoctorHintWithPlugin,
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
@@ -1098,10 +1099,57 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
-  it("starts catalog hooks together and continues after multiple plugins time out", async () => {
+  it("keeps exact catalog hooks pending instead of returning partial rows", async () => {
     vi.useFakeTimers();
     try {
-      const augmentHealthyCatalog = vi.fn(() => [
+      let resolveHung!: (entries: ModelCatalogEntry[]) => void;
+      const hungCatalog = new Promise<ModelCatalogEntry[]>((resolve) => {
+        resolveHung = resolve;
+      });
+      const healthyHook = vi.fn(() => [
+        { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
+      ]);
+      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["hung-plugin", "healthy-plugin"]);
+      resolvePluginProvidersMock.mockReturnValue([
+        createOpenAiCatalogProviderPlugin({
+          id: "hung",
+          pluginId: "hung-plugin",
+          augmentModelCatalog: () => hungCatalog,
+        }),
+        createOpenAiCatalogProviderPlugin({
+          id: "healthy",
+          pluginId: "healthy-plugin",
+          augmentModelCatalog: healthyHook,
+        }),
+      ]);
+
+      let settled = false;
+      const catalogLoad = augmentModelCatalogWithProviderPlugins({
+        env: process.env,
+        context: { env: process.env, entries: [] },
+      });
+      void catalogLoad.finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).toBe(false);
+      expect(healthyHook).not.toHaveBeenCalled();
+      expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
+
+      resolveHung([]);
+      await expect(catalogLoad).resolves.toEqual([
+        { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds degraded hooks individually and continues in plugin order", async () => {
+    vi.useFakeTimers();
+    try {
+      const healthyHook = vi.fn(() => [
         { provider: "healthy", id: "healthy-model", name: "Healthy Model" },
       ]);
       resolveCatalogHookProviderPluginIdsMock.mockReturnValue([
@@ -1110,39 +1158,32 @@ describe("provider-runtime", () => {
         "healthy-plugin",
       ]);
       resolvePluginProvidersMock.mockReturnValue([
-        {
+        createOpenAiCatalogProviderPlugin({
           id: "hung-one",
           pluginId: "hung-plugin-one\nWARN forged",
-          label: "First Hung Provider",
-          auth: [],
           augmentModelCatalog: () => new Promise(() => {}),
-        },
-        {
+        }),
+        createOpenAiCatalogProviderPlugin({
           id: "hung-two",
           pluginId: "hung-plugin-two",
-          label: "Second Hung Provider",
-          auth: [],
           augmentModelCatalog: () => new Promise(() => {}),
-        },
-        {
+        }),
+        createOpenAiCatalogProviderPlugin({
           id: "healthy",
           pluginId: "healthy-plugin",
-          label: "Healthy Provider",
-          auth: [],
-          augmentModelCatalog: augmentHealthyCatalog,
-        },
+          augmentModelCatalog: healthyHook,
+        }),
       ]);
 
-      const catalogLoad = augmentModelCatalogWithProviderPluginsResult({
+      const catalogLoad = augmentModelCatalogWithProviderPluginsDegraded({
         env: process.env,
         context: { env: process.env, entries: [] },
       });
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(augmentHealthyCatalog).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+      expect(healthyHook).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(15_000);
-
       await expect(catalogLoad).resolves.toEqual({
         entries: [{ provider: "healthy", id: "healthy-model", name: "Healthy Model" }],
         authoritative: false,
@@ -1150,44 +1191,27 @@ describe("provider-runtime", () => {
       expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(2);
       const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
       expect(warning).toContain('Provider plugin "hung-plugin-oneWARN forged"');
-      expect(warning).toContain(
-        "augmentModelCatalog hook timed out after 15000ms; skipping hook and continuing catalog discovery",
-      );
+      expect(warning).toContain("continuing degraded catalog discovery");
       expect(warning).not.toContain("\n");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("does not overlap timed-out catalog hooks across retries", async () => {
+  it("does not overlap a timed-out degraded hook across retries", async () => {
     vi.useFakeTimers();
     try {
-      const signals: AbortSignal[] = [];
-      const timeoutBudgets: number[] = [];
-      const augmentHungCatalog = vi.fn<NonNullable<ProviderPlugin["augmentModelCatalog"]>>(
-        (context) => {
-          if (context.signal) {
-            signals.push(context.signal);
-          }
-          if (context.timeoutMs) {
-            timeoutBudgets.push(context.timeoutMs);
-          }
-          return new Promise<never>(() => {});
-        },
-      );
+      const hungHook = vi.fn(() => new Promise<never>(() => {}));
       resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["hung-plugin"]);
       resolvePluginProvidersMock.mockReturnValue([
-        {
+        createOpenAiCatalogProviderPlugin({
           id: "hung",
           pluginId: "hung-plugin",
-          label: "Hung Provider",
-          auth: [],
-          augmentModelCatalog: augmentHungCatalog,
-        },
+          augmentModelCatalog: hungHook,
+        }),
       ]);
-
       const loadCatalog = () =>
-        augmentModelCatalogWithProviderPluginsResult({
+        augmentModelCatalogWithProviderPluginsDegraded({
           env: process.env,
           context: { env: process.env, entries: [] },
         });
@@ -1195,15 +1219,9 @@ describe("provider-runtime", () => {
       const firstLoad = loadCatalog();
       await vi.advanceTimersByTimeAsync(15_000);
       await expect(firstLoad).resolves.toEqual({ entries: [], authoritative: false });
+      await expect(loadCatalog()).resolves.toEqual({ entries: [], authoritative: false });
 
-      const retryLoad = loadCatalog();
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(retryLoad).resolves.toEqual({ entries: [], authoritative: false });
-
-      expect(augmentHungCatalog).toHaveBeenCalledTimes(1);
-      expect(signals).toHaveLength(1);
-      expect(signals[0]?.aborted).toBe(true);
-      expect(timeoutBudgets).toEqual([15_000]);
+      expect(hungHook).toHaveBeenCalledTimes(1);
       expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -1211,131 +1229,7 @@ describe("provider-runtime", () => {
     }
   });
 
-  it("shares the original catalog hook deadline with overlapping callers", async () => {
-    vi.useFakeTimers();
-    try {
-      const augmentHungCatalog = vi.fn<NonNullable<ProviderPlugin["augmentModelCatalog"]>>(
-        () => new Promise<never>(() => {}),
-      );
-      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["hung-plugin"]);
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "hung",
-          pluginId: "hung-plugin",
-          label: "Hung Provider",
-          auth: [],
-          augmentModelCatalog: augmentHungCatalog,
-        },
-      ]);
-      const loadCatalog = () =>
-        augmentModelCatalogWithProviderPluginsResult({
-          env: process.env,
-          context: { env: process.env, entries: [] },
-        });
-
-      let firstResult:
-        | Awaited<ReturnType<typeof augmentModelCatalogWithProviderPluginsResult>>
-        | undefined;
-      let overlappingResult:
-        | Awaited<ReturnType<typeof augmentModelCatalogWithProviderPluginsResult>>
-        | undefined;
-      const firstLoad = loadCatalog();
-      void firstLoad.then((result) => {
-        firstResult = result;
-      });
-      await vi.advanceTimersByTimeAsync(14_000);
-      const overlappingLoad = loadCatalog();
-      void overlappingLoad.then((result) => {
-        overlappingResult = result;
-      });
-      await vi.advanceTimersByTimeAsync(999);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(overlappingResult).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(firstResult).toEqual({ entries: [], authoritative: false });
-      expect(overlappingResult).toEqual({ entries: [], authoritative: false });
-      expect(augmentHungCatalog).toHaveBeenCalledTimes(1);
-      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("releases existing catalog waiters when their runtime scope is retired", async () => {
-    vi.useFakeTimers();
-    try {
-      const config = {} as OpenClawConfig;
-      const healthyEntry = { provider: "healthy", id: "healthy-model", name: "Healthy Model" };
-      let hungSignal: AbortSignal | undefined;
-      setActivePluginRegistry(
-        createEmptyPluginRegistry(),
-        "generation-one",
-        "default",
-        "/tmp/work",
-      );
-      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["catalog-plugin"]);
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "catalog-provider",
-          pluginId: "catalog-plugin",
-          label: "Catalog Provider",
-          auth: [],
-          augmentModelCatalog: (context) => {
-            hungSignal = context.signal;
-            return new Promise<never>(() => {});
-          },
-        },
-      ]);
-
-      let firstResult:
-        | Awaited<ReturnType<typeof augmentModelCatalogWithProviderPluginsResult>>
-        | undefined;
-      const firstLoad = augmentModelCatalogWithProviderPluginsResult({
-        config,
-        env: process.env,
-        context: { config, env: process.env, entries: [] },
-      });
-      void firstLoad.then((result) => {
-        firstResult = result;
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      setActivePluginRegistry(
-        createEmptyPluginRegistry(),
-        "generation-two",
-        "default",
-        "/tmp/work",
-      );
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "catalog-provider",
-          pluginId: "catalog-plugin",
-          label: "Catalog Provider",
-          auth: [],
-          augmentModelCatalog: () => [healthyEntry],
-        },
-      ]);
-      await expect(
-        augmentModelCatalogWithProviderPluginsResult({
-          config,
-          env: process.env,
-          context: { config, env: process.env, entries: [] },
-        }),
-      ).resolves.toEqual({ entries: [healthyEntry], authoritative: true });
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(firstResult).toEqual({ entries: [], authoritative: false });
-      expect(hungSignal?.aborted).toBe(true);
-      expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retires timed-out catalog hooks after a same-workspace plugin reload", async () => {
+  it("retires timed-out degraded hooks after a plugin reload", async () => {
     vi.useFakeTimers();
     try {
       const config = {} as OpenClawConfig;
@@ -1348,16 +1242,14 @@ describe("provider-runtime", () => {
       );
       resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["catalog-plugin"]);
       resolvePluginProvidersMock.mockReturnValue([
-        {
+        createOpenAiCatalogProviderPlugin({
           id: "catalog-provider",
           pluginId: "catalog-plugin",
-          label: "Catalog Provider",
-          auth: [],
           augmentModelCatalog: () => new Promise(() => {}),
-        },
+        }),
       ]);
 
-      const firstLoad = augmentModelCatalogWithProviderPluginsResult({
+      const firstLoad = augmentModelCatalogWithProviderPluginsDegraded({
         config,
         env: process.env,
         context: { config, env: process.env, entries: [] },
@@ -1365,7 +1257,7 @@ describe("provider-runtime", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       await expect(firstLoad).resolves.toEqual({ entries: [], authoritative: false });
 
-      const augmentReplacementCatalog = vi.fn(() => [healthyEntry]);
+      const replacementHook = vi.fn(() => [healthyEntry]);
       setActivePluginRegistry(
         createEmptyPluginRegistry(),
         "generation-two",
@@ -1373,171 +1265,53 @@ describe("provider-runtime", () => {
         "/tmp/work",
       );
       resolvePluginProvidersMock.mockReturnValue([
-        {
+        createOpenAiCatalogProviderPlugin({
           id: "catalog-provider",
           pluginId: "catalog-plugin",
-          label: "Catalog Provider",
-          auth: [],
-          augmentModelCatalog: augmentReplacementCatalog,
-        },
+          augmentModelCatalog: replacementHook,
+        }),
       ]);
 
       await expect(
-        augmentModelCatalogWithProviderPluginsResult({
+        augmentModelCatalogWithProviderPluginsDegraded({
           config,
           env: process.env,
           context: { config, env: process.env, entries: [] },
         }),
       ).resolves.toEqual({ entries: [healthyEntry], authoritative: true });
-      expect(augmentReplacementCatalog).toHaveBeenCalledTimes(1);
+      expect(replacementHook).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("retires timed-out catalog hooks when the active workspace changes", async () => {
-    vi.useFakeTimers();
-    try {
-      const healthyEntry = { provider: "healthy", id: "healthy-model", name: "Healthy Model" };
-      setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-one", "default", "/tmp/one");
-      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["catalog-plugin"]);
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "catalog-provider",
-          pluginId: "catalog-plugin",
-          label: "Catalog Provider",
-          auth: [],
-          augmentModelCatalog: () => new Promise(() => {}),
+  it("propagates degraded hook errors before starting later hooks", async () => {
+    const failure = new Error("catalog hook failed");
+    const laterHook = vi.fn(() => new Promise(() => {}));
+    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["broken-plugin", "later-plugin"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      createOpenAiCatalogProviderPlugin({
+        id: "broken",
+        pluginId: "broken-plugin",
+        augmentModelCatalog: async () => {
+          throw failure;
         },
-      ]);
+      }),
+      createOpenAiCatalogProviderPlugin({
+        id: "later",
+        pluginId: "later-plugin",
+        augmentModelCatalog: laterHook,
+      }),
+    ]);
 
-      const firstLoad = augmentModelCatalogWithProviderPluginsResult({
+    await expect(
+      augmentModelCatalogWithProviderPluginsDegraded({
         env: process.env,
         context: { env: process.env, entries: [] },
-      });
-      await vi.advanceTimersByTimeAsync(15_000);
-      await expect(firstLoad).resolves.toEqual({ entries: [], authoritative: false });
-
-      const augmentReplacementCatalog = vi.fn(() => [healthyEntry]);
-      setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-two", "default", "/tmp/two");
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "catalog-provider",
-          pluginId: "catalog-plugin",
-          label: "Catalog Provider",
-          auth: [],
-          augmentModelCatalog: augmentReplacementCatalog,
-        },
-      ]);
-
-      await expect(
-        augmentModelCatalogWithProviderPluginsResult({
-          env: process.env,
-          context: { env: process.env, entries: [] },
-        }),
-      ).resolves.toEqual({ entries: [healthyEntry], authoritative: true });
-      expect(augmentReplacementCatalog).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retires timed-out catalog hooks when the model config identity changes", async () => {
-    vi.useFakeTimers();
-    try {
-      const firstConfig = { models: { providers: {} } } as OpenClawConfig;
-      const secondConfig = { models: { providers: { demo: {} } } } as OpenClawConfig;
-      const healthyEntry = { provider: "healthy", id: "healthy-model", name: "Healthy Model" };
-      let healthy = false;
-      const augmentCatalog = vi.fn(() => (healthy ? [healthyEntry] : new Promise<never>(() => {})));
-      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["catalog-plugin"]);
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "catalog-provider",
-          pluginId: "catalog-plugin",
-          label: "Catalog Provider",
-          auth: [],
-          augmentModelCatalog: augmentCatalog,
-        },
-      ]);
-
-      const firstLoad = augmentModelCatalogWithProviderPluginsResult({
-        config: firstConfig,
-        env: process.env,
-        context: { config: firstConfig, env: process.env, entries: [] },
-      });
-      await vi.advanceTimersByTimeAsync(15_000);
-      await expect(firstLoad).resolves.toEqual({ entries: [], authoritative: false });
-
-      healthy = true;
-      await expect(
-        augmentModelCatalogWithProviderPluginsResult({
-          config: secondConfig,
-          env: process.env,
-          context: { config: secondConfig, env: process.env, entries: [] },
-        }),
-      ).resolves.toEqual({ entries: [healthyEntry], authoritative: true });
-      expect(augmentCatalog).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("propagates catalog hook errors after later hook deadlines settle", async () => {
-    vi.useFakeTimers();
-    try {
-      const failure = new Error("catalog hook failed");
-      let hungSignal: AbortSignal | undefined;
-      resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["broken-plugin", "hung-plugin"]);
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "broken",
-          pluginId: "broken-plugin",
-          label: "Broken Provider",
-          auth: [],
-          augmentModelCatalog: async () => {
-            throw failure;
-          },
-        },
-        {
-          id: "hung",
-          pluginId: "hung-plugin",
-          label: "Hung Provider",
-          auth: [],
-          augmentModelCatalog: (context) => {
-            hungSignal = context.signal;
-            return new Promise(() => {});
-          },
-        },
-      ]);
-
-      let settled = false;
-      let rejection: unknown;
-      void augmentModelCatalogWithProviderPlugins({
-        env: process.env,
-        context: { env: process.env, entries: [] },
-      }).then(
-        () => {
-          settled = true;
-        },
-        (error: unknown) => {
-          settled = true;
-          rejection = error;
-        },
-      );
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(settled).toBe(true);
-      expect(rejection).toBe(failure);
-      expect(hungSignal?.aborted).toBe(true);
-      expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+      }),
+    ).rejects.toBe(failure);
+    expect(laterHook).not.toHaveBeenCalled();
+    expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
   });
 
   it("returns provider-prepared runtime auth for the matched provider", async () => {

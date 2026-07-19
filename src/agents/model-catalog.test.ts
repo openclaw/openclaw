@@ -17,7 +17,7 @@ let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCache: typeof import("./model-catalog.js").resetModelCatalogCache;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
-let augmentCatalogResultMock: ReturnType<typeof vi.fn>;
+let augmentCatalogDegradedMock: ReturnType<typeof vi.fn>;
 let prepareOpenClawModelsJsonSourceMock: ReturnType<typeof vi.fn>;
 let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
@@ -314,7 +314,7 @@ describe("loadModelCatalog", () => {
       const augmentModelCatalogWithProviderPlugins = vi.fn().mockResolvedValue([]);
       return {
         augmentModelCatalogWithProviderPlugins,
-        augmentModelCatalogWithProviderPluginsResult: vi.fn(async (params: unknown) => ({
+        augmentModelCatalogWithProviderPluginsDegraded: vi.fn(async (params: unknown) => ({
           entries: await augmentModelCatalogWithProviderPlugins(params),
           authoritative: true,
         })),
@@ -363,8 +363,8 @@ describe("loadModelCatalog", () => {
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
     augmentCatalogMock = vi.mocked(providerRuntime.augmentModelCatalogWithProviderPlugins);
-    augmentCatalogResultMock = vi.mocked(
-      providerRuntime.augmentModelCatalogWithProviderPluginsResult,
+    augmentCatalogDegradedMock = vi.mocked(
+      providerRuntime.augmentModelCatalogWithProviderPluginsDegraded,
     );
   });
 
@@ -382,7 +382,7 @@ describe("loadModelCatalog", () => {
       wrote: false,
     });
     augmentCatalogMock.mockClear();
-    augmentCatalogResultMock.mockClear();
+    augmentCatalogDegradedMock.mockClear();
     currentPluginMetadataSnapshotMock.mockReset();
     currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockReset();
@@ -1650,17 +1650,25 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "kilocode", "google/gemini-3.1-pro-preview");
     expect(entry.name).toBe("Gemini 3 Pro Preview");
+    expect(augmentCatalogMock).toHaveBeenCalledTimes(1);
+    expect(augmentCatalogDegradedMock).not.toHaveBeenCalled();
   });
 
   it("marks timed-out plugin augmentation degraded and retries without caching", async () => {
     mockSingleOpenAiCatalogModel();
     const degradedAugmentation = { entries: [], authoritative: false };
-    augmentCatalogResultMock
+    augmentCatalogDegradedMock
       .mockResolvedValueOnce(degradedAugmentation)
       .mockResolvedValueOnce(degradedAugmentation);
 
-    const first = await loadModelCatalogSnapshot({ config: {} as OpenClawConfig });
-    const second = await loadModelCatalogSnapshot({ config: {} as OpenClawConfig });
+    const first = await loadModelCatalogSnapshot({
+      config: {} as OpenClawConfig,
+      providerCatalogMode: "degraded",
+    });
+    const second = await loadModelCatalogSnapshot({
+      config: {} as OpenClawConfig,
+      providerCatalogMode: "degraded",
+    });
 
     expect(first.authoritative).toBe(false);
     expect(second.authoritative).toBe(false);
@@ -1669,7 +1677,8 @@ describe("loadModelCatalog", () => {
       name: "GPT-4.1",
       provider: "openai",
     });
-    expect(augmentCatalogResultMock).toHaveBeenCalledTimes(2);
+    expect(augmentCatalogDegradedMock).toHaveBeenCalledTimes(2);
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
     expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
   });
 

@@ -14,6 +14,7 @@ import {
 type LoadModelCatalogForTest = (params: {
   config: OpenClawConfig;
   readOnly?: boolean;
+  providerCatalogMode?: "exact" | "degraded";
 }) => Promise<GatewayModelChoice[]>;
 
 function model(id: string): GatewayModelChoice {
@@ -113,6 +114,7 @@ describe("loadGatewayModelCatalog", () => {
     expect(loadModelCatalog).toHaveBeenNthCalledWith(2, {
       config: getConfig(),
       readOnly: false,
+      providerCatalogMode: "exact",
     });
   });
 
@@ -132,24 +134,6 @@ describe("loadGatewayModelCatalog", () => {
     });
   });
 
-  it("caches an explicitly degraded read-only catalog fallback", async () => {
-    const degradedCatalog: GatewayModelChoice[] = [];
-    const loadModelCatalogSnapshot = vi.fn(async () => ({
-      entries: degradedCatalog,
-      routeVariants: degradedCatalog,
-      authoritative: false,
-    }));
-
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
-      degradedCatalog,
-    );
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
-      degradedCatalog,
-    );
-
-    expect(loadModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-  });
-
   it("does not cache an empty full catalog so the next all-model request retries", async () => {
     const emptyCatalog: GatewayModelChoice[] = [];
     const freshCatalog = [model("gpt-5.5")];
@@ -159,32 +143,6 @@ describe("loadGatewayModelCatalog", () => {
     await expectCatalog(loadModelCatalog, freshCatalog, false);
 
     expect(loadModelCatalog).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache a degraded full catalog so the next request retries", async () => {
-    const degradedCatalog = [model("partial")];
-    const freshCatalog = [model("fresh")];
-    const loadModelCatalogSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce({
-        entries: degradedCatalog,
-        routeVariants: degradedCatalog,
-        authoritative: false,
-      })
-      .mockResolvedValueOnce({
-        entries: freshCatalog,
-        routeVariants: freshCatalog,
-        authoritative: true,
-      });
-
-    await expect(
-      loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot, readOnly: false }),
-    ).resolves.toBe(degradedCatalog);
-    await expect(
-      loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot, readOnly: false }),
-    ).resolves.toBe(freshCatalog);
-
-    expect(loadModelCatalogSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("returns the last catalog while a stale reload refresh is still pending", async () => {
