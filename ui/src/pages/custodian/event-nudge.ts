@@ -1,3 +1,4 @@
+import { html } from "lit";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 
@@ -37,6 +38,32 @@ export function eventNudgeText(nudge: CustodianEventNudge): string {
     return t("custodian.nudge.channelDisconnected", { channel });
   }
   return t("custodian.nudge.channelDegraded", { channel });
+}
+
+export function renderCustodianEventNudge(params: {
+  nudge: CustodianEventNudge;
+  disabled: boolean;
+  onSend: () => void;
+  onDismiss: () => void;
+}) {
+  return html`<div class="custodian__nudge" role="status">
+    <button
+      class="custodian__nudge-action"
+      type="button"
+      ?disabled=${params.disabled}
+      @click=${params.onSend}
+    >
+      ${eventNudgeText(params.nudge)}
+    </button>
+    <button
+      class="custodian__nudge-dismiss"
+      type="button"
+      aria-label=${t("custodian.nudge.dismiss")}
+      @click=${params.onDismiss}
+    >
+      ×
+    </button>
+  </div>`;
 }
 
 type UnknownRecord = Record<string, unknown>;

@@ -10,7 +10,6 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/option-card.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { searchForSession } from "../../lib/sessions/navigation.ts";
@@ -24,12 +23,14 @@ import "../../styles/custodian.css";
 import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
+import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 import {
   createCustodianSessionId,
   createCustodianTranscriptMessages,
   custodianErrorMessage,
+  hasUnresolvedCustodianQuestion,
   readCustodianTranscript,
   renderCustodianEarlierDivider,
   toCustodianMessageGroup,
@@ -93,12 +94,11 @@ export class CustodianPage extends OpenClawLightDomElement {
         if (this.onboarding || this.newAgentIntent || this.eventNudgeClosed) {
           return;
         }
-        [this.eventNudge, this.eventNudgePending] =
-          eventNudgeState.reconcileCustodianEventNudge(
-            this.eventNudge,
-            this.eventNudgePending,
-            event,
-          );
+        [this.eventNudge, this.eventNudgePending] = eventNudgeState.reconcileCustodianEventNudge(
+          this.eventNudge,
+          this.eventNudgePending,
+          event,
+        );
       }),
   );
 
@@ -237,8 +237,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sending = false;
     this.chatAvailable = false;
     if (variantChanged || ownershipChanged) {
-      this.eventNudge = null;
-      this.eventNudgePending = null;
+      [this.eventNudge, this.eventNudgePending] = [null, null];
       // A different operator or mode must not inherit the previous context's
       // abandoned-turn warning; same-ownership paths below preserve it.
       this.abandonedTurnOutcomeUnknown = false;
@@ -490,8 +489,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     const sessionVariant = this.sessionVariant;
     const sessionOwnershipKey = this.sessionOwnershipKey;
     if (questionReply) {
-      // A failed structured reply may still have reached the hosted wizard.
-      // Block unrelated nudges until a new wizard session makes the outcome known.
+      // A failed wizard reply may have arrived, so block nudges until the session outcome is known.
       this.questionReplyUncertain = true;
     }
     if (!message.trim() || !client || !this.chatAvailable || this.sending) {
@@ -532,8 +530,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (!nudge || this.sensitive || this.hasUnresolvedQuestion()) {
       return;
     }
-    this.eventNudge = null;
-    this.eventNudgePending = nudge;
+    [this.eventNudge, this.eventNudgePending] = [null, nudge];
     const sent = await this.send(nudge.message);
     if (this.eventNudgePending === nudge) {
       this.eventNudgePending = null;
@@ -543,8 +540,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   private dismissEventNudge(): void {
-    this.eventNudge = null;
-    this.eventNudgeClosed = true;
+    [this.eventNudge, this.eventNudgeClosed] = [null, true];
   }
 
   private dismissQuestion(message: CustodianMessage): void {
@@ -553,8 +549,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     this.dismissedQuestions = new Set(this.dismissedQuestions).add(`${message.id}:${question.id}`);
-    // Closed hosted-wizard selects accept the canonical cancel token; open
-    // "other" prompts retain the visible skip label as their free-form reply.
+    // Closed wizard selects accept cancel; open "other" prompts use their visible free-form reply.
     void this.send(question.isOther ? t("optionCard.skip") : "cancel", t("optionCard.skip"), true);
   }
 
@@ -565,8 +560,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
     const option = question.options.find((candidate) => candidate.label === label);
     this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${question.id}`);
-    // The transcript shows the friendly label; the engine receives the reply
-    // text it actually parses (wizard answers, canonical commands).
+    // Show the friendly label while sending the canonical reply that the engine parses.
     void this.send(option?.reply ?? label, label, true);
   }
 
@@ -581,16 +575,12 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   private hasUnresolvedQuestion(): boolean {
-    if (this.questionReplyUncertain) {
-      return true;
-    }
-    return this.messages.some((message) => {
-      if (!message.question) {
-        return false;
-      }
-      const key = `${message.id}:${message.question.id}`;
-      return !this.dismissedQuestions.has(key) && !this.answeredQuestions.has(key);
-    });
+    return hasUnresolvedCustodianQuestion(
+      this.messages,
+      this.dismissedQuestions,
+      this.answeredQuestions,
+      this.questionReplyUncertain,
+    );
   }
 
   private exitSetup(): void {
@@ -651,28 +641,17 @@ export class CustodianPage extends OpenClawLightDomElement {
 
         <div class="custodian__messages" aria-live="polite">
           ${!this.onboarding && this.eventNudge
-            ? html`<div class="custodian__nudge" role="status">
-                <button
-                  class="custodian__nudge-action"
-                  type="button"
-                  ?disabled=${!this.activeClient ||
+            ? eventNudgeState.renderCustodianEventNudge({
+                nudge: this.eventNudge,
+                disabled:
+                  !this.activeClient ||
                   !this.chatAvailable ||
                   this.sending ||
                   this.sensitive ||
-                  this.hasUnresolvedQuestion()}
-                  @click=${() => void this.sendEventNudge()}
-                >
-                  ${eventNudgeState.eventNudgeText(this.eventNudge)}
-                </button>
-                <button
-                  class="custodian__nudge-dismiss"
-                  type="button"
-                  aria-label=${t("custodian.nudge.dismiss")}
-                  @click=${() => this.dismissEventNudge()}
-                >
-                  ×
-                </button>
-              </div>`
+                  this.hasUnresolvedQuestion(),
+                onSend: () => void this.sendEventNudge(),
+                onDismiss: () => this.dismissEventNudge(),
+              })
             : nothing}
           ${this.messages.map((message) => {
             const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
@@ -687,26 +666,15 @@ export class CustodianPage extends OpenClawLightDomElement {
               })}
               ${renderCustodianEarlierDivider(message, this.earlierBoundaryAfterId)}
               ${showQuestion
-                ? html`<div class="custodian__option-card">
-                    <openclaw-option-card
-                      .props=${{
-                        header: message.question!.header,
-                        question: message.question!.question,
-                        options: message.question!.options.map((option) => ({
-                          value: option.label,
-                          label: option.label,
-                          description: option.description,
-                          recommended: option.recommended,
-                        })),
-                        disabled:
-                          this.sending ||
-                          !this.chatAvailable ||
-                          this.answeredQuestions.has(questionKey),
-                        onSelect: (label: string) => this.answerQuestion(message, label),
-                        onSkip: () => this.dismissQuestion(message),
-                      }}
-                    ></openclaw-option-card>
-                  </div>`
+                ? renderCustodianQuestionCard({
+                    question: message.question!,
+                    disabled:
+                      this.sending ||
+                      !this.chatAvailable ||
+                      this.answeredQuestions.has(questionKey),
+                    onSelect: (label) => this.answerQuestion(message, label),
+                    onSkip: () => this.dismissQuestion(message),
+                  })
                 : nothing}
             `;
           })}

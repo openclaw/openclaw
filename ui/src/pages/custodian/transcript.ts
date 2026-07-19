@@ -19,6 +19,23 @@ export type CustodianMessage = {
   question: CustodianStructuredQuestion | null;
 };
 
+export function hasUnresolvedCustodianQuestion(
+  messages: readonly CustodianMessage[],
+  dismissedQuestions: ReadonlySet<string>,
+  answeredQuestions: ReadonlySet<string>,
+  replyUncertain: boolean,
+): boolean {
+  return (
+    replyUncertain ||
+    messages.some(
+      (message) =>
+        message.question !== null &&
+        !dismissedQuestions.has(`${message.id}:${message.question.id}`) &&
+        !answeredQuestions.has(`${message.id}:${message.question.id}`),
+    )
+  );
+}
+
 export function createCustodianSessionId(): string {
   if (typeof crypto.randomUUID === "function") {
     return `control-ui-onboarding-${crypto.randomUUID()}`;
