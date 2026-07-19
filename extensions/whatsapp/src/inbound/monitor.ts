@@ -26,7 +26,14 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
-import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
+import {
+  getPrimaryIdentityId,
+  identitiesOverlap,
+  prepareWhatsAppDirectInboundActor,
+  prepareWhatsAppInboundActor,
+  resolveComparableIdentity,
+  type PreparedWhatsAppInboundActor,
+} from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -39,7 +46,6 @@ import {
   resolveWhatsAppSocketOperationTimeoutMs,
   resolveWhatsAppSocketTiming,
   withWhatsAppSocketOperationTimeout,
-  type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
 import {
@@ -48,6 +54,7 @@ import {
   toWhatsappJid,
   toWhatsappJidWithLid,
 } from "../text-runtime.js";
+import { classifyWhatsAppDirectJid, classifyWhatsAppJid } from "../whatsapp-jid.js";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -56,7 +63,7 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
-import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe.js";
+import { isRecentOutboundMessage } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
   createWhatsAppDurableInboundQueue,
@@ -90,8 +97,9 @@ import {
   resolveWhatsAppOutboundMentions,
   type WhatsAppOutboundMentionParticipant,
 } from "./outbound-mentions.js";
-import { DisconnectReason, isJidGroup } from "./runtime-api.js";
-import { createWebSendApi } from "./send-api.js";
+import { createWhatsAppOutboundMessageRecorder } from "./outbound-message-cache.js";
+import { DisconnectReason } from "./runtime-api.js";
+import { createWebSendApi, type WhatsAppPreparedOutboundIdentity } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type {
   AdmittedWebInboundMessage,
@@ -235,10 +243,6 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
     return;
   }
   defaultRuntime.log(message);
-}
-
-function isDirectUserJid(jid: string): boolean {
-  return /^(\d+)(?::\d+)?@(s\.whatsapp\.net|c\.us|lid|hosted|hosted\.lid)$/i.test(jid.trim());
 }
 
 function getActiveReachoutTimelock(
@@ -676,8 +680,15 @@ export async function attachWebInboxToSocket(
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
-  const resolveReactionTargetJids = async (jid: string): Promise<string[]> =>
-    resolveEquivalentWhatsAppDirectChatJids(jid, { authDir: options.authDir, lidLookup });
+  const resolveReactionTargetJids = async (
+    jid: string,
+    knownE164?: string | null,
+  ): Promise<string[]> =>
+    resolveEquivalentWhatsAppDirectChatJids(jid, {
+      authDir: options.authDir,
+      lidLookup,
+      knownE164,
+    });
 
   const rememberBaileysMessage = (
     remoteJid: string | null | undefined,
@@ -695,41 +706,11 @@ export async function attachWebInboxToSocket(
     );
   };
 
-  const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
-    const messageId =
-      typeof result === "object" && result && "key" in result
-        ? ((result as { key?: { id?: string } }).key?.id ?? "")
-        : "";
-    if (!messageId) {
-      return;
-    }
-    rememberRecentOutboundMessage({
+  const { remember: rememberOutboundMessage, trackLateAccepted: trackLateAcceptedSend } =
+    createWhatsAppOutboundMessageRecorder({
       accountId: options.accountId,
-      remoteJid,
-      messageId,
+      rememberBaileysMessage,
     });
-    const message =
-      typeof result === "object" && result && "message" in result
-        ? (result as { message?: proto.IMessage }).message
-        : undefined;
-    rememberBaileysMessage(remoteJid, messageId, message);
-    // Baileys derives the participant for fromMe quotes from its own userJid.
-    // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
-    cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
-      fromMe: true,
-      body: extractText(message ?? undefined),
-    });
-  };
-  const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
-    // The local send has failed terminally, but Baileys may still deliver it.
-    // Track a late message id only to suppress the resulting self-echo.
-    void promise.then(
-      (result) => {
-        rememberOutboundMessage(jid, result);
-      },
-      () => {},
-    );
-  };
   let reachoutTimeLock: ReachoutTimelockState | undefined;
   let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
   let reachoutTimeLockVersion = 0;
@@ -790,7 +771,7 @@ export async function attachWebInboxToSocket(
     currentSock: WASocket,
     readinessOptions?: { rememberReady?: boolean; useVerifiedReady?: boolean },
   ) => {
-    if (!isDirectUserJid(jid)) {
+    if (!classifyWhatsAppDirectJid(jid)) {
       return;
     }
     if (readinessOptions?.useVerifiedReady && consumeVerifiedSendReady(jid, currentSock)) {
@@ -824,6 +805,7 @@ export async function attachWebInboxToSocket(
     jid: string,
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
+    identity?: WhatsAppPreparedOutboundIdentity,
   ) => {
     let lastErr: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt++) {
@@ -836,11 +818,11 @@ export async function attachWebInboxToSocket(
             sendOperationTimeoutMs,
             {
               onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
-                trackLateAcceptedSend(timedOutJid, promise);
+                trackLateAcceptedSend(timedOutJid, promise, identity);
               },
             },
           ).sendMessage(jid, content, sendOptions);
-          rememberOutboundMessage(jid, result);
+          rememberOutboundMessage(jid, result, identity);
           return result;
         } catch (err) {
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(err)) {
@@ -873,8 +855,13 @@ export async function attachWebInboxToSocket(
       }
     }
   };
-  const sendApiSocketOperations: WhatsAppSocketOperationAdapter = {
-    sendMessage: (jid, content, sendOptions) => sendTrackedMessage(jid, content, sendOptions),
+  const sendApiSocketOperations: Parameters<typeof createWebSendApi>[0]["sock"] = {
+    sendMessage: (
+      jid: string,
+      content: AnyMessageContent,
+      sendOptions?: MiscMessageGenerationOptions,
+      identity?: WhatsAppPreparedOutboundIdentity,
+    ) => sendTrackedMessage(jid, content, sendOptions, identity),
     sendPresenceUpdate: async (presenceLocal, jid) => {
       const currentSock = getCurrentSock();
       if (!currentSock) {
@@ -962,7 +949,7 @@ export async function attachWebInboxToSocket(
     jid: string,
     text: string,
   ): Promise<{ text: string; mentionedJids: string[] }> => {
-    if (isJidGroup(jid) !== true || !mayContainWhatsAppOutboundMention(text)) {
+    if (classifyWhatsAppJid(jid).kind !== "group" || !mayContainWhatsAppOutboundMention(text)) {
       return { text, mentionedJids: [] };
     }
     const meta = await getGroupMeta(jid);
@@ -1002,6 +989,7 @@ export async function attachWebInboxToSocket(
     participantJid?: string;
     from: string;
     senderE164: string | null;
+    directComparableJids?: string[];
     groupSubject?: string;
     groupParticipants?: string[];
     messageTimestampMs?: number;
@@ -1030,6 +1018,10 @@ export async function attachWebInboxToSocket(
     return true;
   };
 
+  const resolveInboundActorE164 = async (
+    actor: PreparedWhatsAppInboundActor,
+  ): Promise<string | null> => actor.e164 ?? resolveInboundJid(actor.transportJid);
+
   const normalizeInboundMessage = async (
     msg: WAMessage,
   ): Promise<NormalizedInboundMessage | null> => {
@@ -1038,11 +1030,13 @@ export async function attachWebInboxToSocket(
     if (!remoteJid) {
       return null;
     }
-    if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) {
+    const conversationJid = classifyWhatsAppJid(remoteJid);
+    // Only direct chats and groups are inbound conversation surfaces. Reject
+    // status/broadcast and newsletter traffic before participant authorization.
+    if (conversationJid.kind === "unsupported" || conversationJid.kind === "newsletter") {
       return null;
     }
-
-    const group = isJidGroup(remoteJid) === true;
+    const group = conversationJid.kind === "group";
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
     // Applies to both groups and DMs/self-chat — without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.
@@ -1061,16 +1055,28 @@ export async function attachWebInboxToSocket(
       return null;
     }
 
-    const participantJid = msg.key?.participant ?? undefined;
-    const from = group ? remoteJid : await resolveInboundJid(remoteJid);
+    const directActor = group
+      ? null
+      : prepareWhatsAppDirectInboundActor({
+          remoteJid,
+          remoteJidAlt: msg.key?.remoteJidAlt,
+          fromMe: Boolean(msg.key?.fromMe),
+          self,
+        });
+    const actor = group
+      ? prepareWhatsAppInboundActor({
+          primaryJid: msg.key?.participant,
+          alternateJid: msg.key?.participantAlt,
+        })
+      : directActor;
+    const participantJid = group
+      ? (actor?.transportJid ?? msg.key?.participant ?? undefined)
+      : undefined;
+    const from = group ? remoteJid : actor ? await resolveInboundActorE164(actor) : null;
     if (!from) {
       return null;
     }
-    const senderE164 = group
-      ? participantJid
-        ? await resolveInboundJid(participantJid)
-        : null
-      : from;
+    const senderE164 = group ? (actor ? await resolveInboundActorE164(actor) : null) : from;
 
     let groupSubject: string | undefined;
     let groupParticipants: string[] | undefined;
@@ -1113,6 +1119,7 @@ export async function attachWebInboxToSocket(
       participantJid,
       from,
       senderE164,
+      directComparableJids: directActor?.comparableJids,
       groupSubject,
       groupParticipants,
       messageTimestampMs,
@@ -1306,6 +1313,7 @@ export async function attachWebInboxToSocket(
         chatJid,
         addWhatsAppOutboundMentionsToContent({ text: resolved.text }, resolved.mentionedJids),
         optionsResult,
+        { remoteE164: inbound.group ? undefined : (inbound.senderE164 ?? undefined) },
       );
       return normalizeWhatsAppSendResult(result, "text");
     };
@@ -1318,6 +1326,7 @@ export async function attachWebInboxToSocket(
         chatJid,
         await applyOutboundMentionsToContent(chatJid, previewPayload),
         optionsValue,
+        { remoteE164: inbound.group ? undefined : (inbound.senderE164 ?? undefined) },
       );
       return normalizeWhatsAppSendResult(result, "media");
     };
@@ -1439,16 +1448,20 @@ export async function attachWebInboxToSocket(
     }
     if (inboundMessage.event.id) {
       const admission = requireWhatsAppInboundAdmission(inboundMessage);
+      // Cache only identity facts already established by ingress and Baileys.
+      // Quote lookup compares E.164 too; alias discovery here would delay delivery.
       cacheInboundMessageMeta(
         admission.accountId,
         inboundMessage.platform.chatJid,
         inboundMessage.event.id,
         {
           participant: inboundMessage.platform.senderJid,
-          participantE164:
+          remoteE164:
             admission.conversation.kind === "direct"
               ? inboundMessage.platform.senderE164
               : undefined,
+          remoteJids:
+            admission.conversation.kind === "direct" ? inbound.directComparableJids : undefined,
           body: inboundMessage.payload.body,
           fromMe: inboundMessage.platform.fromMe,
         },

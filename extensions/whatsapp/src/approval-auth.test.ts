@@ -59,4 +59,41 @@ describe("whatsappApprovalAuth", () => {
       }),
     ).toEqual({ authorized: true });
   });
+
+  it("canonicalizes PN domains and device ids for approval authorization", () => {
+    for (const senderId of ["15551230000:3@c.us", "15551230000:4@hosted"]) {
+      expect(
+        whatsappApprovalAuth.authorizeActorAction({
+          cfg: { channels: { whatsapp: { allowFrom: ["+15551230000"] } } },
+          senderId,
+          action: "approve",
+          approvalKind: "exec",
+        }),
+      ).toEqual({ authorized: true });
+    }
+  });
+
+  it("does not authorize a same-digit LID without an explicit mapping", () => {
+    expect(
+      whatsappApprovalAuth.authorizeActorAction({
+        cfg: { channels: { whatsapp: { allowFrom: ["+15551230000"] } } },
+        senderId: "15551230000@lid",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toMatchObject({ authorized: false });
+    expect(
+      getWhatsAppApprovalApprovers({
+        cfg: { channels: { whatsapp: { allowFrom: ["15551230000@hosted.lid"] } } },
+      }),
+    ).toEqual([]);
+    expect(
+      whatsappApprovalAuth.authorizeActorAction({
+        cfg: { channels: { whatsapp: { allowFrom: ["15551230000@hosted.lid"] } } },
+        senderId: "15551230000@hosted.lid",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toMatchObject({ authorized: false });
+  });
 });

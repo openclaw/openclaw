@@ -302,6 +302,59 @@ describe("checkInboundAccessControl admission contract", () => {
     expect(result.allowed).toBe(false);
     expect("admission" in result).toBe(false);
   });
+
+  it.each(["15550001111@lid", "15550001111@hosted.lid"])(
+    "does not authorize a PN sender from same-digit LID allowFrom entry %s",
+    async (lidEntry) => {
+      const cfg = {
+        channels: {
+          whatsapp: {
+            dmPolicy: "allowlist",
+            accounts: { work: { allowFrom: [lidEntry] } },
+          },
+        },
+      };
+      setAccessControlTestConfig(cfg);
+
+      const result = await checkUnauthorizedWorkDmSender();
+      const commandAuthorized = await checkCommandAuthorizedForDm({ cfg });
+
+      expectSilentlyBlocked(result);
+      expect(commandAuthorized).toBe(false);
+    },
+  );
+
+  it.each(["15550001111@lid", "15550001111@hosted.lid"])(
+    "does not authorize a group PN sender from same-digit LID allowlist entry %s",
+    async (lidEntry) => {
+      const cfg = {
+        channels: {
+          whatsapp: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [lidEntry],
+          },
+        },
+      };
+      setAccessControlTestConfig(cfg);
+
+      const result = await checkInboundAccessControl({
+        cfg: getAccessControlTestConfig() as never,
+        accountId: "work",
+        from: "120363401234567890@g.us",
+        selfE164: "+15550009999",
+        senderE164: "+15550001111",
+        group: true,
+        pushName: "Sam",
+        isFromMe: false,
+        sock: { sendMessage: sendMessageMock },
+        remoteJid: "120363401234567890@g.us",
+      });
+      const commandAuthorized = await checkCommandAuthorizedForGroup({ cfg });
+
+      expectSilentlyBlocked(result);
+      expect(commandAuthorized).toBe(false);
+    },
+  );
 });
 
 describe("checkInboundAccessControl pairing grace", () => {

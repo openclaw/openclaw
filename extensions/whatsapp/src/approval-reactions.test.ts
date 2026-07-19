@@ -45,8 +45,10 @@ function registerExecApprovalTarget(params: { remoteJid: string; approvalId?: st
 
 function buildReactionMessage(params: {
   remoteJid: string;
+  remoteJidAlt?: string;
   reactionRemoteJid?: string;
   participant?: string;
+  participantAlt?: string;
   fromMe?: boolean;
   reactionFromMe?: boolean;
 }) {
@@ -54,7 +56,9 @@ function buildReactionMessage(params: {
     key: {
       id: "reaction-message",
       remoteJid: params.remoteJid,
+      ...(params.remoteJidAlt ? { remoteJidAlt: params.remoteJidAlt } : {}),
       ...(params?.participant ? { participant: params.participant } : {}),
+      ...(params.participantAlt ? { participantAlt: params.participantAlt } : {}),
       fromMe: params.fromMe ?? false,
     },
     message: {
@@ -174,6 +178,48 @@ describe("WhatsApp approval reactions", () => {
       cfg: approvalConfig(["+15551230000"]),
       approvalId: "plugin:abc",
       approvalKind: "plugin",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
+
+  it.each([
+    {
+      name: "direct chat",
+      remoteJid: "812345678901234@lid",
+      remoteJidAlt: "15551230000:2@s.whatsapp.net",
+    },
+    {
+      name: "group chat",
+      remoteJid: "120363401234567890@g.us",
+      participant: "812345678901234@lid",
+      participantAlt: "15551230000:2@s.whatsapp.net",
+    },
+  ])("authorizes a $name reaction from its observed alternate PN", async (testCase) => {
+    registerWhatsAppApprovalReactionTarget({
+      accountId: "default",
+      remoteJid: testCase.remoteJid,
+      messageId: "approval-message",
+      approvalId: "exec-observed-pn",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once"],
+    });
+    const resolveInboundJid = vi.fn().mockResolvedValue(null);
+
+    const handled = await maybeResolveWhatsAppApprovalReaction({
+      cfg: approvalConfig(["+15551230000"]),
+      accountId: "default",
+      msg: buildReactionMessage(testCase),
+      resolveInboundJid,
+    });
+
+    expect(handled).toBe(true);
+    expect(resolveInboundJid).not.toHaveBeenCalled();
+    expect(resolverMocks.resolveWhatsAppApproval).toHaveBeenCalledWith({
+      cfg: approvalConfig(["+15551230000"]),
+      approvalId: "exec-observed-pn",
+      approvalKind: "exec",
       decision: "allow-once",
       senderId: "+15551230000",
       gatewayUrl: undefined,
