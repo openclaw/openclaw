@@ -1135,6 +1135,10 @@ async function connectWebSocket(
   });
 }
 
+// Test-only export — allows handshake-timeout tests without exposing the full
+// internal connect path to the public API surface.
+export const connectWebSocketForTest = connectWebSocket;
+
 async function acquireWebSocket(
   url: string,
   headers: Headers,
