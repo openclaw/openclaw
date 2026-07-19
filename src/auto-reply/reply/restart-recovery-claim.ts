@@ -21,9 +21,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 type ReplyRestartRecoveryClaimController = {
-  admitUserTurn: (
-    recorder?: UserTurnTranscriptRecorder,
-  ) => Promise<"admitted" | "duplicate-source">;
+  admitUserTurn: (recorder?: UserTurnAdmissionRecorder) => Promise<"admitted" | "duplicate-source">;
   beginBeforeAgentReply: () => Promise<boolean>;
   checkpointBeforeAgentReply: (params: {
     state: Exclude<RestartRecoveryBeforeAgentReplyState, "admitted" | "pending">;
@@ -36,6 +34,11 @@ type ReplyRestartRecoveryClaimController = {
   clear: () => Promise<void>;
   isArmed: () => boolean;
 };
+
+type UserTurnAdmissionRecorder = Pick<
+  UserTurnTranscriptRecorder,
+  "hasPersisted" | "persistApproved"
+>;
 
 /** Provider redelivery guard shared by ingress and the agent admission boundary. */
 export function isDuplicateRestartRecoverySource(
@@ -163,7 +166,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   const persistAdmissionPatch = async (options: {
     entry: SessionEntry;
     patch: SessionTranscriptTurnLifecyclePatch;
-    recorder?: UserTurnTranscriptRecorder;
+    recorder?: UserTurnAdmissionRecorder;
     sessionId: string;
     sessionKey: string;
     storePath: string;
@@ -200,7 +203,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   };
 
   const persistUserTurnOnly = async (
-    recorder: UserTurnTranscriptRecorder | undefined,
+    recorder: UserTurnAdmissionRecorder | undefined,
     sessionId: string,
   ): Promise<void> => {
     if (!recorder || recorder.hasPersisted()) {

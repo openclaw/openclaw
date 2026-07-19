@@ -261,7 +261,7 @@ docker_build_resource_exhausted_failure "$LOG_PATH"
   });
 
   it("retries Corepack connect timeouts without misreading Dockerfile comments as OOM", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-connect-timeout-"));
+    const workDir = tempDirs.make("openclaw-docker-build-connect-timeout-");
 
     try {
       const logPath = join(workDir, "docker-build.log");

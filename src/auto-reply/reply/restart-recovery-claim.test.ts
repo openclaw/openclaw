@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type {
   UserTurnTranscriptRecorder,
@@ -9,16 +8,11 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("createReplyRestartRecoveryClaimController", () => {
   it("retargets durable user-turn admission to the prepared reply session", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-admission-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-reply-admission-");
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "plugin-binding:codex:target";
     const sessionId = "bound-session-id";
@@ -40,7 +34,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     const recorder = {
       hasPersisted: () => false,
       persistApproved,
-    } as UserTurnTranscriptRecorder;
+    } satisfies Pick<UserTurnTranscriptRecorder, "hasPersisted" | "persistApproved">;
     const controller = createReplyRestartRecoveryClaimController({
       getEntry: () => entry,
       getSessionId: () => sessionId,
