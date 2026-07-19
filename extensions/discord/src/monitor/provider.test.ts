@@ -3,7 +3,6 @@ import { EventEmitter } from "node:events";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "../internal/discord.js";
 import {
@@ -17,8 +16,6 @@ import {
   formatDiscordDeployErrorDetails,
   formatDiscordDeployErrorMessage,
 } from "./provider.deploy-errors.js";
-
-vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 const {
   clientConstructorOptionsMock,
@@ -252,7 +249,6 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    vi.mocked(logVerbose).mockImplementation(() => undefined);
     ({ monitorDiscordProvider } = await import("./provider.js"));
     ({ discordProviderTestSupport: providerTesting } = await import("./provider.test-support.js"));
   });
@@ -261,7 +257,6 @@ describe("monitorDiscordProvider", () => {
     providerTesting.reset();
     resetDiscordProviderMonitorMocks();
     voiceAutoJoinMock.mockClear();
-    vi.mocked(logVerbose).mockClear();
     providerTesting.setFetchDiscordApplicationId(async () => "app-1");
     providerTesting.setCreateDiscordNativeCommand(((
       ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
