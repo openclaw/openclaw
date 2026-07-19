@@ -22,6 +22,7 @@ import {
   BoardEventParamsSchema,
   BoardGetParamsSchema,
   BoardUpdateParamsSchema,
+  BoardWidgetContentSchema,
   BoardWidgetGrantParamsSchema,
   BoardWidgetPutParamsSchema,
   AgentEventSchema,
@@ -668,6 +669,7 @@ export const validateAgentsListParams = lazyCompile(AgentsListParamsSchema);
 export const validateWorktreesListParams = lazyCompile(WorktreesListParamsSchema);
 export const validateBoardGetParams = lazyCompile(BoardGetParamsSchema);
 export const validateBoardUpdateParams = lazyCompile(BoardUpdateParamsSchema);
+export const validateBoardWidgetContent = lazyCompile(BoardWidgetContentSchema);
 export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
 export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
 export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);

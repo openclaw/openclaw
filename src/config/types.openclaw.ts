@@ -310,6 +310,8 @@ export type LegacyConfigIssue = {
 export type ConfigFileSnapshot = {
   /** Config file path that was read. */
   path: string;
+  /** Lexical and canonical file paths reached while resolving $include directives. */
+  includedPaths?: string[];
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */

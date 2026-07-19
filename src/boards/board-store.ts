@@ -4,7 +4,7 @@ import type {
   BoardOp,
   BoardSnapshot,
   BoardWidgetContent,
-  BoardWidgetPutParams,
+  BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
   applyBoardOps,
@@ -31,7 +31,7 @@ export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDoc
 export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot;
-  putWidget(params: BoardWidgetPutParams): BoardSnapshot;
+  putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot;
   grant(
     sessionKey: string,
     name: string,
@@ -86,7 +86,7 @@ function createBoardWidgetDocument(
 }
 
 export function createBoardDeclaredSummary(
-  declared: BoardWidgetPutParams["declared"],
+  declared: BoardWidgetMaterializedPutParams["declared"],
 ): string[] | undefined {
   const lines = [
     ...(declared?.netOrigins ?? []).map((origin) => `Network access: ${origin}`),
@@ -97,7 +97,7 @@ export function createBoardDeclaredSummary(
 
 export function createBoardWidgetPutSnapshot(
   prior: BoardSnapshot,
-  params: BoardWidgetPutParams,
+  params: BoardWidgetMaterializedPutParams,
 ): BoardSnapshot {
   if (
     params.content.kind === "html" &&
@@ -226,7 +226,7 @@ export class InMemoryBoardStore implements BoardStore {
     return cloneBoardSnapshot(next);
   }
 
-  putWidget(params: BoardWidgetPutParams): BoardSnapshot {
+  putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot {
     const current = this.boards.get(params.sessionKey);
     const prior = current?.snapshot ?? emptyBoardSnapshot(params.sessionKey);
     const snapshot = createBoardWidgetPutSnapshot(prior, params);

@@ -3956,6 +3956,130 @@ describe("handleSendChat", () => {
     expect(reset).not.toHaveBeenCalled();
   });
 
+  it("cancels a queued reset when dashboard reset confirmation is rejected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory();
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "queued-reset-cancelled",
+      text: "/reset",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "reset",
+      sessionKey: "agent:main",
+    };
+    const confirmConversationReset = vi.fn(async () => false);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+      confirmConversationReset,
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(confirmConversationReset).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
+  it("preserves queued reset approval when a run starts during confirmation", async () => {
+    const confirmation = createDeferred<boolean>();
+    const sendPayloads: Array<Record<string, unknown>> = [];
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "chat.history") {
+        return Promise.resolve(idleChatHistory());
+      }
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "approved queued reset payload");
+        sendPayloads.push(payload);
+        return Promise.resolve({ runId: payload.idempotencyKey, status: "ok" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "queued-reset-approved-before-run",
+      text: "/reset",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "reset",
+      sessionKey: "agent:main",
+    };
+    const confirmConversationReset = vi.fn(async () => await confirmation.promise);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+      confirmConversationReset,
+    });
+    admitHostQueueItems(host);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() => expect(confirmConversationReset).toHaveBeenCalledOnce());
+    host.chatRunId = "run-started-during-reset-confirmation";
+    confirmation.resolve(true);
+    await draining;
+
+    const approvedReset = listStoredChatOutboxes(host)[0]?.queue[0];
+    expect(approvedReset).toEqual(
+      expect.objectContaining({
+        id: item.id,
+        sendState: "waiting-idle",
+        text: "/reset",
+      }),
+    );
+    expect(approvedReset).not.toHaveProperty("localCommandName");
+
+    host.chatRunId = null;
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(confirmConversationReset).toHaveBeenCalledOnce();
+    expect(sendPayloads.map((payload) => payload.message)).toEqual(["/reset"]);
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
+  it("keeps a queued reset when its session changes during confirmation", async () => {
+    const confirmation = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return idleChatHistory("agent:main:first");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "queued-reset-route-switch",
+      text: "/reset",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "reset",
+      sessionKey: "agent:main:first",
+    };
+    const confirmConversationReset = vi.fn(async () => await confirmation.promise);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+      confirmConversationReset,
+      sessionKey: item.sessionKey,
+    });
+    admitHostQueueItems(host);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() => expect(confirmConversationReset).toHaveBeenCalledOnce());
+    host.sessionKey = "agent:main:second";
+    confirmation.resolve(false);
+    await draining;
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(listStoredChatOutboxes(host)).toEqual([
+      expect.objectContaining({
+        sessionKey: item.sessionKey,
+        queue: [expect.objectContaining({ id: item.id, sendState: "waiting-idle" })],
+      }),
+    ]);
+  });
+
   it("retires a queued local command without applying its late result after a route switch", async () => {
     const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);

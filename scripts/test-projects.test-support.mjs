@@ -4551,13 +4551,11 @@ function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   if (hasConservativeVitestWorkerBudget(env)) {
     return false;
   }
-  return (
-    env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
-  );
+  return env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && !isCiLikeEnv(env);
 }
 
 function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
-  return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
+  return !isCiLikeEnv(env);
 }
 
 function parsePositiveInt(value, label) {

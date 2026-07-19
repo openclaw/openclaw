@@ -47,6 +47,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import {
+  confirmConversationResetForCurrentSession,
   dispatchChatSlashCommand,
   type ChatCommandHost,
   type ChatCommandResetOptions,
@@ -1785,18 +1786,41 @@ async function drainStoredChatOutbox(
       syncChatQueueFromStoredOutbox(host, outbox);
       if (item.localCommandName === "reset") {
         const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
-        const converted = updateQueuedMessageForSession(
-          host,
-          outbox.sessionKey,
-          item.id,
-          (entry) => ({
+        const convertResetToMessage = (sendState?: ChatQueueItem["sendState"]) =>
+          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
             ...entry,
             localCommandArgs: undefined,
             localCommandName: undefined,
             refreshSessions: true,
             text: resetText,
-          }),
-        );
+            ...(sendState ? { sendState } : {}),
+          }));
+        const confirmation = await confirmConversationResetForCurrentSession(host, {
+          sessionKey: outbox.sessionKey,
+          ...(outbox.agentId ? { agentId: outbox.agentId } : {}),
+        });
+        if (confirmation === "deferred") {
+          const approvedDuringRun =
+            visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && host.chatRunId;
+          const deferred = approvedDuringRun
+            ? convertResetToMessage("waiting-idle")
+            : updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+                ...entry,
+                sendError: undefined,
+                sendState: "waiting-idle",
+              }));
+          if (!deferred) {
+            return "blocked";
+          }
+          return "blocked";
+        }
+        if (confirmation === "cancelled") {
+          if (!removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey)) {
+            return "blocked";
+          }
+          continue;
+        }
+        const converted = convertResetToMessage();
         if (!converted) {
           return "blocked";
         }

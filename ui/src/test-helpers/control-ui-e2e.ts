@@ -54,6 +54,7 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
@@ -258,6 +259,7 @@ function normalizeScenario(
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
+    featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
@@ -798,7 +800,11 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: scenario.featureMethods },
+          features: {
+            capabilities: scenario.featureCapabilities,
+            events: [],
+            methods: scenario.featureMethods,
+          },
           controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
