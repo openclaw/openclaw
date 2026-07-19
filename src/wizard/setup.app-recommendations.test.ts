@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type {
   OnboardingRecommendationMatch,
   OnboardingRecommendationsRecord,
+  OnboardingRecommendationsStore,
 } from "../state/onboarding-recommendations.js";
 import type { SetupAppRecommendationsResult } from "../system-agent/setup-app-recommendations.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -42,11 +43,7 @@ function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
   let current = initial;
   let now = 0;
   const writeOffer = vi.fn(
-    (
-      params: Parameters<
-        typeof import("../state/onboarding-recommendations.js").writeOnboardingRecommendationsOffer
-      >[0],
-    ) => {
+    (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
       now += 1;
       current = {
         inventoryHash: "hash",
@@ -59,11 +56,7 @@ function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
     },
   );
   const acknowledgeStored = vi.fn(
-    (
-      params: Parameters<
-        typeof import("../state/onboarding-recommendations.js").acknowledgeOnboardingRecommendations
-      >[0] = {},
-    ) => {
+    (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
       if (
         !current ||
         (params.expected &&
@@ -78,11 +71,7 @@ function storeDeps(initial: OnboardingRecommendationsRecord | null = null) {
     },
   );
   const updatePendingStored = vi.fn(
-    (
-      params: Parameters<
-        typeof import("../state/onboarding-recommendations.js").updatePendingOnboardingRecommendations
-      >[0],
-    ) => {
+    (params: Parameters<OnboardingRecommendationsStore["updatePending"]>[0]) => {
       if (
         !current ||
         params.expected.inventoryHash !== current.inventoryHash ||
@@ -452,11 +441,7 @@ describe("setupAppRecommendations", () => {
     const storeState: { current: OnboardingRecommendationsRecord | null } = { current: null };
     let now = 0;
     const writeOffer = vi.fn(
-      (
-        params: Parameters<
-          typeof import("../state/onboarding-recommendations.js").writeOnboardingRecommendationsOffer
-        >[0],
-      ) => {
+      (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
         now += 1;
         storeState.current = {
           inventoryHash: "hash",
@@ -469,11 +454,7 @@ describe("setupAppRecommendations", () => {
       },
     );
     const acknowledgeStored = vi.fn(
-      (
-        params: Parameters<
-          typeof import("../state/onboarding-recommendations.js").acknowledgeOnboardingRecommendations
-        >[0] = {},
-      ) => {
+      (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
         if (
           !storeState.current ||
           (params.expected &&

@@ -21,11 +21,8 @@ import {
   resolveClawHubSkillVerificationTarget,
 } from "../skills/lifecycle/clawhub.js";
 import {
-  acknowledgeOnboardingRecommendations,
-  clearPendingOnboardingRecommendations,
-  readOnboardingRecommendations,
-  updatePendingOnboardingRecommendations,
-  writeOnboardingRecommendationsOffer,
+  createOnboardingRecommendationsStore,
+  type OnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
 import {
@@ -45,10 +42,10 @@ type SetupAppRecommendationDeps = {
   isSkillInstalled?: (params: { workspaceDir: string; skillRef: string }) => Promise<boolean>;
   resolveOfficialEntry?: (pluginId: string) => OnboardingPluginInstallEntry | undefined;
   readStored?: () => OnboardingRecommendationsRecord | null;
-  writeOffer?: typeof writeOnboardingRecommendationsOffer;
-  acknowledgeStored?: typeof acknowledgeOnboardingRecommendations;
-  updatePendingStored?: typeof updatePendingOnboardingRecommendations;
-  clearPendingStored?: typeof clearPendingOnboardingRecommendations;
+  writeOffer?: OnboardingRecommendationsStore["writeOffer"];
+  acknowledgeStored?: OnboardingRecommendationsStore["acknowledge"];
+  updatePendingStored?: OnboardingRecommendationsStore["updatePending"];
+  clearPendingStored?: OnboardingRecommendationsStore["clearPending"];
   deferOfferToBootstrap?: () => boolean;
 };
 
@@ -138,13 +135,13 @@ export async function setupAppRecommendations(params: {
   ) {
     return unchangedOutcome(params.config);
   }
-  const readStored = params.deps?.readStored ?? readOnboardingRecommendations;
+  const store = createOnboardingRecommendationsStore({ workspaceDir: params.workspaceDir });
+  const readStored = params.deps?.readStored ?? store.read;
   const storedRecord = readStored();
   if (typeof storedRecord?.acceptedAt === "number") {
     return unchangedOutcome(params.config);
   }
-  const clearPendingStored =
-    params.deps?.clearPendingStored ?? clearPendingOnboardingRecommendations;
+  const clearPendingStored = params.deps?.clearPendingStored ?? store.clearPending;
   // Pending recommendations are rebuildable cache. Rescan legacy bare
   // ClawHub ids instead of installing without a publisher identity.
   const hasLegacyClawHubId = storedRecord?.matches.some(
@@ -156,10 +153,9 @@ export async function setupAppRecommendations(params: {
     }
   }
   const stored = hasLegacyClawHubId ? null : storedRecord;
-  const writeOffer = params.deps?.writeOffer ?? writeOnboardingRecommendationsOffer;
-  const acknowledgeStored = params.deps?.acknowledgeStored ?? acknowledgeOnboardingRecommendations;
-  const updatePendingStored =
-    params.deps?.updatePendingStored ?? updatePendingOnboardingRecommendations;
+  const writeOffer = params.deps?.writeOffer ?? store.writeOffer;
+  const acknowledgeStored = params.deps?.acknowledgeStored ?? store.acknowledge;
+  const updatePendingStored = params.deps?.updatePendingStored ?? store.updatePending;
   const deferOfferToBootstrap =
     params.deps?.deferOfferToBootstrap ??
     (() => existsSync(path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)));
