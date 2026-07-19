@@ -277,6 +277,18 @@ export interface ClawInstalls {
   workspace: string;
 }
 
+export interface ClawWorkspaceFiles {
+  agent_id: string;
+  content_digest: string;
+  created_at_ms: number;
+  schema_version: string;
+  source_path: string;
+  status: string;
+  target_path: string;
+  updated_at_ms: number;
+  workspace: string;
+}
+
 export interface ClawhubPromotionClaims {
   claimed_at_ms: number;
   ends_at_ms: number;
@@ -1378,6 +1390,7 @@ export interface DB {
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
   claw_installs: ClawInstalls;
+  claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
