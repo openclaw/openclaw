@@ -69,6 +69,19 @@ describe("attachMcpAppChannelAction", () => {
     expect(materialize).not.toHaveBeenCalled();
   });
 
+  it("does not mint without a resolved channel transport", () => {
+    const payloads = [{ text: "Final answer" }];
+
+    expect(
+      attachMcpAppChannelAction({
+        payloads,
+        sessionKey: "agent:main:main",
+        view,
+      }),
+    ).toBe(payloads);
+    expect(materialize).not.toHaveBeenCalled();
+  });
+
   it("preserves the original payloads when late materialization is unavailable", () => {
     materialize.mockReturnValue(undefined);
     const payloads = [{ text: "Final answer" }];

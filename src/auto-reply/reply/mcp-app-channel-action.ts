@@ -20,7 +20,7 @@ export function attachMcpAppChannelAction(params: {
   sessionKey?: string;
   view?: McpAppChannelView;
 }): ReplyPayload[] {
-  if (params.channel === "webchat" || !params.sessionKey || !params.view) {
+  if (!params.channel || params.channel === "webchat" || !params.sessionKey || !params.view) {
     return params.payloads;
   }
   const index = params.payloads.findLastIndex(isEligibleTerminalPayload);
