@@ -4154,6 +4154,11 @@
       "translated": "Konfiguration av Talk Provider"
     },
     {
+      "id": "native.android.23b638094c34b916",
+      "source": "Microphone",
+      "translated": "Mikrofon"
+    },
+    {
       "id": "native.android.98a8bbb2b1f382e6",
       "source": "Audio Test",
       "translated": "Ljudtest"
@@ -4197,6 +4202,66 @@
       "id": "native.android.05bd460309ac6db6",
       "source": "Done",
       "translated": "Klart"
+    },
+    {
+      "id": "native.android.8d9ecdfdd916b780",
+      "source": "Automatic",
+      "translated": "Automatisk"
+    },
+    {
+      "id": "native.android.c1626a6700a570f6",
+      "source": "Preferred microphone unavailable; using automatic routing.",
+      "translated": "Den föredragna mikrofonen är inte tillgänglig; automatisk dirigering används."
+    },
+    {
+      "id": "native.android.820bc5d0ce571d8b",
+      "source": "Prioritizes connected Bluetooth microphones.",
+      "translated": "Prioriterar anslutna Bluetooth-mikrofoner."
+    },
+    {
+      "id": "native.android.11e48038d5e8bff6",
+      "source": "Preferred microphone",
+      "translated": "Föredragen mikrofon"
+    },
+    {
+      "id": "native.android.eaa4d7563a46d307",
+      "source": "Unavailable",
+      "translated": "Inte tillgänglig"
+    },
+    {
+      "id": "native.android.9f5ebf17eb405ba8",
+      "source": "Next session",
+      "translated": "Nästa session"
+    },
+    {
+      "id": "native.android.8c4e91f53928efb2",
+      "source": "Built-in microphone",
+      "translated": "Inbyggd mikrofon"
+    },
+    {
+      "id": "native.android.14b613cb6e2446b4",
+      "source": "Bluetooth microphone",
+      "translated": "Bluetooth-mikrofon"
+    },
+    {
+      "id": "native.android.c885247b2d7ce271",
+      "source": "Bluetooth LE microphone",
+      "translated": "Bluetooth LE-mikrofon"
+    },
+    {
+      "id": "native.android.b6a4e674c5fb441a",
+      "source": "Wired headset microphone",
+      "translated": "Mikrofon i trådbundet headset"
+    },
+    {
+      "id": "native.android.9c8becb3b0fb5a90",
+      "source": "USB microphone",
+      "translated": "USB-mikrofon"
+    },
+    {
+      "id": "native.android.ba46258fadec7a39",
+      "source": "External microphone",
+      "translated": "Extern mikrofon"
     },
     {
       "id": "native.android.60cf67eb5ec46ea0",
@@ -6717,6 +6782,16 @@
       "id": "native.android.5d4f2992e2320c3e",
       "source": "Unmute",
       "translated": "Slå på ljud"
+    },
+    {
+      "id": "native.android.cb608d82c5b3352a",
+      "source": "Back camera",
+      "translated": "Bakre kamera"
+    },
+    {
+      "id": "native.android.e89a0e780eed2e1e",
+      "source": "Front camera",
+      "translated": "Främre kamera"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",
