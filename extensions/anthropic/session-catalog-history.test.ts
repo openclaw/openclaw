@@ -20,7 +20,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
-  it("uses the import timestamp when a native row has an invalid or pre-epoch timestamp", async () => {
+  it("falls back for invalid timestamps while preserving valid pre-epoch dates", async () => {
     appended.length = 0;
     const fallbackTimestamp = new Date("2026-07-18T12:00:00.000Z").getTime();
     vi.useFakeTimers();
@@ -48,11 +48,8 @@ describe("importClaudeHistory", () => {
     }
 
     expect(appended).toHaveLength(2);
-    expect(appended.map((message) => message.timestamp)).toEqual([
-      fallbackTimestamp,
-      fallbackTimestamp + 1,
-    ]);
-    expect(JSON.stringify(appended)).toContain(`"timestamp":${fallbackTimestamp}`);
+    expect(appended.map((message) => message.timestamp)).toEqual([-1_000, fallbackTimestamp + 1]);
+    expect(JSON.stringify(appended)).not.toContain('"timestamp":null');
   });
 
   it("tags imported native user rows so self-echo provenance excludes them", async () => {
