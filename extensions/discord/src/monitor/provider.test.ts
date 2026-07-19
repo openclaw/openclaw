@@ -806,7 +806,7 @@ describe("monitorDiscordProvider", () => {
     });
   });
 
-  it("forwards custom eventQueue config from discord config to the Discord client", async () => {
+  it("ignores removed custom eventQueue config", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
       token: "MTIz.abc.def",
@@ -825,7 +825,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     const eventQueue = getConstructedEventQueue();
-    expect(eventQueue?.listenerTimeout).toBe(300_000);
+    expect(eventQueue?.listenerTimeout).toBe(120_000);
   });
 
   it("does not pass eventQueue.listenerTimeout into the message run queue", async () => {
