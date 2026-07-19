@@ -8,13 +8,6 @@ import {
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import {
-  prepareNonDirectoryTargets,
-  reconciliationDirectories,
-  reconciliationEntries,
-} from "./workspace-reconcile-derived-paths.js";
-import { entryMatches } from "./workspace-reconcile-fs.js";
-import { applyWorkspacePatch, createWorkspacePatch } from "./workspace-reconcile-recovery.js";
-import {
   applyWorkspaceDirectoryChanges,
   assertActualWorkspaceManifest,
   changedPaths,
@@ -23,10 +16,20 @@ import {
   manifestNodes,
   preflightWorkspaceApply,
   readActualWorkspaceManifest,
-  recoverWorkerWorkspaceReconciliation,
   retainedConflictPaths,
   type WorkerWorkspaceApplyResult,
-} from "./workspace-reconcile.js";
+} from "./workspace-reconcile-core.js";
+import {
+  prepareNonDirectoryTargets,
+  reconciliationDirectories,
+  reconciliationEntries,
+} from "./workspace-reconcile-derived-paths.js";
+import { entryMatches } from "./workspace-reconcile-fs.js";
+import {
+  applyWorkspacePatch,
+  createWorkspacePatch,
+  recoverWorkerWorkspaceReconciliation,
+} from "./workspace-reconcile-recovery.js";
 
 export async function applyStagedWorkerWorkspace(params: {
   root: string;

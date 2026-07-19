@@ -11,6 +11,11 @@ import {
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-manifest.js";
 import {
+  assertWorkspaceMatchesManifest,
+  ConcurrentWorkspacePathError,
+  localWorkspaceNode,
+} from "./workspace-reconcile-core.js";
+import {
   prepareNonDirectoryTargets,
   reconciliationDirectories,
   reconciliationEntries,
@@ -24,11 +29,6 @@ import {
   localPath,
   readWorkspaceTreeFile,
 } from "./workspace-reconcile-fs.js";
-import {
-  assertWorkspaceMatchesManifest,
-  ConcurrentWorkspacePathError,
-  localWorkspaceNode,
-} from "./workspace-reconcile.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
 async function requireGit(

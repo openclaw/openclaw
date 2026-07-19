@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,13 +16,15 @@ import {
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("worker placement dispatch reclaim", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-dispatch-"));
+    root = tempDirs.make("openclaw-dispatch-", await fs.realpath(os.tmpdir()));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { renameSync, symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import type {
   WorkerWorkspaceManifest,
@@ -19,17 +19,14 @@ import {
 } from "./workspace-reconcile.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 
-const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
 async function temporaryDirectory(name: string): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${name}-`));
-  roots.push(root);
-  return root;
+  return tempDirs.make(`openclaw-${name}-`);
 }
 
 async function gitInit(root: string): Promise<void> {
