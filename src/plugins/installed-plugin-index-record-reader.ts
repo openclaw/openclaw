@@ -121,7 +121,7 @@ function resolveRecoveredManagedNpmPluginId(params: {
   return validatePluginId(pluginId) ? undefined : pluginId;
 }
 
-export type RecoveredManagedNpmInstallCandidate = {
+type RecoveredManagedNpmInstallCandidate = {
   installRecord: PluginInstallRecord;
   installTimestampMs: number;
   pluginId: string;
