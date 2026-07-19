@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
@@ -42,6 +43,24 @@ export type McpAppViewLease = {
   releaseRuntimeLease?: () => void;
 };
 
+export type McpAppChannelView = {
+  viewId: string;
+};
+
+/** Retain only the bounded view identity needed for late channel materialization. */
+export function readMcpAppChannelView(result: unknown): McpAppChannelView | undefined {
+  const details = asRecord(asRecord(result)?.details);
+  const preview = asRecord(details?.mcpAppPreview);
+  const view = asRecord(preview?.view);
+  const descriptor = asRecord(preview?.mcpApp);
+  const viewId = typeof descriptor?.viewId === "string" ? descriptor.viewId.trim() : "";
+  const projectedViewId = typeof view?.id === "string" ? view.id.trim() : "";
+  if (!viewId || projectedViewId !== viewId) {
+    return undefined;
+  }
+  return { viewId };
+}
+
 type McpAppViewStore = Map<string, McpAppViewLease>;
 
 function getViewStore(): McpAppViewStore {
@@ -62,6 +81,7 @@ function deleteView(viewId: string, expected?: McpAppViewLease): void {
     return;
   }
   clearTimeout(view.expiryTimer);
+  clearMcpAppModelContextForView(view.runtime, view);
   view.releaseRuntimeLease?.();
   store.delete(viewId);
   void completeDeferredSessionMcpRuntimeRetirement(view.runtime).catch((error: unknown) => {

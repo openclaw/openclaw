@@ -115,7 +115,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "config-runtime": 123,
   "config-contracts": 1,
   // +1 each: unified implicit-mention config and AgentThinkingLevel types.
-  "config-types": 427,
+  // +1: SwarmConfig mirrors the public tools.swarm config contract.
+  "config-types": 428,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 26,
@@ -280,7 +281,18 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: AgentThinkingLevel shared by default-turn and compaction config.
       // +9: shared ingress monitor factory and lifecycle/result contracts across
       // channel-outbound and its two deprecated compatibility barrels.
-      8177,
+      // +1: SwarmConfig exposes the tools.swarm contract through config-types.
+      // +3: harness sessionFork capability params, result, and failure-code contracts.
+      // +2: upstream-link registry write/delete for harness-owned session forks.
+      // Harvest: mention-pattern schemas and helper exports -3.
+      // +1: config-backed main-session resolver for Gateway-hosted plugin services.
+      // +9: outbound echo identity type and record/query helpers across
+      // channel-outbound and its two compatibility barrels.
+      // Net +1: public session catalog locator types after the protocol cleanup harvest.
+      // +2: lifecycle-owned prepared model catalog sync and async readers.
+      // Harvest: retired tuning-knob config types -10.
+      // Harvest: removed process-global API-provider publication functions -2.
+      8180,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -325,7 +337,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: bounded raw transcript cursor reader.
       // +1: bounded visible transcript cursor reader.
       // +3: shared ingress monitor factory across channel-outbound and compat mirrors.
-      4546,
+      // +2: upstream-link registry write/delete for harness-owned session forks.
+      // +1: config-backed main-session resolver for Gateway-hosted plugin services.
+      // +6: outbound echo record/query helpers across channel-outbound and mirrors.
+      // +2: lifecycle-owned prepared model catalog sync and async readers.
+      // Harvest: removed process-global API-provider publication functions -2.
+      4555,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -347,7 +364,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: AgentModelPolicyConfig mirrored by deprecated config-types.
       // +6: ingress monitor lifecycle/result contracts through deprecated channel barrels.
       // +1: AgentThinkingLevel mirrored by deprecated config-types.
-      3013,
+      // +1: SwarmConfig mirrored by deprecated config-types.
+      // +2: outbound echo helpers inherited by deprecated channel barrels.
+      // +1: lifecycle-owned prepared model catalog contract mirrored by agent-runtime compat.
+      3017,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

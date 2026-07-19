@@ -77,6 +77,7 @@ import {
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
@@ -325,6 +326,7 @@ type OpenClawCodingToolsOptions = {
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
   agentDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
@@ -416,6 +418,10 @@ type OpenClawCodingToolsOptions = {
   inboundEventKind?: InboundEventKind;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Collector runs never open operator approval flows. */
+  swarmCollector?: boolean;
+  /** Synthetic structured_output schema for collector runs. */
+  swarmOutputSchema?: Record<string, unknown>;
   /** Keep the message tool available even when the selected profile omits it. */
   forceMessageTool?: boolean;
   /** Include the heartbeat response tool for structured heartbeat outcomes. */
@@ -762,6 +768,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         channelContext: options?.channelContext,
         accountId: options?.agentAccountId,
         approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
+        nonInteractiveApproval: options?.swarmCollector,
         backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
         timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
         approvalRunningNoticeMs:
@@ -879,7 +886,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             modelId: options?.modelId,
             modelHasVision: options?.modelHasVision,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
-            disableMessageTool: options?.disableMessageTool,
+            disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             clientCaps: options?.clientCaps,
@@ -959,6 +966,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentGroupSpace: options?.groupSpace ?? null,
             agentMemberRoleIds: options?.memberRoleIds,
             agentDir: options?.agentDir,
+            preparedModelRuntime: options?.preparedModelRuntime,
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,
@@ -997,7 +1005,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
             inboundEventKind: options?.inboundEventKind,
-            disableMessageTool: options?.disableMessageTool,
+            disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
+            swarmCollector: options?.swarmCollector,
+            swarmOutputSchema: options?.swarmOutputSchema,
             enableHeartbeatTool,
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
@@ -1020,6 +1030,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     ...toolSearchTools,
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
+  const swarmStructuredOutputTool =
+    options?.swarmCollector && options.swarmOutputSchema
+      ? tools.find((tool) => tool.name === "structured_output")
+      : undefined;
   const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;
   if (isMemoryFlushRun && memoryFlushWritePath) {
     for (const tool of tools) {
@@ -1118,8 +1132,21 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const authorizedTools = applyDelegationCapability(
     mergeAgentRingZeroTools(ringZeroTools, subagentFiltered),
     options?.delegationCapability,
+  ).filter(
+    (tool) =>
+      !options?.swarmCollector ||
+      (tool.name !== "ask_user" && tool.name !== "sessions_send" && tool.name !== "sessions_yield"),
   );
+  if (
+    swarmStructuredOutputTool &&
+    !authorizedTools.some((tool) => tool.name === swarmStructuredOutputTool.name)
+  ) {
+    // Collector output is a run contract, not an operator-configurable capability.
+    authorizedTools.push(swarmStructuredOutputTool);
+  }
   if (shouldInheritEffectiveToolAllowlist) {
+    // Snapshot exporter only: this copies authorizedTools for descendants and
+    // never filters the mandatory structured_output tool from this turn.
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
@@ -1167,7 +1194,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
-  const hookOptions = { emitDiagnostics: options?.emitBeforeToolCallDiagnostics };
+  const hookOptions = {
+    emitDiagnostics: options?.emitBeforeToolCallDiagnostics,
+    ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
+  };
   const withHooks = normalized.map((tool) =>
     isToolWrappedWithBeforeToolCallHook(tool)
       ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)

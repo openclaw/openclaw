@@ -19,7 +19,6 @@ extensions/browser/src/browser/chrome-mcp.ts
 extensions/browser/src/browser/chrome.executables.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
-extensions/browser/src/browser/config.test.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/pw-session.ts
@@ -490,8 +489,6 @@ src/agents/model-auth-availability.ts
 src/agents/model-auth.profiles.test.ts
 src/agents/model-auth.test.ts
 src/agents/model-auth.ts
-src/agents/model-catalog.test.ts
-src/agents/model-catalog.ts
 src/agents/model-fallback.test.ts
 src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
@@ -547,7 +544,6 @@ src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
 src/agents/tool-loop-detection.test.ts
-src/agents/tool-loop-detection.ts
 src/agents/tool-search.test.ts
 src/agents/tool-search.ts
 src/agents/tools/computer-tool.ts
@@ -953,7 +949,6 @@ src/logging/logger.ts
 src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
-src/media-understanding/image.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
 src/media-understanding/runner.vision-skip.test.ts

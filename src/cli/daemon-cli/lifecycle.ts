@@ -243,10 +243,7 @@ async function resolveRestartListenerHealthWait(
   } else if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
     drainTimeoutMs = restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
   } else {
-    const config = await readBestEffortConfig().catch(() => undefined);
-    drainTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
-      config?.gateway?.reload?.deferralTimeoutMs,
-    );
+    drainTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
   }
 
   const replacementHealthAttempts = postRestartHealthAttempts();

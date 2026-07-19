@@ -8,10 +8,10 @@ import {
   hasStoredGatewayAuth,
   type GatewayBrowserClient,
 } from "../api/gateway.ts";
+import type { GatewayAgentRow } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
-import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
@@ -55,6 +55,7 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
@@ -66,6 +67,7 @@ import {
   APPROVAL_PAGE_ELEMENT,
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
+  EXEC_APPROVAL_ELEMENT,
   ensureOptionalElementForHost,
   isOptionalElementDefined,
   preloadOptionalElement,
@@ -114,6 +116,26 @@ type AppSidebarElement = HTMLElement & {
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
+
+function diffAgentRoster(
+  previous: readonly GatewayAgentRow[],
+  next: readonly GatewayAgentRow[],
+): { invalidatedIds: string[]; changedIds: string[] } {
+  const nextById = new Map(next.map((agent) => [agent.id, agent]));
+  const invalidatedIds: string[] = [];
+  const changedIds: string[] = [];
+  for (const agent of previous) {
+    const replacement = nextById.get(agent.id);
+    if (!replacement) {
+      invalidatedIds.push(agent.id);
+    } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
+      invalidatedIds.push(agent.id);
+      changedIds.push(agent.id);
+    }
+  }
+  return { invalidatedIds, changedIds };
+}
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
   const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
@@ -458,6 +480,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   private readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   private readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  private readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") private commandPalette?: CommandPaletteElement;
   @query("openclaw-exec-approval")
   private approvalOverlay?: HTMLElement & { show(): void };
@@ -471,6 +494,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private lastNativeNavState: NativeNavState | undefined;
   private didConsiderNativeRouteRestore = false;
   private pendingNativeNewSession = false;
@@ -650,6 +674,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.sessionKeyClient = null;
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
+      this.agentRosterRefreshTimer = null;
+    }
     resetServerUiPrefsSync();
     for (const timer of this.settingsPreloadTimers.values()) {
       globalThis.clearTimeout(timer);
@@ -666,6 +694,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
         void runtimeConfig.refresh();
       }
+      this.scheduleAgentRosterRefresh();
       return;
     }
     if (event.event !== "ui.command" || !event.payload) {
@@ -711,6 +740,49 @@ class OpenClawShell extends OpenClawLightDomElement {
     context.gateway.setSessionKey(command.sessionKey);
     this.navigate("chat", { search: searchForSession(command.sessionKey) });
   };
+
+  private scheduleAgentRosterRefresh() {
+    // Persisted config writes can arrive as a tight sequence; roster state is
+    // snapshot-based, so only the final forced read in that burst is useful.
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
+    }
+    this.agentRosterRefreshTimer = globalThis.setTimeout(() => {
+      this.agentRosterRefreshTimer = null;
+      void this.refreshAgentRoster();
+    }, AGENT_ROSTER_REFRESH_DEBOUNCE_MS);
+  }
+
+  private async refreshAgentRoster() {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const previous = context.agents.state.agentsList;
+    const activeAgentId = context.agentSelection.state.selectedId;
+    const next = await context.agents.refreshList();
+    if (!next || this.context !== context) {
+      return;
+    }
+    const rosterDiff = diffAgentRoster(previous?.agents ?? [], next.agents);
+    if (rosterDiff.invalidatedIds.length > 0) {
+      context.agents.invalidateFiles(rosterDiff.invalidatedIds);
+      context.agentIdentity.invalidate(rosterDiff.invalidatedIds);
+    }
+    if (rosterDiff.changedIds.length > 0) {
+      void context.agentIdentity.ensure(rosterDiff.changedIds);
+    }
+    const previousIds = new Set(previous?.agents.map((agent) => agent.id) ?? []);
+    const nextIds = new Set(next.agents.map((agent) => agent.id));
+    if (
+      activeAgentId &&
+      context.agentSelection.state.selectedId === activeAgentId &&
+      previousIds.has(activeAgentId) &&
+      !nextIds.has(activeAgentId)
+    ) {
+      context.agentSelection.set(next.defaultId);
+    }
+  }
 
   private readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
     const context = this.context;
@@ -1009,6 +1081,20 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.runWithCommandPalette((palette) => palette.togglePalette());
   };
 
+  private readonly openApprovals = () => {
+    const show = () => this.approvalOverlay?.show();
+    if (isOptionalElementDefined(this.execApprovalElement)) {
+      show();
+      return;
+    }
+    void ensureOptionalElementForHost(this, this.execApprovalElement)
+      .then(async () => {
+        await this.updateComplete;
+        show();
+      })
+      .catch(() => undefined);
+  };
+
   private deliverPanelEventAfterLoad(element: OptionalCustomElement, event: Event): void {
     void ensureOptionalElementForHost(this, element)
       .then(async () => {
@@ -1098,6 +1184,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
       }
+    }
+    if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
+      preloadOptionalElement(this, this.execApprovalElement);
     }
     const navState = {
       collapsed: this.nativeNavCollapsed(),
@@ -1271,6 +1360,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       schema: runtimeConfig.configSchema,
       value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
       uiHints: runtimeConfig.configUiHints,
+      identityAvailable: Boolean(gatewaySnapshot.selfUser),
     });
     const onboarding = this.onboardingMode;
     const navDrawerOpen = this.navDrawerOpen && !onboarding;
@@ -1296,6 +1386,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     // its scrolling and pins the composer dock to the bottom.
     const chatLikeRoute =
       activeRoute === "chat" || activeRoute === "custodian" || activeRoute === "new-session";
+    const inlineApproval =
+      activeRoute === "chat"
+        ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
+        : null;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
@@ -1401,6 +1495,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarEntries=${navigationSnapshot.sidebarEntries}
+                .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
                 .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
@@ -1413,7 +1508,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .updateRunning=${overlaySnapshot.updateRunning}
                 .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
-                .onOpenApprovals=${() => this.approvalOverlay?.show()}
+                .onOpenApprovals=${this.openApprovals}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
                   const search = newSessionSearch(agentId, target);
@@ -1492,15 +1587,21 @@ class OpenClawShell extends OpenClawLightDomElement {
             password: context.gateway.connection.password,
           })}
         ></openclaw-browser-panel>
-        <openclaw-exec-approval
-          .props=${{
-            queue: overlaySnapshot.approvalQueue,
-            busy: overlaySnapshot.approvalBusy,
-            error: overlaySnapshot.approvalError,
-            onDecision: (decision: Parameters<typeof context.overlays.decideApproval>[0]) =>
-              context.overlays.decideApproval(decision),
-          }}
-        ></openclaw-exec-approval>
+        ${isOptionalElementDefined(this.execApprovalElement)
+          ? html`<openclaw-exec-approval
+              .props=${{
+                queue: overlaySnapshot.approvalQueue,
+                busy: overlaySnapshot.approvalBusy,
+                errors: overlaySnapshot.approvalErrors,
+                nowMs: overlaySnapshot.approvalNowMs,
+                inlineApprovalId: inlineApproval?.id ?? null,
+                onDecision: (
+                  approvalId: string,
+                  decision: Parameters<typeof context.overlays.decideApproval>[0],
+                ) => context.overlays.decideApproval(decision, approvalId),
+              }}
+            ></openclaw-exec-approval>`
+          : nothing}
         ${renderDevicePairSetup({
           open: overlaySnapshot.devicePairSetupOpen,
           loading: overlaySnapshot.devicePairSetupLoading,

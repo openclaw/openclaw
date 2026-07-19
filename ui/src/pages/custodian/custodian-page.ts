@@ -1,5 +1,10 @@
 import { consume } from "@lit/context";
-import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
+import type {
+  SystemAgentChatParams,
+  SystemAgentChatResult,
+  SystemChangeEntry,
+  SystemChangesListResult,
+} from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -7,9 +12,9 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { icons } from "../../components/icons.ts";
 import "../../components/option-card.ts";
 import { t } from "../../i18n/index.ts";
-import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { searchForSession } from "../../lib/sessions/navigation.ts";
+import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat/grouped.css";
@@ -18,46 +23,21 @@ import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
+import { renderCustodianChangeHistory } from "./custodian-history.ts";
 import { classifyCustodianEventNudge, type CustodianEventNudge } from "./event-nudge.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
+import {
+  createCustodianSessionId,
+  createCustodianTranscriptMessages,
+  custodianErrorMessage,
+  readCustodianTranscript,
+  renderCustodianEarlierDivider,
+  toCustodianMessageGroup,
+  type CustodianMessage,
+} from "./transcript.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
-
-type CustodianMessage = {
-  id: number;
-  role: "assistant" | "user";
-  text: string;
-  at: number;
-  question: CustodianStructuredQuestion | null;
-};
-
-function toMessageGroup(message: CustodianMessage): MessageGroup {
-  const key = `msg-${message.id}`;
-  return {
-    kind: "group",
-    key,
-    role: message.role,
-    messages: [{ message: { role: message.role, content: message.text }, key }],
-    timestamp: message.at,
-    isStreaming: false,
-  };
-}
-
-function createSessionId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return `control-ui-onboarding-${crypto.randomUUID()}`;
-  }
-  const suffix = [...crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-  return `control-ui-onboarding-${suffix}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : t("custodian.requestFailed");
-}
+const SYSTEM_CHANGE_PAGE_SIZE = 50;
 
 export class CustodianPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -65,6 +45,9 @@ export class CustodianPage extends OpenClawLightDomElement {
 
   /** Onboarding mode shows the Exit setup control; the route view sets this. */
   @property({ attribute: false }) onboarding = false;
+
+  /** New-agent mode starts a creation proposal conversation. */
+  @property({ attribute: false }) newAgentIntent = false;
 
   @state() private messages: CustodianMessage[] = [];
   @state() private input = "";
@@ -75,16 +58,28 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private answeredQuestions = new Set<string>();
   @state() private activeClient: GatewayBrowserClient | null = null;
   @state() private chatAvailable = false;
+  @state() private historyAvailable = false;
+  @state() private historyOpen = false;
+  @state() private historyEntries: SystemChangeEntry[] = [];
+  @state() private historyNextCursor: string | null = null;
+  @state() private historyLoading = false;
+  @state() private historyLoadingMore = false;
+  @state() private historyError: string | null = null;
   @state() private eventNudge: CustodianEventNudge | null = null;
 
-  private sessionId = createSessionId();
+  private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
-  private sessionScopeKey: string | null = null;
+  private sessionVariant: "onboarding" | "new-agent" | "caretaker" | null = null;
+  private sessionClient: GatewayBrowserClient | null = null;
+  private sessionOwnershipKey: string | null = null;
   private sessionStarted = false;
+  private earlierBoundaryAfterId: number | null = null;
   private lastHelloDeviceToken = "";
   private eventNudgeClosed = false;
+  private abandonedTurnOutcomeUnknown = false;
+  private historyLoaded = false;
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
@@ -93,7 +88,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     () => this.context?.gateway,
     (gateway) =>
       gateway.subscribeEvents((event) => {
-        if (this.onboarding || this.eventNudgeClosed) {
+        if (this.onboarding || this.newAgentIntent || this.eventNudgeClosed) {
           return;
         }
         const next = classifyCustodianEventNudge(event);
@@ -120,78 +115,210 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
+  private currentSessionVariant(): "onboarding" | "new-agent" | "caretaker" {
+    return this.onboarding ? "onboarding" : this.newAgentIntent ? "new-agent" : "caretaker";
+  }
+
+  private welcomeVariant(): Pick<SystemAgentChatParams, "welcomeVariant"> {
+    if (this.onboarding) {
+      return { welcomeVariant: "onboarding" };
+    }
+    if (this.newAgentIntent) {
+      return { welcomeVariant: "new-agent" };
+    }
+    return {};
+  }
+
   /**
-   * Session ownership boundary: URL plus every presented credential. A client
-   * swap with different auth on the same URL is a different operator; keeping
-   * the transcript (or pending sensitive retryParams) would leak across logins.
-   * Transport reconnects reuse the same client object and never hit this. The
-   * store clears bootstrapToken on hello before the page sees a connected
-   * client, so including it only resets across re-pairing handshakes.
+   * Transcript rows are durable and admin-scoped, but the live engine session
+   * owns wizard and approval state. Rotate only that volatile state when its
+   * client or authenticated gateway identity changes.
    */
-  private connectionScopeKey(): string {
+  private currentSessionOwnershipKey(): string {
     const { gatewayUrl, token, password, bootstrapToken } = this.context.gateway.connection;
-    // Hello vanishes while the client retries a transient drop; keep the last
-    // authenticated device token so a drop alone never crosses the session
-    // boundary, while a new hello carrying a different stored-device token
-    // still rotates the scope (shared-browser operator change).
-    const hello = this.context.gateway.snapshot.hello;
-    if (hello) {
-      this.lastHelloDeviceToken = hello.auth?.deviceToken ?? "";
+    const auth = this.context.gateway.snapshot.hello?.auth;
+    if (auth) {
+      this.lastHelloDeviceToken = auth.deviceToken ?? "";
     }
     return JSON.stringify([gatewayUrl, token, password, bootstrapToken, this.lastHelloDeviceToken]);
   }
 
-  private currentSessionScopeKey(): string {
-    // Mode selects the welcome contract, so changing it starts a new session
-    // instead of carrying the previous route's transcript across modes.
-    return JSON.stringify([this.onboarding, this.connectionScopeKey()]);
+  private startSession(
+    client: GatewayBrowserClient,
+    variant: "onboarding" | "new-agent" | "caretaker",
+    loadTranscript: boolean,
+  ): void {
+    this.sessionId = createCustodianSessionId();
+    this.sessionVariant = variant;
+    this.sessionClient = client;
+    this.sessionOwnershipKey = this.currentSessionOwnershipKey();
+    this.sessionStarted = true;
+    void this.initializeSession(
+      client,
+      { sessionId: this.sessionId, ...this.welcomeVariant() },
+      loadTranscript,
+    );
+  }
+
+  /**
+   * A user turn abandoned mid-flight may already have acted on the gateway.
+   * The unknown-outcome warning must survive rotations and reconnects
+   * independently of retry state (raw text is never retained) until the
+   * operator supersedes it with a new message.
+   */
+  private abandonPendingUserTurn(pendingParams: SystemAgentChatParams | null): void {
+    if (pendingParams?.message === undefined) {
+      return;
+    }
+    this.retryParams = null;
+    this.abandonedTurnOutcomeUnknown = true;
+  }
+
+  private rotateVolatileSession(
+    client: GatewayBrowserClient,
+    variant: "onboarding" | "new-agent" | "caretaker",
+  ): void {
+    this.retireQuestions();
+    this.retryParams = null;
+    this.input = "";
+    this.sensitive = false;
+    this.error = null;
+    this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
+    this.startSession(client, variant, false);
   }
 
   private synchronizeClient(): void {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.connected ? snapshot.client : null;
-    const scopeKey = this.currentSessionScopeKey();
-    const scopeChanged = this.sessionScopeKey !== null && this.sessionScopeKey !== scopeKey;
-    if (client === this.activeClient && !scopeChanged) {
+    const chatSupported =
+      client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true;
+    const historyAvailable =
+      client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.changes.list") === true;
+    if (this.historyAvailable !== historyAvailable) {
+      this.historyAvailable = historyAvailable;
+      if (!historyAvailable) {
+        this.historyOpen = false;
+        this.resetHistory();
+      }
+    }
+    const variant = this.currentSessionVariant();
+    const variantChanged = this.sessionStarted && this.sessionVariant !== variant;
+    const ownershipKey = this.currentSessionOwnershipKey();
+    const clientReplaced =
+      this.sessionStarted &&
+      client !== null &&
+      this.sessionClient !== null &&
+      client !== this.sessionClient;
+    // Ownership boundaries stay armed even while the volatile session is torn
+    // down (e.g. an unsupported replacement): a retained transcript must never
+    // survive an authenticated identity change.
+    const ownershipChanged =
+      this.sessionOwnershipKey !== null && ownershipKey !== this.sessionOwnershipKey;
+    if (
+      client === this.activeClient &&
+      !variantChanged &&
+      !clientReplaced &&
+      !ownershipChanged &&
+      this.chatAvailable === chatSupported
+    ) {
       return;
     }
     const requestWasPending = this.sending && this.retryParams !== null;
+    const pendingParams = requestWasPending ? this.retryParams : null;
     this.activeClient = client;
     this.requestEpoch += 1;
+    this.historyOpen = false;
+    this.resetHistory();
     this.sending = false;
     this.chatAvailable = false;
-    if (scopeChanged) {
-      this.sessionScopeKey = scopeKey;
-      this.sessionStarted = false;
+    if (variantChanged || ownershipChanged) {
       this.eventNudge = null;
+      // A different operator or mode must not inherit the previous context's
+      // abandoned-turn warning; same-ownership paths below preserve it.
+      this.abandonedTurnOutcomeUnknown = false;
+      this.sessionStarted = false;
       this.clearConversation();
+    } else if (client && clientReplaced) {
+      // A transport replacement keeps the same durable transcript, but do not
+      // create a fresh volatile session until the new client advertises chat.
+      if (!chatSupported) {
+        this.sessionStarted = false;
+        this.abandonPendingUserTurn(pendingParams);
+        this.error = t("custodian.unsupportedGateway");
+        return;
+      }
+      this.chatAvailable = true;
+      // Abandon before rotating: rotation installs the fresh welcome's retry
+      // state, which the abandoned turn's scrub must not clear.
+      this.abandonPendingUserTurn(pendingParams);
+      this.rotateVolatileSession(client, variant);
+      return;
     } else if (requestWasPending) {
-      this.error = t("custodian.connectionChanged");
+      if (pendingParams?.message === undefined) {
+        this.error = t("custodian.connectionChanged");
+      }
+      this.abandonPendingUserTurn(pendingParams);
     }
     if (!client) {
       return;
     }
-    if (isGatewayMethodAdvertised(snapshot, "openclaw.chat") !== true) {
+    if (!chatSupported) {
       this.error = t("custodian.unsupportedGateway");
       return;
     }
     this.chatAvailable = true;
-    if (this.sessionStarted && this.sessionScopeKey === scopeKey) {
+    if (this.sessionStarted) {
       if (!this.retryParams) {
-        this.error = null;
+        // The abandoned-turn warning renders from its own flag; transient
+        // reconnects only clear stale request errors here.
+        this.error = requestWasPending ? this.error : null;
       }
+      // This rendered thread owns live questions and turns for the active
+      // session; durable history is projected only during its cold start.
       return;
     }
-    this.sessionId = createSessionId();
-    this.sessionScopeKey = scopeKey;
-    this.sessionStarted = true;
     this.clearConversation();
-    // The onboarding variant seeds the first-run setup proposal; the permanent
+    // Route variants seed their dedicated proposal conversation; the permanent
     // presence surface gets the normal caretaker greeting instead.
-    void this.requestReply(client, {
-      sessionId: this.sessionId,
-      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
-    });
+    this.startSession(client, variant, true);
+  }
+
+  private async initializeSession(
+    client: GatewayBrowserClient,
+    params: SystemAgentChatParams,
+    loadTranscript = true,
+  ): Promise<void> {
+    const epoch = ++this.requestEpoch;
+    this.sending = true;
+    this.error = null;
+    this.retryParams = params;
+    if (loadTranscript) {
+      await this.refreshTranscriptHistory(client, epoch);
+    }
+    if (epoch !== this.requestEpoch || client !== this.activeClient) {
+      return;
+    }
+    await this.requestReply(client, params);
+  }
+
+  private async refreshTranscriptHistory(
+    client: GatewayBrowserClient,
+    epoch: number,
+  ): Promise<void> {
+    if (
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "openclaw.chat.history") !== true
+    ) {
+      return;
+    }
+    const turns = await readCustodianTranscript(client);
+    if (turns === null || epoch !== this.requestEpoch || client !== this.activeClient) {
+      // History is additive. A transient read failure must not block chat or erase local state.
+      return;
+    }
+    const transcript = createCustodianTranscriptMessages(turns, this.nextMessageId);
+    this.messages = transcript.messages;
+    this.nextMessageId = transcript.nextMessageId;
+    this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
   }
 
   private clearConversation(): void {
@@ -202,6 +329,71 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.error = null;
     this.input = "";
     this.sensitive = false;
+    this.earlierBoundaryAfterId = null;
+  }
+
+  private resetHistory(): void {
+    this.historyEntries = [];
+    this.historyNextCursor = null;
+    this.historyLoading = false;
+    this.historyLoadingMore = false;
+    this.historyError = null;
+    this.historyLoaded = false;
+  }
+
+  private toggleHistory(): void {
+    this.historyOpen = !this.historyOpen;
+    if (this.historyOpen && !this.historyLoading && !this.historyLoadingMore) {
+      void this.loadHistory(true);
+    }
+  }
+
+  private async loadHistory(reset: boolean): Promise<void> {
+    const client = this.activeClient;
+    const cursor = reset ? undefined : (this.historyNextCursor ?? undefined);
+    if (
+      !client ||
+      !this.historyAvailable ||
+      this.historyLoading ||
+      this.historyLoadingMore ||
+      (!reset && !cursor)
+    ) {
+      return;
+    }
+    const epoch = this.requestEpoch;
+    if (reset) {
+      this.historyLoading = true;
+    } else {
+      this.historyLoadingMore = true;
+    }
+    this.historyError = null;
+    const isCurrent = () =>
+      this.isConnected &&
+      this.activeClient === client &&
+      this.requestEpoch === epoch &&
+      this.historyAvailable;
+    try {
+      const result = await client.request<SystemChangesListResult>("openclaw.changes.list", {
+        limit: SYSTEM_CHANGE_PAGE_SIZE,
+        ...(cursor ? { beforeCursor: cursor } : {}),
+      });
+      if (!isCurrent()) {
+        return;
+      }
+      this.historyEntries = reset ? result.entries : [...this.historyEntries, ...result.entries];
+      this.historyNextCursor = result.nextCursor ?? null;
+      this.historyLoaded = true;
+    } catch {
+      if (isCurrent()) {
+        this.historyError = t("custodian.history.requestFailed");
+        this.historyLoaded = true;
+      }
+    } finally {
+      if (isCurrent()) {
+        this.historyLoading = false;
+        this.historyLoadingMore = false;
+      }
+    }
   }
 
   private appendAssistant(reply: string, question: CustodianStructuredQuestion | null): void {
@@ -237,7 +429,18 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.retryParams = null;
       this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
       if (result.action === "open-agent") {
-        const sessionKey = this.context.gateway.snapshot.sessionKey?.trim();
+        let sessionKey = this.context.gateway.snapshot.sessionKey?.trim();
+        if (result.agentId) {
+          const roster = await this.context.agents.refreshList();
+          if (epoch !== this.requestEpoch || client !== this.activeClient) {
+            return;
+          }
+          sessionKey = buildAgentMainSessionKey({
+            agentId: result.agentId,
+            mainKey: roster?.mainKey,
+          });
+          this.context.gateway.setSessionKey(sessionKey);
+        }
         if (result.agentDraft === "hatch" && sessionKey) {
           // Preserve the destination session while preloading the localized
           // birth-sequence opener; draft-only chat routes are intentionally invalid.
@@ -252,7 +455,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (epoch === this.requestEpoch && client === this.activeClient) {
-        this.error = errorMessage(error);
+        this.error = custodianErrorMessage(error);
       }
       // A failed user turn may still have reached the agent and acted; there is
       // no turn idempotency, so never keep it replayable (or its raw text).
@@ -275,6 +478,8 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
+    // A new operator turn supersedes any abandoned-turn unknown-outcome warning.
+    this.abandonedTurnOutcomeUnknown = false;
     this.retireQuestions();
     this.messages = [
       ...this.messages,
@@ -289,7 +494,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.input = "";
     void this.requestReply(client, {
       sessionId: this.sessionId,
-      ...(this.onboarding ? { welcomeVariant: "onboarding" as const } : {}),
+      ...this.welcomeVariant(),
       message,
     });
   }
@@ -368,7 +573,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     const client = this.activeClient;
     const params = this.retryParams;
     if (client && params && params.message === undefined && this.chatAvailable && !this.sending) {
-      void this.requestReply(client, params);
+      void this.initializeSession(client, params);
     }
   }
 
@@ -388,14 +593,26 @@ export class CustodianPage extends OpenClawLightDomElement {
             <div class="custodian__mark" aria-hidden="true">OC</div>
             <div>
               <h1>${t("custodian.title")}</h1>
-              <p>${t("custodian.subtitle")}</p>
+              <p>${t(this.onboarding ? "custodian.subtitle" : "custodian.subtitleCaretaker")}</p>
             </div>
           </div>
-          ${this.onboarding
-            ? html`<button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
-                ${t("custodian.exitSetup")}
-              </button>`
-            : nothing}
+          <div class="custodian__header-actions">
+            ${this.historyAvailable
+              ? html`<button
+                  class="btn btn--ghost custodian__history-toggle"
+                  type="button"
+                  aria-expanded=${this.historyOpen ? "true" : "false"}
+                  @click=${() => this.toggleHistory()}
+                >
+                  ${t("custodian.history.button")}
+                </button>`
+              : nothing}
+            ${this.onboarding
+              ? html`<button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
+                  ${t("custodian.exitSetup")}
+                </button>`
+              : nothing}
+          </div>
         </header>
 
         <div class="custodian__messages" aria-live="polite">
@@ -424,12 +641,13 @@ export class CustodianPage extends OpenClawLightDomElement {
             const showQuestion =
               message.question !== null && !this.dismissedQuestions.has(questionKey);
             return html`
-              ${renderMessageGroup(toMessageGroup(message), {
+              ${renderMessageGroup(toCustodianMessageGroup(message), {
                 showReasoning: false,
                 showToolCalls: false,
                 assistantName: t("custodian.title"),
                 assistantAvatar: "OC",
               })}
+              ${renderCustodianEarlierDivider(message, this.earlierBoundaryAfterId)}
               ${showQuestion
                 ? html`<div class="custodian__option-card">
                     <openclaw-option-card
@@ -463,7 +681,13 @@ export class CustodianPage extends OpenClawLightDomElement {
                 </div>
               </div>`
             : nothing}
-          ${this.error
+          ${this.abandonedTurnOutcomeUnknown
+            ? html`<div class="custodian__error" role="alert">
+                <span>${t("custodian.connectionChanged")}</span>
+              </div>`
+            : nothing}
+          ${this.error &&
+          !(this.abandonedTurnOutcomeUnknown && this.error === t("custodian.connectionChanged"))
             ? html`<div class="custodian__error" role="alert">
                 <span>${this.error}</span>
                 ${this.activeClient && this.chatAvailable && this.canRetry()
@@ -474,6 +698,20 @@ export class CustodianPage extends OpenClawLightDomElement {
               </div>`
             : nothing}
         </div>
+
+        ${this.historyOpen && this.historyAvailable
+          ? renderCustodianChangeHistory({
+              entries: this.historyEntries,
+              error: this.historyError,
+              loaded: this.historyLoaded,
+              loading: this.historyLoading,
+              loadingMore: this.historyLoadingMore,
+              nextCursor: this.historyNextCursor,
+              onLoad: (reset) => {
+                void this.loadHistory(reset);
+              },
+            })
+          : nothing}
 
         <div class="agent-chat__composer-shell">
           <div class="agent-chat__input">

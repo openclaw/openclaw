@@ -535,10 +535,7 @@ export function createWhatsAppReplyPlan(params: {
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
   const statusReactionController = params.statusReactionController ?? null;
-  const statusReactionTiming = {
-    ...DEFAULT_TIMING,
-    ...params.cfg.messages?.statusReactions?.timing,
-  };
+  const statusReactionTiming = DEFAULT_TIMING;
   const removeAckAfterReply = params.cfg.messages?.removeAckAfterReply ?? false;
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);

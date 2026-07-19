@@ -16,7 +16,6 @@ export type ClickClackAccountConfig = {
   replyMode?: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo?: string;
   allowFrom?: string[];
@@ -54,7 +53,6 @@ export type ResolvedClickClackAccount = {
   replyMode: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo: string;
   allowFrom: string[];

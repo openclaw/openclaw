@@ -61,7 +61,8 @@ const hoisted = vi.hoisted(() => {
     allowed: true,
     inCatalog: true,
   }));
-  const ensureOpenClawModelsJson = vi.fn(async () => {});
+  const prepareModelRuntimeSnapshot = vi.fn(async () => ({}));
+  const refreshPreparedModelRuntimeSnapshots = vi.fn(async (_cfg?: unknown) => {});
   const ensureRuntimePluginsLoaded = vi.fn();
   const ensureContextWindowCacheLoaded = vi.fn(async () => {});
   const clearCurrentProviderAuthState = vi.fn();
@@ -100,7 +101,8 @@ const hoisted = vi.hoisted(() => {
     resolveHooksGmailModel,
     loadModelCatalog,
     getModelRefStatus,
-    ensureOpenClawModelsJson,
+    prepareModelRuntimeSnapshot,
+    refreshPreparedModelRuntimeSnapshots,
     ensureRuntimePluginsLoaded,
     ensureContextWindowCacheLoaded,
     clearCurrentProviderAuthState,
@@ -192,8 +194,8 @@ vi.mock("../infra/update-startup.js", () => ({
   scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: hoisted.loadModelCatalog,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: hoisted.loadModelCatalog,
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
@@ -203,8 +205,9 @@ vi.mock("../agents/model-selection.js", () => ({
   resolveHooksGmailModel: hoisted.resolveHooksGmailModel,
 }));
 
-vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  publishPreparedModelRuntimeSnapshot: hoisted.prepareModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeSnapshots: hoisted.refreshPreparedModelRuntimeSnapshots,
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -355,8 +358,10 @@ describe("startGatewayPostAttachRuntime", () => {
       allowed: true,
       inCatalog: true,
     });
-    hoisted.ensureOpenClawModelsJson.mockReset();
-    hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
+    hoisted.prepareModelRuntimeSnapshot.mockReset();
+    hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
     hoisted.ensureRuntimePluginsLoaded.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockReset();
     hoisted.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
@@ -1494,6 +1499,42 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(startChannels).toHaveBeenCalledTimes(1);
       },
     );
+  });
+
+  it("warms the macOS system CA cache before channel startup", async () => {
+    let finishWarmup: (() => void) | undefined;
+    const warmSystemCa = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishWarmup = resolve;
+        }),
+    );
+    const startChannels = vi.fn(async () => {});
+    const sidecars = startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels,
+      warmSystemCa,
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await waitForGatewayTestState(() => expect(warmSystemCa).toHaveBeenCalledTimes(1));
+    expect(startChannels).not.toHaveBeenCalled();
+
+    finishWarmup?.();
+    await sidecars;
+    expect(startChannels).toHaveBeenCalledTimes(1);
   });
 
   it("starts and reports plugin services after channel startup completes", async () => {
