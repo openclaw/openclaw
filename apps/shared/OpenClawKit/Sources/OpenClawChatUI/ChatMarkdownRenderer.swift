@@ -102,6 +102,18 @@ struct ChatMarkdownRenderer: View {
                 .lineSpacing(self.variant == .compact ? 2 : 4)
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
                 .accessibilityAddTraits(.isHeader)
+        case let .list(list):
+            ChatMarkdownListView(
+                list: list,
+                variant: self.variant,
+                font: self.font,
+                textColor: self.textColor,
+                linkColor: self.linkColor,
+                inlineMathFontSize: self.inlineMathFontSize,
+                colorScheme: self.colorScheme)
+        case .thematicBreak:
+            Divider()
+                .accessibilityHidden(true)
         case let .code(code):
             ChatCodeBlockView(block: code)
         case let .math(math):
@@ -157,6 +169,19 @@ struct ChatMarkdownRenderSnapshot {
                         markdown: heading.markdown,
                         isComplete: isComplete,
                         preparesReveal: false))
+            case let .list(list):
+                .list(ChatMarkdownRenderedList(
+                    style: list.style,
+                    items: list.items.map { item in
+                        ChatMarkdownRenderedList.Item(
+                            checkbox: item.checkbox,
+                            prose: ChatMarkdownProse(
+                                markdown: item.markdown,
+                                isComplete: isComplete,
+                                preparesReveal: false))
+                    }))
+            case .thematicBreak:
+                .thematicBreak
             case let .code(code):
                 .code(code)
             case let .math(math):
@@ -181,9 +206,70 @@ struct ChatMarkdownRenderSnapshot {
 enum ChatMarkdownRenderedBlock {
     case prose(ChatMarkdownProse)
     case heading(level: Int, prose: ChatMarkdownProse)
+    case list(ChatMarkdownRenderedList)
+    case thematicBreak
     case code(ChatCodeBlock)
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
+}
+
+@MainActor
+struct ChatMarkdownRenderedList {
+    struct Item {
+        let checkbox: ChatMarkdownList.Item.Checkbox?
+        let prose: ChatMarkdownProse
+    }
+
+    let style: ChatMarkdownList.Style
+    let items: [Item]
+
+    func marker(for item: Item, index: Int) -> String {
+        let checkbox = item.checkbox.map { $0 == .checked ? "☑︎" : "☐︎" }
+        switch self.style {
+        case .unordered:
+            return checkbox ?? "•"
+        case let .ordered(start):
+            let number = "\(start + UInt(index))."
+            return checkbox.map { "\(number) \($0)" } ?? number
+        }
+    }
+}
+
+@MainActor
+private struct ChatMarkdownListView: View {
+    let list: ChatMarkdownRenderedList
+    let variant: ChatMarkdownVariant
+    let font: Font
+    let textColor: Color
+    let linkColor: Color
+    let inlineMathFontSize: CGFloat
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: self.variant == .compact ? 4 : 6) {
+            ForEach(Array(self.list.items.enumerated()), id: \.offset) { index, item in
+                GridRow(alignment: .firstTextBaseline) {
+                    Text(self.list.marker(for: item, index: index))
+                        .font(self.font)
+                        .foregroundStyle(self.textColor)
+                        .gridColumnAlignment(.trailing)
+
+                    item.prose.renderedText(
+                        fontSize: self.inlineMathFontSize,
+                        textColor: self.textColor,
+                        colorScheme: self.colorScheme)
+                        .font(self.font)
+                        .foregroundStyle(self.textColor)
+                        .tint(self.linkColor)
+                        .textSelection(.enabled)
+                        .lineSpacing(self.variant == .compact ? 2 : 4)
+                        .modifier(ChatInlineMathAccessibilityModifier(
+                            label: item.prose.inlineAccessibilityText))
+                        .gridColumnAlignment(.leading)
+                }
+            }
+        }
+    }
 }
 
 @MainActor
@@ -463,8 +549,8 @@ private struct ChatInlineMathAccessibilityModifier: ViewModifier {
     }
 }
 
-/// Headings, fenced code, display math, and GFM tables are split out by `ChatMarkdownBlockSegmenter`
-/// before this runs, so prose only needs chat-style soft-break preservation.
+/// Blocks with dedicated native renderers are split out by `ChatMarkdownBlockSegmenter` before this
+/// runs, so prose only needs chat-style soft-break preservation.
 enum ChatMarkdownDisplayPreprocessor {
     static func preserveChatSoftBreaks(in markdown: String) -> String {
         let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")

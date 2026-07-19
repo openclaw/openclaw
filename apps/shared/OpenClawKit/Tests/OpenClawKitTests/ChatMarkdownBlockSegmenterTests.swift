@@ -101,6 +101,146 @@ struct ChatMarkdownBlockSegmenterTests {
         })
     }
 
+    // MARK: - Lists and thematic breaks
+
+    @Test func `ordered list becomes a native block and preserves inline markdown`() {
+        let markdown = """
+        Here are the options:
+
+        1. **Option one** – first.
+        2. **Option two** – second.
+        3. **Option three** – third.
+        """
+
+        #expect(self.segments(markdown) == [
+            .prose("Here are the options:"),
+            .list(ChatMarkdownList(
+                style: .ordered(start: 1),
+                items: [
+                    .init(checkbox: nil, markdown: "**Option one** – first."),
+                    .init(checkbox: nil, markdown: "**Option two** – second."),
+                    .init(checkbox: nil, markdown: "**Option three** – third."),
+                ])),
+        ])
+    }
+
+    @Test func `unordered list becomes a native block`() {
+        #expect(self.segments("- alpha\n- beta") == [
+            .list(ChatMarkdownList(
+                style: .unordered,
+                items: [
+                    .init(checkbox: nil, markdown: "alpha"),
+                    .init(checkbox: nil, markdown: "beta"),
+                ])),
+        ])
+    }
+
+    @Test func `ordered list preserves its starting index`() {
+        #expect(self.segments("7. seven\n8. eight") == [
+            .list(ChatMarkdownList(
+                style: .ordered(start: 7),
+                items: [
+                    .init(checkbox: nil, markdown: "seven"),
+                    .init(checkbox: nil, markdown: "eight"),
+                ])),
+        ])
+    }
+
+    @Test func `task list preserves checkbox state`() {
+        #expect(self.segments("- [x] shipped\n- [ ] pending") == [
+            .list(ChatMarkdownList(
+                style: .unordered,
+                items: [
+                    .init(checkbox: .checked, markdown: "shipped"),
+                    .init(checkbox: .unchecked, markdown: "pending"),
+                ])),
+        ])
+    }
+
+    @Test func `multiline simple list item removes structural indentation`() {
+        #expect(self.segments("- first line\n  second line\n- third") == [
+            .list(ChatMarkdownList(
+                style: .unordered,
+                items: [
+                    .init(checkbox: nil, markdown: "first line\nsecond line"),
+                    .init(checkbox: nil, markdown: "third"),
+                ])),
+        ])
+    }
+
+    @Test func `complex list keeps its complete markdown container`() {
+        let nested = "- parent\n  - child"
+        let multiParagraph = "- first\n\n  second"
+        for markdown in [nested, multiParagraph] {
+            #expect(self.segments(markdown) == [.prose(markdown)])
+        }
+    }
+
+    @Test func `multiline inline code keeps its complete list container`() {
+        let markdown = "- `foo\n  bar`"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `reference links keep their list scoped definitions`() {
+        let markdown = "- [docs]\n\n  [docs]: https://example.com"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `bounded lists stay native and oversized lists fall back to prose`() {
+        let bounded = (1...ChatMarkdownBlockSegmenter.maxListItems)
+            .map { "- item \($0)" }
+            .joined(separator: "\n")
+        guard case let .list(list) = self.segments(bounded).first else {
+            Issue.record("expected bounded list")
+            return
+        }
+        #expect(list.items.count == ChatMarkdownBlockSegmenter.maxListItems)
+
+        let oversized = bounded + "\n- one too many"
+        #expect(self.segments(oversized) == [.prose(oversized)])
+    }
+
+    @Test func `thematic breaks become native blocks without stealing Setext headings`() {
+        #expect(self.segments("before\n\n---\n\nafter") == [
+            .prose("before"),
+            .thematicBreak,
+            .prose("after"),
+        ])
+        #expect(self.segments("Heading\n---") == [
+            .heading(ChatMarkdownHeading(level: 2, markdown: "Heading\n---")),
+        ])
+    }
+
+    @Test @MainActor func `native list snapshot retains inline attributes per item`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "1. **Status** and [docs](https://example.com)\n2. Ready",
+            isComplete: true)
+        guard case let .list(list) = try #require(snapshot.blocks.first) else {
+            Issue.record("expected list block")
+            return
+        }
+
+        #expect(list.items.count == 2)
+        #expect(String(list.items[0].prose.attributed.characters) == "Status and docs")
+        #expect(list.items[0].prose.attributed.runs.contains { $0.link != nil })
+        #expect(list.items[0].prose.attributed.runs.contains {
+            $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+    }
+
+    @Test @MainActor func `ordered task list keeps both number and checkbox`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "3. [ ] pending\n4. [x] shipped",
+            isComplete: true)
+        guard case let .list(list) = try #require(snapshot.blocks.first) else {
+            Issue.record("expected list block")
+            return
+        }
+
+        #expect(list.marker(for: list.items[0], index: 0) == "3. ☐︎")
+        #expect(list.marker(for: list.items[1], index: 1) == "4. ☑︎")
+    }
+
     // MARK: - Fenced code
 
     @Test func `fence with language and surrounding prose`() {

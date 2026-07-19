@@ -2,10 +2,13 @@ import Foundation
 import Markdown
 
 /// One renderable block of a chat message. Prose stays on the
-/// AttributedString pipeline; headings, fenced code, display math, and GFM tables get dedicated views.
+/// AttributedString pipeline; headings, simple lists, thematic breaks, fenced code,
+/// display math, and GFM tables get dedicated views.
 enum ChatMarkdownBlock: Equatable {
     case prose(String)
     case heading(ChatMarkdownHeading)
+    case list(ChatMarkdownList)
+    case thematicBreak
     case code(ChatCodeBlock)
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
@@ -16,6 +19,27 @@ struct ChatMarkdownHeading: Equatable {
     /// Keep the complete source so Swift's Markdown parser continues to own
     /// inline formatting and both ATX and Setext heading syntax.
     let markdown: String
+}
+
+struct ChatMarkdownList: Equatable {
+    enum Style: Equatable {
+        case unordered
+        case ordered(start: UInt)
+    }
+
+    struct Item: Equatable {
+        enum Checkbox: Equatable {
+            case checked
+            case unchecked
+        }
+
+        let checkbox: Checkbox?
+        /// Inline Markdown for a simple, single-paragraph list item.
+        let markdown: String
+    }
+
+    let style: Style
+    let items: [Item]
 }
 
 struct ChatCodeBlock: Equatable {
@@ -70,10 +94,12 @@ enum ChatMarkdownBlockSegmenter {
     static let maxTableRows = 100
     static let maxTableColumns = 12
     static let maxTableCells = 600
+    static let maxListBytes = 20000
+    static let maxListItems = 100
 
-    /// Extracts only top-level headings, fenced code, display math, and GFM tables. The parser owns
-    /// CommonMark container and reference semantics; nested blocks stay in the
-    /// surrounding prose range unchanged.
+    /// Extracts only top-level blocks with dedicated native renderers. The parser owns CommonMark
+    /// container and reference semantics; complex and nested containers stay in the surrounding
+    /// prose range unchanged.
     static func segments(markdown: String, isComplete: Bool) -> [ChatMarkdownBlock] {
         let source = SourceBuffer(markdown)
         let document = Document(parsing: source.markdown)
@@ -95,6 +121,33 @@ enum ChatMarkdownBlockSegmenter {
                     block: .heading(ChatMarkdownHeading(
                         level: heading.level,
                         markdown: source.text(in: lineRange)))))
+                continue
+            }
+
+            if let orderedList = child as? Markdown.OrderedList,
+               let list = self.list(
+                   orderedList,
+                   style: .ordered(start: orderedList.startIndex),
+                   source: source,
+                   lineRange: lineRange)
+            {
+                extractions.append(Extraction(lineRange: lineRange, block: .list(list)))
+                continue
+            }
+
+            if let unorderedList = child as? Markdown.UnorderedList,
+               let list = self.list(
+                   unorderedList,
+                   style: .unordered,
+                   source: source,
+                   lineRange: lineRange)
+            {
+                extractions.append(Extraction(lineRange: lineRange, block: .list(list)))
+                continue
+            }
+
+            if child is Markdown.ThematicBreak {
+                extractions.append(Extraction(lineRange: lineRange, block: .thematicBreak))
                 continue
             }
 
@@ -258,7 +311,7 @@ enum ChatMarkdownBlockSegmenter {
         return [.prose(slice.joined(separator: "\n"))]
     }
 
-    private static func containsReferenceLink(_ document: Document, source: SourceBuffer) -> Bool {
+    private static func containsReferenceLink(_ markup: any Markup, source: SourceBuffer) -> Bool {
         func search(_ markup: any Markup) -> Bool {
             if markup is Markdown.Link || markup is Markdown.Image,
                let range = markup.range,
@@ -269,11 +322,60 @@ enum ChatMarkdownBlockSegmenter {
             }
             return markup.children.contains(where: search)
         }
-        return search(document)
+        return search(markup)
     }
 
     private static func dropStructuralCodeNewline(_ code: String) -> String {
         code.hasSuffix("\n") ? String(code.dropLast()) : code
+    }
+
+    private static func list(
+        _ list: some ListItemContainer,
+        style: ChatMarkdownList.Style,
+        source: SourceBuffer,
+        lineRange: Range<Int>) -> ChatMarkdownList?
+    {
+        let items = Array(list.listItems)
+        guard !items.isEmpty,
+              items.count <= self.maxListItems,
+              source.text(in: lineRange).utf8.count <= self.maxListBytes
+        else { return nil }
+
+        var renderedItems: [ChatMarkdownList.Item] = []
+        renderedItems.reserveCapacity(items.count)
+        for item in items {
+            let children = Array(item.blockChildren)
+            guard children.count == 1,
+                  let paragraph = children.first as? Markdown.Paragraph,
+                  let range = paragraph.range,
+                  let markdown = source.listParagraphText(in: range),
+                  !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !self.containsReferenceLink(paragraph, source: source),
+                  !self.containsMultilineInlineCode(paragraph),
+                  !markdown.contains("$$"),
+                  !markdown.contains(#"\["#)
+            else { return nil }
+
+            let checkbox: ChatMarkdownList.Item.Checkbox? = switch item.checkbox {
+            case .checked?: .checked
+            case .unchecked?: .unchecked
+            case nil: nil
+            }
+            renderedItems.append(ChatMarkdownList.Item(
+                checkbox: checkbox,
+                markdown: markdown))
+        }
+        return ChatMarkdownList(style: style, items: renderedItems)
+    }
+
+    private static func containsMultilineInlineCode(_ markup: any Markup) -> Bool {
+        if markup is Markdown.InlineCode,
+           let range = markup.range,
+           range.lowerBound.line != range.upperBound.line
+        {
+            return true
+        }
+        return markup.children.contains(where: self.containsMultilineInlineCode)
     }
 
     private struct Extraction {
@@ -398,6 +500,27 @@ enum ChatMarkdownBlockSegmenter {
             else { return nil }
             let middle = self.lines[(startLine + 1)..<endLine]
             return ([first] + middle + [last]).joined(separator: "\n")
+        }
+
+        func listParagraphText(in range: SourceRange) -> String? {
+            guard let text = self.text(in: range) else { return nil }
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            guard lines.count > 1 else { return text }
+
+            let continuationIndent = max(range.lowerBound.column - 1, 0)
+            return ([lines[0]] + lines.dropFirst().map {
+                Self.removingLeadingSpaces(from: $0, upTo: continuationIndent)
+            }).joined(separator: "\n")
+        }
+
+        private static func removingLeadingSpaces(from line: String, upTo limit: Int) -> String {
+            var cursor = line.startIndex
+            var removed = 0
+            while cursor < line.endIndex, removed < limit, line[cursor] == " " {
+                cursor = line.index(after: cursor)
+                removed += 1
+            }
+            return String(line[cursor...])
         }
 
         private func utf8Slice(_ line: String, from start: Int, to end: Int) -> String? {
