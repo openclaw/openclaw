@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   requireSuccessfulNativeCommandCompactionEvidence,
   requireSuccessfulPersistedNativeCommandExecution,
-} from "./gateway-codex-harness.command-evidence.js";
+} from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
   buildCodexHarnessLargeOutputCommand,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,

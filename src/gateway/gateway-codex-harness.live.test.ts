@@ -23,7 +23,7 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "./gateway-cli-backend.live-helpers.js";
-import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.js";
+import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
   buildCodexHarnessLargeOutputCommand,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,

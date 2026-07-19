@@ -1,3 +1,4 @@
+// Live-only command evidence shared by the gateway stress test and its unit coverage.
 import {
   isExpectedNativeCommand,
   requireSuccessfulNativeCommandExecution,
