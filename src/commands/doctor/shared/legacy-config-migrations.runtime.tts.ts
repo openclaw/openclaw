@@ -513,8 +513,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
     ],
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
-      const legacy = getRecord(messages?.tts);
-      if (!messages || !legacy) {
+      if (!messages || !Object.hasOwn(messages, "tts")) {
+        return;
+      }
+      const legacy = getRecord(messages.tts);
+      if (!legacy) {
+        delete messages.tts;
+        changes.push("Removed messages.tts (invalid value).");
         return;
       }
       const canonical = getRecord(raw.tts) ?? {};

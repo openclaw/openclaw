@@ -206,6 +206,14 @@ describe("legacy migrate provider-shaped config", () => {
     expect(res.config?.messages).toEqual({});
   });
 
+  it("removes invalid messages.tts values", () => {
+    const res = migrateLegacyConfig({ messages: { tts: true } });
+
+    expect(res.changes).toStrictEqual(["Removed messages.tts (invalid value)."]);
+    expect(res.config?.messages).toEqual({});
+    expect(res.config?.tts).toBeUndefined();
+  });
+
   it("moves legacy edge provider aliases into microsoft tts config", () => {
     const res = migrateLegacyConfig({
       messages: {
