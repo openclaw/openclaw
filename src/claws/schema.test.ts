@@ -1,5 +1,5 @@
 // Tests for the grouped Claw manifest and read-only add plan.
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -507,6 +507,28 @@ describe("buildClawAddPlan", () => {
       "cron_job_collision",
     ]);
     expect(plan.summary.blockedActions).toBe(8);
+  });
+
+  it("canonicalizes a missing workspace through an existing aliased parent", async () => {
+    const { source } = await createPlanSource();
+    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-workspace-alias-"));
+    const canonicalParent = join(root, "canonical");
+    const aliasParent = join(root, "alias");
+    await mkdir(canonicalParent);
+    await symlink(canonicalParent, aliasParent, process.platform === "win32" ? "junction" : "dir");
+    const canonicalWorkspace = join(await realpath(canonicalParent), "new-workspace");
+
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: {
+        workspace: join(aliasParent, "new-workspace"),
+        existingWorkspacePaths: [canonicalWorkspace],
+      },
+    });
+
+    expect(plan.agent.workspace).toBe(canonicalWorkspace);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
   });
 
   it("uses an explicit unused agent id for every derived action", async () => {
