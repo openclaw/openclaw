@@ -245,7 +245,10 @@ export async function maybeSpawnVisibleSession(params: {
   const reservation = reserveVisibleChildSlot({
     controllerSessionKey: requesterKey,
     maxChildren,
-    countActiveRuns: params.options?.countActiveRuns ?? countActiveRunsForSession,
+    countActiveRuns: (sessionKey) =>
+      (params.options?.countActiveRuns ?? countActiveRunsForSession)(sessionKey, {
+        collect: false,
+      }),
   });
   if (!reservation.ok) {
     return {
