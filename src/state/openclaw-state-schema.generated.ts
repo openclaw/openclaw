@@ -967,6 +967,7 @@ CREATE TABLE IF NOT EXISTS agent_deletion_journal (
   agent_dir TEXT NOT NULL,
   workspace_dir TEXT NOT NULL,
   sessions_dir TEXT NOT NULL,
+  database_paths_json TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   cleanup_completed INTEGER NOT NULL DEFAULT 0,
   delete_files INTEGER NOT NULL DEFAULT 1

@@ -8,6 +8,7 @@ import {
   completeAgentDeletionJournal,
   readAgentDeletionJournal,
   removeAgentDeletionJournal,
+  updateAgentDeletionJournalDatabasePaths,
   type AgentDeletionJournalEntry,
 } from "../state/agent-deletion-journal.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
@@ -35,12 +36,13 @@ function lifecycleKey(agentId: string, options: OpenClawStateDatabaseOptions): s
 export function beginAgentDeletion(
   entry: Omit<
     AgentDeletionJournalEntry,
-    "createdAt" | "operationId" | "cleanupCompleted" | "deleteFiles"
-  > & { deleteFiles?: boolean },
+    "createdAt" | "operationId" | "cleanupCompleted" | "databasePaths" | "deleteFiles"
+  > & { databasePaths?: string[]; deleteFiles?: boolean },
   options: OpenClawStateDatabaseOptions = {},
 ): {
   entry: AgentDeletionJournalEntry;
   commit: () => void;
+  fenceDatabasePaths: (paths: readonly string[]) => void;
   finish: () => void;
   rollback: () => void;
 } {
@@ -55,6 +57,12 @@ export function beginAgentDeletion(
   return {
     entry: journal,
     commit: () => agentLifecycle.set(key, "deleted"),
+    fenceDatabasePaths: (paths) => {
+      if (!updateAgentDeletionJournalDatabasePaths(id, operationId, paths, options)) {
+        throw new Error(`Failed to fence database cleanup paths for agent ${id}.`);
+      }
+      journal.databasePaths = [...new Set(paths.map((entryPath) => path.resolve(entryPath)))];
+    },
     finish: () => {
       if (completeAgentDeletionJournal(id, operationId, options)) {
         agentLifecycle.set(key, "deleted");

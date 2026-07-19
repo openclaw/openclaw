@@ -79,10 +79,7 @@ import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
-import {
-  beginOpenClawAgentDatabaseRegistrationFence,
-  unregisterOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db-registry.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
@@ -364,8 +361,76 @@ async function removeAgentPath(pathname: string): Promise<AgentDeletePathOutcome
     await movePathToTrash(pathname);
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
-    return cleanupFailure(pathname, error);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      return cleanupFailure(pathname, error);
+    }
+    try {
+      await fs.lstat(pathname);
+      return cleanupFailure(pathname, error);
+    } catch (statError) {
+      return (statError as NodeJS.ErrnoException).code === "ENOENT"
+        ? { removed: { path: pathname, method: "missing" } }
+        : cleanupFailure(pathname, statError);
+    }
   }
+}
+
+type AgentDeleteCleanupPath = {
+  path: string;
+  canonicalPath: string;
+  trashPath: string;
+  trashCoversDescendants: boolean;
+};
+
+async function prepareAgentDeleteCleanupPaths(
+  paths: readonly string[],
+): Promise<AgentDeleteCleanupPath[]> {
+  const uniquePaths = new Map<string, AgentDeleteCleanupPath>();
+  for (const pathname of paths) {
+    const trashPath = path.resolve(pathname);
+    if (uniquePaths.has(trashPath)) {
+      continue;
+    }
+    const canonicalPath = normalizeAgentDirRegistryPath(pathname);
+    let trashCoversDescendants = false;
+    try {
+      const stat = await fs.lstat(pathname);
+      trashCoversDescendants = stat?.isSymbolicLink?.() !== true;
+    } catch {
+      // Missing or unreadable parents cannot prove that trashing them covers a child path.
+    }
+    uniquePaths.set(trashPath, {
+      path: pathname,
+      canonicalPath,
+      trashPath,
+      trashCoversDescendants,
+    });
+  }
+  const candidates = [...uniquePaths.values()];
+  return candidates.filter(
+    (candidate) =>
+      !candidates.some(
+        (parent) =>
+          parent !== candidate &&
+          parent.trashCoversDescendants &&
+          isPathInside(parent.trashPath, candidate.trashPath) &&
+          isPathInside(parent.canonicalPath, candidate.canonicalPath),
+      ),
+  );
+}
+
+function cleanupPathCovers(
+  cleanupPath: AgentDeleteCleanupPath,
+  targetPath: string,
+  canonicalTargetPath: string,
+): boolean {
+  const trashTargetPath = path.resolve(targetPath);
+  return (
+    cleanupPath.trashPath === trashTargetPath ||
+    (cleanupPath.trashCoversDescendants &&
+      isPathInside(cleanupPath.trashPath, trashTargetPath) &&
+      isPathInside(cleanupPath.canonicalPath, canonicalTargetPath))
+  );
 }
 
 type AgentDeleteDatabasePlan = {
@@ -780,6 +845,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
         try {
           prepareJournaledAgentDirOwnership(lockedConfig, agentId, journal.agentDir);
           databasePlan = prepareAgentDeleteDatabases(lockedConfig, agentId, journal.agentDir);
+          deletion.fenceDatabasePaths([
+            ...journal.databasePaths,
+            ...databasePlan.fileGroups.flat(),
+          ]);
           await context.cron.removeAgentJobsTransactional(
             agentId,
             async () =>
@@ -848,120 +917,147 @@ export const agentsHandlers: GatewayRequestHandlers = {
         // A journaled path is trash-eligible only while registry ownership still points at the
         // deleted agent; recovery must not consume a path claimed by a surviving agent.
         const agentDirRegistryPath = normalizeAgentDirRegistryPath(deleteResult.agentDir);
-        const releaseDatabaseFence = deleteFiles
-          ? beginOpenClawAgentDatabaseRegistrationFence([
-              deleteResult.agentDir,
-              deleteResult.workspaceDir,
-              deleteResult.sessionsDir,
-              ...(databasePlan?.fileGroups.flat() ?? []),
-            ])
-          : () => {};
-        try {
-          await purgeAgentSessionStoreEntries(lockedConfig, agentId);
+        await purgeAgentSessionStoreEntries(lockedConfig, agentId);
 
-          const removed: AgentDeleteRemovedPath[] = [];
-          const failed: AgentDeleteFailedPath[] = [];
-          const recordOutcome = (outcome: AgentDeletePathOutcome) => {
+        const removed: AgentDeleteRemovedPath[] = [];
+        const failed: AgentDeleteFailedPath[] = [];
+
+        if (deleteFiles) {
+          const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+            listOpenClawRegisteredAgentDatabases(),
+            agentId,
+          );
+          const workspaceTrashEligible = !isPathOwnedBySurvivingAgent(
+            nextConfig,
+            agentId,
+            deleteResult.workspaceDir,
+            survivingDatabaseFilePaths,
+          );
+          // The config mutation lock and durable journal fence block new roster and database
+          // claims across this final ownership recheck and the filesystem cleanup below.
+          const agentDirTrashEligible =
+            resolveRegisteredAgentIdForDir(deleteResult.agentDir) === agentId &&
+            !isPathOwnedBySurvivingAgent(
+              nextConfig,
+              agentId,
+              deleteResult.agentDir,
+              survivingDatabaseFilePaths,
+            );
+          const sessionsDirTrashEligible = !isPathOwnedBySurvivingAgent(
+            nextConfig,
+            agentId,
+            deleteResult.sessionsDir,
+            survivingDatabaseFilePaths,
+          );
+          const databaseFilePaths = [
+            ...(agentDirTrashEligible
+              ? (databasePlan?.relocatedFileGroups ?? [])
+              : (databasePlan?.fileGroups ?? [])
+            ).flat(),
+            ...journal.databasePaths,
+          ].filter(
+            (pathname) =>
+              !isPathOwnedBySurvivingAgent(
+                nextConfig,
+                agentId,
+                pathname,
+                survivingDatabaseFilePaths,
+              ),
+          );
+          const cleanupPaths = (
+            await prepareAgentDeleteCleanupPaths([
+              ...(workspaceTrashEligible ? [deleteResult.workspaceDir] : []),
+              ...(agentDirTrashEligible ? [deleteResult.agentDir] : []),
+              ...(sessionsDirTrashEligible ? [deleteResult.sessionsDir] : []),
+              ...databaseFilePaths,
+            ])
+          ).filter(
+            (cleanupPath) =>
+              agentDirTrashEligible ||
+              !cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath),
+          );
+          const workspaceCanonicalPath = normalizeAgentDirRegistryPath(deleteResult.workspaceDir);
+          const workspaceCleanupPath = cleanupPaths.find((cleanupPath) =>
+            cleanupPathCovers(cleanupPath, deleteResult.workspaceDir, workspaceCanonicalPath),
+          );
+          const legacyPlan = workspaceCleanupPath
+            ? prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir)
+            : undefined;
+          const statePlan = workspaceCleanupPath
+            ? prepareWorkspaceStateDeletion(deleteResult.workspaceDir)
+            : undefined;
+          const workspaceOutcome = workspaceCleanupPath
+            ? {
+                cleanupPath: workspaceCleanupPath,
+                outcome: await removeAgentPath(workspaceCleanupPath.path),
+              }
+            : undefined;
+          const refreshedDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+            listOpenClawRegisteredAgentDatabases(),
+            agentId,
+          );
+          const remainingCleanupPaths = cleanupPaths.filter(
+            (cleanupPath) =>
+              cleanupPath !== workspaceCleanupPath &&
+              !isPathOwnedBySurvivingAgent(
+                nextConfig,
+                agentId,
+                cleanupPath.path,
+                refreshedDatabaseFilePaths,
+              ) &&
+              (!cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath) ||
+                resolveRegisteredAgentIdForDir(deleteResult.agentDir) === agentId),
+          );
+          const outcomes = [
+            ...(workspaceOutcome ? [workspaceOutcome] : []),
+            ...(await Promise.all(
+              remainingCleanupPaths.map(async (cleanupPath) => ({
+                cleanupPath,
+                outcome: await removeAgentPath(cleanupPath.path),
+              })),
+            )),
+          ];
+          for (const { outcome } of outcomes) {
             if ("removed" in outcome) {
               removed.push(outcome.removed);
             } else {
               failed.push(outcome.failed);
             }
-          };
-
-          if (deleteFiles) {
-            let survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-              listOpenClawRegisteredAgentDatabases(),
-              agentId,
-            );
-            if (
-              !isPathOwnedBySurvivingAgent(
-                nextConfig,
-                agentId,
-                deleteResult.workspaceDir,
-                survivingDatabaseFilePaths,
-              )
-            ) {
-              const legacyPlan = prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir);
-              const statePlan = prepareWorkspaceStateDeletion(deleteResult.workspaceDir);
-              const workspaceOutcome = await removeAgentPath(deleteResult.workspaceDir);
-              recordOutcome(workspaceOutcome);
-              if ("removed" in workspaceOutcome) {
-                try {
-                  await removeLegacyWorkspaceStateForReset(legacyPlan);
-                  deleteWorkspaceState(statePlan);
-                } catch {
-                  // Best-effort cleanup. A later explicit reset can remove stale rows.
-                }
-              }
-            }
-            survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-              listOpenClawRegisteredAgentDatabases(),
-              agentId,
-            );
-            // The config mutation lock blocks new roster claims across this final recheck and Trash.
-            const agentDirTrashEligible =
-              resolveRegisteredAgentIdForDir(deleteResult.agentDir) === agentId &&
-              !isPathOwnedBySurvivingAgent(
-                nextConfig,
-                agentId,
-                deleteResult.agentDir,
-                survivingDatabaseFilePaths,
-              );
-            const sessionsDirTrashEligible = !isPathOwnedBySurvivingAgent(
-              nextConfig,
-              agentId,
-              deleteResult.sessionsDir,
-              survivingDatabaseFilePaths,
-            );
-            const databaseFilePaths = (
-              agentDirTrashEligible
-                ? (databasePlan?.relocatedFileGroups ?? [])
-                : (databasePlan?.fileGroups ?? [])
-            )
-              .filter((fileGroup) =>
-                fileGroup.every(
-                  (pathname) =>
-                    !isPathOwnedBySurvivingAgent(
-                      nextConfig,
-                      agentId,
-                      pathname,
-                      survivingDatabaseFilePaths,
-                    ),
-                ),
-              )
-              .flat();
-            const statePaths = [
-              ...new Set([
-                ...(agentDirTrashEligible ? [deleteResult.agentDir] : []),
-                ...(sessionsDirTrashEligible ? [deleteResult.sessionsDir] : []),
-                ...databaseFilePaths,
-              ]),
-            ];
-            const stateOutcomes = await Promise.all(statePaths.map(removeAgentPath));
-            stateOutcomes.forEach(recordOutcome);
-            const agentDirOutcome = stateOutcomes[statePaths.indexOf(deleteResult.agentDir)];
-            if (agentDirOutcome && "removed" in agentDirOutcome) {
-              unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
+          }
+          if (
+            workspaceOutcome &&
+            "removed" in workspaceOutcome.outcome &&
+            legacyPlan &&
+            statePlan
+          ) {
+            try {
+              await removeLegacyWorkspaceStateForReset(legacyPlan);
+              deleteWorkspaceState(statePlan);
+            } catch {
+              // Best-effort cleanup. A later explicit reset can remove stale rows.
             }
           }
-          if (failed.length === 0) {
+          const agentDirOutcome = outcomes.find(({ cleanupPath }) =>
+            cleanupPathCovers(cleanupPath, deleteResult.agentDir, agentDirRegistryPath),
+          )?.outcome;
+          if (agentDirOutcome && "removed" in agentDirOutcome) {
             unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
-            if (deleteFiles) {
-              unregisterAgentDeleteDatabases(agentId, databasePlan?.registrationPaths ?? []);
-            }
-            deletion.finish();
           }
-          return {
-            ok: true,
-            agentId,
-            removedBindings: deleteResult.removedBindings,
-            removed,
-            failed,
-          };
-        } finally {
-          releaseDatabaseFence();
         }
+        if (failed.length === 0) {
+          unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
+          if (deleteFiles) {
+            unregisterAgentDeleteDatabases(agentId, databasePlan?.registrationPaths ?? []);
+          }
+          deletion.finish();
+        }
+        return {
+          ok: true,
+          agentId,
+          removedBindings: deleteResult.removedBindings,
+          removed,
+          failed,
+        };
       });
       respond(true, result, undefined);
     } catch (error) {

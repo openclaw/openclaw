@@ -7,7 +7,11 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
-import { ensureAgentDeletionJournalSchema } from "./agent-deletion-journal.js";
+import {
+  assertAgentDeletionPathFence,
+  ensureAgentDeletionJournalSchema,
+  prepareAgentDeletionPathFence,
+} from "./agent-deletion-journal.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
@@ -37,6 +41,10 @@ export function claimOpenClawAgentDatabaseLease(params: {
   env?: NodeJS.ProcessEnv;
 }): string {
   const agentId = normalizeAgentId(params.agentId);
+  const deletionFence = prepareAgentDeletionPathFence(
+    { agentId, path: params.path },
+    { env: params.env },
+  );
   const leaseId = crypto.randomUUID();
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   runOpenClawStateWriteTransaction(
@@ -52,6 +60,7 @@ export function claimOpenClawAgentDatabaseLease(params: {
           `OpenClaw agent database is unavailable while agent ${agentId} is deleted.`,
         );
       }
+      assertAgentDeletionPathFence(database.db, deletionFence);
       executeSqliteQuerySync(
         database.db,
         db.insertInto("agent_database_leases").values({
