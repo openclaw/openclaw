@@ -36,6 +36,7 @@ import { noteSecurityWarnings } from "./doctor-security.js";
 type TrustedProxyBoundaryOptions = {
   trustedProxies: string[];
   token?: GatewayAuthConfig["token"];
+  password?: GatewayAuthConfig["password"];
   trustedProxy?: GatewayTrustedProxyConfig;
   controlUi?: GatewayControlUiConfig;
   localInterfaces?: string[];
@@ -269,6 +270,21 @@ const trustedProxyBoundaryCases: Array<
     { trustedProxies: ["192.0.2.0/24"], tailscaleMode: "serve" },
     ["fails gateway startup validation", "non-host-scoped CIDR"],
   ],
+  [
+    "rejects an unresolvable trusted-proxy password SecretRef",
+    {
+      trustedProxies: ["192.0.2.10"],
+      password: { source: "env", provider: "default", id: "UNSET_GATEWAY_PASSWORD" },
+    },
+    ["fails gateway startup validation", "SecretRef is unresolved"],
+  ],
+  [
+    "allows a resolvable trusted-proxy password SecretRef",
+    {
+      trustedProxies: ["192.0.2.10"],
+      password: { source: "env", provider: "default", id: "SET_GATEWAY_PASSWORD" },
+    },
+  ],
 ];
 
 describe("noteSecurityWarnings trusted-proxy boundaries", () => {
@@ -276,6 +292,7 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
     note.mockClear();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
+    vi.stubEnv("SET_GATEWAY_PASSWORD", "proxy-fallback-pass-2f8a");
   });
 
   afterEach(() => {
@@ -286,6 +303,7 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
     const {
       trustedProxies,
       token,
+      password,
       trustedProxy,
       controlUi,
       localInterfaces,
@@ -325,6 +343,7 @@ describe("noteSecurityWarnings trusted-proxy boundaries", () => {
           auth: {
             mode: "trusted-proxy",
             token,
+            password,
             trustedProxy: trustedProxy ?? { userHeader: "x-forwarded-user" },
           },
         },

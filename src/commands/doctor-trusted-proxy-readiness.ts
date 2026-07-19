@@ -16,6 +16,7 @@ import {
   resolveGatewayAuth,
 } from "../gateway/auth.js";
 import { isContainerEnvironment, isTrustedProxyAddress } from "../gateway/net.js";
+import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 
 /**
  * Mirrors gateway startup: seed runtime-only Control UI origins first, then run the real
@@ -29,6 +30,9 @@ export async function resolveGatewayStartupValidationProblem(
   // Startup lazy-loads this resolver; keep the doctor on the same dynamic boundary.
   const { resolveGatewayRuntimeConfig } = await import("../gateway/server-runtime-config.js");
   try {
+    // Same order as gateway startup: the auth secret preflight throws on unresolvable
+    // active refs (trusted-proxy treats password refs as active) before the resolver runs.
+    await ensureGatewayStartupAuth({ cfg: seeded.config, warn: () => {} });
     await resolveGatewayRuntimeConfig({
       cfg: seeded.config,
       port: resolveGatewayPortWithDefault(cfg.gateway?.port),
