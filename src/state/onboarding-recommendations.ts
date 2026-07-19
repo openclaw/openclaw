@@ -235,6 +235,83 @@ export function acknowledgeOnboardingRecommendations(
   );
 }
 
+export function updatePendingOnboardingRecommendations(params: {
+  matches: readonly OnboardingRecommendationMatch[];
+  nowMs?: number;
+  database?: OpenClawStateDatabaseOptions;
+}): OnboardingRecommendationsRecord | null {
+  const nowMs = params.nowMs ?? Date.now();
+  const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database.db);
+      const existing = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("onboarding_recommendations")
+          .select([
+            "inventory_hash",
+            "matches_json",
+            "offered_at_ms",
+            "accepted_at_ms",
+            "updated_at_ms",
+          ])
+          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY),
+      );
+      if (!existing || typeof existing.accepted_at_ms === "number") {
+        return existing
+          ? {
+              inventoryHash: existing.inventory_hash,
+              matches: OnboardingRecommendationMatchesSchema.parse(
+                JSON.parse(existing.matches_json),
+              ),
+              offeredAt: existing.offered_at_ms,
+              acceptedAt: existing.accepted_at_ms,
+              updatedAt: existing.updated_at_ms,
+            }
+          : null;
+      }
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("onboarding_recommendations")
+          .set({ matches_json: JSON.stringify(matches), updated_at_ms: nowMs })
+          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY)
+          .where("accepted_at_ms", "is", null),
+      );
+      return {
+        inventoryHash: existing.inventory_hash,
+        matches,
+        offeredAt: existing.offered_at_ms,
+        acceptedAt: null,
+        updatedAt: nowMs,
+      };
+    },
+    params.database,
+    { operationLabel: "onboarding.recommendations.update-pending" },
+  );
+}
+
+export function clearPendingOnboardingRecommendations(
+  databaseOptions: OpenClawStateDatabaseOptions = {},
+): boolean {
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("onboarding_recommendations")
+          .where("config_key", "=", ONBOARDING_RECOMMENDATIONS_KEY)
+          .where("accepted_at_ms", "is", null),
+      );
+      return (result.numAffectedRows ?? 0n) > 0n;
+    },
+    databaseOptions,
+    { operationLabel: "onboarding.recommendations.clear-pending" },
+  );
+}
+
 export function clearOnboardingRecommendations(
   databaseOptions: OpenClawStateDatabaseOptions = {},
 ): boolean {

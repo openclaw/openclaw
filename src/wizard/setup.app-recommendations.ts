@@ -18,7 +18,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import { installSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
   acknowledgeOnboardingRecommendations,
+  clearPendingOnboardingRecommendations,
   readOnboardingRecommendations,
+  updatePendingOnboardingRecommendations,
   writeOnboardingRecommendationsOffer,
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
@@ -40,6 +42,8 @@ type SetupAppRecommendationDeps = {
   readStored?: () => OnboardingRecommendationsRecord | null;
   writeOffer?: typeof writeOnboardingRecommendationsOffer;
   acknowledgeStored?: typeof acknowledgeOnboardingRecommendations;
+  updatePendingStored?: typeof updatePendingOnboardingRecommendations;
+  clearPendingStored?: typeof clearPendingOnboardingRecommendations;
   deferOfferToBootstrap?: () => boolean;
 };
 
@@ -101,12 +105,25 @@ export async function setupAppRecommendations(params: {
     return params.config;
   }
   const readStored = params.deps?.readStored ?? readOnboardingRecommendations;
-  const stored = readStored();
-  if (typeof stored?.acceptedAt === "number") {
+  const storedRecord = readStored();
+  if (typeof storedRecord?.acceptedAt === "number") {
     return params.config;
   }
+  const clearPendingStored =
+    params.deps?.clearPendingStored ?? clearPendingOnboardingRecommendations;
+  // Pending recommendations are rebuildable cache. Rescan legacy bare
+  // ClawHub ids instead of installing without a publisher identity.
+  const hasLegacyClawHubId = storedRecord?.matches.some(
+    (match) => match.candidate.source === "clawhub-skill" && !match.candidate.id.startsWith("@"),
+  );
+  if (hasLegacyClawHubId) {
+    clearPendingStored();
+  }
+  const stored = hasLegacyClawHubId ? null : storedRecord;
   const writeOffer = params.deps?.writeOffer ?? writeOnboardingRecommendationsOffer;
   const acknowledgeStored = params.deps?.acknowledgeStored ?? acknowledgeOnboardingRecommendations;
+  const updatePendingStored =
+    params.deps?.updatePendingStored ?? updatePendingOnboardingRecommendations;
   const deferOfferToBootstrap =
     params.deps?.deferOfferToBootstrap ??
     (() => existsSync(path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)));
@@ -116,14 +133,20 @@ export async function setupAppRecommendations(params: {
   // bootstrap still owns the ask, or the wizard presents the stored matches.
   let matches: SetupAppRecommendationMatch[];
   let appLabels: string[];
-  let recordAnswer: () => void;
+  let recordResult: (retryMatches: SetupAppRecommendationMatch[]) => void;
   if (stored) {
     if (deferOfferToBootstrap()) {
       return params.config;
     }
     matches = stored.matches;
     appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
-    recordAnswer = () => void acknowledgeStored();
+    recordResult = (retryMatches) => {
+      if (retryMatches.length === 0) {
+        void acknowledgeStored();
+        return;
+      }
+      void updatePendingStored({ matches: retryMatches });
+    };
   } else {
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
     let result: SetupAppRecommendationsResult;
@@ -153,8 +176,12 @@ export async function setupAppRecommendations(params: {
     const scanned = result;
     matches = scanned.matches;
     appLabels = scanned.apps.map((app) => app.label);
-    recordAnswer = () =>
-      void writeOffer({ inventory: scanned.apps, matches: scanned.matches, answered: true });
+    recordResult = (retryMatches) =>
+      void writeOffer({
+        inventory: scanned.apps,
+        matches: retryMatches.length > 0 ? retryMatches : scanned.matches,
+        answered: retryMatches.length === 0,
+      });
   }
 
   await params.prompter.note(
@@ -194,14 +221,13 @@ export async function setupAppRecommendations(params: {
         : [],
     ),
   });
-  // Returning from the prompt means the user answered even when every option
-  // was deselected. Cancellation throws before this point.
-  recordAnswer();
   if (selected.includes(SKIP_VALUE)) {
+    recordResult([]);
     return params.config;
   }
 
   let next = params.config;
+  const retryMatches: SetupAppRecommendationMatch[] = [];
   const ensurePlugin = params.deps?.ensurePlugin ?? ensureOnboardingPluginInstalled;
   const installSkill = params.deps?.installSkill ?? installSkillFromClawHub;
   for (const match of uniqueSelectedMatches(matches, selected)) {
@@ -242,6 +268,7 @@ export async function setupAppRecommendations(params: {
         throw new Error(installed.error ?? installed.status);
       }
     } catch (error) {
+      retryMatches.push(match);
       params.runtime.error(
         t("wizard.appRecommendations.installFailed", {
           name: match.candidate.displayName,
@@ -250,5 +277,8 @@ export async function setupAppRecommendations(params: {
       );
     }
   }
+  // Unselected recommendations were explicitly declined. Keep only failed
+  // selected installs pending so later onboarding can retry them.
+  recordResult(retryMatches);
   return next;
 }
