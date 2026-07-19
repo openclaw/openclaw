@@ -98,7 +98,27 @@ describe("registerOnboardCommand", () => {
   it("routes the recommendations acknowledgement subcommand", async () => {
     await runCli(["onboard", "recommendations", "acknowledge"]);
 
-    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+      { retry: undefined },
+      runtime,
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes failed recommendation ids through acknowledgement", async () => {
+    await runCli([
+      "onboard",
+      "recommendations",
+      "acknowledge",
+      "--retry",
+      "chat-plugin",
+      "@demo-owner/notes",
+    ]);
+
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+      { retry: ["chat-plugin", "@demo-owner/notes"] },
+      runtime,
+    );
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 

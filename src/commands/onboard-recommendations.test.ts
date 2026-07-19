@@ -97,10 +97,86 @@ describe("onboard recommendations command", () => {
       matches: [],
     }));
 
-    acknowledgeOnboardRecommendationsCommand(runtime, { acknowledge });
+    acknowledgeOnboardRecommendationsCommand({}, runtime, { acknowledge });
 
     expect(acknowledge).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith("Onboarding recommendations acknowledged.");
+  });
+
+  it("leaves failed bootstrap installs pending and consumes the other matches", () => {
+    const runtime = makeRuntime();
+    const updatePending = vi.fn(() => ({
+      inventoryHash: "hash",
+      offeredAt: 1,
+      acceptedAt: null,
+      updatedAt: 2,
+      matches: [],
+    }));
+    const matches = [
+      {
+        appLabel: "Chat",
+        candidateId: "chat-plugin",
+        tier: "recommended" as const,
+        reason: "Connects conversations",
+        candidate: {
+          id: "chat-plugin",
+          displayName: "Chat plugin",
+          summary: "Chat",
+          source: "official-channel" as const,
+        },
+      },
+      {
+        appLabel: "Notes",
+        candidateId: "@demo-owner/notes",
+        tier: "optional" as const,
+        reason: "Connects notes",
+        candidate: {
+          id: "@demo-owner/notes",
+          displayName: "Notes skill",
+          summary: "Notes",
+          source: "clawhub-skill" as const,
+        },
+      },
+    ];
+
+    acknowledgeOnboardRecommendationsCommand({ retry: ["@demo-owner/notes"] }, runtime, {
+      read: () => ({
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches,
+      }),
+      updatePending,
+    });
+
+    expect(updatePending).toHaveBeenCalledWith({ matches: [matches[1]] });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Onboarding recommendations updated; 1 left pending for retry.",
+    );
+  });
+
+  it("rejects unknown bootstrap retry ids without consuming the offer", () => {
+    const runtime = makeRuntime();
+    const acknowledge = vi.fn();
+    const updatePending = vi.fn();
+
+    acknowledgeOnboardRecommendationsCommand({ retry: ["missing-skill"] }, runtime, {
+      read: () => ({
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches: [],
+      }),
+      acknowledge,
+      updatePending,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith("Unknown pending recommendation id: missing-skill");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(updatePending).not.toHaveBeenCalled();
   });
 
   it("clears a stored offer for the next onboarding scan", () => {

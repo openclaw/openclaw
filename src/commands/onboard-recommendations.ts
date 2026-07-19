@@ -3,13 +3,19 @@ import {
   acknowledgeOnboardingRecommendations,
   clearOnboardingRecommendations,
   readOnboardingRecommendations,
+  updatePendingOnboardingRecommendations,
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
 
 type OnboardRecommendationsDeps = {
   read?: () => OnboardingRecommendationsRecord | null;
   acknowledge?: () => OnboardingRecommendationsRecord | null;
+  updatePending?: typeof updatePendingOnboardingRecommendations;
   clear?: () => boolean;
+};
+
+type AcknowledgeOnboardRecommendationsOptions = {
+  retry?: readonly string[];
 };
 
 const SAFE_INSTALL_ID_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu;
@@ -70,9 +76,34 @@ export function onboardRecommendationsCommand(
 }
 
 export function acknowledgeOnboardRecommendationsCommand(
+  opts: AcknowledgeOnboardRecommendationsOptions,
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
+  const retryIds = [...new Set(opts.retry ?? [])];
+  if (retryIds.length > 0) {
+    const record = (deps.read ?? readOnboardingRecommendations)();
+    const pending = bootstrapRecommendations(record);
+    const pendingIds = new Set(pending.map((match) => match.id));
+    const unknownIds = retryIds.filter((id) => !pendingIds.has(id));
+    if (unknownIds.length > 0) {
+      runtime.error(`Unknown pending recommendation id: ${unknownIds.join(", ")}`);
+      runtime.exit(1);
+      return;
+    }
+    const retryIdSet = new Set(retryIds);
+    const retryMatches =
+      record?.matches.filter((match) => retryIdSet.has(match.candidate.id)) ?? [];
+    const updated = (deps.updatePending ?? updatePendingOnboardingRecommendations)({
+      matches: retryMatches,
+    });
+    runtime.log(
+      updated?.acceptedAt == null
+        ? `Onboarding recommendations updated; ${retryIds.length} left pending for retry.`
+        : "Onboarding recommendations already acknowledged.",
+    );
+    return;
+  }
   const record = (deps.acknowledge ?? acknowledgeOnboardingRecommendations)();
   runtime.log(record ? "Onboarding recommendations acknowledged." : "No stored recommendations.");
 }

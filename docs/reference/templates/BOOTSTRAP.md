@@ -62,12 +62,22 @@ convenience?"**
   `openclaw skills install <id>`.
 - If there are no stored matches, skip this beat without commentary.
 
-After the user answers and any chosen installs finish, record completion so the
-offer never appears again:
+After the user answers and every chosen install succeeds, record completion so
+the offer never appears again:
 
 ```bash
 openclaw onboard recommendations acknowledge
 ```
+
+If an install fails, consume the successful and declined recommendations but
+leave every failed ID pending for a later onboarding run:
+
+```bash
+openclaw onboard recommendations acknowledge --retry "<failed-id>" ["<failed-id>"...]
+```
+
+Use the exact opaque IDs returned by the read command. Never acknowledge a
+failed install without `--retry`.
 
 When the three beats are complete, delete this file. Then say one line:
 
