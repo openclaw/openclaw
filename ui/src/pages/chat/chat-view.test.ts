@@ -751,6 +751,71 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("cloud workspace conflict notice", () => {
+  const conflict = {
+    paths: [
+      "src/[path]-1.ts",
+      "src/path-2.ts",
+      "src/path-3.ts",
+      "src/path-4.ts",
+      "src/path-5.ts",
+      "src/path-6.ts",
+    ],
+    stagedResultRef: "refs/openclaw/worker-results/claim-123",
+    totalCount: 9,
+  };
+
+  it("bounds paths and renders copyable staged-ref guidance", () => {
+    const onDismissWorkspaceConflict = vi.fn();
+    const container = renderChatView({
+      workspaceConflict: conflict,
+      onDismissWorkspaceConflict,
+    });
+
+    const notice = requireElement(
+      container,
+      ".chat-workspace-conflict-notice",
+      "workspace conflict notice",
+    );
+    expect(notice.textContent).toContain("9 cloud workspace conflicts");
+    expect(notice.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
+    expect(notice.textContent).toContain("+4 more paths");
+    expect(notice.textContent).toContain(conflict.stagedResultRef);
+    expect(notice.textContent).toContain("Git Bash on Windows");
+    expect(notice.textContent).toContain("file/directory conflict");
+    expect(notice.textContent).toContain("cloud deleted it");
+    expect(notice.textContent).toContain("staged ref is missing");
+
+    const commands = [...notice.querySelectorAll(".chat-workspace-conflict-commands code")].map(
+      (element) => element.textContent,
+    );
+    expect(commands).toEqual([
+      "git show 'refs/openclaw/worker-results/claim-123:src/[path]-1.ts'",
+      "git checkout 'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/[path]-1.ts'",
+    ]);
+    expect(
+      notice.querySelector<HTMLButtonElement>('[aria-label="Copy cloud inspect command"]'),
+    ).toBeInstanceOf(HTMLButtonElement);
+    expect(
+      notice.querySelector<HTMLButtonElement>('[aria-label="Copy take-cloud command"]'),
+    ).toBeInstanceOf(HTMLButtonElement);
+
+    notice
+      .querySelector<HTMLButtonElement>('[aria-label="Dismiss workspace conflict notice"]')!
+      .click();
+    expect(onDismissWorkspaceConflict).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the notice after the cleared projection drops the conflict", () => {
+    const container = document.createElement("div");
+    render(renderChat(createChatProps({ workspaceConflict: conflict })), container);
+    expect(container.querySelector(".chat-workspace-conflict-notice")).not.toBeNull();
+
+    render(renderChat(createChatProps()), container);
+    expect(container.querySelector(".chat-workspace-conflict-notice")).toBeNull();
+  });
+});
+
 describe("chat conversation width", () => {
   it("applies a configured width once to the centered transcript frame", () => {
     const container = renderChatView({

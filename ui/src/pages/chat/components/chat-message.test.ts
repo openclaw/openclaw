@@ -224,6 +224,43 @@ function createMessageGroup(message: unknown, role: string): MessageGroup {
   };
 }
 
+describe("cloud workspace conflict transcript messages", () => {
+  it("renders the custom event as a bounded structured status card", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "fallback summary that should not render as plain text",
+        details: {
+          paths: [
+            "src/one.ts",
+            "src/two.ts",
+            "src/three.ts",
+            "src/four.ts",
+            "src/five.ts",
+            "src/six.ts",
+          ],
+          stagedResultRef: "refs/openclaw/worker-results/claim-456",
+          totalCount: 7,
+        },
+        timestamp: 1,
+      },
+      "custom",
+    );
+
+    expect(container.querySelector(".chat-group.workspace-conflict")).not.toBeNull();
+    const card = expectElement(container, ".chat-workspace-conflict-event", HTMLDivElement);
+    expect(card.textContent).toContain("Cloud result applied with 7 conflicts");
+    expect(card.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
+    expect(card.textContent).toContain("+2 more paths");
+    expect(card.textContent).toContain("refs/openclaw/worker-results/claim-456");
+    expect(card.querySelector(".chat-text")).toBeNull();
+    expect(container.querySelector(".chat-sender-name")?.textContent).toBe("Cloud workspace");
+  });
+});
+
 function createAssistantCanvasBlock(params: {
   suffix: string;
   title?: string;

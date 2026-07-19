@@ -17,11 +17,12 @@ afterEach(() => {
   container.remove();
 });
 
-function renderBadges(placementState?: SessionPlacementState) {
+function renderBadges(placementState?: SessionPlacementState, workspaceConflictCount?: number) {
   render(
     renderSessionRowBadges({
       hasAutomation: false,
       placementState,
+      workspaceConflictCount,
     }),
     container,
   );
@@ -113,5 +114,19 @@ describe("session row placement badges", () => {
     expect(container.querySelector(".session-row-badge--pull-request")).not.toBeNull();
     expect(container.querySelector(".session-row-badge--approval")).not.toBeNull();
     expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
+  });
+
+  it("uses the existing cloud badge to call out workspace conflicts", () => {
+    renderBadges("active", 3);
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.workspaceConflicts).toBe("3");
+    expect(badge?.getAttribute("title")).toBe("Cloud worker: active · 3 workspace conflicts");
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+
+    renderBadges("active", 1);
+    expect(container.querySelector(".session-row-badge--cloud")?.getAttribute("title")).toBe(
+      "Cloud worker: active · 1 workspace conflict",
+    );
   });
 });

@@ -233,6 +233,7 @@ import {
 } from "./session-message-cache.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
@@ -480,6 +481,7 @@ class ChatPane extends OpenClawLightDomElement {
   private sessionPullRequestsRequestVersion = 0;
   private sessionPullRequestsExpanded = false;
   private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
+  private readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
   @litState() private catalogMessages: unknown[] = [];
   @litState() private catalogLoading = false;
   @litState() private loadingOlder = false;
@@ -3091,6 +3093,13 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
+    const visibleWorkspaceConflict =
+      workspaceConflict &&
+      this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
+        workspaceConflict.stagedResultRef
+        ? workspaceConflict
+        : undefined;
     const board = this.resolveBoardView();
     const runtimeConfigState = this.context.runtimeConfig.state;
     const configSnapshot = runtimeConfigState.configSnapshot;
@@ -3247,6 +3256,17 @@ class ChatPane extends OpenClawLightDomElement {
       onApprovalDecision: overlays
         ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
         : undefined,
+      workspaceConflict: visibleWorkspaceConflict,
+      onDismissWorkspaceConflict:
+        visibleWorkspaceConflict && selectedSession
+          ? () => {
+              this.dismissedWorkspaceConflictRefs.set(
+                selectedSession.key,
+                visibleWorkspaceConflict.stagedResultRef,
+              );
+              this.requestUpdate();
+            }
+          : undefined,
       sessions: state.sessionsResult,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,

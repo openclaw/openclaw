@@ -22,6 +22,7 @@ export function renderSessionRowBadges(params: {
   hasOpenPullRequest?: boolean;
   hasApproval?: boolean;
   placementState?: SessionPlacementState;
+  workspaceConflictCount?: number;
 }) {
   const hasAutomation = !params.isChild && params.hasAutomation;
   const placementState = params.isChild ? undefined : params.placementState;
@@ -31,8 +32,19 @@ export function renderSessionRowBadges(params: {
   if (!hasAutomation && !params.hasOpenPullRequest && !params.hasApproval && !cloudPlacementState) {
     return nothing;
   }
+  const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
   const cloudLabel = cloudPlacementState
-    ? t("sessionsView.cloudWorkerPlacement", { state: cloudPlacementState })
+    ? workspaceConflictCount > 0
+      ? t(
+          workspaceConflictCount === 1
+            ? "sessionsView.cloudWorkerPlacementConflict"
+            : "sessionsView.cloudWorkerPlacementConflicts",
+          {
+            state: cloudPlacementState,
+            count: String(workspaceConflictCount),
+          },
+        )
+      : t("sessionsView.cloudWorkerPlacement", { state: cloudPlacementState })
     : "";
   return html`<span class="session-row-badges">
     ${hasAutomation
@@ -66,6 +78,9 @@ export function renderSessionRowBadges(params: {
       ? html`<span
           class="session-row-badge session-row-badge--cloud"
           data-placement-state=${cloudPlacementState}
+          data-workspace-conflicts=${workspaceConflictCount > 0
+            ? String(workspaceConflictCount)
+            : nothing}
           role="img"
           aria-label=${cloudLabel}
           title=${cloudLabel}
