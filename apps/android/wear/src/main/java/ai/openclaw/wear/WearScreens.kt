@@ -729,11 +729,16 @@ private fun ThreadVoiceMode(
         )
     }
   }
-  LaunchedEffect(contentRevision) {
-    val update = nextWearThreadFollowForContent(followState, contentRevision)
+  LaunchedEffect(realtimeActive, contentRevision) {
+    val update =
+      nextWearThreadFollowForContent(
+        state = followState,
+        contentRevision = contentRevision,
+        realtimeActive = realtimeActive,
+      )
     followState = update.state
     if (update.scrollToLatest && latestItemIndex >= 0) {
-      listState.animateScrollToItem(latestItemIndex)
+      listState.requestScrollToItem(latestItemIndex)
     }
   }
 
@@ -921,7 +926,14 @@ internal fun wearThreadContentRevision(
 internal fun nextWearThreadFollowForContent(
   state: WearThreadFollowState,
   contentRevision: WearThreadContentRevision,
+  realtimeActive: Boolean = true,
 ): WearThreadFollowUpdate {
+  if (!realtimeActive) {
+    return WearThreadFollowUpdate(
+      state = WearThreadFollowState(),
+      scrollToLatest = false,
+    )
+  }
   if (state.contentRevision == contentRevision) {
     return WearThreadFollowUpdate(state = state, scrollToLatest = false)
   }

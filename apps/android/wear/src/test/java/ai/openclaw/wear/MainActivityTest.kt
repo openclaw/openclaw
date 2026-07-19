@@ -121,6 +121,34 @@ class MainActivityTest {
     assertFalse(latest.hasNewContent)
   }
 
+  @Test
+  fun threadFollowResetsWhenRealtimeStops() {
+    val revision = threadRevision(text = "Old", streaming = false)
+    val away =
+      WearThreadFollowState(
+        contentRevision = revision,
+        followingLatest = false,
+        hasNewContent = true,
+      )
+    val stopped =
+      nextWearThreadFollowForContent(
+        state = away,
+        contentRevision = revision,
+        realtimeActive = false,
+      )
+
+    assertFalse(stopped.scrollToLatest)
+    assertTrue(stopped.state.followingLatest)
+    assertFalse(stopped.state.hasNewContent)
+
+    val restarted =
+      nextWearThreadFollowForContent(
+        state = stopped.state,
+        contentRevision = revision,
+      )
+    assertTrue(restarted.scrollToLatest)
+  }
+
   private fun threadRevision(
     text: String,
     streaming: Boolean,
