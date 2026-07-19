@@ -255,13 +255,13 @@ describe("custodian page nudges", () => {
     );
   });
 
-  it("clears a pending event nudge when the gateway identity changes", async () => {
+  it("keeps a pending event nudge across a transient disconnect and reconnect", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
       reply: "Everything is healthy.",
       action: "none",
     });
-    const { context, emitGatewayEvent, setGatewaySnapshot, setGatewayUrl } = createContext(request);
+    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
@@ -274,15 +274,44 @@ describe("custodian page nudges", () => {
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
-    setGatewayUrl("ws://gateway-b.test/control");
+    setGatewaySnapshot({ connected: false, reconnecting: true });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).not.toBeNull();
+
+    setGatewaySnapshot({ connected: true, reconnecting: false });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).not.toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("clears a pending event nudge when gateway ownership changes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Everything is healthy.",
+      action: "none",
+    });
+    const { context, emitGatewayEvent, setGatewaySnapshot, setGatewayToken } =
+      createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: { telegram: { configured: true, running: true, connected: false } },
+      },
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).not.toBeNull();
+
+    setGatewayToken("new-operator-token");
     setGatewaySnapshot({
       client: { request } as unknown as GatewayBrowserClient,
       connected: true,
       reconnecting: false,
     });
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    await page.updateComplete;
-    expect(page.querySelector(".custodian__nudge")).toBeNull();
+    await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
+    expect(request).toHaveBeenCalledTimes(2);
 
     emitGatewayEvent({
       event: "health",

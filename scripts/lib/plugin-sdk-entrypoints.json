@@ -225,6 +225,7 @@
   "response-limit-runtime",
   "session-binding-runtime",
   "session-catalog",
+  "session-discussion",
   "session-key-runtime",
   "session-store-runtime",
   "session-transcript-runtime",

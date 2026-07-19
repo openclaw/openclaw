@@ -122,6 +122,7 @@ export type ChatProps = {
   disabledActionLabel?: string | null;
   onDisabledAction?: (() => void) | null;
   error: string | null;
+  runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
   approvalBusy?: boolean;
   approvalErrors?: ReadonlyMap<string, string>;
@@ -209,6 +210,7 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  gatewayUrl?: string;
   composerControls?: TemplateResult | typeof nothing;
   replyTarget?: {
     messageId: string;
@@ -335,6 +337,7 @@ export function renderChat(props: ChatProps) {
       questionPrompts: props.gatewayQuestionPrompts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
+      gatewayUrl: props.gatewayUrl,
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
       assistantAvatarUrl: props.assistantAvatarUrl,
@@ -384,6 +387,7 @@ export function renderChat(props: ChatProps) {
     disabledReason: props.disabledReason,
     disabledActionLabel: props.disabledActionLabel,
     onDisabledAction: props.onDisabledAction,
+    runError: props.runError,
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,

@@ -45,6 +45,41 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar viewer presence", () => {
+  it("renders the self user's avatar route in the footer identity chip", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    sidebar.connected = true;
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "self-instance",
+          // Presence publishes the canonical gateway avatar route; the gateway
+          // serves an uploaded avatar or its Gravatar fallback behind it, so the
+          // chip renders that same-origin route (CSP-safe) rather than a direct
+          // gravatar.com URL the Control UI CSP would block.
+          user: {
+            id: "00-self",
+            email: "test@example.com",
+            name: "Self User",
+            avatarUrl: "/api/users/00-self/avatar?v=7",
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      const avatar = sidebar.querySelector<HTMLImageElement>(
+        ".sidebar-footer-bar__identity openclaw-viewer-avatar img",
+      );
+      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
+    });
+  });
+
   it("groups identified viewers for session rows and the footer", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
@@ -69,7 +104,9 @@ describe("AppSidebar viewer presence", () => {
         },
         {
           instanceId: "alice-1",
-          user: { id: "alice", name: "Alice", avatarUrl: "https://example.test/alice.png" },
+          // Presence publishes avatars as the canonical gateway route; the
+          // resolver renders only that, falling back to initials otherwise.
+          user: { id: "alice", name: "Alice", avatarUrl: "/api/users/alice/avatar" },
           watchedSessions: ["agent:main:work"],
         },
         {

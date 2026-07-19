@@ -1258,4 +1258,21 @@ export function loadPluginManifestRegistry(
   const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
+
+/** Load manifest metadata from the bundled/source plugin tree without consulting operator state. */
+export function loadBundledPluginManifestRegistry(
+  params: { env?: NodeJS.ProcessEnv } = {},
+): PluginManifestRegistry {
+  const env = params.env ?? process.env;
+  const installRecords: Record<string, PluginInstallRecord> = {};
+  return loadPluginManifestRegistry({
+    env,
+    installRecords,
+    discovery: discoverOpenClawPlugins({
+      env,
+      installRecords,
+      rootScope: "bundled",
+    }),
+  });
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

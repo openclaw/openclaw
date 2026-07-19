@@ -6646,6 +6646,7 @@ describe("handleSendChat", () => {
       sessionKey: "main",
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+      chatRunError: { summary: "Error: previous run failed" },
       chatSideChatTurns: [
         {
           kind: "btw",
@@ -6664,6 +6665,7 @@ describe("handleSendChat", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
     expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatRunError).toBeNull();
     expect(host.chatSideChatTurns).toEqual([]);
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();

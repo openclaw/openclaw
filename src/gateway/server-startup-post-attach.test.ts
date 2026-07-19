@@ -1501,6 +1501,42 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("warms the macOS system CA cache before channel startup", async () => {
+    let finishWarmup: (() => void) | undefined;
+    const warmSystemCa = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishWarmup = resolve;
+        }),
+    );
+    const startChannels = vi.fn(async () => {});
+    const sidecars = startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels,
+      warmSystemCa,
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await waitForGatewayTestState(() => expect(warmSystemCa).toHaveBeenCalledTimes(1));
+    expect(startChannels).not.toHaveBeenCalled();
+
+    finishWarmup?.();
+    await sidecars;
+    expect(startChannels).toHaveBeenCalledTimes(1);
+  });
+
   it("starts and reports plugin services after channel startup completes", async () => {
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },

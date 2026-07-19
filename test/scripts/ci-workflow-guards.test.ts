@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -7,7 +8,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -2112,17 +2112,21 @@ describe("ci workflow guards", () => {
     expect(installStep.run).toContain(
       '[ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]',
     );
+    expect(installStep.run).toContain('sticky_fingerprint_matches="true"');
+    expect(installStep.run).toContain(
+      "Sticky dependency fingerprint matches, but restored importer contents are incomplete; reinstalling",
+    );
     expect(installStep.run).toContain('[ "$STICKY_WRITER" != "true" ]');
     expect(installStep.run).toContain('sudo umount "$GITHUB_WORKSPACE/node_modules"');
     expect(installStep.run).toContain('ephemeral_store="${RUNNER_TEMP:?}/openclaw-pnpm-store"');
     expect(installStep.run).toContain(
-      "Sticky dependency snapshot is stale; using runner-local storage for this read-only run",
+      "Sticky dependency snapshot is unusable; using runner-local storage for this read-only run",
     );
     expect(installStep.run).toContain(
       'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
     );
     expect(installStep.run).toContain(
-      "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install",
+      "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install",
     );
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
     expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
@@ -2141,7 +2145,7 @@ describe("ci workflow guards", () => {
         'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
-    // The exact snapshot fingerprint or successful install already owns
+    // The content-validated snapshot or successful install already owns
     // dependency validation. pnpm's redundant check sees intentionally pruned
     // plugin importers as stale, so it must not mutate during shard fanout.
     const disableImplicitInstall =
@@ -2258,27 +2262,126 @@ describe("ci workflow guards", () => {
     try {
       const workspace = path.join(root, "workspace");
       const stickyRoot = path.join(root, "sticky");
+      const importerRoot = path.join(workspace, "packages", "example");
       const rootModules = path.join(workspace, "node_modules");
-      const importerModules = path.join(workspace, "packages", "example", "node_modules");
+      const importerModules = path.join(importerRoot, "node_modules");
+      const rootDependency = path.join(rootModules, "ipaddr.js");
+      const rootOptionalDependency = path.join(rootModules, "optional-ipaddr");
+      const importerDependency = path.join(importerModules, "ipaddr.js");
       const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
-      mkdirSync(path.join(rootModules, "shared"), { recursive: true });
-      mkdirSync(importerModules, { recursive: true });
+      const lockfile = [
+        "lockfileVersion: '9.0'",
+        "importers:",
+        "  packages/example:",
+        "    dependencies:",
+        "      ipaddr.js:",
+        "        specifier: 2.4.0",
+        "        version: 2.4.0",
+        "      aliased-ipaddr:",
+        "        specifier: npm:ipaddr.js@2.4.0",
+        "        version: ipaddr.js@2.4.0",
+        "      local-helper:",
+        "        specifier: file:../local-helper",
+        "        version: file:../local-helper",
+        "    optionalDependencies:",
+        "      optional-ipaddr:",
+        "        specifier: npm:ipaddr.js@2.4.0",
+        "        version: ipaddr.js@2.4.0",
+        "      unsupported-optional:",
+        "        specifier: 3.0.0",
+        "        version: 3.0.0",
+        "",
+      ].join("\n");
+      mkdirSync(workspace, { recursive: true });
+      writeFileSync(path.join(workspace, "pnpm-lock.yaml"), lockfile, "utf8");
+      mkdirSync(rootDependency, { recursive: true });
+      mkdirSync(rootOptionalDependency, { recursive: true });
+      mkdirSync(importerDependency, { recursive: true });
+      writeFileSync(
+        path.join(rootDependency, "package.json"),
+        JSON.stringify({ name: "ipaddr.js", version: "1.9.1" }),
+        "utf8",
+      );
+      writeFileSync(
+        path.join(rootOptionalDependency, "package.json"),
+        JSON.stringify({ name: "ipaddr.js", version: "1.9.1" }),
+        "utf8",
+      );
+      writeFileSync(
+        path.join(importerDependency, "package.json"),
+        JSON.stringify({ name: "ipaddr.js", version: "2.4.0" }),
+        "utf8",
+      );
+      for (const dependencyName of ["aliased-ipaddr", "optional-ipaddr"]) {
+        const dependencyRoot = path.join(importerModules, dependencyName);
+        mkdirSync(dependencyRoot, { recursive: true });
+        writeFileSync(
+          path.join(dependencyRoot, "package.json"),
+          JSON.stringify({ name: "ipaddr.js", version: "2.4.0" }),
+          "utf8",
+        );
+      }
+      writeFileSync(
+        path.join(rootModules, ".modules.yaml"),
+        JSON.stringify({
+          hoistedLocations: {
+            "ipaddr.js@1.9.1": ["node_modules/ipaddr.js", "node_modules/optional-ipaddr"],
+            "ipaddr.js@2.4.0": [
+              "packages/example/node_modules/ipaddr.js",
+              "packages/example/node_modules/aliased-ipaddr",
+              "packages/example/node_modules/optional-ipaddr",
+            ],
+          },
+        }),
+        "utf8",
+      );
       writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
-      symlinkSync("../../../node_modules/shared", path.join(importerModules, "shared"));
 
       execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-a"]);
       rmSync(importerModules, { recursive: true });
       writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
       execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
 
-      expect(readlinkSync(path.join(importerModules, "shared"))).toBe(
-        "../../../node_modules/shared",
-      );
+      expect(
+        JSON.parse(readFileSync(path.join(importerDependency, "package.json"), "utf8")),
+      ).toMatchObject({ version: "2.4.0" });
       expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
       expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
         "fingerprint-a\n",
       );
-      expect(() => execFileSync("bash", [helper, "capture", stickyRoot, workspace])).toThrow();
+
+      // Recreate the reported failure shape: a marker-matching archive can be
+      // structurally valid yet omit the importer-local override, causing Node
+      // to fall through to the stale root-hoisted version.
+      rmSync(importerModules, { recursive: true });
+      const archive = path.join(stickyRoot, "importer-node-modules.tar");
+      execFileSync("tar", ["--create", "--file", archive, "--files-from", "/dev/null"]);
+      const manifest = path.join(stickyRoot, "importer-node-modules.manifest");
+      const archiveChecksum = createHash("sha256").update(readFileSync(archive)).digest("hex");
+      const manifestChecksum = createHash("sha256").update(readFileSync(manifest)).digest("hex");
+      writeFileSync(
+        path.join(stickyRoot, ".openclaw-importer-archive.sha256"),
+        `${archiveChecksum}\n${manifestChecksum}\n`,
+        "utf8",
+      );
+      const failedRestore = spawnSync("bash", [helper, "restore", stickyRoot, workspace], {
+        encoding: "utf8",
+      });
+      expect(failedRestore.status).toBe(1);
+      expect(failedRestore.stderr).toContain(
+        "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
+      );
+      expect(existsSync(importerModules)).toBe(false);
+
+      const failedCapture = spawnSync(
+        "bash",
+        [helper, "capture", stickyRoot, workspace, "fingerprint-b"],
+        { encoding: "utf8" },
+      );
+      expect(failedCapture.status).toBe(1);
+      expect(failedCapture.stderr).toContain(
+        "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -3556,6 +3659,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const releaseGateMerge = checksFastSteps.find(
       (step: WorkflowStep) => step.name === "Prepare release-gate max-lines merge tree",
     );
+    const protocolManualBase = checksFastSteps.find(
+      (step: WorkflowStep) => step.name === "Resolve manual protocol base",
+    );
 
     expect(workflow.jobs["checks-fast-core"].permissions).toEqual({
       contents: "read",
@@ -3577,6 +3683,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(checksFastRun.env.GH_TOKEN).toBe(
       "${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}",
+    );
+    expect(protocolManualBase.if).toBe(
+      "matrix.task == 'bundled-protocol' && github.event_name == 'workflow_dispatch' && !inputs.release_gate",
+    );
+    expect(protocolManualBase.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(protocolManualBase.run).toContain(
+      '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${TARGET_SHA}"',
+    );
+    expect(protocolManualBase.run).toContain('echo "sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"');
+    expect(checksFastRun.env.PROTOCOL_MANUAL_BASE_SHA).toBe(
+      "${{ steps.protocol_manual_base.outputs.sha }}",
     );
     expect(releaseGateMerge.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}"',
@@ -3618,6 +3735,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).toContain('git ls-remote origin "refs/heads/${default_branch}"');
     expect(checksFastRun.run).toContain(
       '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}"',
+    );
+    expect(checksFastRun.run).toContain('PROTOCOL_SINCE_BASE_SHA="$PROTOCOL_MANUAL_BASE_SHA"');
+    expect(checksFastRun.run).toContain(
+      '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
     );
     expect(checksFastRun.run).toContain("--jq '.merge_base_commit.sha'");
     expect(checksFastRun.run).toContain(

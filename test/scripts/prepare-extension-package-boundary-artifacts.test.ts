@@ -16,6 +16,7 @@ import {
   parseMode,
   resolveBoundaryEntryShimRequiredOutputs,
   resolveBoundaryRootShimsTimeoutMs,
+  resolveTsxImportSpecifier,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
@@ -100,6 +101,33 @@ async function waitForProcessExit(
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
+  it("resolves the tsx loader from the selected checkout toolchain", () => {
+    const tsxBinPath = "/primary/node_modules/.bin/tsx";
+    const loaderPath = "/primary/node_modules/tsx/dist/loader.mjs";
+
+    expect(
+      resolveTsxImportSpecifier({
+        resolveTool: (toolName) => {
+          expect(toolName).toBe("tsx");
+          return tsxBinPath;
+        },
+        ensureToolchain: (toolPath) => {
+          expect(toolPath).toBe(tsxBinPath);
+          return "/worktree/node_modules";
+        },
+        createRequireFrom: (filename) => {
+          expect(filename).toBe(tsxBinPath);
+          return {
+            resolve(packageName) {
+              expect(packageName).toBe("tsx");
+              return loaderPath;
+            },
+          };
+        },
+      }),
+    ).toBe(pathToFileURL(loaderPath).href);
+  });
+
   it("prefixes each completed line and flushes the trailing partial line", () => {
     let output = "";
     const writer = createPrefixedOutputWriter("boundary", {

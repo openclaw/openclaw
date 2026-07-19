@@ -619,6 +619,7 @@ function createChatProps(
     canSend: true,
     disabledReason: null,
     error: null,
+    runError: null,
     sessions: null,
     sidebarOpen: false,
     sidebarContent: null,
@@ -724,6 +725,22 @@ describe("inline approval card", () => {
     );
     container.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
     expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
+  });
+});
+
+describe("chat run error", () => {
+  it("renders a non-interactive alert immediately above the composer", () => {
+    const container = renderChatView({
+      runError: { summary: "Error: gateway disconnected" },
+    });
+
+    const alert = requireElement(container, ".chat-run-error", "chat run error");
+    const summary = requireElement(alert, ".chat-run-error__summary", "chat run error summary");
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(summary.textContent?.trim()).toBe("Error: gateway disconnected");
+    expect(alert.querySelector(".chat-run-error__icon svg")).not.toBeNull();
+    expect(alert.querySelector("button")).toBeNull();
+    expect(alert.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
   });
 });
 

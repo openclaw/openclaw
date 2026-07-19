@@ -1919,6 +1919,18 @@ html.openclaw-native-macos
   height: 100%;
 }
 
+.viewer-avatar__fallback {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > img {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > .viewer-avatar__fallback {
+  display: grid;
+}
+
 .viewer-avatar > img {
   object-fit: cover;
 }

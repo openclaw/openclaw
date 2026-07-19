@@ -501,7 +501,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
-    nextConfig: OpenClawConfig,
     isTransactionCurrent: () => boolean,
   ): Promise<boolean> => {
     // Returns true when the wait was cancelled (restart or config supersession),
@@ -520,9 +519,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ", ",
       )} complete`,
     );
-    const timeoutMs = resolveGatewayRestartDeferralTimeoutMs(
-      nextConfig.gateway?.reload?.deferralTimeoutMs,
-    );
+    const timeoutMs = resolveGatewayRestartDeferralTimeoutMs();
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
@@ -816,7 +813,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (targets.size === 0 || shouldSkipChannelRestart) {
           return;
         }
-        if (await waitForActiveWorkBeforeChannelReload(targets, nextConfig, isTransactionCurrent)) {
+        if (await waitForActiveWorkBeforeChannelReload(targets, isTransactionCurrent)) {
           params.logChannels.info(
             "channel reload before plugin replace cancelled by config supersession or restart",
           );
@@ -929,7 +926,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
       pluginReloadAborted = await waitForActiveWorkBeforeChannelReload(
         channelTargets,
-        nextConfig,
         isTransactionCurrent,
       );
     }
@@ -1516,9 +1512,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
       restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
-          nextConfig.gateway?.reload?.deferralTimeoutMs,
-        ),
+        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
         timeoutIntent: { force: true, reason: "config reload forced restart" },
         reason: restartReason,
         emitHooks: {
