@@ -96,6 +96,26 @@ or reuses matching ones and records whether the Claw introduced or referenced
 each resource. Plugins remain process-wide OpenClaw capabilities rather than
 per-agent installations.
 
+Cron jobs declare scheduled work for the new agent:
+
+```json
+{
+  "cronJobs": [
+    {
+      "id": "daily-summary",
+      "name": "Daily incident summary",
+      "schedule": { "cron": "0 9 * * *", "timezone": "UTC" },
+      "session": "isolated",
+      "message": "Summarize active incidents."
+    }
+  ]
+}
+```
+
+Claws use the existing Gateway scheduler and bind created jobs to the new
+agent. Preview, provenance, status, and removal cover those jobs without
+changing the behavior of ordinary cron commands.
+
 ## Inspect and preview
 
 Validate the source without planning local changes:
@@ -138,8 +158,8 @@ openclaw claws status
 openclaw claws status incident-triage --json
 ```
 
-`status` compares the installed agent and its recorded workspace and package
-provenance with current state. It reports incomplete installs, missing
+`status` compares the installed agent and its recorded workspace, package, and
+cron provenance with current state. It reports incomplete installs, missing
 resources, and drift without changing local state.
 
 Claw provenance distinguishes two relationships:
@@ -215,3 +235,4 @@ Use `--json` for experimental machine-readable output.
 - [Agents](/cli/agents)
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)
+- [Cron jobs](/automation/cron-jobs)
