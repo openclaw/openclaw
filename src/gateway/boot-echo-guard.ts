@@ -14,16 +14,15 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const MIN_ECHO_CHARS = 80;
 
-/** Like sliceUtf16Safe, but only returns strings of exactly `minLen` characters.
+/** Thin wrapper: slices using UTF-16-safe boundaries at `[start, start+minLen)`.
  *
- * Windows where UTF-16 surrogate pair boundaries shorten the result are
- * skipped (return empty string) to prevent the while-loop from extending
- * past `minLen` and causing false-positive echo matches on sub-minLen
- * shared substrings. */
+ * Unlike the raw `sliceUtf16Safe`, this returns ALL non-empty results
+ * regardless of length.  A window whose end falls between a surrogate
+ * pair expands to include the full character (length > minLen), which
+ * is fine — boot-prompt and outbound windows use the same adjusted
+ * boundaries so matching is consistent. */
 function sliceUtf16SafeMinLen(input: string, start: number, minLen: number): string {
-  const end = start + minLen;
-  const result = sliceUtf16Safe(input, start, end);
-  return result.length === minLen ? result : "";
+  return sliceUtf16Safe(input, start, start + minLen);
 }
 
 type BootEchoContext = {

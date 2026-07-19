@@ -58,12 +58,13 @@ describe("stripBootEchoFromOutboundText", () => {
     expect(stripBootEchoFromOutboundText(tail, LONG_BOOT_PROMPT)).toBe("");
   });
 
-  it("skips surrogate-shortened windows to avoid false positives", () => {
+  it("does not produce false positives on surrogate boundary windows", () => {
     // Regression: when a boot prompt contains non-BMP characters at
     // positions that cause the 80-char sliding window to cross surrogate
-    // pair boundaries, sliceUtf16SafeMinLen shortens the result.
-    // The old while-loop then extended past minLen, breaking the
-    // minimum-window invariant. The fix skips shortened windows entirely.
+    // pair boundaries, sliceUtf16Safe expands the window to include the
+    // full pair.  The expanded window is longer than minLen but must not
+    // cause false-positive echo detection against outbound text that
+    // shares only the prefix.
     const prefix = "x".repeat(79);
     const emoji = "\u{1F600}"; // 😀 — 2 UTF-16 code units
     const bootPrompt = prefix + emoji + "y".repeat(20);
