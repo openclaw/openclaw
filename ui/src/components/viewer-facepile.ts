@@ -121,10 +121,10 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
 
   override render() {
     const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
-    const users = this.sessionKey
+    const sessionKey = this.sessionKey;
+    const users = sessionKey
       ? projection.users.filter(
-          (user) =>
-            user.id !== projection.selfUserId && user.watchedSessions.includes(this.sessionKey),
+          (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
         )
       : projection.users;
     if (users.length === 0) {
