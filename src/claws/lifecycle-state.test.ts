@@ -119,6 +119,15 @@ describe("Claw status and remove", () => {
     });
   });
 
+  it("counts every non-complete root install as partial", async () => {
+    const current = await fixture();
+    persistClawInstallRecord(current.plan, { env: current.env, status: "config_committed" });
+
+    await expect(
+      readClawStatus("worker", { env: current.env, config: { agents: { list: [] } } }),
+    ).resolves.toMatchObject({ summary: { claws: 1, partial: 1 } });
+  });
+
   it("reports orphaned subordinate ownership without a root install row", async () => {
     const current = await fixture();
     persistClawPackageRef(
