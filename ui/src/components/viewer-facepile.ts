@@ -209,6 +209,28 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
     this.rosterPosition = { x: rect.left, y: rect.top };
   }
 
+  private focusRosterTrigger() {
+    this.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.focus();
+  }
+
+  protected override willUpdate() {
+    if (!this.rosterPosition) {
+      return;
+    }
+    // A presence update can unmount the footer facepile (everyone else left)
+    // while the roster is open. The dropdown is then removed without hiding,
+    // so wa-after-hide never fires — clear the open state here or the menu
+    // would remount at stale coordinates when presence returns.
+    const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
+    const available =
+      this.variant === "footer" &&
+      !this.sessionKey &&
+      projection.users.some((user) => user.id !== projection.selfUserId);
+    if (!available) {
+      this.rosterPosition = null;
+    }
+  }
+
   private renderRosterMenu(roster: readonly PresenceViewer[], selfUserId: string | undefined) {
     const position = this.rosterPosition;
     if (!position) {
@@ -223,12 +245,21 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
         aria-label=${t("presence.rosterTitle")}
         @wa-select=${(event: CustomEvent) => {
           // Rows are informational; selecting one just dismisses the menu.
+          // Close explicitly — preventDefault also cancels the dropdown's own
+          // select-and-hide behavior.
           event.preventDefault();
-        }}
-        @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, () => {})}
-        @wa-after-hide=${(event: Event) => {
-          consumeDropdownKeyboardDismissal(event);
           this.rosterPosition = null;
+        }}
+        @keydown=${(event: KeyboardEvent) =>
+          trackDropdownKeyboardDismissal(event, () => this.focusRosterTrigger())}
+        @wa-after-hide=${(event: Event) => {
+          // The dropdown's own trigger is a hidden throwaway anchor, so restore
+          // focus to the visible facepile button on keyboard dismissal.
+          const keyboard = consumeDropdownKeyboardDismissal(event);
+          this.rosterPosition = null;
+          if (keyboard) {
+            this.focusRosterTrigger();
+          }
         }}
       >
         <button
