@@ -240,9 +240,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const hasExplicitId = id !== null && id !== undefined;
     if (
       hasExplicitId &&
-      (id.length === 0 ||
-        id.length > 128 ||
-        EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN.test(id))
+      (id.length === 0 || id.length > 128 || EXPLICIT_APPROVAL_ID_INVALID_CHAR_PATTERN.test(id))
     ) {
       throw new InvalidApprovalIdError();
     }
