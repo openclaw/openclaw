@@ -410,7 +410,6 @@ export async function preflightDiscordMessage(
   } = routeState;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
-      accountId: params.accountId,
       threadId: messageChannelId,
       webhookId,
       threadBinding,
