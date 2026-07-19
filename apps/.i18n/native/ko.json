@@ -23479,6 +23479,16 @@
       "translated": "위젯 이미지를 저장할 수 없습니다."
     },
     {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "목록 항목"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "항목"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
