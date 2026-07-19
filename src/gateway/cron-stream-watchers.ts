@@ -107,10 +107,17 @@ type OwnerParams = {
     job: CronJob,
     batch: string,
     streamScheduleKey: string,
+    streamSourceGeneration: string,
   ) => Promise<CronStreamFireDisposition>;
   logger: Logger;
   nowMs: () => number;
 };
+
+// Process-wide, monotonic per-owner-instance nonce. Combined with the owner's
+// generation counter it yields a source-epoch token that is globally unique
+// across owner recreation, so a batch admitted under a retired epoch can never
+// alias a live one (a per-owner reset-to-0 would be an ABA hole).
+let nextStreamOwnerNonce = 0;
 
 type InFlightBatch = {
   batch: string;
@@ -128,6 +135,30 @@ type BufferedOutput = {
 
 function scopeKey(jobId: string): string {
   return `${SCOPE_PREFIX}:${jobId}`;
+}
+
+/**
+ * Reason a direct stream-job mutation must stop its source instead of starting.
+ * Ordering mirrors reconcile so a job mutated while cron is off reports the same
+ * remediable `cron-disabled` state (not a generic stopped one): triggers-off is
+ * the more specific `trust-disabled`; otherwise a disabled global cron wins.
+ */
+export function resolveStreamStopReason(input: {
+  triggersEnabled: boolean;
+  cronEnabled: boolean;
+  restartExhausted: boolean;
+  isStream: boolean;
+}): StreamStopReason {
+  if (!input.triggersEnabled) {
+    return "trust-disabled";
+  }
+  if (!input.cronEnabled) {
+    return "cron-disabled";
+  }
+  if (input.restartExhausted) {
+    return "restart-exhausted";
+  }
+  return input.isStream ? "disabled" : "schedule-update";
 }
 
 function boundedIncrement(value: number): number {
@@ -200,6 +231,7 @@ async function waitForInFlightBatch(
 class StreamJobOwner {
   private state: StreamOwnerState = "idle";
   private generation = 0;
+  private readonly ownerNonce = ++nextStreamOwnerNonce;
   private desiredRunning = false;
   private retired = false;
   private removalRequested = false;
@@ -261,6 +293,13 @@ class StreamJobOwner {
 
   ownsSchedule(job: StreamCronJob): boolean {
     return cronStreamScheduleKey(job.schedule) === this.scheduleKey;
+  }
+
+  // Token identifying one live source epoch. Persisted into job.state so the
+  // cron.run admission path (a different layer) can reject a batch whose epoch
+  // has since been stopped/respawned even when the schedule key is unchanged.
+  private sourceGenerationFor(generation: number): string {
+    return `${this.ownerNonce}.${generation}`;
   }
 
   acceptsStart(): boolean {
@@ -752,8 +791,7 @@ class StreamJobOwner {
           }
         : reason === "cron-disabled"
           ? { streamStatus: "disabled", streamError: "cron is disabled" }
-          : reason === "restart-exhausted" ||
-              (reason === "shutdown" && this.restartExhausted)
+          : reason === "restart-exhausted" || (reason === "shutdown" && this.restartExhausted)
             ? // Preserve the terminal restart-exhaustion diagnostic across a
               // normal gateway shutdown; overwriting it with a plain "stopped"
               // would erase why the source stopped restarting.
@@ -1036,7 +1074,12 @@ class StreamJobOwner {
       batch,
       generation,
       startedAtMs: attemptStartedAtMs,
-      promise: this.params.fireBatch(this.job, batch, this.scheduleKey),
+      promise: this.params.fireBatch(
+        this.job,
+        batch,
+        this.scheduleKey,
+        this.sourceGenerationFor(generation),
+      ),
       handled: false,
     };
     this.firing = firing;
@@ -1279,7 +1322,15 @@ class StreamJobOwner {
 
   private async persistState(patch: Partial<CronJobState>): Promise<boolean> {
     try {
-      const result = await this.params.updateState(this.job.id, patch, this.scheduleKey);
+      // Every persist stamps the current source epoch so job.state always names
+      // the epoch entitled to fire batches. A stop (post-generation-bump) or a
+      // respawn therefore invalidates any batch still queued under the prior
+      // epoch at the cron.run admission gate.
+      const stamped = {
+        streamSourceGeneration: this.sourceGenerationFor(this.generation),
+        ...patch,
+      };
+      const result = await this.params.updateState(this.job.id, stamped, this.scheduleKey);
       if (result === false) {
         this.desiredRunning = false;
         return false;
@@ -1298,7 +1349,11 @@ class StreamJobOwner {
 
   private async persistFailure(error: string, patch: Partial<CronJobState>): Promise<void> {
     try {
-      await this.params.recordFailure(this.job.id, error, patch, this.scheduleKey);
+      const stamped = {
+        streamSourceGeneration: this.sourceGenerationFor(this.generation),
+        ...patch,
+      };
+      await this.params.recordFailure(this.job.id, error, stamped, this.scheduleKey);
     } catch (failureError) {
       this.params.logger.warn(
         { jobId: this.job.id, err: String(failureError) },
@@ -1345,6 +1400,7 @@ export function createCronStreamWatchers(params: {
     job: CronJob,
     batch: string,
     streamScheduleKey: string,
+    streamSourceGeneration: string,
   ) => Promise<CronStreamFireDisposition>;
   logger: Logger;
   nowMs?: () => number;

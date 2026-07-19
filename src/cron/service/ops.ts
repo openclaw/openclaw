@@ -946,6 +946,7 @@ type PreparedManualRun =
       evaluateTrigger?: boolean;
       streamBatch?: string;
       streamScheduleKey?: string;
+      streamSourceGeneration?: string;
       onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
     }
   | { ok: false };
@@ -965,6 +966,7 @@ type ManualRunOptions = {
   evaluateTrigger?: boolean;
   streamBatch?: string;
   streamScheduleKey?: string;
+  streamSourceGeneration?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
 };
 
@@ -1007,10 +1009,24 @@ type ManualRunPreflightResult =
 
 let nextManualRunId = 1;
 
-function ownsStreamSchedule(job: CronJob, streamScheduleKey: string): boolean {
-  return (
-    job.schedule.kind === "stream" && cronStreamScheduleKey(job.schedule) === streamScheduleKey
-  );
+function ownsStreamSchedule(
+  job: CronJob,
+  streamScheduleKey: string,
+  streamSourceGeneration?: string,
+): boolean {
+  if (job.schedule.kind !== "stream" || cronStreamScheduleKey(job.schedule) !== streamScheduleKey) {
+    return false;
+  }
+  // Batch admission carries the firing source's epoch token; a retired epoch's
+  // batch (disable→re-enable, or A→B→A) is stale even though the schedule key
+  // matches. Owner state persists pass no token and remain schedule-scoped.
+  if (
+    streamSourceGeneration !== undefined &&
+    job.state.streamSourceGeneration !== streamSourceGeneration
+  ) {
+    return false;
+  }
+  return true;
 }
 
 async function skipInvalidPersistedManualRun(params: {
@@ -1080,6 +1096,7 @@ async function inspectManualRunPreflight(
   runId?: string,
   terminalTracker?: ManualRunTerminalTracker,
   streamScheduleKey?: string,
+  streamSourceGeneration?: string,
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -1100,7 +1117,7 @@ async function inspectManualRunPreflight(
     const job = findJobOrThrow(state, id);
     if (
       streamScheduleKey !== undefined &&
-      (!ownsStreamSchedule(job, streamScheduleKey) || !isJobEnabled(job))
+      (!ownsStreamSchedule(job, streamScheduleKey, streamSourceGeneration) || !isJobEnabled(job))
     ) {
       return { ok: true, ran: false, reason: "not-due" } as const;
     }
@@ -1152,6 +1169,7 @@ async function prepareManualRun(
     opts?.runId,
     opts?.terminalTracker,
     opts?.streamScheduleKey,
+    opts?.streamSourceGeneration,
   );
   if (!preflight.ok) {
     return preflight;
@@ -1182,7 +1200,8 @@ async function prepareManualRun(
     const job = findJobOrThrow(state, id);
     if (
       opts?.streamScheduleKey !== undefined &&
-      (!ownsStreamSchedule(job, opts.streamScheduleKey) || !isJobEnabled(job))
+      (!ownsStreamSchedule(job, opts.streamScheduleKey, opts.streamSourceGeneration) ||
+        !isJobEnabled(job))
     ) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
@@ -1265,6 +1284,9 @@ async function prepareManualRun(
       ...(opts?.streamScheduleKey !== undefined
         ? { streamScheduleKey: opts.streamScheduleKey }
         : {}),
+      ...(opts?.streamSourceGeneration !== undefined
+        ? { streamSourceGeneration: opts.streamSourceGeneration }
+        : {}),
       ...(opts?.onTriggerDisposition ? { onTriggerDisposition: opts.onTriggerDisposition } : {}),
     } as const;
   });
@@ -1301,10 +1323,13 @@ async function activatePreparedManualRun(
     }
     if (
       prepared.streamScheduleKey !== undefined &&
-      (!ownsStreamSchedule(job, prepared.streamScheduleKey) || !isJobEnabled(job))
+      (!ownsStreamSchedule(job, prepared.streamScheduleKey, prepared.streamSourceGeneration) ||
+        !isJobEnabled(job))
     ) {
       // This is reservation identity, not watcher ownership: a force run can
       // wait behind cron admission after its owner has stopped for replacement.
+      // The source-generation token rejects a batch whose epoch was retired even
+      // when the schedule key is unchanged (disable→re-enable, A→B→A).
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" } as const;
     }
@@ -1480,6 +1505,7 @@ async function finishPreparedManualRun(
         owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
         streamBatch: prepared.streamBatch,
         streamScheduleKey: prepared.streamScheduleKey,
+        streamSourceGeneration: prepared.streamSourceGeneration,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };

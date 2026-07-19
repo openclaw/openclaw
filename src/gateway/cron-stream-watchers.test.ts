@@ -7,7 +7,7 @@ import type {
   RunExit,
   SpawnInput,
 } from "../process/supervisor/types.js";
-import { createCronStreamWatchers } from "./cron-stream-watchers.js";
+import { createCronStreamWatchers, resolveStreamStopReason } from "./cron-stream-watchers.js";
 
 function job(overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -196,7 +196,12 @@ describe("cron stream watchers", () => {
     await watchers.start(job());
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(fireBatch).toHaveBeenCalledWith(expect.any(Object), "early", expect.any(String));
+    expect(fireBatch).toHaveBeenCalledWith(
+      expect.any(Object),
+      "early",
+      expect.any(String),
+      expect.any(String),
+    );
     await watchers.stopAll("shutdown");
   });
 
@@ -240,6 +245,7 @@ describe("cron stream watchers", () => {
     expect(fireBatch).toHaveBeenLastCalledWith(
       expect.any(Object),
       "second\nthird",
+      expect.any(String),
       expect.any(String),
     );
     expect(updateState).toHaveBeenCalledWith(
@@ -287,6 +293,7 @@ describe("cron stream watchers", () => {
       2,
       expect.any(Object),
       "first\nsecond",
+      expect.any(String),
       expect.any(String),
     );
     await watchers.stopAll("shutdown");
@@ -454,7 +461,12 @@ describe("cron stream watchers", () => {
     fake.inputs[0]?.onStdout?.("\n");
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(fireBatch).toHaveBeenCalledWith(expect.any(Object), "", expect.any(String));
+    expect(fireBatch).toHaveBeenCalledWith(
+      expect.any(Object),
+      "",
+      expect.any(String),
+      expect.any(String),
+    );
     await watchers.stopAll("shutdown");
   });
 
@@ -476,7 +488,12 @@ describe("cron stream watchers", () => {
     fake.inputs[0]?.onStdout?.("\n\nvalue\n");
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(fireBatch).toHaveBeenCalledWith(expect.any(Object), "\n\nvalue", expect.any(String));
+    expect(fireBatch).toHaveBeenCalledWith(
+      expect.any(Object),
+      "\n\nvalue",
+      expect.any(String),
+      expect.any(String),
+    );
     await watchers.stopAll("shutdown");
   });
 
@@ -523,7 +540,12 @@ describe("cron stream watchers", () => {
     fake.inputs[0]?.onStdout?.("put\n");
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(fireBatch).toHaveBeenCalledWith(expect.any(Object), "err\noutput", expect.any(String));
+    expect(fireBatch).toHaveBeenCalledWith(
+      expect.any(Object),
+      "err\noutput",
+      expect.any(String),
+      expect.any(String),
+    );
     await watchers.stopAll("shutdown");
   });
 
@@ -570,10 +592,10 @@ describe("cron stream watchers", () => {
     expect(fake.spawn).not.toHaveBeenCalled();
     expect(updateState).toHaveBeenCalledWith(
       "stream-job",
-      {
+      expect.objectContaining({
         streamStatus: "disabled",
         streamError: "stream sources require cron.triggers.enabled=true",
-      },
+      }),
       expect.any(String),
     );
   });
@@ -596,7 +618,7 @@ describe("cron stream watchers", () => {
     expect(fake.spawn).not.toHaveBeenCalled();
     expect(updateState).toHaveBeenCalledWith(
       "stream-job",
-      { streamStatus: "disabled", streamError: "cron is disabled" },
+      expect.objectContaining({ streamStatus: "disabled", streamError: "cron is disabled" }),
       expect.any(String),
     );
   });
@@ -617,10 +639,10 @@ describe("cron stream watchers", () => {
     expect(fake.spawn).not.toHaveBeenCalled();
     expect(updateState).toHaveBeenCalledWith(
       "stream-job",
-      {
+      expect.objectContaining({
         streamStatus: "disabled",
         streamError: "stream sources require cron.triggers.enabled=true",
-      },
+      }),
       expect.any(String),
     );
   });
@@ -1085,7 +1107,12 @@ describe("cron stream watchers", () => {
       await settle();
       await vi.advanceTimersByTimeAsync(1);
       expect(fake.spawn).toHaveBeenCalledTimes(2);
-      expect(fireBatch).toHaveBeenLastCalledWith(expect.any(Object), "pending", expect.any(String));
+      expect(fireBatch).toHaveBeenLastCalledWith(
+        expect.any(Object),
+        "pending",
+        expect.any(String),
+        expect.any(String),
+      );
       await watchers.stopAll("shutdown");
     });
 
@@ -1205,6 +1232,7 @@ describe("cron stream watchers", () => {
       expect(fireBatch).toHaveBeenLastCalledWith(
         expect.any(Object),
         "second\naccepted-before-exit",
+        expect.any(String),
         expect.any(String),
       );
       await watchers.stopAll("shutdown");
@@ -1572,12 +1600,47 @@ describe("cron stream watchers", () => {
     );
     await vi.waitFor(
       () =>
-        expect(fireBatch).toHaveBeenCalledWith(expect.any(Object), "live-line", expect.any(String)),
+        expect(fireBatch).toHaveBeenCalledWith(
+          expect.any(Object),
+          "live-line",
+          expect.any(String),
+          expect.any(String),
+        ),
       {
         timeout: 3_000,
       },
     );
     await watchers.stopAll("shutdown");
     expect(watchers.activeJobIds()).toEqual([]);
+  });
+});
+
+describe("resolveStreamStopReason", () => {
+  const base = {
+    triggersEnabled: true,
+    cronEnabled: true,
+    restartExhausted: false,
+    isStream: true,
+  };
+
+  it("selects trust-disabled when triggers are off, even if cron is also off", () => {
+    expect(resolveStreamStopReason({ ...base, triggersEnabled: false, cronEnabled: false })).toBe(
+      "trust-disabled",
+    );
+  });
+
+  it("selects the remediable cron-disabled when only global cron is off", () => {
+    // Direct-mutation regression: cron off + triggers on must not fall through to
+    // the generic stopped reason, matching reconcile's cron-disabled remediation.
+    expect(resolveStreamStopReason({ ...base, cronEnabled: false })).toBe("cron-disabled");
+  });
+
+  it("prefers restart-exhausted over the generic disabled reason", () => {
+    expect(resolveStreamStopReason({ ...base, restartExhausted: true })).toBe("restart-exhausted");
+  });
+
+  it("uses disabled for a live stream job and schedule-update otherwise", () => {
+    expect(resolveStreamStopReason(base)).toBe("disabled");
+    expect(resolveStreamStopReason({ ...base, isStream: false })).toBe("schedule-update");
   });
 });

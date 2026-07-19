@@ -388,6 +388,12 @@ export type CronJobState = {
   streamError?: string;
   streamConsecutiveFailures?: number;
   streamRestartExhausted?: boolean;
+  // Identity of the live source epoch that currently owns this job's stream
+  // batches. Advances on every owner spawn/backoff/stop, so a batch already
+  // handed to cron.run under a prior epoch fails admission after a
+  // disable→re-enable or A→B→A schedule edit that leaves the schedule key
+  // unchanged (the schedule-key check alone cannot see that ABA).
+  streamSourceGeneration?: string;
   streamDroppedBatches?: number;
   streamCoalescedBatches?: number;
   streamLastStartedAtMs?: number;

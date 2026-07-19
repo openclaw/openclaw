@@ -395,6 +395,54 @@ describe("cron service run admission", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
+  it("skips a stream batch from a retired source epoch under an unchanged schedule key", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.160Z");
+    const streamJob = createDueIsolatedJob({
+      id: "stale-source-generation",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    streamJob.schedule = { kind: "stream", command: ["current-source"] };
+    // The live source epoch currently owning this job's batches. A
+    // disable→re-enable or A→B→A edit leaves the schedule key identical but
+    // advances this token, so the schedule-key guard alone cannot tell a retired
+    // epoch's batch from a live one.
+    streamJob.state.streamSourceGeneration = "2.5";
+    await saveCronStore(store.storePath, { version: 1, jobs: [streamJob] });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1, triggers: { enabled: true } },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const scheduleKey = cronStreamScheduleKey(streamJob.schedule);
+    // Same schedule key, retired epoch token: must be dropped, not fired.
+    await expect(
+      run(state, streamJob.id, "force", {
+        streamBatch: "from-a-retired-epoch",
+        streamScheduleKey: scheduleKey,
+        streamSourceGeneration: "1.4",
+      }),
+    ).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+    // Same schedule key, current epoch token: still fires.
+    await run(state, streamJob.id, "force", {
+      streamBatch: "from-the-live-epoch",
+      streamScheduleKey: scheduleKey,
+      streamSourceGeneration: "2.5",
+    });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
   it("revalidates a manual job changed to an unsupported spec while queued", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:06.125Z");

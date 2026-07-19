@@ -65,6 +65,7 @@ import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watcher
 import {
   createCronStreamWatchers,
   type CronStreamFireDisposition,
+  resolveStreamStopReason,
 } from "./cron-stream-watchers.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
@@ -503,14 +504,12 @@ export function buildGatewayCronService(params: {
         await watchers.start(job);
         return;
       }
-      const reason =
-        params.cfg.cron?.triggers?.enabled !== true
-          ? "trust-disabled"
-          : job?.state.streamRestartExhausted
-            ? "restart-exhausted"
-            : job?.schedule.kind === "stream"
-              ? "disabled"
-              : "schedule-update";
+      const reason = resolveStreamStopReason({
+        triggersEnabled: params.cfg.cron?.triggers?.enabled === true,
+        cronEnabled,
+        restartExhausted: job?.state.streamRestartExhausted === true,
+        isStream: job?.schedule.kind === "stream",
+      });
       await watchers.stop(jobId, reason, job);
     } finally {
       streamWatcherReconciliations -= 1;
@@ -1037,7 +1036,7 @@ export function buildGatewayCronService(params: {
     recordFailure: async (jobId, error, patch, streamScheduleKey) => {
       await cron.recordExternalFailure(jobId, error, patch, streamScheduleKey);
     },
-    fireBatch: (job, batch, streamScheduleKey) =>
+    fireBatch: (job, batch, streamScheduleKey, streamSourceGeneration) =>
       runWithGatewayIndependentRootWorkAdmission(async () =>
         fireStreamJob(job, batch, {
           run: async (jobId, payload, onDisposition) => {
@@ -1046,6 +1045,7 @@ export function buildGatewayCronService(params: {
               evaluateTrigger: true,
               streamBatch: batch,
               streamScheduleKey,
+              streamSourceGeneration,
               onTriggerDisposition: onDisposition,
             });
             return { ...result, enabled: cron.getJob(jobId)?.enabled };

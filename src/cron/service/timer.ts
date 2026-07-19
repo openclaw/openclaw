@@ -217,6 +217,10 @@ type ExecuteJobCoreOptions = {
   // an ABA race: a batch emitted by an old stream schedule must not fire after
   // the job was disabled and re-enabled (or edited) with a different schedule.
   streamScheduleKey?: string;
+  // Epoch token of the firing source. Rejects a batch whose source was retired
+  // even when the schedule key is unchanged (disable→re-enable, A→B→A), which
+  // the schedule key alone cannot detect.
+  streamSourceGeneration?: string;
 };
 
 /** Script payloads run headlessly even when their notifications target main. */
@@ -259,6 +263,7 @@ export async function executeJobCoreWithTimeout(
     owningCronLaneTaskMarker?: CommandLaneTaskMarker;
     streamBatch?: string;
     streamScheduleKey?: string;
+    streamSourceGeneration?: string;
   },
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
@@ -307,6 +312,7 @@ export async function executeJobCoreWithTimeout(
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         streamBatch: opts?.streamBatch,
         streamScheduleKey: opts?.streamScheduleKey,
+        streamSourceGeneration: opts?.streamSourceGeneration,
         onExecutionStarted: accumulateExecution,
         onExecutionPhase: accumulateExecution,
       });
@@ -364,6 +370,7 @@ export async function executeJobCoreWithTimeout(
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
+      streamSourceGeneration: opts?.streamSourceGeneration,
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -2511,6 +2518,14 @@ async function executeJobCore(
       job.schedule.kind === "stream" ? cronStreamScheduleKey(job.schedule) : undefined;
     if (currentKey !== options.streamScheduleKey) {
       return { status: "skipped", error: "stream batch schedule no longer current" };
+    }
+    // A stable schedule key cannot see an ABA (disable→re-enable, A→B→A): the
+    // source epoch token does. A batch whose epoch was retired must not fire.
+    if (
+      options.streamSourceGeneration !== undefined &&
+      job.state.streamSourceGeneration !== options.streamSourceGeneration
+    ) {
+      return { status: "skipped", error: "stream batch source no longer current" };
     }
   }
   let effectiveJob = job;
