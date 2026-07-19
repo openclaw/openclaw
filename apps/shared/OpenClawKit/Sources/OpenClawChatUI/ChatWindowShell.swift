@@ -18,6 +18,7 @@ public struct OpenClawChatWindowShell: View {
     @State private var isConfirmingClearHistory = false
     @State private var isPresentingSessions = false
     @State private var isRenamingSession = false
+    @State private var isPresentingNewSessionOptions = false
     @State private var renameSessionKey: String?
     @State private var renameText = ""
     private let userAccent: Color?
@@ -74,7 +75,7 @@ public struct OpenClawChatWindowShell: View {
                 .background(self.keyboardShortcutHandlers)
         }
         .confirmationDialog(
-            "Clear this session's history?",
+            "Clear this thread's history?",
             isPresented: self.$isConfirmingClearHistory)
         {
             Button(role: .destructive) {
@@ -91,8 +92,8 @@ public struct OpenClawChatWindowShell: View {
                 self.activeSessionTitle))
                 .font(OpenClawChatTypography.body)
         }
-        .alert(String(localized: "Rename Session"), isPresented: self.$isRenamingSession) {
-                TextField(String(localized: "Session name"), text: self.$renameText)
+        .alert(String(localized: "Rename Thread"), isPresented: self.$isRenamingSession) {
+                TextField(String(localized: "Thread name"), text: self.$renameText)
                 Button(String(localized: "Rename")) {
                     guard let renameSessionKey else { return }
                     self.viewModel.renameSession(key: renameSessionKey, label: self.renameText)
@@ -122,7 +123,7 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 Task { await self.viewModel.startNewSession() }
             } label: {
-                Text("New Session")
+                Text("New Thread")
                     .font(OpenClawChatTypography.body)
             }
             .keyboardShortcut("n", modifiers: [.command])
@@ -148,7 +149,7 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 self.isPresentingSessions = true
             } label: {
-                Text("Sessions")
+                Text("Threads")
                     .font(OpenClawChatTypography.body)
             }
             .keyboardShortcut("s", modifiers: [.command, .shift])
@@ -344,9 +345,15 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 Task { await self.viewModel.startNewSession() }
             } label: {
-                chatWindowActionLabel("New Session", systemImage: "square.and.pencil")
+                chatWindowActionLabel("New Thread", systemImage: "square.and.pencil")
             }
             .keyboardShortcut("n", modifiers: [.command])
+
+            Button {
+                self.isPresentingNewSessionOptions = true
+            } label: {
+                chatWindowActionLabel("New Thread Options…", systemImage: "slider.horizontal.3")
+            }
 
             Button {
                 self.viewModel.refresh()
@@ -359,7 +366,7 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 self.isPresentingSessions = true
             } label: {
-                chatWindowActionLabel("Sessions…", systemImage: "rectangle.stack")
+                chatWindowActionLabel("Threads…", systemImage: "rectangle.stack")
             }
             .keyboardShortcut("s", modifiers: [.command, .shift])
 
@@ -371,7 +378,7 @@ public struct OpenClawChatWindowShell: View {
                 self.isRenamingSession = true
             } label: {
                 chatWindowActionLabel(
-                    LocalizedStringKey(String(localized: "Rename Session…")),
+                    LocalizedStringKey(String(localized: "Rename Thread…")),
                     systemImage: "pencil")
             }
 
@@ -379,7 +386,7 @@ public struct OpenClawChatWindowShell: View {
                 Task { await self.viewModel.forkSession(key: self.activeSessionKey) }
             } label: {
                 chatWindowActionLabel(
-                    LocalizedStringKey(String(localized: "Fork Session")),
+                    LocalizedStringKey(String(localized: "Fork")),
                     systemImage: "arrow.triangle.branch")
             }
 
@@ -472,7 +479,7 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 self.viewModel.requestSessionCompact()
             } label: {
-                chatWindowActionLabel("Compact Session", systemImage: "arrow.down.right.and.arrow.up.left")
+                chatWindowActionLabel("Compact Thread", systemImage: "arrow.down.right.and.arrow.up.left")
             }
             .disabled(self.viewModel.hasBlockingRunActivity)
 
@@ -482,10 +489,15 @@ public struct OpenClawChatWindowShell: View {
                 chatWindowActionLabel("Clear History…", systemImage: "trash")
             }
         } label: {
-            chatWindowActionLabel("Session", systemImage: "ellipsis.circle")
+            chatWindowActionLabel("Thread", systemImage: "ellipsis.circle")
+        }
+        .popover(isPresented: self.$isPresentingNewSessionOptions) {
+            ChatNewSessionOptionsPopover(viewModel: self.viewModel) {
+                self.isPresentingNewSessionOptions = false
+            }
         }
         .menuIndicator(.hidden)
-        .help("Session actions")
+        .help("Thread actions")
     }
 
     private func copyToPasteboard(_ string: String) {
@@ -519,13 +531,13 @@ private struct ChatContextUsageMenu: View {
                 .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             if let cost = self.usage.totalCost {
                 Text(verbatim: String(
-                    format: String(localized: "Session cost %@"),
+                    format: String(localized: "Thread cost %@"),
                     ChatContextUsageFormatter.cost(cost)))
                     .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
             Divider()
             Button(action: self.onCompact) {
-                Text("Compact Session")
+                Text("Compact Thread")
                     .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
         } label: {

@@ -838,6 +838,10 @@ function sourceMessageId(message: unknown): string | null {
   return id || null;
 }
 
+export function persistedMessageEntryId(message: unknown): string | null {
+  return isPendingSendMessage(message) ? null : sourceMessageId(message);
+}
+
 function transcriptMessageSourceKey(message: unknown): string | null {
   const record = asRecord(message);
   if (!record) {
@@ -1183,7 +1187,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
-  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const tools = Array.isArray(props.toolMessages)
+    ? props.toolMessages.filter((message) => asRecord(message) !== null)
+    : [];
   const historyKeys = buildMessageKeys(history);
   const toolKeys = buildMessageKeys(tools, history.length);
   const liftedCanvasSources = tools.flatMap((message, index) => {

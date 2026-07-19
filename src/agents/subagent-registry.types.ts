@@ -37,7 +37,7 @@ export type PendingFinalDeliveryPayload = {
 };
 
 export type SubagentExecutionState = {
-  status: "running" | "interrupted" | "terminal";
+  status: "queued" | "running" | "interrupted" | "terminal";
   startedAt?: number;
   endedAt?: number;
   outcome?: SubagentRunOutcome;
@@ -52,6 +52,28 @@ export type SubagentCompletionState = {
   capturedAt?: number;
   fallbackResultText?: string | null;
   fallbackCapturedAt?: number;
+};
+
+export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
+
+type SwarmCollectorCompletion = {
+  status: SwarmCollectorStatus;
+  structured?: unknown;
+  schemaError?: string;
+  usage?: { inputTokens: number; outputTokens: number };
+};
+
+export type SwarmStructuredOutputState = {
+  structured?: unknown;
+  schemaError?: string;
+  invalidAttempts: number;
+};
+
+export type SwarmQueuedLaunch = {
+  request: Record<string, unknown>;
+  timeoutMs: number;
+  schedulerGroupKey: string;
+  maxConcurrent: number;
 };
 
 export type SubagentCompletionDeliveryState = {
@@ -103,8 +125,14 @@ export type RequesterSettleWakeState = {
   replayCount?: number;
   /** Persisted retry deadline; restore waits until this instant. */
   nextAttemptAt?: number;
-  /** Frozen wave membership once the first delivery attempt is admitted. */
+  /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];
+  /** Batch frozen while its spawning requester turn was yielding. */
+  requesterYieldBatch?: true;
+  /** Present only when an idle requester needs a new turn after yielding. */
+  afterRequesterYield?: true;
+  /** Monotonic process generation protecting a newer yield from stale completion. */
+  rearmGeneration?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
@@ -123,6 +151,12 @@ export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
   taskRunId?: string;
+  /** Requester attempt that must settle before this completion row can retire. */
+  requesterTurnRunId?: string;
+  /** Durable proof that this requester attempt invoked sessions_yield. */
+  requesterTurnYielded?: true;
+  /** Cleanup retirement deferred until requesterTurnRunId settles. */
+  retireAfterRequesterTurn?: boolean;
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -130,6 +164,8 @@ export type SubagentRunRecord = {
   /** Durable source locator for transport-neutral progress presentation. */
   progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
+  /** Effective requester agent, including cron/hook overrides not encoded in the session key. */
+  requesterAgentId?: string;
   task: string;
   taskName?: string;
   cleanup: "delete" | "keep";
@@ -176,4 +212,27 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Collector-mode runs remain waitable and never announce to the requester. */
+  collect?: boolean;
+  /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
+  swarmRequesterSessionKey?: string;
+  /** Spawner plus ancestor sessions authorized to wait, frozen when the collector is registered. */
+  swarmWaitOwnerSessionKeys?: string[];
+  /** Stable public collector id; gateway execution ids can change across dispatch/recovery. */
+  swarmRunId?: string;
+  /** Stable scheduler slot identity across gateway-assigned run id replacements. */
+  schedulerSlotId?: string;
+  /** Exact host-reserved Gateway request identity for the current collector turn. */
+  swarmLaunchIdempotencyKey?: string;
+  /** True only between host reservation and accepted Gateway dispatch. */
+  swarmLaunchPending?: boolean;
+  groupId?: string;
+  outputSchema?: Record<string, unknown>;
+  structuredOutput?: SwarmStructuredOutputState;
+  queuedLaunch?: SwarmQueuedLaunch;
+  /** Durable retry obligation for a prepared collector session whose launch failed. */
+  collectorLaunchCleanupPending?: boolean;
+  /** Set after failed-launch context-engine cleanup succeeds, preventing duplicate end hooks. */
+  contextEngineCleanupCompletedAt?: number;
+  collectorCompletion?: SwarmCollectorCompletion;
 };

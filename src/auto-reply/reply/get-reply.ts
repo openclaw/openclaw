@@ -882,6 +882,16 @@ export async function getReplyFromConfig(
     });
   };
 
+  const shouldPrepareStatusThinkingCatalog =
+    inlineStatusRequested ||
+    directives.hasStatusDirective ||
+    command.commandBodyNormalized.trim() === "/status";
+  const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
+    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
+        modelState.resolveThinkingCatalog(),
+      )
+    : undefined;
+
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
       ctx,
@@ -911,6 +921,7 @@ export async function getReplyFromConfig(
       elevatedAllowed,
       elevatedFailures,
       defaultActivation: () => defaultActivation,
+      thinkingCatalog: statusThinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel,
       resolvedReasoningLevel,

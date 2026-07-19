@@ -1,4 +1,8 @@
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
@@ -20,6 +24,7 @@ import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -55,6 +60,10 @@ const loadAgentsWorkspaceHandlers = lazyHandlerModule(
 const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
+);
+const loadBoardHandlers = lazyHandlerModule(
+  () => import("./server-methods/board.js"),
+  (module) => module.boardHandlers,
 );
 const loadAuditHandlers = lazyHandlerModule(
   () => import("./server-methods/audit.js"),
@@ -315,7 +324,14 @@ function authorizeGatewayMethod(
     ? authorizeOperatorScopesForRequiredScope(registeredScope, scopes)
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
+    const resolvedRequiredScopes = isOperatorScope(registeredScope)
+      ? [registeredScope]
+      : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+    return missingScopeErrorShape({
+      missingScope: scopeAuth.missingScope,
+      requiredScopes:
+        resolvedRequiredScopes.length > 0 ? resolvedRequiredScopes : [scopeAuth.missingScope],
+    });
   }
   return null;
 }
@@ -359,6 +375,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["ui.command"],
     loadHandlers: loadUiCommandHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["board.get", "board.update", "board.widget.put", "board.widget.grant", "board.event"],
+    loadHandlers: loadBoardHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
@@ -600,6 +620,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "mcp.app.listResources",
       "mcp.app.listResourceTemplates",
       "mcp.app.readResource",
+      "mcp.app.updateModelContext",
     ],
     loadHandlers: loadMcpAppHandlers,
   }),
@@ -647,6 +668,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.create",
       "sessions.compaction.branch",
       "sessions.compaction.restore",
+      "sessions.branches.list",
+      "sessions.branches.switch",
+      "sessions.rewind",
+      "sessions.fork",
       "sessions.send",
       "sessions.steer",
       "sessions.abort",

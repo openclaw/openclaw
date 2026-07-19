@@ -59,6 +59,7 @@ vi.mock("../runtime.js", () => ({
 
 type CronUpdatePatch = {
   patch?: {
+    deleteAfterRun?: boolean;
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
     payload?: {
       kind?: string;
@@ -793,7 +794,7 @@ describe("cron cli", () => {
       value,
     ]);
     expectRuntimeErrorContaining(
-      "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery",
+      "--channel, --to, --account, and --thread-id require a non-main agentTurn, command, or script job with delivery",
     );
   });
 
@@ -1616,6 +1617,21 @@ describe("cron cli", () => {
       kind: "at",
       at: "2026-03-23T22:00:00.000Z",
     });
+    expect(patch?.patch).not.toHaveProperty("deleteAfterRun");
+  });
+
+  it("preserves an explicit keep policy when converting to --at", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--at",
+      "2026-03-23T23:00:00Z",
+      "--keep-after-run",
+    ]);
+
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "at",
+      at: "2026-03-23T23:00:00.000Z",
+    });
+    expect(patch?.patch?.deleteAfterRun).toBe(false);
   });
 
   it("rejects --tz with --every on cron edit", async () => {

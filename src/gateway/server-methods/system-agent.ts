@@ -22,6 +22,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
+import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { formatSystemAgentStartupMessage } from "../../system-agent/overview.js";
@@ -213,10 +214,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    await runSystemAgentGatewayTask(async () => {
-      const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference(), undefined);
-    });
+    // Detection is read-only and may load native provider code. Keep it outside
+    // the mutation lane and off the Gateway event loop so health stays live.
+    const { detectSetupInferenceIsolated } =
+      await import("../../system-agent/setup-inference-detection.js");
+    respond(true, await detectSetupInferenceIsolated(), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond }) => {
@@ -487,6 +489,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               const onboardingWelcome = await buildOnboardingWelcome({ engine });
               welcome = onboardingWelcome.text;
               welcomeQuestion = onboardingWelcome.question;
+            } else if (params.welcomeVariant === "new-agent") {
+              welcome = buildNewAgentWelcome({ engine });
             } else {
               welcome = formatSystemAgentStartupMessage(await engine.loadOverview());
               engine.noteAssistantMessage(welcome);
@@ -592,6 +596,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             action,
             ...(action === "open-agent" && reply.agentDraft
               ? { agentDraft: reply.agentDraft }
+              : {}),
+            ...(action === "open-agent" &&
+            reply.handoff?.kind === "open-tui" &&
+            reply.handoff.agentId
+              ? { agentId: reply.handoff.agentId }
               : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
             ...(reply.question ? { question: reply.question } : {}),

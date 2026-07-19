@@ -2,8 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runCommandBuffered } from "../../process/exec.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -96,27 +95,6 @@ function hasReplacedBaseEntryAncestor(
     }
   }
   return false;
-}
-
-export function workerWorkspaceTransferPaths(
-  current: WorkerWorkspaceManifest,
-  base: WorkerWorkspaceManifest,
-): string[] {
-  const changed = changedPaths(base, current);
-  const paths = reconciliationEntries(current.entries)
-    .filter((entry) => changed.has(entry.path))
-    .map((entry) => {
-      if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-        throw new Error(`Cloud workspace result is too large: ${entry.path}`);
-      }
-      return entry.path;
-    });
-  if (paths.length > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  return paths;
 }
 
 async function preflightWorkspaceApply(params: {

@@ -106,6 +106,7 @@ const rootEntries = [
   "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  "scripts/bench-transcript-cursors.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
@@ -113,6 +114,8 @@ const rootEntries = [
   "src/audit/audit-event-writer.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
+  "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagent-registry.runtime.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
@@ -341,6 +344,12 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // The full-tree companion config makes tests entrypoints; these contracts
+    // are intentionally test-only in the production graph.
+    "src/boards/board-layout.ts": ["types"],
+    "src/boards/board-notices.ts": ["exports"],
+    "src/boards/board-store.ts": ["exports"],
+    "src/gateway/board-view-ticket.ts": ["exports"],
   },
   workspaces: {
     ".": {

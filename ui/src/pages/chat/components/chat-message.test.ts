@@ -1,44 +1,41 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
+import * as localStorageModule from "../../../local-storage.ts";
+import * as chatAvatar from "../chat-avatar.ts";
 import { renderMessageGroup, renderStreamGroup } from "./chat-message.ts";
 
-const localStorageValues = vi.hoisted(() => new Map<string, string>());
-const markdownRenderMock = vi.hoisted(() =>
-  vi.fn(
-    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
-  ),
+const localStorageValues = new Map<string, string>();
+const markdownRenderMock = vi.fn(
+  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
 );
-const streamingMarkdownRenderMock = vi.hoisted(() =>
-  vi.fn(
-    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
-      `<div class="streaming-markdown">${value}</div>`,
-  ),
+const streamingMarkdownRenderMock = vi.fn(
+  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
+    `<div class="streaming-markdown">${value}</div>`,
 );
 
-vi.mock("../../../local-storage.ts", () => ({
-  getSafeLocalStorage: () => ({
+function getSafeLocalStorageMock(): Storage {
+  return {
+    get length() {
+      return localStorageValues.size;
+    },
+    clear: () => localStorageValues.clear(),
     getItem: (key: string) => localStorageValues.get(key) ?? null,
+    key: (index: number) => [...localStorageValues.keys()][index] ?? null,
     removeItem: (key: string) => localStorageValues.delete(key),
     setItem: (key: string, value: string) => localStorageValues.set(key, value),
-  }),
-}));
-
-vi.mock("../../../components/markdown.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../components/markdown.ts")>();
-  return {
-    ...actual,
-    toSanitizedMarkdownHtml: markdownRenderMock,
-    toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   };
-});
+}
 
-vi.mock("../../../components/icons.ts", () => ({
-  icons: {},
-}));
+function renderChatAvatarMock(
+  ...[role]: Parameters<typeof chatAvatar.renderChatAvatar>
+): ReturnType<typeof chatAvatar.renderChatAvatar> {
+  return html`<div class="chat-avatar ${role}"></div>`;
+}
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -67,13 +64,12 @@ function pointerClick(element: Element) {
   element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 }
 
-vi.mock("./chat-avatar.ts", () => ({
-  renderChatAvatar: (role: string) => {
-    const element = document.createElement("div");
-    element.className = `chat-avatar ${role}`;
-    return element;
-  },
-}));
+beforeEach(() => {
+  vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
+  vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
+  vi.spyOn(markdown, "toStreamingMarkdownHtml").mockImplementation(streamingMarkdownRenderMock);
+  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(renderChatAvatarMock);
+});
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
@@ -570,19 +566,19 @@ describe("grouped chat rendering", () => {
 
   it("renders user markdown without code-block copy chrome", () => {
     const container = document.createElement("div");
-    const markdown = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
+    const markdownContent = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
 
     renderGroupedMessage(
       container,
       {
         role: "user",
-        content: markdown,
+        content: markdownContent,
         timestamp: 1001,
       },
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: false,
       codeBlockChrome: "none",
       fileLinks: true,
@@ -591,15 +587,15 @@ describe("grouped chat rendering", () => {
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {
     const container = document.createElement("div");
-    const markdown = "```bash\necho ok\n```";
+    const markdownContent = "```bash\necho ok\n```";
 
     renderAssistantMessage(container, {
       role: "assistant",
-      content: markdown,
+      content: markdownContent,
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdownContent, {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
@@ -661,6 +657,43 @@ describe("grouped chat rendering", () => {
       "chat-delete-confirm",
       "chat-delete-confirm--right",
     ]);
+  });
+
+  it("renders a confirmed rewind action only for user groups", () => {
+    const container = document.createElement("div");
+    const onRewind = vi.fn();
+    localStorageValues.delete("openclaw:skip-rewind-confirm");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup({ role: "user", content: "rewind me", timestamp: 1000 }, "user"),
+        createMessageGroup({ role: "assistant", content: "answer", timestamp: 1001 }, "assistant"),
+      ],
+      { onRewind },
+    );
+
+    const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
+    expect(rewindButtons).toHaveLength(1);
+    rewindButtons[0]!.click();
+    expect(container.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+      "Rewind to before this message?",
+    );
+    container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+    expect(onRewind).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables rewind while the agent is working", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [createMessageGroup({ role: "user", content: "busy", timestamp: 1000 }, "user")],
+      { onRewind: vi.fn(), rewindDisabled: true },
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
+    const tooltip = button?.closest("openclaw-tooltip");
+    expect(button?.disabled).toBe(true);
+    expect(tooltip?.content).toBe("Rewind is unavailable while the agent is working");
   });
 
   it("places the delete confirm below the trigger near the top viewport edge", () => {
@@ -1190,6 +1223,39 @@ describe("grouped chat rendering", () => {
 
     const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
     expect(avatar?.tagName).toBe("DIV");
+  });
+
+  it("renders a durable sender label in the user message metadata", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "attributed-user-group",
+      role: "user",
+      senderLabel: "alice",
+      messages: [
+        {
+          key: "attributed-user-message",
+          message: { role: "user", content: "hello", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        userName: "Local User",
+      }),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
+    ).toBe("alice");
   });
 
   it("uses assistant senderLabel for forwarded assistant-side groups", () => {

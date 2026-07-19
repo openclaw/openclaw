@@ -425,6 +425,35 @@ describe("SystemAgentChatEngine", () => {
     expect(reply.text).toContain("Settings → Ask OpenClaw");
   });
 
+  it("hatches into a newly created agent and carries its id", async () => {
+    useTempStateDir();
+    const createAgent = vi.fn(async () => ({
+      status: "created" as const,
+      agentId: "researcher",
+      name: "researcher",
+      workspace: "/tmp/researcher",
+      agentDir: "/tmp/agent-researcher",
+      bootstrapPending: true,
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { createAgent, loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({ kind: "create-agent", agentId: "researcher" });
+
+    const reply = await engine.handle("yes");
+
+    expect(createAgent).toHaveBeenCalledWith({ name: "researcher" });
+    expect(reply.action).toBe("open-tui");
+    expect(reply.handoff).toMatchObject({
+      kind: "open-tui",
+      agentId: "researcher",
+      agentDraft: "hatch",
+    });
+  });
+
   it("stays in setup when an established workspace has no bootstrap pending", async () => {
     useTempStateDir();
     const applySetup = vi.fn(async () => ({

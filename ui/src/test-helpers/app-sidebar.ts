@@ -11,6 +11,8 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
+import type { ApplicationOverlays } from "../app/overlays.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -28,6 +30,8 @@ export type SidebarLifecycleState = HTMLElement & {
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
+  sidebarEntries: readonly string[];
+  onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
   onNavigate: (routeId: string, options?: { search?: string }) => void;
@@ -232,6 +236,7 @@ export function createContext(
   gateway: ApplicationGateway,
   sessions: SessionCapability,
   agentsList: AgentsListResult | null = null,
+  approvalQueue: readonly ExecApprovalRequest[] = [],
 ): ApplicationContext<RouteId> {
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
@@ -247,6 +252,10 @@ export function createContext(
       setScope: () => undefined,
       subscribe: () => () => undefined,
     },
+    overlays: {
+      snapshot: { approvalQueue },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationOverlays,
   } as unknown as ApplicationContext<RouteId>;
 }
 
@@ -255,8 +264,9 @@ export async function mountSidebar(
   sessions: SessionCapability,
   variant: SidebarLifecycleState["variant"] = "panel",
   agentsList: AgentsListResult | null = null,
+  approvalQueue: readonly ExecApprovalRequest[] = [],
 ) {
-  const context = createContext(gateway, sessions, agentsList);
+  const context = createContext(gateway, sessions, agentsList, approvalQueue);
   const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
@@ -351,6 +361,7 @@ export function setupSidebarTest() {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     document.body.replaceChildren();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
