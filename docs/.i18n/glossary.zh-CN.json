@@ -1236,6 +1236,10 @@
     "target": "Discord 语音"
   },
   {
+    "source": "Discord voice channels",
+    "target": "Discord 语音频道"
+  },
+  {
     "source": "Plugin management",
     "target": "插件管理"
   },

@@ -94,6 +94,10 @@ When a join or status result reports `manualActionRequired`, complete the report
 
 Only join meetings where the operator is authorized to add an agent. Tell participants when local policy or consent rules require disclosure of automated participation, transcription, or synthesized speech.
 
+## Discord voice chat
+
+[Discord voice channels](/channels/discord#voice-channels) provide native, audio-only realtime conversation without browser meeting automation. OpenClaw can join a voice channel, listen, route turns through an OpenClaw agent or realtime voice model, and speak replies. It does not send or receive camera video or screen sharing, even when people use video in the same Discord channel, so Discord voice is a related live-conversation surface rather than a fourth browser meeting plugin.
+
 ## Platform guides
 
 - [Google Meet plugin](/plugins/google-meet)

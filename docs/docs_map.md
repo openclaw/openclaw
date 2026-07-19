@@ -5975,6 +5975,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Enable the plugin
   - H2: Verify and join
   - H2: Handle platform policy prompts
+  - H2: Discord voice chat
   - H2: Platform guides
 
 ## plugins/memory-lancedb.md
