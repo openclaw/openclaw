@@ -4,6 +4,10 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 const mocks = vi.hoisted(() => ({
   applySkillEnvOverrides: vi.fn(),
   mapSandboxSkillEntriesForPrompt: vi.fn(),
+  resolveEmbeddedRunSkillEntries: vi.fn(() => ({
+    shouldLoadSkillEntries: true,
+    skillEntries: [],
+  })),
 }));
 
 vi.mock("../../../skills/runtime/env-overrides.js", () => ({
@@ -12,10 +16,7 @@ vi.mock("../../../skills/runtime/env-overrides.js", () => ({
 }));
 
 vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
-  resolveEmbeddedRunSkillEntries: vi.fn(() => ({
-    shouldLoadSkillEntries: true,
-    skillEntries: [],
-  })),
+  resolveEmbeddedRunSkillEntries: mocks.resolveEmbeddedRunSkillEntries,
 }));
 
 vi.mock("../../../skills/loading/workspace.js", () => ({
@@ -57,5 +58,21 @@ describe("prepareEmbeddedAttemptSkills", () => {
       }),
     ).toThrow("skill prompt mapping failed");
     expect(restore).toHaveBeenCalledOnce();
+  });
+
+  it("forces workspace-only discovery for explicitly isolated child runs", () => {
+    mocks.applySkillEnvOverrides.mockReturnValue(vi.fn());
+    mocks.mapSandboxSkillEntriesForPrompt.mockReturnValue([]);
+
+    prepareEmbeddedAttemptSkills({
+      attempt: { config: {}, skillsWorkspaceOnly: true } as EmbeddedRunAttemptParams,
+      effectiveWorkspace: "/tmp/workspace",
+      sandbox: null,
+      sessionAgentId: "main",
+    });
+
+    expect(mocks.resolveEmbeddedRunSkillEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/workspace", workspaceOnly: true }),
+    );
   });
 });

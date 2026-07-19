@@ -39,7 +39,7 @@ export function prepareEmbeddedAttemptSkills(params: {
     skillsPromptWorkspaceDir,
     skillsSnapshot,
     skillsWorkspaceDir,
-    workspaceOnly,
+    workspaceOnly: sandboxWorkspaceOnly,
   } = resolveSandboxSkillRuntimeInputs({
     sandbox: params.sandbox,
     effectiveWorkspace: params.effectiveWorkspace,
@@ -51,7 +51,7 @@ export function prepareEmbeddedAttemptSkills(params: {
     agentId: params.sessionAgentId,
     eligibility: skillsEligibility,
     skillsSnapshot,
-    workspaceOnly,
+    workspaceOnly: params.attempt.skillsWorkspaceOnly === true || sandboxWorkspaceOnly,
   });
   const restoreSkillEnv = skillsSnapshot
     ? applySkillEnvOverridesFromSnapshot({

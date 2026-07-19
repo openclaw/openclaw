@@ -395,6 +395,7 @@ export function startAgentRunExecution(params: {
             workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
             cwd: params.sessionEntry?.spawnedCwd,
           }),
+          skillsWorkspaceOnly: params.sessionEntry?.spawnedSkillsWorkspaceOnly === true,
           cwd: resolveSessionRuntimeCwd({
             requestedCwd: params.request.cwd,
             sessionEntry: params.sessionEntry,
