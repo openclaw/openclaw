@@ -246,9 +246,11 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
         @wa-select=${(event: CustomEvent) => {
           // Rows are informational; selecting one just dismisses the menu.
           // Close explicitly — preventDefault also cancels the dropdown's own
-          // select-and-hide behavior.
+          // select-and-hide behavior — and hand focus back to the trigger so
+          // a keyboard activation does not strand focus on the body.
           event.preventDefault();
           this.rosterPosition = null;
+          this.focusRosterTrigger();
         }}
         @keydown=${(event: KeyboardEvent) =>
           trackDropdownKeyboardDismissal(event, () => this.focusRosterTrigger())}
