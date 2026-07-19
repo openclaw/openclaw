@@ -24,6 +24,17 @@ function optionalCursor(params: Record<string, unknown>): { cursor?: string } | 
   return typeof cursor === "string" && cursor.trim() ? { cursor: cursor.trim() } : undefined;
 }
 
+function optionalArgumentsObject(params: Record<string, unknown>): Record<string, unknown> {
+  const value = params.arguments;
+  if (value === undefined) {
+    return {};
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  throw new Error("tool arguments must be an object");
+}
+
 async function runOperation(
   params: Record<string, unknown>,
   operation: McpAppOperation,
@@ -100,7 +111,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           method: "tools/call",
           params: {
             name: requireString(params, "toolName"),
-            arguments: (params.arguments ?? {}) as Record<string, unknown>,
+            arguments: optionalArgumentsObject(params),
           },
         }),
     );
