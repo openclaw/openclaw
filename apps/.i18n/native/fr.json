@@ -10869,9 +10869,9 @@
       "translated": "Sur quoi souhaitez-vous travailler ?"
     },
     {
-      "id": "native.apple.4da775013ac9b123",
-      "source": "The thread attaches once the gateway is ready.",
-      "translated": "Le fil de discussion est joint une fois que le Gateway est prêt."
+      "id": "native.apple.ed7f703a8809b564",
+      "source": "The session attaches once the gateway is ready.",
+      "translated": "La session se connecte une fois que le Gateway est prêt."
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10919,9 +10919,9 @@
       "translated": "Options de la nouvelle session…"
     },
     {
-      "id": "native.apple.003b25ddafeb18e9",
-      "source": "Threads…",
-      "translated": "Fils de discussion…"
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "Sessions…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -11084,14 +11084,14 @@
       "translated": "Créer"
     },
     {
-      "id": "native.apple.31d5c7287cfb3abe",
-      "source": "Delete Thread?",
-      "translated": "Supprimer le fil de discussion ?"
+      "id": "native.apple.e7382c53c7dd48f7",
+      "source": "Delete Session?",
+      "translated": "Supprimer la session ?"
     },
     {
-      "id": "native.apple.d3395564809f1120",
-      "source": "Delete Thread",
-      "translated": "Supprimer le fil"
+      "id": "native.apple.702fd8b48da56065",
+      "source": "Delete Session",
+      "translated": "Supprimer la session"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -11099,9 +11099,9 @@
       "translated": "Annuler"
     },
     {
-      "id": "native.apple.092659256d26cb03",
-      "source": "This permanently deletes the thread and its transcript.",
-      "translated": "Cette action supprime définitivement le fil et sa transcription."
+      "id": "native.apple.61f3f19ea24c6012",
+      "source": "This permanently deletes the session and its transcript.",
+      "translated": "Cette opération supprime définitivement la session et sa transcription."
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -11129,9 +11129,9 @@
       "translated": "Nouveau groupe"
     },
     {
-      "id": "native.apple.683032464c497bbd",
-      "source": "Rename Thread",
-      "translated": "Renommer le fil"
+      "id": "native.apple.cd368674179237a0",
+      "source": "Rename Session",
+      "translated": "Renommer la session"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -11139,9 +11139,9 @@
       "translated": "Nom du groupe"
     },
     {
-      "id": "native.apple.f887aa956588f237",
-      "source": "Thread name",
-      "translated": "Nom du fil"
+      "id": "native.apple.8b54306971cfa8c9",
+      "source": "Session name",
+      "translated": "Nom de la session"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
@@ -11164,9 +11164,9 @@
       "translated": "Jetons"
     },
     {
-      "id": "native.apple.6fcbd4e2c32a2334",
-      "source": "Opens Threads",
-      "translated": "Opens Threads"
+      "id": "native.apple.bec8b61a3a29b59a",
+      "source": "Opens Sessions",
+      "translated": "Ouvre les sessions"
     },
     {
       "id": "native.apple.69279daa342241c1",
@@ -11219,14 +11219,14 @@
       "translated": "Agents"
     },
     {
-      "id": "native.apple.7c8231b7b1ca480f",
-      "source": "Agent thread",
-      "translated": "Fil de l’agent"
+      "id": "native.apple.789d5d0790fd18ca",
+      "source": "Agent session",
+      "translated": "Session de l’agent"
     },
     {
-      "id": "native.apple.b3c553614f762a58",
-      "source": "Recent threads",
-      "translated": "Fils récents"
+      "id": "native.apple.ee45dce4a2e44737",
+      "source": "Recent sessions",
+      "translated": "Sessions récentes"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -11234,9 +11234,9 @@
       "translated": "Gateway hors ligne"
     },
     {
-      "id": "native.apple.5aa32afda85064ea",
-      "source": "No recent threads",
-      "translated": "Aucun fil récent"
+      "id": "native.apple.c97e0382e578a2f7",
+      "source": "No recent sessions",
+      "translated": "Aucune session récente"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11339,14 +11339,14 @@
       "translated": "Annuler"
     },
     {
-      "id": "native.apple.b6855cf19a50f477",
-      "source": "Threads",
-      "translated": "Fils"
+      "id": "native.apple.7a6511a467e34f69",
+      "source": "Sessions",
+      "translated": "Sessions"
     },
     {
-      "id": "native.apple.9b1d0ef27a1333b0",
-      "source": "Archived threads",
-      "translated": "Fils archivés"
+      "id": "native.apple.e6b8913014b64f0a",
+      "source": "Archived sessions",
+      "translated": "Sessions archivées"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11354,34 +11354,34 @@
       "translated": "Afficher les éléments archivés"
     },
     {
-      "id": "native.apple.98167401c7267735",
-      "source": "Threads unavailable",
-      "translated": "Fils indisponibles"
+      "id": "native.apple.119433782518f199",
+      "source": "Sessions unavailable",
+      "translated": "Sessions indisponibles"
     },
     {
-      "id": "native.apple.4d28a7def2337b9f",
-      "source": "Loading archived threads",
-      "translated": "Chargement des fils archivés"
+      "id": "native.apple.9882fbadac3bea03",
+      "source": "Loading archived sessions",
+      "translated": "Chargement des sessions archivées"
     },
     {
-      "id": "native.apple.777d7b706933bd7b",
-      "source": "Loading recent threads",
-      "translated": "Chargement des fils récents"
+      "id": "native.apple.16dca1cfac8a571b",
+      "source": "Loading recent sessions",
+      "translated": "Chargement des sessions récentes"
     },
     {
-      "id": "native.apple.22f81ea94bef8410",
-      "source": "^[\\(count) thread](inflect: true)",
-      "translated": "^[\\(count) fil](inflect: true)"
+      "id": "native.apple.207dad20d09f3160",
+      "source": "^[\\(count) session](inflect: true)",
+      "translated": "^[\\(count) session](inflect: true)"
     },
     {
-      "id": "native.apple.1cad51e14db59bf9",
-      "source": "No archived threads",
-      "translated": "Aucun fil archivé"
+      "id": "native.apple.a0b4091bf77d4060",
+      "source": "No archived sessions",
+      "translated": "Aucune session archivée"
     },
     {
-      "id": "native.apple.18ef832d3a7ddcf8",
-      "source": "Archived threads will appear here.",
-      "translated": "Les fils archivés apparaîtront ici."
+      "id": "native.apple.acfdf5c72e289736",
+      "source": "Archived sessions will appear here.",
+      "translated": "Les sessions archivées apparaîtront ici."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11464,9 +11464,9 @@
       "translated": "Partager la réception"
     },
     {
-      "id": "native.apple.21d9208d86a4d1fe",
-      "source": "Loading threads",
-      "translated": "Chargement des fils"
+      "id": "native.apple.4c5b2ecf243cfbbc",
+      "source": "Loading sessions",
+      "translated": "Chargement des sessions"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11474,19 +11474,19 @@
       "translated": "Récupération de l’activité récente depuis le Gateway."
     },
     {
-      "id": "native.apple.4be1f79aa2b230ff",
-      "source": "Threads unavailable",
-      "translated": "Fils indisponibles"
+      "id": "native.apple.c4479934c65c973c",
+      "source": "Sessions unavailable",
+      "translated": "Sessions indisponibles"
     },
     {
-      "id": "native.apple.98b348873556bc46",
-      "source": "No recent threads",
-      "translated": "Aucun fil récent"
+      "id": "native.apple.6e67b64954ba3002",
+      "source": "No recent sessions",
+      "translated": "Aucune session récente"
     },
     {
-      "id": "native.apple.7396d205574d279f",
-      "source": "Thread activity offline",
-      "translated": "Activité du fil hors ligne"
+      "id": "native.apple.5dce07848bec08b5",
+      "source": "Session activity offline",
+      "translated": "Activité des sessions hors ligne"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11944,9 +11944,9 @@
       "translated": "Carte"
     },
     {
-      "id": "native.apple.c9ec1b0e18074d8a",
-      "source": "Open Thread",
-      "translated": "Ouvrir le fil"
+      "id": "native.apple.3edbccb7c14b693c",
+      "source": "Open Session",
+      "translated": "Ouvrir la session"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -13349,9 +13349,9 @@
       "translated": "Par défaut"
     },
     {
-      "id": "native.apple.f4ae5664c3eda95d",
-      "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "Utilisé pour les nouveaux fils de discussion Chat et les sessions Talk."
+      "id": "native.apple.6805480889265026",
+      "source": "Used for new Chat and Talk sessions.",
+      "translated": "Utilisé pour les nouvelles sessions de discussion et de conversation."
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15584,9 +15584,14 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.8855710a55de2ed5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "id": "native.apple.00f9704d3c430ff7",
+      "source": "Switch agent",
+      "translated": "Changer d’agent"
+    },
+    {
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "Nouveau chat"
     },
     {
       "id": "native.apple.7042a7d70a7e5a20",
@@ -15594,9 +15599,9 @@
       "translated": "Masquer la barre latérale"
     },
     {
-      "id": "native.apple.14858678ae3f059f",
-      "source": "New Chat",
-      "translated": "Nouveau chat"
+      "id": "native.apple.8855710a55de2ed5",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.94772cbd85c42e6e",
@@ -15629,9 +15634,14 @@
       "translated": "All Sessions…"
     },
     {
-      "id": "native.apple.4bfe6dc45811d50f",
-      "source": "Pages",
-      "translated": "Pages"
+      "id": "native.apple.aa7c4ecffd2ba36a",
+      "source": "Edit Pages",
+      "translated": "Modifier les pages"
+    },
+    {
+      "id": "native.apple.4d724d2e5731583d",
+      "source": "Home",
+      "translated": "Accueil"
     },
     {
       "id": "native.apple.b4567540cbcaf944",
@@ -15682,6 +15692,31 @@
       "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "Hors ligne"
+    },
+    {
+      "id": "native.apple.9fc7dfa0dccea003",
+      "source": "Pinned pages stay in the sidebar. Home is always shown.",
+      "translated": "Les pages épinglées restent dans la barre latérale. L’accueil est toujours affiché."
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Pages"
+    },
+    {
+      "id": "native.apple.422767686f219093",
+      "source": "Done",
+      "translated": "Terminé"
+    },
+    {
+      "id": "native.apple.e197e8708ad3b2c8",
+      "source": "Pinned",
+      "translated": "Épinglé"
+    },
+    {
+      "id": "native.apple.098013d7dd8cdfc7",
+      "source": "Not pinned",
+      "translated": "Non épinglé"
     },
     {
       "id": "native.apple.a4256b2ab523ee60",
