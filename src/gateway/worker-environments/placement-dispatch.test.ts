@@ -39,10 +39,12 @@ function createHarness(
     leaseFails?: boolean;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
+    reconcileConflictPaths?: string[];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   const log: string[] = [];
+  const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
     log.push(stage);
     if (options.failAt === stage) {
@@ -62,9 +64,19 @@ function createHarness(
       placementStore.recordStagedWorkspaceResult(claim, ref),
     recordWorkspaceResultConflict: (claim, conflict) =>
       placementStore.recordWorkspaceResultConflict(claim, conflict),
+    claimTurn: (params) => placementStore.claimTurn(params),
+    markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
-    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) =>
-      placementStore.completeWorkspaceResultAndReleaseTurn(claim, completionOptions),
+    completeWorkspaceResultAndReleaseTurn: (claim, completionOptions) => {
+      const completed = placementStore.completeWorkspaceResultAndReleaseTurn(
+        claim,
+        completionOptions,
+      );
+      if (completionOptions?.reclaim) {
+        log.push("placement:reclaimed");
+      }
+      return completed;
+    },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
@@ -159,6 +171,9 @@ function createHarness(
         throw new Error("workspace conflict");
       }
       request.journal.commit(reconciledManifestRef);
+      if (options.reconcileConflictPaths?.length && request.stagedResult) {
+        request.stagedResult.record(request.stagedResult.ref);
+      }
       return {
         manifestRef: reconciledManifestRef,
         changed: true,
@@ -174,6 +189,14 @@ function createHarness(
             throw new Error("local workspace changed after reconciliation");
           }
         },
+        getAppliedWorkspaceResult: options.reconcileConflictPaths?.length
+          ? () => ({
+              manifestRef: reconciledManifestRef,
+              manifest: { version: 1 as const, baseCommit: null, entries: [] },
+              conflictPaths: options.reconcileConflictPaths!,
+              verifyLocalStable: async () => {},
+            })
+          : undefined,
       };
     }),
     runWorkspaceCommand: vi.fn(async () => ({
@@ -256,7 +279,7 @@ function createHarness(
       fail("workspace");
       return "/gateway/workspace";
     },
-    reportWorkspaceResultConflict: vi.fn(async () => {}),
+    reportWorkspaceResultConflict,
     resolveWorkspaceResultConflict: vi.fn(async () => undefined),
   });
   return {
@@ -281,6 +304,7 @@ function createHarness(
       },
     },
     environments,
+    reportWorkspaceResultConflict,
     markEnvironmentDestroyed: () => {
       currentEnvironment = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
     },
@@ -366,9 +390,44 @@ describe("worker placement dispatch", () => {
       "workspace:verify",
       "workspace:verify-local",
       "teardown:destroy",
-      "teardown:stop",
       "placement:reclaimed",
+      "teardown:stop",
     ]);
+  });
+
+  it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileConflictPaths: ["src/local.ts"],
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({ state: "reclaimed" });
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "reclaimed",
+      workspaceResultConflict: {
+        paths: ["src/local.ts"],
+        stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\/reclaim-/u),
+        totalCount: 1,
+      },
+    });
+
+    expect(harness.reportWorkspaceResultConflict).toHaveBeenCalledWith({
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      paths: ["src/local.ts"],
+      stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\/reclaim-/u),
+      totalCount: 1,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
   it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {

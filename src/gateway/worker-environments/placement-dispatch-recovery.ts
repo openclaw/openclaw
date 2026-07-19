@@ -241,6 +241,7 @@ export function createPlacementRecoveryActions(deps: {
           continue;
         }
         if (stagedResultRef) {
+          let ownedStagedResultRef = stagedResultRef;
           // A staged result must never be destroyed by environment lifecycle.
           // Keep its fence and placement until the local apply is durably accepted.
           const owner = {
@@ -278,35 +279,37 @@ export function createPlacementRecoveryActions(deps: {
               journal.abort();
             }
             let conflictPaths = priorWorkspaceResultConflict?.paths ?? [];
-            let retainStagedResult = conflictPaths.length > 0;
             const reconciliation = await applyStagedWorkerWorkspaceResult({
               root: localPath,
-              stagedResultRef,
+              stagedResultRef: ownedStagedResultRef,
               expectedBaseManifestRef: placement.workspaceBaseManifestRef,
               alreadyAccepted: pending.workspaceAcceptedAtMs !== null || alreadyApplied,
               journal,
             });
             await reconciliation.verifyLocalStable();
             conflictPaths = reconciliation.conflictPaths;
-            retainStagedResult = conflictPaths.length > 0;
+            const retainStagedResult = conflictPaths.length > 0;
             if (pending.workspaceAcceptedAtMs === null) {
               placements.acceptWorkspaceResult(turnClaim);
             }
-            if (conflictPaths.length > 0 && isWorkerWorkspaceResultCleanupRef(stagedResultRef)) {
+            if (
+              conflictPaths.length > 0 &&
+              isWorkerWorkspaceResultCleanupRef(ownedStagedResultRef)
+            ) {
               await restoreStagedWorkerWorkspaceResultFromCleanup({
                 root: localPath,
-                cleanupRef: stagedResultRef,
+                cleanupRef: ownedStagedResultRef,
                 stagedResultRef: canonicalStagedResultRef,
               });
-              stagedResultRef = canonicalStagedResultRef;
+              ownedStagedResultRef = canonicalStagedResultRef;
             }
             const supersededConflict =
               priorWorkspaceResultConflict &&
               (conflictPaths.length === 0 ||
-                priorWorkspaceResultConflict.stagedResultRef !== stagedResultRef)
+                priorWorkspaceResultConflict.stagedResultRef !== ownedStagedResultRef)
                 ? priorWorkspaceResultConflict
                 : undefined;
-            if (supersededConflict && supersededConflict.stagedResultRef !== stagedResultRef) {
+            if (supersededConflict && supersededConflict.stagedResultRef !== ownedStagedResultRef) {
               await deleteStagedWorkerWorkspaceResult({
                 root: localPath,
                 stagedResultRef: supersededConflict.stagedResultRef,
@@ -315,7 +318,7 @@ export function createPlacementRecoveryActions(deps: {
             if (conflictPaths.length > 0) {
               const projectedConflict = projectWorkspaceResultConflict(
                 conflictPaths,
-                stagedResultRef,
+                ownedStagedResultRef,
               );
               placements.recordWorkspaceResultConflict(turnClaim, projectedConflict);
               await deps.reportWorkspaceResultConflict({
@@ -336,11 +339,11 @@ export function createPlacementRecoveryActions(deps: {
               });
             }
             const cleanupRef = !retainStagedResult
-              ? isWorkerWorkspaceResultCleanupRef(stagedResultRef)
-                ? stagedResultRef
+              ? isWorkerWorkspaceResultCleanupRef(ownedStagedResultRef)
+                ? ownedStagedResultRef
                 : await moveStagedWorkerWorkspaceResultToCleanup({
                     root: localPath,
-                    stagedResultRef,
+                    stagedResultRef: ownedStagedResultRef,
                   })
               : undefined;
             const currentEnvironment = environments.get(placement.environmentId);

@@ -17,7 +17,7 @@ export function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
 }
 
-export type WorkspaceFileSnapshot =
+type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
   | { type: "unsupported" };
 

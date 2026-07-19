@@ -30,6 +30,7 @@ export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
   | "adoptActive"
   | "acceptIdleWorkspaceReconciliation"
+  | "claimTurn"
   | "fail"
   | "finishReclaim"
   | "get"
@@ -39,6 +40,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "listWorkspaceReconciliationOwners"
   | "list"
   | "listPendingWorkspaceResults"
+  | "markWorkspaceResultPending"
   | "workspaceResultInstanceId"
   | "recordStagedWorkspaceResult"
   | "recordWorkspaceResultConflict"
