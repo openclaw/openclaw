@@ -358,6 +358,33 @@ function summarizeMcpCapability(server: unknown): string {
   return summary.join("; ");
 }
 
+function summarizeMcpCapabilityEffect(server: unknown): Record<string, unknown> {
+  if (!server || typeof server !== "object") {
+    return { configured: false };
+  }
+  const value = server as Record<string, unknown>;
+  return {
+    connection:
+      typeof value.command === "string"
+        ? "local-process"
+        : typeof value.url === "string"
+          ? "remote-server"
+          : "configured-server",
+    ...(typeof value.transport === "string" ? { transport: value.transport } : {}),
+    ...(typeof value.command === "string"
+      ? {
+          commandConfigured: true,
+          argumentCount: Array.isArray(value.args) ? value.args.length : 0,
+        }
+      : {}),
+    ...(value.auth !== undefined ? { authConfigured: true } : {}),
+    ...(value.toolFilter !== undefined ? { toolFilterConfigured: true } : {}),
+    ...(value.env && typeof value.env === "object"
+      ? { envEntryCount: Object.keys(value.env).length }
+      : {}),
+  };
+}
+
 export function mcpCapabilityChange(params: {
   id: string;
   action: ClawUpdateCapabilityChange["action"];
@@ -379,21 +406,9 @@ export function mcpCapabilityChange(params: {
       ? "Target manifest removes or releases an MCP tool surface."
       : "Target manifest adds, restores, or changes an MCP tool surface.",
     effect:
-      params.desired && typeof params.desired === "object"
-        ? {
-            ...(params.desired as Record<string, unknown>),
-            ...("env" in (params.desired as Record<string, unknown>)
-              ? {
-                  env: Object.keys(
-                    ((params.desired as Record<string, unknown>).env ?? {}) as Record<
-                      string,
-                      unknown
-                    >,
-                  ).toSorted(),
-                }
-              : {}),
-          }
-        : { removed: true },
+      params.desired === undefined
+        ? { removed: true }
+        : summarizeMcpCapabilityEffect(params.desired),
     ...(params.current === undefined
       ? {}
       : {
@@ -419,6 +434,24 @@ function summarizeCronCapability(cron: unknown): string {
   return `schedule ${scheduleKind}; session ${typeof value.session === "string" ? value.session : "default"}; payload withheld`;
 }
 
+function summarizeCronCapabilityEffect(cron: unknown): Record<string, unknown> {
+  if (!cron || typeof cron !== "object") {
+    return { configured: false };
+  }
+  const value = cron as Record<string, unknown>;
+  const schedule = value.schedule as Record<string, unknown> | undefined;
+  return {
+    schedule:
+      schedule && typeof schedule === "object"
+        ? (Object.keys(schedule).find((key) => key !== "timezone") ?? "configured")
+        : "configured",
+    timezoneConfigured: typeof schedule?.timezone === "string",
+    session: typeof value.session === "string" ? value.session : "default",
+    deliveryConfigured: value.delivery !== undefined,
+    payloadWithheld: true,
+  };
+}
+
 export function cronCapabilityChange(params: {
   id: string;
   action: ClawUpdateCapabilityChange["action"];
@@ -440,9 +473,9 @@ export function cronCapabilityChange(params: {
       ? "Target manifest removes a scheduled automation."
       : "Target manifest adds, restores, or changes a scheduled automation.",
     effect:
-      params.desired && typeof params.desired === "object"
-        ? { ...(params.desired as Record<string, unknown>) }
-        : { removed: true },
+      params.desired === undefined
+        ? { removed: true }
+        : summarizeCronCapabilityEffect(params.desired),
     ...(params.current === undefined
       ? {}
       : {

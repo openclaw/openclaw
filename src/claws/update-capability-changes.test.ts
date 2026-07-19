@@ -287,6 +287,9 @@ describe("pushResolvedAgentCapabilityChanges", () => {
       desired: { url: "https://second.example", auth: { scheme: "second" } },
     });
     expect(firstMcp?.desired).toEqual(secondMcp?.desired);
+    expect(firstMcp?.effect).toEqual({ connection: "remote-server", authConfigured: true });
+    expect(JSON.stringify(firstMcp)).not.toContain("first.example");
+    expect(JSON.stringify(firstMcp)).not.toContain('"scheme":"first"');
 
     const firstCron = cronCapabilityChange({
       id: "report",
@@ -299,5 +302,46 @@ describe("pushResolvedAgentCapabilityChanges", () => {
       desired: { schedule: { cron: "0 9 * * *" }, session: "isolated", message: "second" },
     });
     expect(firstCron?.desired).toEqual(secondCron?.desired);
+    expect(firstCron?.effect).toEqual({
+      schedule: "cron",
+      timezoneConfigured: false,
+      session: "isolated",
+      deliveryConfigured: false,
+      payloadWithheld: true,
+    });
+    expect(JSON.stringify(firstCron)).not.toContain('"message":"first"');
+  });
+
+  it("describes MCP execution shape without exposing private configuration", () => {
+    const change = mcpCapabilityChange({
+      id: "private",
+      action: "add",
+      desired: {
+        command: "private-command",
+        args: ["--token", "secret-argument"],
+        env: { PRIVATE_TOKEN: "secret-env" },
+        auth: { token: "secret-auth" },
+        toolFilter: { allow: ["secret-tool"] },
+      },
+    });
+    expect(change?.effect).toEqual({
+      connection: "local-process",
+      commandConfigured: true,
+      argumentCount: 2,
+      authConfigured: true,
+      toolFilterConfigured: true,
+      envEntryCount: 1,
+    });
+    const serialized = JSON.stringify(change);
+    for (const privateValue of [
+      "private-command",
+      "secret-argument",
+      "PRIVATE_TOKEN",
+      "secret-env",
+      "secret-auth",
+      "secret-tool",
+    ]) {
+      expect(serialized).not.toContain(privateValue);
+    }
   });
 });

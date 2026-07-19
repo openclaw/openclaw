@@ -340,8 +340,9 @@ describe("buildClawUpdatePlan", () => {
           kind: "mcpServer",
           id: "search",
           effect: expect.objectContaining({
-            url: "https://mcp.example.com/search",
-            auth: "oauth",
+            connection: "remote-server",
+            transport: "streamable-http",
+            authConfigured: true,
           }),
           desired: expect.objectContaining({
             summary: "remote server; auth configured",
@@ -352,7 +353,10 @@ describe("buildClawUpdatePlan", () => {
         expect.objectContaining({
           kind: "cronJob",
           id: "daily",
-          effect: expect.objectContaining({ message: "Updated report" }),
+          effect: expect.objectContaining({
+            schedule: "cron",
+            payloadWithheld: true,
+          }),
           requiresDistinctConsent: true,
         }),
       ]),

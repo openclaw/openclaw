@@ -34,11 +34,7 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-import {
-  buildClawUpdatePlan,
-  CLAW_UPDATE_PLAN_SCHEMA_VERSION,
-  type ClawUpdatePlan,
-} from "../claws/update-plan.js";
+import { buildClawUpdatePlan, CLAW_UPDATE_PLAN_SCHEMA_VERSION } from "../claws/update-plan.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -50,6 +46,7 @@ import {
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
+import { logClawUpdatePlanSummary } from "./claws-cli-update-output.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
@@ -406,34 +403,6 @@ export async function runClawsStatusCommand(
   }
   if (target && status.records.length === 0) {
     runtime.exit(1);
-  }
-}
-
-function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeEnv): void {
-  runtime.log(`Agent: ${plan.agentId}`);
-  runtime.log(`Update actions: ${plan.summary.totalActions}`);
-  runtime.log(
-    `Add: ${plan.summary.added}; change: ${plan.summary.changed}; remove: ${plan.summary.removed}; release: ${plan.summary.released}; unchanged: ${plan.summary.unchanged}; manual: ${plan.summary.manual}`,
-  );
-  runtime.log(
-    `Capability changes: ${plan.summary.capabilityChanges}; escalations requiring explicit review: ${plan.summary.capabilityEscalations}`,
-  );
-  runtime.log(`Plan integrity: ${plan.planIntegrity}`);
-  if (plan.summary.capabilityEscalations > 0) {
-    runtime.log(
-      "Capability consent: the exact plan-integrity token binds every ! change disclosed below.",
-    );
-  }
-  for (const change of plan.capabilityChanges) {
-    const current = change.current?.summary ?? "unset";
-    const desired = change.desired?.summary ?? "unset";
-    runtime.log(
-      `  ${change.requiresDistinctConsent ? "!" : "-"} ${change.path}: ${current} -> ${desired} (${change.action})`,
-    );
-    runtime.log(redactSensitiveText(`      effect: ${JSON.stringify(change.effect)}`));
-  }
-  if (plan.blockers.length > 0) {
-    runtime.error(formatDiagnostics(plan.blockers));
   }
 }
 
