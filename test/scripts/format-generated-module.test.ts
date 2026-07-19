@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  outputTail,
   formatGeneratedModule,
   GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
   GENERATED_MODULE_FORMAT_TIMEOUT_MS,
@@ -114,5 +115,21 @@ describe("formatGeneratedModule", () => {
       expect(message).not.toContain("DO_NOT_DUMP_OLD_STDERR");
       expect(message).not.toContain("DO_NOT_DUMP_OLD_STDOUT");
     }
+  });
+});
+
+describe("outputTail UTF-8 safety", () => {
+  it("skips leading continuation bytes when the retained byte window splits a multibyte character", () => {
+    // "你好" (6 bytes) + 16380 x's = 16386 bytes, exceeding the 16 KiB cap.
+    // subarray(-16384) starts at byte 2 = 0xA0 (continuation of 你).
+    const bigText = "你好" + "x".repeat(16380);
+    const result = outputTail(bigText);
+    expect(result).not.toContain("�");
+    // The continuation byte is skipped; the tail starts with "好".
+    expect(result).toMatch(/^好x/);
+  });
+
+  it("passes through output that fits within the tail budget", () => {
+    expect(outputTail("hello")).toBe("hello");
   });
 });
