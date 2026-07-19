@@ -345,7 +345,7 @@ export function registerOnboardCommand(program: Command): void {
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
-          tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
+          tailscaleResetOnExit: opts.tailscaleResetOnExit === true ? true : undefined,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,

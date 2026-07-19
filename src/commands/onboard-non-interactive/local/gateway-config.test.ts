@@ -69,7 +69,7 @@ function applyGatewayConfig({
   );
 }
 
-describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
+describe("applyNonInteractiveGatewayConfig auth resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -206,5 +206,18 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(randomToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicitly empty password instead of preserving the existing password", () => {
+    const runtime = createRuntime();
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "password", password: "test-password" } } },
+      opts: { gatewayPassword: " " } as OnboardOptions,
+      runtime,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--gateway-password"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

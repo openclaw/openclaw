@@ -161,6 +161,7 @@ describe("registerSetupCommand", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastWizardOptions()?.tailscaleResetOnExit).toBeUndefined();
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
@@ -219,6 +220,7 @@ describe("registerSetupCommand", () => {
       "--skip-search",
       "--skip-skills",
       "--skip-bootstrap",
+      "--tailscale-reset-on-exit",
       "--node-manager",
       "pnpm",
       "--json",
@@ -237,6 +239,7 @@ describe("registerSetupCommand", () => {
       skipSearch: true,
       skipSkills: true,
       skipBootstrap: true,
+      tailscaleResetOnExit: true,
       nodeManager: "pnpm",
       json: true,
     });

@@ -113,7 +113,7 @@ async function runOnboardingEntry(
       gatewayTokenRefEnv: optionalString(options.gatewayTokenRefEnv),
       gatewayPassword: optionalString(options.gatewayPassword),
       tailscale: options.tailscale as TailscaleMode | undefined,
-      tailscaleResetOnExit: Boolean(options.tailscaleResetOnExit),
+      tailscaleResetOnExit: options.tailscaleResetOnExit === true ? true : undefined,
       installDaemon,
       daemonRuntime: options.daemonRuntime as GatewayDaemonRuntime | undefined,
       skipChannels: Boolean(options.skipChannels),

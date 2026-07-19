@@ -133,6 +133,7 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard"]);
 
     expect(setupWizardOptions().installDaemon).toBeUndefined();
+    expect(setupWizardOptions().tailscaleResetOnExit).toBeUndefined();
   });
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
@@ -170,6 +171,11 @@ describe("registerOnboardCommand", () => {
   it("forwards --skip-bootstrap to setup wizard options", async () => {
     await runCli(["onboard", "--skip-bootstrap"]);
     expect(setupWizardOptions().skipBootstrap).toBe(true);
+  });
+
+  it("forwards explicit --tailscale-reset-on-exit", async () => {
+    await runCli(["onboard", "--tailscale-reset-on-exit"]);
+    expect(setupWizardOptions().tailscaleResetOnExit).toBe(true);
   });
 
   it("forwards remote seed flags to setup wizard options", async () => {
