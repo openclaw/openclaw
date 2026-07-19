@@ -25,7 +25,6 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
-import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   appendTranscriptMessage,
   listSessionEntries,
@@ -1119,6 +1118,10 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("sessions cleanup extracts and evicts historical SQLite rows under physical pressure", async () => {
+    // Keep ordinary write/reset kicks inert; this test owns the explicit pressure pass below.
+    mockLoadConfig.mockReturnValue({
+      session: { maintenance: { maxDiskBytes: false } },
+    });
     const sessionKey = "agent:main:historical-budget";
     await seedSqliteSessionStore(storePath, {
       [sessionKey]: { sessionId: "historical-budget-session", updatedAt: 1 },
@@ -1134,14 +1137,15 @@ describe("Integration: saveSessionStore with pruning", () => {
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       buildNextEntry: () => ({ sessionId: "live-budget-session", updatedAt: Date.now() }),
     });
-    const before = await measureSessionPhysicalDiskUsage(storePath);
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
           mode: "enforce",
           pruneAfter: "365d",
           maxEntries: 500,
-          maxDiskBytes: before.totalBytes - 1,
+          // Keep the store unconditionally over budget even if cleanup checkpoints its WAL
+          // between preview and enforcement.
+          maxDiskBytes: 1,
           highWaterBytes: 0,
         },
       },
