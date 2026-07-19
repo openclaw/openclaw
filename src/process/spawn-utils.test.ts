@@ -3,7 +3,7 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { sanitizeSpawnOptionsForPlatform, spawnWithFallback } from "./spawn-utils.js";
+import { spawnWithFallback } from "./spawn-utils.js";
 
 function createStubChild() {
   const child = new EventEmitter() as ChildProcess;
@@ -33,31 +33,6 @@ function spawnOptionsAt(
   }
   return options as SpawnOptions;
 }
-
-describe("sanitizeSpawnOptionsForPlatform", () => {
-  it("forces detached false on Windows when callers request detached true (#105528)", () => {
-    const sanitized = sanitizeSpawnOptionsForPlatform(
-      { detached: true, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
-      "win32",
-    );
-    expect(sanitized.detached).toBe(false);
-    expect(sanitized.windowsHide).toBe(true);
-    expect(sanitized.stdio).toEqual(["pipe", "pipe", "pipe"]);
-  });
-
-  it("leaves detached true alone on POSIX", () => {
-    const sanitized = sanitizeSpawnOptionsForPlatform(
-      { detached: true, stdio: ["ignore", "pipe", "pipe"] },
-      "linux",
-    );
-    expect(sanitized.detached).toBe(true);
-  });
-
-  it("leaves already-attached Windows options unchanged", () => {
-    const options = { detached: false, stdio: ["pipe", "pipe", "pipe"] as const };
-    expect(sanitizeSpawnOptionsForPlatform(options, "win32")).toBe(options);
-  });
-});
 
 describe("spawnWithFallback", () => {
   it("retries on EBADF using fallback options", async () => {

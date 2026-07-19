@@ -29,11 +29,12 @@ const DEFAULT_RETRY_CODES = ["EBADF"];
 /**
  * On Windows, `detached: true` can break stdout/stderr pipe capture for
  * headless hosts (Scheduled Task / service) so exec/read-style tools return
- * empty output with no error. Call sites mostly opt out already; keep a
- * central belt-and-suspenders guard so every spawnWithFallback caller is safe.
+ * empty output with no error. The sole production caller
+ * (`createChildAdapter`) already opts out on win32; keep this as a local
+ * guard so future spawnWithFallback callers cannot reintroduce the footgun.
  * See #105528 / historical #17806 / #18035.
  */
-export function sanitizeSpawnOptionsForPlatform(
+function sanitizeSpawnOptionsForPlatform(
   options: SpawnOptions,
   platform: NodeJS.Platform = process.platform,
 ): SpawnOptions {
