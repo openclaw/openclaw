@@ -124,6 +124,7 @@ const setupChannels = vi.hoisted(() =>
 );
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const validateGatewayWebSocketUrl = vi.hoisted(() => vi.fn(() => undefined));
 
 function providerPluginStub(
   overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
@@ -236,6 +237,7 @@ vi.mock("../commands/onboard-skills.js", () => ({
 
 vi.mock("../commands/onboard-remote.js", () => ({
   promptRemoteGatewayConfig,
+  validateGatewayWebSocketUrl,
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -425,6 +427,8 @@ describe("runSetupWizard", () => {
     setupSkills.mockImplementation(async (cfg) => cfg);
     promptRemoteGatewayConfig.mockReset();
     promptRemoteGatewayConfig.mockImplementation(async (cfg) => cfg);
+    validateGatewayWebSocketUrl.mockReset();
+    validateGatewayWebSocketUrl.mockReturnValue(undefined);
     configureGatewayForSetup.mockReset();
     configureGatewayForSetup.mockImplementation(async (args) => ({
       nextConfig: args.nextConfig,
@@ -765,6 +769,29 @@ describe("runSetupWizard", () => {
       expect.any(Object),
       { secretInputMode: undefined },
     );
+  });
+
+  it("does not probe an invalid CLI remote URL with its token", async () => {
+    const remoteToken = "test-token";
+    validateGatewayWebSocketUrl.mockReturnValueOnce("Use wss:// for public gateways");
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: "ws://public.example",
+        remoteToken,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(validateGatewayWebSocketUrl).toHaveBeenCalledWith("ws://public.example");
+    expect(probeGatewayReachable).not.toHaveBeenCalledWith({
+      url: "ws://public.example",
+      token: remoteToken,
+    });
   });
 
   it("auto-enables the bundled session-memory hook without showing the hooks screen", async () => {

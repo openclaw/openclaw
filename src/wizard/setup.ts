@@ -471,12 +471,14 @@ async function runSetupWizardOnce(
       "Gateway auth",
     );
   }
-  const remoteProbe = remoteUrl
-    ? await onboardHelpers.probeGatewayReachable({
-        url: remoteUrl,
-        token: remoteGatewayToken,
-      })
-    : null;
+  const remoteOnboard = remoteUrl ? await import("../commands/onboard-remote.js") : null;
+  const remoteProbe =
+    remoteUrl && remoteOnboard?.validateGatewayWebSocketUrl(remoteUrl) === undefined
+      ? await onboardHelpers.probeGatewayReachable({
+          url: remoteUrl,
+          token: remoteGatewayToken,
+        })
+      : null;
 
   const mode =
     opts.mode ??
@@ -505,7 +507,8 @@ async function runSetupWizardOnce(
         })) as OnboardMode));
 
   if (mode === "remote") {
-    const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
+    const { promptRemoteGatewayConfig } =
+      remoteOnboard ?? (await import("../commands/onboard-remote.js"));
     const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
