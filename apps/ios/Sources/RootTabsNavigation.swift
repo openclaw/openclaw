@@ -9,7 +9,8 @@ extension RootTabs {
 
     static let sidebarSplitIdealWidth: CGFloat = 316
     static let sidebarSplitMaximumWidth: CGFloat = 340
-    static let sidebarDrawerMaximumWidth: CGFloat = 340
+    // Mirrors the web mobile drawer cap (min(86vw, 320px)).
+    static let sidebarDrawerMaximumWidth: CGFloat = 320
     static let sidebarShowButtonAccessibilityIdentifier = "RootTabs.Sidebar.Show"
     static let sidebarHideButtonAccessibilityIdentifier = "RootTabs.Sidebar.Hide"
 
@@ -232,4 +233,26 @@ extension RootTabs {
         .terminal,
         .docs,
     ]
+
+    /// Home (chat) is a fixed first row like the web sidebar; only these can be
+    /// pinned/unpinned by the user.
+    static let pinnableSidebarPages: [SidebarDestination] = sidebarDestinations.filter { $0 != .chat }
+
+    /// Echoes the web first-run Pages zone (Home, Usage, Automations, …):
+    /// compact by default so sessions stay above the fold. The Sessions page is
+    /// intentionally unpinned — the sessions section + "All Sessions…" own it.
+    static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
+
+    /// "" = never customized (defaults); "none" = user unpinned everything.
+    static func pinnedSidebarPages(from storage: String) -> [SidebarDestination] {
+        let trimmed = storage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return self.defaultPinnedSidebarPages }
+        if trimmed == "none" { return [] }
+        let stored = Set(trimmed.split(separator: ",").map(String.init))
+        return self.pinnableSidebarPages.filter { stored.contains($0.rawValue) }
+    }
+
+    static func pinnedSidebarPagesStorage(_ pages: [SidebarDestination]) -> String {
+        pages.isEmpty ? "none" : pages.map(\.rawValue).joined(separator: ",")
+    }
 }

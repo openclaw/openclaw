@@ -84,7 +84,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             initialDestination: "overview",
             name: "control-overview-navigation"))
 
-        XCTAssertTrue(self.app?.staticTexts["Agent thread"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
         try self.selectSidebarDestination("Overview")
 
         XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5) == true)
@@ -581,7 +581,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         try self.startNewChatFromSidebar()
         try self.selectSidebarDestination("Overview")
-        XCTAssertTrue(self.app?.staticTexts["Agent thread"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
         self.attachScreenshot(named: "control-tab-returns-to-root")
 
         let agentSession = try XCTUnwrap(
@@ -592,7 +592,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].waitForExistence(timeout: 8) == true)
         self.attachScreenshot(named: "chat-session-return-to-overview")
         try self.selectSidebarDestination("Overview")
-        XCTAssertTrue(self.app?.staticTexts["Agent thread"].waitForExistence(timeout: 8) == true)
+        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
     }
 
     func testAgentUsesToolbarFilter() throws {
@@ -620,7 +620,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let controlApp = self.relaunchConnectedLiveGatewayApp(
             initialTab: "control",
             initialDestination: "overview")
-        XCTAssertTrue(controlApp.staticTexts["Agent thread"].waitForExistence(timeout: 8))
+        XCTAssertTrue(controlApp.staticTexts["Agent session"].waitForExistence(timeout: 8))
         XCTAssertTrue(controlApp.buttons["RootTabs.Sidebar.Show"].exists)
         XCTAssertEqual(controlApp.state, .runningForeground)
     }
@@ -665,7 +665,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let controlApp = self.relaunchConnectedLiveGatewayApp(
             initialTab: "control",
             initialDestination: "overview")
-        XCTAssertTrue(controlApp.staticTexts["Agent thread"].waitForExistence(timeout: 8))
+        XCTAssertTrue(controlApp.staticTexts["Agent session"].waitForExistence(timeout: 8))
         self.attachScreenshot(named: "live-gateway-control")
         try self.selectSidebarDestination("Overview")
         XCTAssertTrue(controlApp.buttons["Gateway settings"].waitForExistence(timeout: 5))

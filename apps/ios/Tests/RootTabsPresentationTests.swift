@@ -582,6 +582,24 @@ struct RootTabsPresentationTests {
         #expect(width <= RootTabs.sidebarDrawerMaximumWidth)
     }
 
+    @Test func `pinned pages storage round trips and keeps canonical order`() {
+        #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
+        #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
+        #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
+
+        // Storage order does not matter; canonical sidebar order wins.
+        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs")
+        #expect(parsed == [.overview, .usage, .docs])
+
+        let storage = RootTabs.pinnedSidebarPagesStorage([.overview, .usage, .docs])
+        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.overview, .usage, .docs])
+
+        // Unknown raw values are dropped; chat is never pinnable.
+        #expect(RootTabs.pinnedSidebarPages(from: "chat,bogus").isEmpty)
+        #expect(!RootTabs.pinnedSidebarPages(from: "chat,overview").contains(.chat))
+        #expect(!RootTabs.pinnableSidebarPages.contains(.chat))
+    }
+
     @Test func `drawer content follows reveal and dismiss drag`() {
         #expect(RootTabs.sidebarContentOffset(
             sidebarWidth: 340,

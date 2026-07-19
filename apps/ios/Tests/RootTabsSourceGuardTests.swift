@@ -134,11 +134,13 @@ struct RootTabsSourceGuardTests {
         let navigationSource = try String(contentsOf: Self.rootTabsNavigationSourceURL(), encoding: .utf8)
 
         #expect(rootSource.contains("RootSidebar("))
-        #expect(source.contains("ForEach(RootTabs.sidebarDestinations)"))
-        #expect(source.contains("private var identityHeader: some View"))
-        #expect(source.contains("OpenClawProMark(size: 30"))
-        #expect(source.contains("String(localized: \"OpenClaw\")"))
-        #expect(source.contains("private var gatewayStatusTitle: String"))
+        #expect(source.contains("ForEach(self.pinnedPages)"))
+        #expect(source.contains("ForEach(RootTabs.pinnableSidebarPages)"))
+        #expect(source.contains("private var agentHeader: some View"))
+        #expect(source.contains("private var homeRow: some View"))
+        #expect(source.contains("RootTabs.pinnedSidebarPages(from: self.pinnedPagesStorage)"))
+        #expect(source.contains("struct RootSidebarPagesEditor: View"))
+                        #expect(source.contains("private var gatewayStatusTitle: String"))
         #expect(source.contains("private var gatewayStatusColor: Color"))
         #expect(source.contains("private var sessionsSection: some View"))
         #expect(source.contains("private var pagesSection: some View"))
@@ -641,9 +643,9 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("self.previewHeader(\"Loading\")"))
         #expect(source.contains("self.previewHeader(\"Empty\")"))
         #expect(source.contains("self.previewHeader(\"Error\")"))
-        #expect(source.contains("title: \"Threads unavailable\""))
-        #expect(source.contains("title: \"No recent threads\""))
-        #expect(source.contains("title: \"Loading threads\""))
+        #expect(source.contains("title: \"Sessions unavailable\""))
+        #expect(source.contains("title: \"No recent sessions\""))
+        #expect(source.contains("title: \"Loading sessions\""))
     }
 
     @Test func `routed feature screens reuse shared pro components`() throws {

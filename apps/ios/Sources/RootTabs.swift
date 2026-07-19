@@ -213,6 +213,9 @@ struct RootTabs: View {
                     }
             }
         }
+        // Uniform card surface: destinations that do not paint vertical safe
+        // areas would otherwise show the container black as bands.
+        .background(OpenClawProBackground().ignoresSafeArea())
         .contentShape(Rectangle())
         .gesture(
             self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
@@ -220,6 +223,12 @@ struct RootTabs: View {
         .clipShape(RoundedRectangle(
             cornerRadius: OpenClawProMetric.drawerRadius * progress,
             style: .continuous))
+        // Defines the card edge against the black sidebar when content is dark.
+        .overlay(
+            RoundedRectangle(
+                cornerRadius: OpenClawProMetric.drawerRadius * progress,
+                style: .continuous)
+                .strokeBorder(Color.white.opacity(0.12 * progress), lineWidth: 1))
         .shadow(
             color: .black.opacity(0.28 * progress),
             radius: 20 * progress,

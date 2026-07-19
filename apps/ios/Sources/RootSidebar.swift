@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawProtocol
 import SwiftUI
 
 struct RootSidebar: View {
@@ -7,6 +8,10 @@ struct RootSidebar: View {
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
     @State private var searchText = ""
+    @State private var isSearchActive = false
+    @State private var showsPagesEditor = false
+    @FocusState private var isSearchFocused: Bool
+    @AppStorage("sidebar.pinnedPages") private var pinnedPagesStorage: String = ""
 
     let selectedDestination: RootTabs.SidebarDestination
     let isDrawerLayout: Bool
@@ -16,13 +21,14 @@ struct RootSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            self.identityHeader
-            self.primaryActions
-            self.searchField
+            self.agentHeader
+            if self.isSearchActive {
+                self.searchField
+            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    self.sessionsSection
                     self.pagesSection
+                    self.sessionsSection
                     self.attentionSection
                 }
                 .padding(.horizontal, 10)
@@ -33,27 +39,141 @@ struct RootSidebar: View {
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
         .environment(\.colorScheme, .dark)
+        .sheet(isPresented: self.$showsPagesEditor) {
+            RootSidebarPagesEditor(
+                pinnedPages: self.pinnedPages,
+                onSelect: { destination in
+                    self.showsPagesEditor = false
+                    self.selectDestination(destination)
+                },
+                onTogglePin: self.togglePinnedPage)
+        }
         .task(id: self.refreshID) {
             guard self.scenePhase == .active else { return }
             await self.model.refresh(appModel: self.appModel)
         }
     }
 
+    private var pinnedPages: [RootTabs.SidebarDestination] {
+        RootTabs.pinnedSidebarPages(from: self.pinnedPagesStorage)
+    }
+
+    private func togglePinnedPage(_ destination: RootTabs.SidebarDestination) {
+        var pages = self.pinnedPages
+        if let index = pages.firstIndex(of: destination) {
+            pages.remove(at: index)
+        } else {
+            pages = RootTabs.pinnableSidebarPages.filter { pages.contains($0) || $0 == destination }
+        }
+        self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
+    }
+
     private var refreshID: String {
         "\(self.appModel.chatViewModelIdentityID):\(self.scenePhase == .active)"
     }
 
-    private var identityHeader: some View {
+    /// Web-parity agent card: current agent up top, switcher when the gateway
+    /// offers more than one, compact icon actions on the trailing edge.
+    private var agentHeader: some View {
+        HStack(spacing: 8) {
+            if self.appModel.gatewayAgents.count > 1 {
+                Menu {
+                    ForEach(self.appModel.gatewayAgents, id: \.id) { agent in
+                        Button {
+                            self.appModel.setSelectedAgentId(agent.id)
+                        } label: {
+                            if agent.id == self.currentAgentID {
+                                Label {
+                                    Text(verbatim: Self.agentDisplayName(agent))
+                                        .font(OpenClawType.subheadSemiBold)
+                                } icon: {
+                                    Image(systemName: "checkmark")
+                                }
+                            } else {
+                                Text(verbatim: Self.agentDisplayName(agent))
+                                    .font(OpenClawType.subheadSemiBold)
+                            }
+                        }
+                    }
+                } label: {
+                    self.agentCard(showsChevron: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Switch agent"))
+            } else {
+                self.agentCard(showsChevron: false)
+            }
+
+            Spacer(minLength: 4)
+
+            self.headerIconButton(
+                systemName: "plus.bubble",
+                label: String(localized: "New Chat"))
+            {
+                self.appModel.requestNewChat()
+                self.selectDestination(.chat)
+            }
+            .disabled(!self.appModel.isOperatorGatewayConnected)
+
+            self.headerIconButton(
+                systemName: "magnifyingglass",
+                label: String(localized: "Search sessions"))
+            {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    self.isSearchActive.toggle()
+                }
+                if self.isSearchActive {
+                    self.isSearchFocused = true
+                } else {
+                    self.searchText = ""
+                }
+            }
+
+            if self.isDrawerLayout {
+                Button(action: self.hideSidebar) {
+                    Image(systemName: "xmark")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(width: 40, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(OpenClawSidebarPalette.accent)
+                .accessibilityLabel(String(localized: "Hide Sidebar"))
+                .accessibilityIdentifier(RootTabs.sidebarHideButtonAccessibilityIdentifier)
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 10)
+        .background(OpenClawSidebarPalette.background)
+        .overlay(alignment: .bottom) { self.separator }
+    }
+
+    private func agentCard(showsChevron: Bool) -> some View {
         HStack(spacing: 10) {
-            OpenClawProMark(size: 30, shadowRadius: 3)
-                .accessibilityHidden(true)
+            ZStack {
+                Circle()
+                    .fill(OpenClawSidebarPalette.elevated)
+                Text(verbatim: self.currentAgentBadge)
+                    .font(OpenClawType.captionSemiBold)
+                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
+            }
+            .frame(width: 30, height: 30)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(String(localized: "OpenClaw"))
-                    .font(OpenClawType.headline)
-                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                    .lineLimit(1)
-
+                HStack(spacing: 4) {
+                    Text(verbatim: self.currentAgentName)
+                        .font(OpenClawType.headline)
+                        .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                        .lineLimit(1)
+                    if showsChevron {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                            .accessibilityHidden(true)
+                    }
+                }
                 HStack(spacing: 5) {
                     Circle()
                         .fill(self.gatewayStatusColor)
@@ -65,53 +185,65 @@ struct RootSidebar: View {
                         .lineLimit(1)
                 }
             }
-
-            Spacer(minLength: 8)
-
-            if self.isDrawerLayout {
-                Button(action: self.hideSidebar) {
-                    Image(systemName: "xmark")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(OpenClawSidebarPalette.accent)
-                .accessibilityLabel(String(localized: "Hide Sidebar"))
-                .accessibilityIdentifier(RootTabs.sidebarHideButtonAccessibilityIdentifier)
-            }
         }
-        .padding(.leading, 18)
-        .padding(.trailing, 10)
-        .padding(.vertical, 10)
-        .background(OpenClawSidebarPalette.background)
-        .overlay(alignment: .bottom) { self.separator }
+        .contentShape(Rectangle())
     }
 
-    private var primaryActions: some View {
-        Button {
-            self.appModel.requestNewChat()
-            self.selectDestination(.chat)
-        } label: {
-            Label {
-                Text(String(localized: "New Chat"))
-                    .font(OpenClawType.subheadSemiBold)
-            } icon: {
-                Image(systemName: "plus.bubble")
-                    .font(OpenClawType.subheadSemiBold)
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 12)
-            .contentShape(Rectangle())
+    private func headerIconButton(
+        systemName: String,
+        label: String,
+        action: @escaping () -> Void) -> some View
+    {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(OpenClawType.subheadSemiBold)
+                .frame(width: 40, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(OpenClawSidebarPalette.textStrong)
-        .background(OpenClawSidebarPalette.elevated, in: RoundedRectangle(
-            cornerRadius: OpenClawProMetric.controlRadius,
-            style: .continuous))
-        .disabled(!self.appModel.isOperatorGatewayConnected)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
+        .foregroundStyle(OpenClawSidebarPalette.text)
+        .accessibilityLabel(label)
+    }
+
+    private var currentAgentID: String {
+        let selected = self.appModel.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !selected.isEmpty { return selected }
+        return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var currentAgent: AgentSummary? {
+        let agents = self.appModel.gatewayAgents
+        return agents.first { $0.id == self.currentAgentID } ?? agents.first
+    }
+
+    private var currentAgentName: String {
+        if let currentAgent { return Self.agentDisplayName(currentAgent) }
+        let active = self.appModel.activeAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return active.isEmpty ? String(localized: "OpenClaw") : active
+    }
+
+    private var currentAgentBadge: String {
+        Self.agentBadge(name: self.currentAgentName, identity: self.currentAgent?.identity)
+    }
+
+    static func agentDisplayName(_ agent: AgentSummary) -> String {
+        let name = agent.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? agent.id : name
+    }
+
+    static func agentBadge(name: String, identity: [String: AnyCodable]?) -> String {
+        if let emoji = (identity?["emoji"]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !emoji.isEmpty
+        {
+            return emoji
+        }
+        let initials = name
+            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+            .joined()
+        return initials.isEmpty ? "OC" : initials.uppercased()
     }
 
     private var searchField: some View {
@@ -132,6 +264,7 @@ struct RootSidebar: View {
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .focused(self.$isSearchFocused)
                     .accessibilityLabel(String(localized: "Search sessions"))
             }
             if !self.searchText.isEmpty {
@@ -218,11 +351,65 @@ struct RootSidebar: View {
 
     private var pagesSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            self.sectionTitle(String(localized: "Pages"))
-            ForEach(RootTabs.sidebarDestinations) { destination in
+            HStack(spacing: 4) {
+                self.sectionTitle(String(localized: "Pages"))
+                Spacer(minLength: 4)
+                Button {
+                    self.showsPagesEditor = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(OpenClawType.captionSemiBold)
+                        .frame(width: 40, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(OpenClawSidebarPalette.muted)
+                .accessibilityLabel(String(localized: "Edit Pages"))
+            }
+            self.homeRow
+            ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
             }
         }
+    }
+
+    /// Fixed first Pages row like the web "Home": opens the agent's chat and
+    /// carries the main session's run/unread state.
+    private var homeRow: some View {
+        let isSelected = self.selectedDestination == .chat
+        let mainSession = self.model.sessions.first { $0.key == self.appModel.defaultChatSessionKey }
+        return Button {
+            self.selectDestination(.chat)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "house")
+                    .font(OpenClawType.subheadSemiBold)
+                    .frame(width: 18)
+                Text(String(localized: "Home"))
+                    .font(OpenClawType.subheadSemiBold)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if mainSession?.hasActiveRun == true {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(OpenClawSidebarPalette.accent)
+                } else if mainSession?.unread == true {
+                    Circle()
+                        .fill(OpenClawSidebarPalette.accent)
+                        .frame(width: 7, height: 7)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? OpenClawSidebarPalette.accent : OpenClawSidebarPalette.text)
+        .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+            cornerRadius: OpenClawProMetric.controlRadius,
+            style: .continuous))
+        .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
     }
 
     @ViewBuilder
@@ -255,22 +442,44 @@ struct RootSidebar: View {
         }
     }
 
+    /// Web-parity compact footer: connection state left, Settings gear right.
     private var footer: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 0) {
             self.separator
-            self.footerButton(
-                title: self.gatewayName,
-                systemImage: "network",
-                statusColor: self.gatewayStatusColor)
-            {
-                self.selectDestination(.gateway)
-            }
-            self.footerButton(
-                title: String(localized: "Settings"),
-                systemImage: "gearshape",
-                statusColor: nil)
-            {
-                self.selectDestination(.settings)
+            HStack(spacing: 4) {
+                Button {
+                    self.selectDestination(.gateway)
+                } label: {
+                    HStack(spacing: 9) {
+                        Circle()
+                            .fill(self.gatewayStatusColor)
+                            .frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text(verbatim: self.gatewayName)
+                            .font(OpenClawType.subheadSemiBold)
+                            .lineLimit(1)
+                    }
+                    .frame(minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(OpenClawSidebarPalette.text)
+                .accessibilityValue(self.gatewayStatusTitle)
+
+                Spacer(minLength: 4)
+
+                Button {
+                    self.selectDestination(.settings)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(OpenClawSidebarPalette.text)
+                .accessibilityLabel(String(localized: "Settings"))
             }
         }
         .padding(.horizontal, 10)
@@ -424,37 +633,6 @@ struct RootSidebar: View {
         .foregroundStyle(OpenClawSidebarPalette.text)
     }
 
-    private func footerButton(
-        title: String,
-        systemImage: String,
-        statusColor: Color?,
-        action: @escaping () -> Void) -> some View
-    {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                if let statusColor {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 8, height: 8)
-                        .frame(width: 18)
-                } else {
-                    Image(systemName: systemImage)
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(width: 18)
-                }
-                Text(verbatim: title)
-                    .font(OpenClawType.subheadSemiBold)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 10)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(OpenClawSidebarPalette.text)
-    }
-
     private func sectionTitle(_ title: String) -> some View {
         Text(verbatim: title.uppercased())
             .font(OpenClawType.caption2Bold)
@@ -552,6 +730,79 @@ struct RootSidebar: View {
             } catch {
                 self.model.reportSessionError(error)
             }
+        }
+    }
+}
+
+/// Web-parity Pages editor (the pen menu): navigate to any page, pin/unpin
+/// which ones stay in the sidebar. Home is fixed and not listed.
+struct RootSidebarPagesEditor: View {
+    let pinnedPages: [RootTabs.SidebarDestination]
+    let onSelect: (RootTabs.SidebarDestination) -> Void
+    let onTogglePin: (RootTabs.SidebarDestination) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(RootTabs.pinnableSidebarPages) { destination in
+                        self.pageRow(destination)
+                    }
+                } footer: {
+                    Text("Pinned pages stay in the sidebar. Home is always shown.")
+                        .font(OpenClawType.caption)
+                }
+            }
+            .navigationTitle(String(localized: "Pages"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        self.dismiss()
+                    } label: {
+                        Text(String(localized: "Done"))
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                }
+            }
+        }
+        .openClawSheetChrome()
+    }
+
+    private func pageRow(_ destination: RootTabs.SidebarDestination) -> some View {
+        let isPinned = self.pinnedPages.contains(destination)
+        return HStack(spacing: 10) {
+            Button {
+                self.onSelect(destination)
+            } label: {
+                Label {
+                    Text(destination.sidebarTitle)
+                        .font(OpenClawType.subheadSemiBold)
+                } icon: {
+                    Image(systemName: destination.systemImage)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                self.onTogglePin(destination)
+            } label: {
+                Image(systemName: isPinned ? "pin.fill" : "pin")
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(isPinned ? OpenClawBrand.accent : Color.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(destination.sidebarTitle)
+            .accessibilityValue(
+                isPinned
+                    ? String(localized: "Pinned")
+                    : String(localized: "Not pinned"))
         }
     }
 }
