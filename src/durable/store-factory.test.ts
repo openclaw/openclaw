@@ -4,7 +4,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { DURABLE_RUNTIME_SCHEMA_META_KEY } from "./schema.js";
 import { openDurableRuntimeStore, openDurableRuntimeStoreReadOnly } from "./store-factory.js";
 
 describe("durable runtime store factory", () => {
@@ -75,8 +74,8 @@ describe("durable runtime store factory", () => {
       const db = new DatabaseSync(dbPath, { readOnly: true });
       try {
         const row = db
-          .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = ?")
-          .get(DURABLE_RUNTIME_SCHEMA_META_KEY) as { updated_at: number | bigint };
+          .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
+          .get() as { updated_at: number | bigint };
         return Number(row.updated_at);
       } finally {
         db.close();

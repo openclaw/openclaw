@@ -5,15 +5,12 @@ import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import {
+  OPENCLAW_STATE_SCHEMA_VERSION,
   closeOpenClawStateDatabaseForPath,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { DURABLE_RUNTIME_SCHEMA_META_KEY } from "./schema.js";
-import {
-  DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
-  openDurableRuntimeSqliteStore,
-} from "./sqlite-store.js";
+import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 
 const DURABLE_TABLES = [
   "delivery_attempt_evidence",
@@ -65,9 +62,7 @@ describe("durable runtime sqlite store", () => {
         .all(...DURABLE_TABLES);
       expect(runtimeTables).toEqual([]);
       expect(
-        state.db
-          .prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?")
-          .get(DURABLE_RUNTIME_SCHEMA_META_KEY),
+        state.db.prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?").get("durable_runtime"),
       ).toBeUndefined();
     } finally {
       closeOpenClawStateDatabaseForPath({ path: dbPath });
@@ -75,17 +70,31 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
-  it("records the supported durable schema version", () => {
+  it("installs additive durable tables without a separate schema marker", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
     const store = openDurableRuntimeSqliteStore({
-      path: path.join(dir, "openclaw.sqlite"),
+      path: dbPath,
     });
     try {
-      expect(store.getStats()).toMatchObject({
-        schemaVersion: DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
-      });
+      expect(store.getStats()).toMatchObject({ runs: 0, events: 0, steps: 0 });
     } finally {
       store.close();
+    }
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(db.prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?").get("primary")).toEqual({
+        1: 1,
+      });
+      expect(
+        db.prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?").get("durable_runtime"),
+      ).toBeUndefined();
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+    } finally {
+      db.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -96,7 +105,7 @@ describe("durable runtime sqlite store", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(dbPath);
     try {
-      db.exec(`PRAGMA user_version = ${DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION + 1};`);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     } finally {
       db.close();
     }
@@ -115,71 +124,6 @@ describe("durable runtime sqlite store", () => {
                ORDER BY name`,
           )
           .all();
-        expect(runtimeTables).toEqual([]);
-      } finally {
-        verifyDb.close();
-      }
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects a newer durable schema before mutating shared state", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-future-store-"));
-    const dbPath = path.join(dir, "openclaw.sqlite");
-    openOpenClawStateDatabase({ path: dbPath });
-    closeOpenClawStateDatabaseForPath({ path: dbPath });
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(dbPath);
-    try {
-      db.prepare(
-        `INSERT INTO schema_meta (
-           meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-         ) VALUES (?, ?, ?, NULL, NULL, ?, ?)`,
-      ).run(
-        DURABLE_RUNTIME_SCHEMA_META_KEY,
-        "durable_runtime",
-        DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION + 1,
-        123,
-        123,
-      );
-    } finally {
-      db.close();
-    }
-
-    const snapshot = new DatabaseSync(dbPath, { readOnly: true });
-    const before = (() => {
-      try {
-        return {
-          schema: snapshot
-            .prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name")
-            .all(),
-          metadata: snapshot.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
-        };
-      } finally {
-        snapshot.close();
-      }
-    })();
-
-    try {
-      expect(() => openDurableRuntimeSqliteStore({ path: dbPath })).toThrow(
-        /Durable runtime database .* uses newer schema version .* supports/,
-      );
-      const verifyDb = new DatabaseSync(dbPath, { readOnly: true });
-      try {
-        expect({
-          schema: verifyDb
-            .prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name")
-            .all(),
-          metadata: verifyDb.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
-        }).toEqual(before);
-        const runtimeTables = verifyDb
-          .prepare(
-            `SELECT name FROM sqlite_master
-               WHERE type = 'table'
-                 AND name IN (${DURABLE_TABLES.map(() => "?").join(", ")})`,
-          )
-          .all(...DURABLE_TABLES);
         expect(runtimeTables).toEqual([]);
       } finally {
         verifyDb.close();
@@ -216,9 +160,7 @@ describe("durable runtime sqlite store", () => {
 
     const store = openDurableRuntimeSqliteStore({ path: dbPath });
     try {
-      expect(store.getStats()).toMatchObject({
-        schemaVersion: DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
-      });
+      expect(store.getStats()).toMatchObject({ runs: 0, events: 0, steps: 0 });
       const run = store.createRun({
         operationKind: "openclaw.chat.send",
         idempotencyKey: "upgrade-smoke",
@@ -247,12 +189,8 @@ describe("durable runtime sqlite store", () => {
       expect(
         verifyDb
           .prepare("SELECT meta_key, role, schema_version FROM schema_meta WHERE meta_key = ?")
-          .get(DURABLE_RUNTIME_SCHEMA_META_KEY),
-      ).toEqual({
-        meta_key: DURABLE_RUNTIME_SCHEMA_META_KEY,
-        role: "durable_runtime",
-        schema_version: DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
-      });
+          .get("durable_runtime"),
+      ).toBeUndefined();
       expect(
         verifyDb
           .prepare(
@@ -268,7 +206,7 @@ describe("durable runtime sqlite store", () => {
         },
       ]);
       expect(verifyDb.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
       const runtimeTables = verifyDb
         .prepare(

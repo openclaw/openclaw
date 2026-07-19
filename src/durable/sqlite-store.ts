@@ -16,12 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DB as DurableSchemaKyselyDatabase } from "./schema-db.generated.js";
-import {
-  assertDurableRuntimeSchemaVersionAtPath,
-  DURABLE_RUNTIME_SCHEMA_VERSION,
-  ensureDurableRuntimeSchema,
-  openDurableRuntimeSchemaReadOnly,
-} from "./schema.js";
+import { ensureDurableRuntimeSchema, openDurableRuntimeSchemaReadOnly } from "./schema.js";
 import type {
   AppendDurableRuntimeEventInput,
   ClaimNextWakeObligationInput,
@@ -862,9 +857,6 @@ function isSameSqlValue(
   return left === right;
 }
 
-export const DURABLE_SQLITE_SCHEMA_VERSION = DURABLE_RUNTIME_SCHEMA_VERSION;
-export const DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION = DURABLE_SQLITE_SCHEMA_VERSION;
-
 export function openDurableRuntimeSqliteStore(storeOptions?: {
   path?: string;
   env?: NodeJS.ProcessEnv;
@@ -879,7 +871,6 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
     db = openDurableRuntimeSchemaReadOnly(pathname);
     releaseDatabase = () => db.close();
   } else {
-    assertDurableRuntimeSchemaVersionAtPath(pathname);
     const stateDatabaseLease = acquireOpenClawStateDatabaseLease({ env, path: pathname });
     db = stateDatabaseLease.database.db;
     releaseDatabase = () => {
@@ -890,7 +881,7 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
   const durableDb = (() => {
     try {
       if (!readOnly) {
-        ensureDurableRuntimeSchema(db, pathname);
+        ensureDurableRuntimeSchema(db);
       }
       return getNodeSqliteKysely<DurableRuntimeDatabase>(db);
     } catch (err) {
@@ -3515,7 +3506,6 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
     getStats(): DurableRuntimeStoreStats {
       return {
         path: pathname,
-        schemaVersion: DURABLE_RUNTIME_SCHEMA_VERSION,
         runs: count(
           db,
           durableDb
