@@ -304,7 +304,7 @@ describeLive("subagent announce live", () => {
       });
       await state.writeConfig(
         liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
-          queue: { mode: "collect", debounceMs: 2_500 },
+          queue: { mode: "collect" },
           toolAllow: ["sessions_spawn", "bash"],
         }),
       );

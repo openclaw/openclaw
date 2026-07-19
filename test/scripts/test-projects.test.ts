@@ -1973,6 +1973,10 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/ci-workflow-guards.test.ts"],
       ],
       [
+        ".github/actions/setup-node-env/verify-importers.mjs",
+        ["test/scripts/ci-workflow-guards.test.ts"],
+      ],
+      [
         ".github/actions/setup-pnpm-store-cache/action.yml",
         [
           "test/scripts/package-acceptance-workflow.test.ts",
