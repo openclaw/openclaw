@@ -326,7 +326,8 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams).not.toHaveProperty("to");
     expect(agentParams).not.toHaveProperty("accountId");
     expect(agentParams).not.toHaveProperty("threadId");
-    expect(agentParams.extraSystemPrompt).toContain("Call structured_output exactly once");
+    expect(agentParams.extraSystemPrompt).toContain("until one payload is accepted");
+    expect(agentParams.extraSystemPrompt).toContain("at most one retry");
     await vi.waitFor(() =>
       expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(result.runId, "run-1"),
     );
@@ -582,6 +583,32 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(accepted.status).toBe("accepted");
     expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenCalledWith("fresh", "agent:main:main");
+  });
+
+  it("enforces group caps atomically across concurrent collector registration", async () => {
+    hoisted.configOverride = createConfigOverride({
+      tools: { swarm: { enabled: true, maxChildrenPerGroup: 1 } },
+    });
+    hoisted.listSwarmRunsForGroupMock.mockImplementation(() =>
+      hoisted.registerSubagentRunMock.mock.calls.map(([run]) => requireRecord(run)),
+    );
+
+    const results = await Promise.all([
+      spawnSubagentDirect(
+        { task: "first concurrent child", collect: true, groupId: "shared" },
+        { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+      ),
+      spawnSubagentDirect(
+        { task: "second concurrent child", collect: true, groupId: "shared" },
+        { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+      ),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(["accepted", "forbidden"]);
+    expect(results.find((result) => result.status === "forbidden")?.error).toContain(
+      "tools.swarm.maxChildrenPerGroup",
+    );
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("retains the requester-wide active-child ceiling for collector groups", async () => {
