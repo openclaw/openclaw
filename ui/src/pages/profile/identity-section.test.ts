@@ -62,7 +62,7 @@ describe("renderIdentitySection", () => {
     expect(container.textContent).toContain("ada@example.test, ada@work.test");
   });
 
-  it("uses the linked email fallback when the profile has no upload", async () => {
+  it("falls back to initials when no same-origin avatar route is available", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -75,13 +75,16 @@ describe("renderIdentitySection", () => {
       container,
     );
     const avatar = container.querySelector<HTMLElement>("openclaw-viewer-avatar") as
-      | (HTMLElement & { updateComplete: Promise<unknown> })
+      | (HTMLElement & { updateComplete?: Promise<unknown> })
       | null;
+    await avatar?.updateComplete;
 
-    await vi.waitFor(() => expect(avatar?.querySelector("img")).not.toBeNull());
-    expect(avatar?.querySelector("img")?.getAttribute("src")).toMatch(
-      /^https:\/\/gravatar\.com\/avatar\/[a-f0-9]{64}\?d=404&s=128$/u,
-    );
+    // The gateway route (userProfileAvatarUrl) serves the Gravatar fallback
+    // server-side and stays same-origin under the Control UI CSP. When no route
+    // is available — e.g. a cross-origin gateway returns null — the chip shows
+    // deterministic initials rather than a CSP-blocked direct gravatar.com image.
+    expect(avatar?.querySelector("img")).toBeNull();
+    expect(avatar?.textContent?.trim()).toBe("AL");
   });
 
   it("edits and saves the display name with the standard input pattern", () => {

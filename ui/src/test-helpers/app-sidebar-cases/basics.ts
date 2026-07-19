@@ -45,7 +45,7 @@ describe("AppSidebar update card wiring", () => {
 });
 
 describe("AppSidebar viewer presence", () => {
-  it("renders the self user's Gravatar in the footer identity chip", async () => {
+  it("renders the self user's avatar route in the footer identity chip", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -58,7 +58,16 @@ describe("AppSidebar viewer presence", () => {
       presence: [
         {
           instanceId: "self-instance",
-          user: { id: "00-self", email: "test@example.com", name: "Self User" },
+          // Presence publishes the canonical gateway avatar route; the gateway
+          // serves an uploaded avatar or its Gravatar fallback behind it, so the
+          // chip renders that same-origin route (CSP-safe) rather than a direct
+          // gravatar.com URL the Control UI CSP would block.
+          user: {
+            id: "00-self",
+            email: "test@example.com",
+            name: "Self User",
+            avatarUrl: "/api/users/00-self/avatar?v=7",
+          },
         },
       ],
     });
@@ -67,9 +76,7 @@ describe("AppSidebar viewer presence", () => {
       const avatar = sidebar.querySelector<HTMLImageElement>(
         ".sidebar-footer-bar__identity openclaw-viewer-avatar img",
       );
-      expect(avatar?.src).toBe(
-        "https://gravatar.com/avatar/973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b?d=404&s=128",
-      );
+      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
     });
   });
 
