@@ -75,7 +75,7 @@ vi.mock("./runtime-plugins.js", () => ({
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
-  loadBundledProviderStaticCatalogContextModels: (...args: unknown[]) =>
+  loadBundledProviderStaticCatalogContextModels: (...args: Parameters<LoadStaticCatalog>) =>
     mocks.loadStaticCatalog(...args),
 }));
 
@@ -203,7 +203,13 @@ describe("prepared model runtime snapshots", () => {
         provider: "nvidia",
         id: "nemotron-static",
         name: "Nemotron Static",
+        api: "openai-completions",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        reasoning: false,
         input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8_192,
       },
     ]);
 
@@ -223,6 +229,10 @@ describe("prepared model runtime snapshots", () => {
         provider: "nvidia",
         id: "nemotron-static",
         name: "Nemotron Static",
+        api: "openai-completions",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        contextWindow: 128_000,
+        reasoning: false,
         input: ["text"],
       },
     ]);
@@ -235,7 +245,12 @@ describe("prepared model runtime snapshots", () => {
         id: "custom-static",
         name: "Custom Static",
         api: "mistral-conversations",
+        baseUrl: "https://example.test/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 32_000,
+        maxTokens: 8_192,
       },
     ]);
 
@@ -249,7 +264,10 @@ describe("prepared model runtime snapshots", () => {
         provider: "custom",
         id: "custom-static",
         name: "Custom Static",
+        baseUrl: "https://example.test/v1",
         contextWindow: 32_000,
+        reasoning: false,
+        input: ["text"],
       },
     ]);
   });

@@ -21,8 +21,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
-  augmentModelCatalogWithProviderPlugins: (...args: unknown[]) =>
-    mocks.augmentModelCatalogWithProviderPlugins(...args),
+  augmentModelCatalogWithProviderPlugins: (
+    ...args: Parameters<AugmentModelCatalogWithProviderPlugins>
+  ) => mocks.augmentModelCatalogWithProviderPlugins(...args),
 }));
 
 const metadataSnapshot = { plugins: [] } as unknown as PluginMetadataSnapshot;
@@ -174,6 +175,9 @@ describe("prepared model catalog builder", () => {
     let resolvedKey: string | undefined;
     let resolvedOAuth: string | undefined;
     mocks.augmentModelCatalogWithProviderPlugins.mockImplementationOnce(async ({ context }) => {
+      if (!context.resolveProviderApiKey) {
+        throw new Error("expected lifecycle auth resolver");
+      }
       resolvedKey = context.resolveProviderApiKey("inherited").apiKey;
       resolvedOAuth = context.resolveProviderApiKey("subscription").apiKey;
       return [];
