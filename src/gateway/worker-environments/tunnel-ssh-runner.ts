@@ -11,6 +11,7 @@ export const WORKER_TUNNEL_READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 
 const STOP_GRACE_MS = 1_500;
 const STDERR_LIMIT = 4_096;
+const WORKER_TUNNEL_READY_TIMEOUT_MS = 30_000;
 
 type WorkerSshProcessExit = {
   code: number | null;
@@ -61,11 +62,31 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       });
       let stdout = "";
       let stderr = "";
+      // An ssh child stalled before the banner neither emits the ready marker
+      // nor closes, so bound the readiness wait even when the caller's own
+      // timeout is effectively unbounded.
+      const readyTimeout = setTimeout(() => {
+        if (readySettled) {
+          return;
+        }
+        readySettled = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Best effort: the readiness deadline must reject even if kill fails.
+        }
+        rejectReady(
+          new Error(
+            `Worker SSH tunnel ready marker not received within ${WORKER_TUNNEL_READY_TIMEOUT_MS}ms`,
+          ),
+        );
+      }, WORKER_TUNNEL_READY_TIMEOUT_MS);
       const settleReadyError = () => {
         if (readySettled) {
           return;
         }
         readySettled = true;
+        clearTimeout(readyTimeout);
         rejectReady(workerSshProcessError(stderr));
       };
       child.stdout.setEncoding("utf8");
@@ -77,6 +98,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
         if (stdout.split(/\r?\n/u).includes(WORKER_TUNNEL_READY_MARKER)) {
           readySettled = true;
+          clearTimeout(readyTimeout);
           resolveReady();
         }
       });
