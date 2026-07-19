@@ -274,9 +274,13 @@ struct ChatToolActivityRow: View {
             .background(self.diffBackground(line.kind))
             // Color alone must not carry add/del semantics for assistive tech.
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(verbatim: Self
-                    .accessibilityMarker(line.kind) + String(line.text.unicodeScalars.prefix(2000))))
+            .accessibilityLabel(Text(verbatim: Self.accessibilityText(for: line)))
         }
+    }
+
+    private static func accessibilityText(for line: ChatToolDiffLine) -> String {
+        let lineNo = line.lineNo.map { "\($0) " } ?? ""
+        return lineNo + self.accessibilityMarker(line.kind) + String(line.text.unicodeScalars.prefix(2000))
     }
 
     private static func accessibilityMarker(_ kind: ChatToolDiffLineKind) -> String {
