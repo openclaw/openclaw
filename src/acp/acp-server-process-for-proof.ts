@@ -13,6 +13,7 @@
 import { Readable, Writable } from "node:stream";
 import { AgentSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+import type { GatewayClient } from "../gateway/client.js";
 import { AcpGatewayAgent } from "./translator.js";
 
 const mode = process.env.PROOF_MODE === "resume" ? "resume" : "new";
@@ -61,7 +62,7 @@ const gateway = {
     }
     return { ok: true };
   },
-} as unknown as Parameters<typeof AcpGatewayAgent.prototype.constructor>[1];
+} as unknown as GatewayClient;
 
 const sessionStore = createInMemorySessionStore();
 
