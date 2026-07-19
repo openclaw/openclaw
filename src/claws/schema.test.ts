@@ -498,6 +498,25 @@ describe("buildClawAddPlan", () => {
         blocked: false,
       }),
     ]);
+    expect(plan.capabilityChanges.filter((change) => change.kind === "package")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "skill:@acme/triage",
+          effect: expect.objectContaining({
+            integrity: `sha256:${"a".repeat(64)}`,
+            riskWarning: "Review @acme/triage before installation.",
+          }),
+        }),
+        expect.objectContaining({
+          id: "plugin:@acme/github",
+          effect: expect.objectContaining({
+            integrity: `sha256:${"b".repeat(64)}`,
+            installId: "github",
+            riskWarning: "Review @acme/github before installation.",
+          }),
+        }),
+      ]),
+    );
   });
 
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {

@@ -433,7 +433,9 @@ export async function buildClawAddPlan(params: {
           source: pkg.source,
           ref: pkg.ref,
           version: pkg.version,
-          integrity: "unresolved",
+          integrity: preflight.integrity ?? "unresolved",
+          ...(preflight.installId ? { installId: preflight.installId } : {}),
+          ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         },
       }),
     );
