@@ -23,6 +23,7 @@
         "@mistralai/mistralai": "2.4.0",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
+        "@openclaw/contracts": "file:vendor/packages/openclaw-contracts-0.1.0.tgz",
         "@openclaw/fs-safe": "0.4.1",
         "@openclaw/proxyline": "0.3.3",
         "@silvia-odwyer/photon-node": "0.3.4",
@@ -431,6 +432,14 @@
       "license": "Apache-2.0",
       "engines": {
         "node": ">=14.0.0"
+      }
+    },
+    "node_modules/@openclaw/contracts": {
+      "version": "0.1.0",
+      "resolved": "file:vendor/packages/openclaw-contracts-0.1.0.tgz",
+      "integrity": "sha512-r3NzvO9DhbxcRzeCvDobQRCjKwO5sp4hlrvGXmSMk6hrnNOkHjJ4FUaAqbOqPiqVjU9S2Ft5FLgiew9DEE5hvA==",
+      "engines": {
+        "node": ">=24.15.0 <25"
       }
     },
     "node_modules/@openclaw/fs-safe": {

@@ -85,6 +85,9 @@ importers:
       '@openclaw/ai':
         specifier: workspace:*
         version: link:packages/ai
+      '@openclaw/contracts':
+        specifier: file:vendor/packages/openclaw-contracts-0.1.0.tgz
+        version: file:vendor/packages/openclaw-contracts-0.1.0.tgz
       '@openclaw/fs-safe':
         specifier: 0.4.1
         version: 0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)
@@ -3724,6 +3727,11 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@openclaw/contracts@file:vendor/packages/openclaw-contracts-0.1.0.tgz':
+    resolution: {integrity: sha512-r3NzvO9DhbxcRzeCvDobQRCjKwO5sp4hlrvGXmSMk6hrnNOkHjJ4FUaAqbOqPiqVjU9S2Ft5FLgiew9DEE5hvA==, tarball: file:vendor/packages/openclaw-contracts-0.1.0.tgz}
+    version: 0.1.0
+    engines: {node: '>=24.15.0 <25'}
 
   '@openclaw/crabline@0.1.11':
     resolution: {integrity: sha512-A7KH6gi7tXfJmdyeCzhZ65cSrLk4lALbto3lNBOHp1C6uIirAgM4tcF9I7/LhNDX/dq/T+q2QytpVPhhsfwgQQ==}
@@ -10110,6 +10118,8 @@ snapshots:
 
   '@openai/codex@0.144.5-win32-x64':
     optional: true
+
+  '@openclaw/contracts@file:vendor/packages/openclaw-contracts-0.1.0.tgz': {}
 
   '@openclaw/crabline@0.1.11':
     dependencies:

@@ -116,6 +116,11 @@ USER.md
 *.tgz
 *.tar.gz
 *.zip
+!vendor/
+vendor/*
+!vendor/packages/
+vendor/packages/*
+!vendor/packages/openclaw-contracts-0.1.0.tgz
 .idea
 .vscode/
 
