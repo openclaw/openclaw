@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mjs";
 import {
@@ -169,17 +170,21 @@ describe("bundled plugin assets", () => {
       const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
         openclaw: { assetScripts: { build: string } };
       };
-      packageJson.openclaw.assetScripts.build = "node scripts/stall.mjs";
+      packageJson.openclaw.assetScripts.build = "node scripts/launch-stall.mjs";
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
       fs.mkdirSync(path.join(pluginDir, "scripts"));
       const pidFile = path.join(pluginDir, "stall.pid");
       fs.writeFileSync(
-        path.join(pluginDir, "scripts", "stall.mjs"),
+        path.join(pluginDir, "scripts", "launch-stall.mjs"),
         [
+          'import { spawn } from "node:child_process";',
           'import { writeFileSync } from "node:fs";',
-          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+          "const child = spawn(process.execPath, [",
+          '  "-e",',
+          '  "process.on(\\"SIGTERM\\", () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 100);",',
+          '], { stdio: "ignore" });',
+          `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
           'process.on("SIGTERM", () => {});',
-          "setTimeout(() => process.exit(0), 2_000);",
           "setInterval(() => {}, 100);",
           "",
         ].join("\n"),
@@ -187,20 +192,26 @@ describe("bundled plugin assets", () => {
 
       const startedAt = Date.now();
       let thrown: unknown;
+      let childPid = 0;
       try {
-        await runBundledPluginAssetHooks({ phase: "build", rootDir, timeoutMs: 100 });
+        await runBundledPluginAssetHooks({ phase: "build", rootDir, timeoutMs: 500 });
       } catch (error) {
         thrown = error;
       }
-
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
-      const childPid = Number(fs.readFileSync(pidFile, "utf8"));
-      expect(() => process.kill(childPid, 0)).toThrow();
-      expect(thrown).toMatchObject({
-        code: "ETIMEDOUT",
-        message: "Bundled plugin asset build hook timed out after 100ms: canvas",
-      });
-      expect((thrown as Error).message).not.toContain("stall.mjs");
+      try {
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
+        childPid = Number(fs.readFileSync(pidFile, "utf8"));
+        await waitForProcessExit(childPid);
+        expect(thrown).toMatchObject({
+          code: "ETIMEDOUT",
+          message: "Bundled plugin asset build hook timed out after 500ms: canvas",
+        });
+        expect((thrown as Error).message).not.toContain("launch-stall.mjs");
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
     });
   });
 
@@ -260,3 +271,22 @@ describe("bundled plugin assets", () => {
     });
   });
 });
+
+async function waitForProcessExit(pid: number, timeoutMs = 1_500) {
+  const startedAt = Date.now();
+  while (isProcessAlive(pid)) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`process ${pid} remained alive after timeout cleanup`);
+    }
+    await delay(5);
+  }
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

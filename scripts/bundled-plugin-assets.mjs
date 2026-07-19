@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -130,25 +131,29 @@ export async function runBundledPluginAssetHooks(options = {}) {
 
   for (const hook of hooks) {
     console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
-    const result = spawnSync(hook.command, {
-      cwd: hook.pluginDir,
-      env: process.env,
-      // spawnSync keeps waiting when a timed-out child handles SIGTERM, so force termination.
-      killSignal: "SIGKILL",
-      shell: true,
-      stdio: "inherit",
-      timeout: timeoutMs,
-    });
-    if (result.error?.code === "ETIMEDOUT") {
-      throw Object.assign(
-        new Error(
-          `Bundled plugin asset ${phase} hook timed out after ${timeoutMs}ms: ${hook.pluginId}`,
-        ),
-        { code: "ETIMEDOUT" },
-      );
+    let status;
+    try {
+      status = await runManagedCommand({
+        bin: hook.command,
+        cwd: hook.pluginDir,
+        env: process.env,
+        shell: true,
+        stdio: "inherit",
+        timeoutMs,
+      });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT") {
+        throw Object.assign(
+          new Error(
+            `Bundled plugin asset ${phase} hook timed out after ${timeoutMs}ms: ${hook.pluginId}`,
+          ),
+          { code: "ETIMEDOUT" },
+        );
+      }
+      throw error;
     }
-    if (result.status !== 0) {
-      process.exit(result.status ?? 1);
+    if (status !== 0) {
+      process.exit(status);
     }
   }
 }
