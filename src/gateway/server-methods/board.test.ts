@@ -4,8 +4,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { InMemoryBoardStore } from "../../boards/board-store.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import { createBoardHandlers } from "./board.js";
@@ -85,7 +89,7 @@ describe("board gateway methods", () => {
     expect(store.listSessionsWithBoards()).toEqual([]);
   });
 
-  it("adds fresh frame URLs to HTML widgets only on board.get", async () => {
+  it("adds fresh frame URLs only to admitted HTML widgets on board.get", async () => {
     const { invoke } = createHarness();
     await invoke("board.widget.put", {
       sessionKey: "agent:main:main",
@@ -111,6 +115,31 @@ describe("board gateway methods", () => {
       },
     });
 
+    const pendingResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
+    const pending = pendingResponse.mock.calls[0]?.[1] as BoardSnapshot;
+    expect(pending.widgets.find((widget) => widget.name === "status")).not.toHaveProperty(
+      "frameUrl",
+    );
+
+    await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "status",
+      decision: "granted",
+      revision: 1,
+    });
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "rejected",
+      content: { kind: "html", html: "<p>no</p>" },
+      declared: { tools: ["status.reject"] },
+    });
+    await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "rejected",
+      decision: "rejected",
+      revision: 1,
+    });
+
     const firstResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const first = firstResponse.mock.calls[0]?.[1] as BoardSnapshot;
     const htmlFrameUrl = first.widgets.find((widget) => widget.name === "status")?.frameUrl;
@@ -122,6 +151,9 @@ describe("board gateway methods", () => {
       "Tool access: status.refresh",
     ]);
     expect(first.widgets.find((widget) => widget.name === "app")).not.toHaveProperty("frameUrl");
+    expect(first.widgets.find((widget) => widget.name === "rejected")).not.toHaveProperty(
+      "frameUrl",
+    );
 
     const secondResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const second = secondResponse.mock.calls[0]?.[1] as BoardSnapshot;
@@ -175,6 +207,7 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       name: "weather",
       decision: "granted",
+      revision: 1,
     });
     expect(grant).toHaveBeenCalledWith(
       true,
@@ -201,6 +234,7 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       name: "widget",
       decision: "rejected",
+      revision: 1,
     });
     expect(rejected.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
@@ -211,8 +245,30 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       name: "widget",
       decision: "granted",
+      revision: 1,
     });
     expect(repeated.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("rejects stale grant revisions without changing the pending widget", async () => {
+    const { invoke } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "widget",
+      content: { kind: "html", html: "ok" },
+      declared: { tools: ["widget.read"] },
+    });
+    const stale = await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "widget",
+      decision: "granted",
+      revision: 2,
+    });
+    expect(stale.mock.calls[0]?.[0]).toBe(false);
+    const current = await invoke("board.get", { sessionKey: "session" });
+    expect(current.mock.calls[0]?.[1]).toMatchObject({
+      widgets: [{ name: "widget", revision: 1, grantState: "pending" }],
+    });
   });
 
   it("appends bounded dashboard notices and coalesces duplicate bursts", async () => {
@@ -261,9 +317,15 @@ describe("board gateway methods", () => {
   it("keeps board state across the real sessions.reset handler", async () => {
     const sessionKey = "agent:main:board-reset-proof";
     const stateDir = tempDirs.make("openclaw-board-reset-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, storePath: database.path },
+      { sessionId: "board-reset-proof", updatedAt: Date.now() },
+    );
     const boardStore = new SqliteBoardStore({
-      resolveAgentId: () => "main",
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
     });
     boardStore.putWidget({
       sessionKey,
@@ -284,6 +346,5 @@ describe("board gateway methods", () => {
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(boardStore.getSnapshot(sessionKey).widgets).toHaveLength(1);
-    boardStore.deleteSession(sessionKey);
   });
 });

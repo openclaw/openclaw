@@ -59,6 +59,9 @@ export function createBoardHandlers(
       }
       const snapshot = store.getSnapshot(params.sessionKey);
       for (const widget of snapshot.widgets) {
+        if (widget.grantState !== "none" && widget.grantState !== "granted") {
+          continue;
+        }
         const document = store.readWidgetHtml(snapshot.sessionKey, widget.name);
         if (!document || !("html" in document) || document.revision !== widget.revision) {
           continue;
@@ -67,7 +70,6 @@ export function createBoardHandlers(
           sessionKey: snapshot.sessionKey,
           name: widget.name,
           revision: widget.revision,
-          sha256: document.sha256,
           viewGeneration: document.viewGeneration,
         });
         widget.frameUrl = buildBoardWidgetFrameUrl({
@@ -126,6 +128,7 @@ export function createBoardHandlers(
           boardParams.sessionKey,
           boardParams.name,
           boardParams.decision,
+          boardParams.revision,
         );
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
@@ -143,9 +146,8 @@ export function createBoardHandlers(
       }
       try {
         const boardParams = params as BoardEventParams;
-        const widget = store
-          .getSnapshot(boardParams.sessionKey)
-          .widgets.some((candidate) => candidate.name === boardParams.widget);
+        const snapshot = store.getSnapshot(boardParams.sessionKey);
+        const widget = snapshot.widgets.some((candidate) => candidate.name === boardParams.widget);
         if (!widget) {
           throw new BoardValidationError(
             "not_found",
@@ -153,7 +155,7 @@ export function createBoardHandlers(
           );
         }
         const appended = appendNotice({
-          sessionKey: boardParams.sessionKey,
+          sessionKey: snapshot.sessionKey,
           widget: boardParams.widget,
           payload: boardParams.payload,
         });

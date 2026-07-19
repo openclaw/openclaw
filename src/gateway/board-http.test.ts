@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { InMemoryBoardStore } from "../boards/board-store.js";
 import { handleBoardHttpRequest } from "./board-http.js";
 import {
@@ -20,6 +20,19 @@ beforeAll(async () => {
     name: "status",
     content: { kind: "html", html: "<!doctype html><p>Status</p>" },
   });
+  store.putWidget({
+    sessionKey: "agent:main:main",
+    name: "pending",
+    content: { kind: "html", html: "pending" },
+    declared: { tools: ["pending.read"] },
+  });
+  store.putWidget({
+    sessionKey: "agent:main:main",
+    name: "rejected",
+    content: { kind: "html", html: "rejected" },
+    declared: { tools: ["rejected.read"] },
+  });
+  store.grant("agent:main:main", "rejected", "rejected", 1);
   store.putWidget({
     sessionKey: "agent:main:main",
     name: "mcp",
@@ -77,7 +90,6 @@ function ticketFor(name: string, revision = 1, issuedAtMs = nowMs): string {
     sessionKey: "agent:main:main",
     name,
     revision,
-    sha256: document.sha256,
     viewGeneration: document.viewGeneration,
     nowMs: issuedAtMs,
   }).ticket;
@@ -95,7 +107,7 @@ function request(
 }
 
 describe("board widget HTTP", () => {
-  it("round-trips an opaque two-minute ticket bound to the widget revision", () => {
+  it("round-trips self-contained claims covered by a two-minute HMAC ticket", () => {
     const document = store.readWidgetHtml("agent:main:main", "status");
     if (!document || !("html" in document)) {
       throw new Error("missing status widget");
@@ -104,60 +116,20 @@ describe("board widget HTTP", () => {
       sessionKey: "agent:main:main",
       name: "status",
       revision: 1,
-      sha256: document.sha256,
       viewGeneration: document.viewGeneration,
       nowMs,
     });
-    expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u);
+    expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
     expect(issued.ticket).not.toContain("agent:main:main");
     expect(issued.expiresAtMs).toBe(nowMs + BOARD_VIEW_TICKET_TTL_MS);
-    expect(
-      verifyBoardViewTicket(issued.ticket, {
-        sessionKey: "agent:other:main",
-        name: "status",
-        revision: 1,
-        sha256: document.sha256,
-        viewGeneration: document.viewGeneration,
-        nowMs,
-      }),
-    ).toBeUndefined();
-    expect(
-      verifyBoardViewTicket(issued.ticket, {
-        sessionKey: "agent:main:main",
-        name: "other",
-        revision: 1,
-        sha256: document.sha256,
-        viewGeneration: document.viewGeneration,
-        nowMs,
-      }),
-    ).toBeUndefined();
-    expect(
-      verifyBoardViewTicket(issued.ticket, {
-        sessionKey: "agent:main:main",
-        name: "status",
-        revision: 1,
-        sha256: document.sha256,
-        viewGeneration: document.viewGeneration,
-        nowMs,
-      }),
-    ).toEqual({
+    expect(verifyBoardViewTicket(issued.ticket, { nowMs })).toEqual({
       sessionKey: "agent:main:main",
       name: "status",
       revision: 1,
-      sha256: document.sha256,
       viewGeneration: document.viewGeneration,
       expiresAtMs: issued.expiresAtMs,
+      nonce: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/u),
     });
-    expect(
-      verifyBoardViewTicket(issued.ticket, {
-        sessionKey: "agent:main:main",
-        name: "status",
-        revision: 2,
-        sha256: document.sha256,
-        viewGeneration: document.viewGeneration,
-        nowMs,
-      }),
-    ).toBeUndefined();
   });
 
   it("serves HTML bytes with a valid ticket and no gateway auth", async () => {
@@ -177,12 +149,16 @@ describe("board widget HTTP", () => {
     expect(response.status).toBe(200);
   });
 
-  it("rejects missing, tampered, and expired tickets", async () => {
-    expect((await request("status")).status).toBe(401);
-    const ticket = ticketFor("status");
-    expect((await request("status", { ticket: `${ticket.slice(0, -1)}x` })).status).toBe(401);
+  it("rejects garbage and expired tickets before reading the store", async () => {
     const expired = ticketFor("status", 1, nowMs - BOARD_VIEW_TICKET_TTL_MS - 1);
+    const valid = ticketFor("status");
+    const readSpy = vi.spyOn(store, "readWidgetHtml");
+    expect((await request("status")).status).toBe(401);
+    expect((await request("status", { ticket: "garbage" })).status).toBe(401);
+    expect((await request("status", { ticket: `${valid.slice(0, -1)}x` })).status).toBe(401);
     expect((await request("status", { ticket: expired })).status).toBe(401);
+    expect(readSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
   });
 
   it("rejects a ticket after the widget revision changes", async () => {
@@ -216,6 +192,22 @@ describe("board widget HTTP", () => {
     expect((await request("recreated", { ticket: ticketFor("recreated") })).status).toBe(200);
   });
 
+  it("rejects a ticket with a stale view generation", async () => {
+    const ticket = createBoardViewTicket({
+      sessionKey: "agent:main:main",
+      name: "status",
+      revision: 1,
+      viewGeneration: "0".repeat(32),
+      nowMs,
+    }).ticket;
+    expect((await request("status", { ticket })).status).toBe(401);
+  });
+
+  it("refuses pending and rejected widgets even with valid tickets", async () => {
+    expect((await request("pending", { ticket: ticketFor("pending") })).status).toBe(401);
+    expect((await request("rejected", { ticket: ticketFor("rejected") })).status).toBe(401);
+  });
+
   it("serves an encoded slash as part of an opaque session key", async () => {
     store.putWidget({
       sessionKey: "session/with/slash",
@@ -230,7 +222,6 @@ describe("board widget HTTP", () => {
       sessionKey: "session/with/slash",
       name: "slash-key",
       revision: 1,
-      sha256: document.sha256,
       viewGeneration: document.viewGeneration,
       nowMs,
     }).ticket;
@@ -241,9 +232,23 @@ describe("board widget HTTP", () => {
     await expect(response.text()).resolves.toBe("slash");
   });
 
-  it("returns 404 for unknown and MCP app widgets", async () => {
-    expect((await request("missing")).status).toBe(404);
-    expect((await request("mcp")).status).toBe(404);
+  it("returns 401 when valid claims have no matching HTML document", async () => {
+    const ticket = createBoardViewTicket({
+      sessionKey: "agent:main:main",
+      name: "missing",
+      revision: 1,
+      viewGeneration: "0".repeat(32),
+      nowMs,
+    }).ticket;
+    expect((await request("missing", { ticket })).status).toBe(401);
+    const mcpTicket = createBoardViewTicket({
+      sessionKey: "agent:main:main",
+      name: "mcp",
+      revision: 1,
+      viewGeneration: "0".repeat(32),
+      nowMs,
+    }).ticket;
+    expect((await request("mcp", { ticket: mcpTicket })).status).toBe(401);
   });
 
   it("allows GET only", async () => {

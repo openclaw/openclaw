@@ -23,7 +23,6 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { handleSessionStateSessionDeleted } from "../../sessions/session-state-events.js";
-import { boardStore } from "../board-store.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -393,10 +392,6 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       // requestedAgentId wins: "global" canonical keys resolve to the default store
       // agent, which would purge the wrong agent's rows for explicit-agent deletes.
       handleSessionStateSessionDeleted(
-        target.canonicalKey ?? key,
-        requestedAgentId ?? resolveSessionStoreAgentId(cfg, target.canonicalKey ?? key),
-      );
-      boardStore.deleteSession(
         target.canonicalKey ?? key,
         requestedAgentId ?? resolveSessionStoreAgentId(cfg, target.canonicalKey ?? key),
       );

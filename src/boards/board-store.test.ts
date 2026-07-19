@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BoardValidationError } from "./board-layout.js";
 import { InMemoryBoardStore } from "./board-store.js";
 
 function putHtml(store: InMemoryBoardStore, sessionKey: string, name: string, html = "<p>one</p>") {
@@ -79,17 +80,57 @@ describe("in-memory board store", () => {
       declared: { netOrigins: ["https://example.com"] },
     });
     expect(pending.widgets[0]!.grantState).toBe("pending");
-    expect(store.grant("session", "networked", "granted").widgets[0]!.grantState).toBe("granted");
-    expect(() => store.grant("session", "networked", "rejected")).toThrow("not pending");
+    expect(store.grant("session", "networked", "granted", 1).widgets[0]!.grantState).toBe(
+      "granted",
+    );
+    expect(() => store.grant("session", "networked", "rejected", 1)).toThrow("not pending");
   });
 
-  it("survives reset/new boundaries and deletes only on explicit session deletion", () => {
+  it("survives reset/new boundaries", () => {
     const store = new InMemoryBoardStore();
     putHtml(store, "session", "status");
     // Session reset has no BoardStore call; the stable session key remains authoritative.
     expect(store.getSnapshot("session").widgets).toHaveLength(1);
-    store.deleteSession("session");
-    expect(store.getSnapshot("session").widgets).toHaveLength(0);
+  });
+
+  it("rejects stale grant revisions and accepts the current revision", () => {
+    const store = new InMemoryBoardStore();
+    store.putWidget({
+      sessionKey: "session",
+      name: "networked",
+      content: { kind: "html", html: "ok" },
+      declared: { tools: ["weather.refresh"] },
+    });
+    try {
+      store.grant("session", "networked", "granted", 2);
+      throw new Error("expected stale grant to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(BoardValidationError);
+      expect(error).toMatchObject({ code: "conflict" });
+      expect((error as Error).message).toContain("revision changed");
+    }
+    expect(store.grant("session", "networked", "granted", 1).widgets[0]).toMatchObject({
+      grantState: "granted",
+      revision: 1,
+    });
+  });
+
+  it("enforces the board widget count and UTF-8 HTML byte limits", () => {
+    const store = new InMemoryBoardStore();
+    for (let index = 0; index < 48; index += 1) {
+      putHtml(store, "session", `widget-${index}`, "ok");
+    }
+    try {
+      putHtml(store, "session", "widget-48", "ok");
+      throw new Error("expected widget cap to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(BoardValidationError);
+      expect(error).toMatchObject({ code: "invalid_operation" });
+      expect((error as Error).message).toContain("more than 48 widgets");
+    }
+    expect(() =>
+      putHtml(new InMemoryBoardStore(), "session", "large", "é".repeat(131_073)),
+    ).toThrow("262144 UTF-8 bytes");
   });
 
   it("bumps once per applyOps transaction and removes widget bytes", () => {

@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "vitest";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { writeSessionStore } from "./test-helpers.js";
+import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   sessionStoreEntry,
@@ -26,8 +27,21 @@ test("sessions.delete removes the session board from its agent database", async 
     },
   });
   const sessionKey = "agent:main:discord:group:board-delete";
+  if (!testState.sessionStorePath) {
+    throw new Error("expected gateway session store path");
+  }
+  const databasePath = resolveSqliteTargetFromSessionStorePath(testState.sessionStorePath, {
+    agentId: "main",
+  }).path;
+  if (!databasePath) {
+    throw new Error("expected gateway agent database path");
+  }
   const store = new SqliteBoardStore({
-    resolveAgentId: () => "main",
+    resolveSession: () => ({
+      agentId: "main",
+      path: databasePath,
+      sessionKey,
+    }),
     env: process.env,
   });
   store.putWidget({

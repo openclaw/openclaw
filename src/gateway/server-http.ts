@@ -691,7 +691,10 @@ export function createGatewayHttpServer(opts: {
       if (isBoardWidgetPath(scopedRequestPath)) {
         requestStages.push({
           name: "board-widget",
-          run: async () => (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
+            ),
         });
       }
       if (openResponsesEnabled && isOpenResponsesPath(scopedRequestPath)) {

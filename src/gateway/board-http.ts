@@ -59,22 +59,19 @@ export function handleBoardHttpRequest(
     sendNotFound(res);
     return true;
   }
-  const document = (opts.store ?? boardStore).readWidgetHtml(path.sessionKey, path.name);
-  if (!document || !("html" in document)) {
-    sendNotFound(res);
+  const ticket = url.searchParams.get("bt");
+  const claims = ticket ? verifyBoardViewTicket(ticket, { nowMs: opts.nowMs }) : undefined;
+  if (!claims || claims.sessionKey !== path.sessionKey || claims.name !== path.name) {
+    sendUnauthorized(res);
     return true;
   }
-  const ticket = url.searchParams.get("bt");
+  const document = (opts.store ?? boardStore).readWidgetHtml(path.sessionKey, path.name);
   if (
-    !ticket ||
-    !verifyBoardViewTicket(ticket, {
-      sessionKey: path.sessionKey,
-      name: path.name,
-      revision: document.revision,
-      sha256: document.sha256,
-      viewGeneration: document.viewGeneration,
-      nowMs: opts.nowMs,
-    })
+    !document ||
+    !("html" in document) ||
+    (document.grantState !== "none" && document.grantState !== "granted") ||
+    document.revision !== claims.revision ||
+    document.viewGeneration !== claims.viewGeneration
   ) {
     sendUnauthorized(res);
     return true;
