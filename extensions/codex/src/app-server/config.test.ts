@@ -438,6 +438,35 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({ enabled: true });
   });
 
+  it("keeps the plugin manifest configSchema in sync for appServer.nativeHookRelay", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const manifest = JSON.parse(
+      await readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      configSchema: {
+        properties: {
+          appServer: {
+            properties: Record<
+              string,
+              { properties?: Record<string, { items?: { enum?: string[] } }> }
+            >;
+          };
+        };
+      };
+    };
+    const relay = manifest.configSchema.properties.appServer.properties.nativeHookRelay;
+    if (!relay) {
+      throw new Error("nativeHookRelay missing from codex plugin manifest configSchema");
+    }
+    expect(Object.keys(relay.properties ?? {}).toSorted()).toStrictEqual(["enabled", "events"]);
+    expect(relay.properties?.events?.items?.enum).toStrictEqual([
+      "pre_tool_use",
+      "post_tool_use",
+      "permission_request",
+      "before_agent_finalize",
+    ]);
+  });
+
   it("rejects removed app-server topology fields", () => {
     expect(
       readCodexPluginConfig({
