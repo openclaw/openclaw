@@ -32,6 +32,19 @@ export function questionUncertainty(previous: boolean, outcome: CustodianSendOut
   return outcome === "unknown" ? true : previous;
 }
 
+export function shouldConsumeNudge(
+  current: CustodianEventNudge | null,
+  finished: CustodianEventNudge,
+  outcome: CustodianSendOutcome,
+): boolean {
+  return (
+    outcome !== "rejected" &&
+    current !== null &&
+    current.severity === finished.severity &&
+    current.message === finished.message
+  );
+}
+
 export function reconcileCustodianEventNudge(
   current: CustodianEventNudge | null,
   pending: CustodianEventNudge | null,
@@ -44,9 +57,7 @@ export function reconcileCustodianEventNudge(
   if (!pending) {
     return [next, null];
   }
-  const sameIncident =
-    next !== null && pending.severity === next.severity && pending.message === next.message;
-  return sameIncident ? [current, pending] : [next, null];
+  return [next, pending];
 }
 
 function eventNudgeText(nudge: CustodianEventNudge): string {

@@ -907,6 +907,53 @@ describe("custodian page nudges", () => {
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Discord is degraded");
   });
 
+  it("consumes an in-flight incident that becomes current again before completion", async () => {
+    let resolveNudge!: (value: { sessionId: string; reply: string; action: "none" }) => void;
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Everything is healthy.",
+        action: "none",
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNudge = resolve;
+          }),
+      );
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const telegramFailure = {
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: true, running: true, connected: false } },
+    };
+
+    emitGatewayEvent({ event: "health", payload: telegramFailure });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    emitGatewayEvent({
+      event: "health",
+      payload: {
+        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
+      },
+    });
+    emitGatewayEvent({ event: "health", payload: telegramFailure });
+    resolveNudge({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Telegram checked.",
+      action: "none",
+    });
+
+    await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
+    emitGatewayEvent({ event: "health", payload: telegramFailure });
+    await page.updateComplete;
+    expect(page.querySelector(".custodian__nudge")).toBeNull();
+  });
+
   it("consumes a nudge after an unchanged health snapshot arrives while sending", async () => {
     let resolveNudge!: (value: { sessionId: string; reply: string; action: "none" }) => void;
     const request = vi

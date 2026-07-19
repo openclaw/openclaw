@@ -69,6 +69,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private historyLoadingMore = false;
   @state() private historyError: string | null = null;
   @state() private eventNudge: eventNudgeState.CustodianEventNudge | null = null;
+  @state() private eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
 
   private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
@@ -81,7 +82,6 @@ export class CustodianPage extends OpenClawLightDomElement {
   private earlierBoundaryAfterId: number | null = null;
   private lastHelloDeviceToken = "";
   private eventNudgeClosed = false;
-  private eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
   private abandonedTurnOutcomeUnknown = false;
   private historyLoaded = false;
   private readonly subscriptions = new SubscriptionsController(this).watch(
@@ -534,12 +534,12 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (!nudge || this.sensitive || this.hasUnresolvedQuestion()) {
       return;
     }
-    [this.eventNudge, this.eventNudgePending] = [null, nudge];
+    this.eventNudgePending = nudge;
     const outcome = await this.send(nudge.message);
     if (this.eventNudgePending === nudge) {
       this.eventNudgePending = null;
-      this.eventNudgeClosed = outcome !== "rejected";
-      this.eventNudge = outcome === "rejected" ? nudge : null;
+      const consumed = eventNudgeState.shouldConsumeNudge(this.eventNudge, nudge, outcome);
+      [this.eventNudgeClosed, this.eventNudge] = [consumed, consumed ? null : this.eventNudge];
     }
   }
 
@@ -637,7 +637,7 @@ export class CustodianPage extends OpenClawLightDomElement {
         </header>
 
         <div class="custodian__messages" aria-live="polite">
-          ${!this.onboarding && this.eventNudge
+          ${!this.onboarding && this.eventNudge && !this.eventNudgePending
             ? eventNudgeState.renderCustodianEventNudge({
                 nudge: this.eventNudge,
                 disabled:
