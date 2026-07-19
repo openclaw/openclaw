@@ -698,9 +698,14 @@ function resolveTelegramApiContext(opts: {
 
 function withTelegramApiContextLease<T>(
   context: TelegramApiContext,
-  operation: Promise<T>,
+  operation: () => Promise<T>,
 ): Promise<T> {
-  return operation.finally(() => context.clientOptionsLease?.release());
+  try {
+    return operation().finally(() => context.clientOptionsLease?.release());
+  } catch (err) {
+    context.clientOptionsLease?.release();
+    throw err;
+  }
 }
 
 type TelegramRequestWithDiag = <T>(
@@ -818,8 +823,7 @@ export async function sendMessageTelegram(
   opts: TelegramSendOpts,
 ): Promise<TelegramSendResult> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     sendMessageTelegramWithContext(to, text, opts, context),
   );
 }
@@ -1607,8 +1611,7 @@ export async function sendLocationTelegram(
   opts: TelegramLocationSendOpts,
 ): Promise<TelegramSendResult> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     sendLocationTelegramWithContext(to, input, opts, context),
   );
 }
@@ -1738,7 +1741,9 @@ export async function sendTypingTelegram(
   opts: TelegramTypingOpts,
 ): Promise<{ ok: true }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(context, sendTypingTelegramWithContext(to, opts, context));
+  return withTelegramApiContextLease(context, () =>
+    sendTypingTelegramWithContext(to, opts, context),
+  );
 }
 
 async function sendTypingTelegramWithContext(
@@ -1782,8 +1787,7 @@ export async function reactMessageTelegram(
   opts: TelegramReactionOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     reactMessageTelegramWithContext(chatIdInput, messageIdInput, emoji, opts, context),
   );
 }
@@ -1853,8 +1857,7 @@ export async function deleteMessageTelegram(
   opts: TelegramDeleteOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     deleteMessageTelegramWithContext(chatIdInput, messageIdInput, opts, context),
   );
 }
@@ -1908,8 +1911,7 @@ export async function pinMessageTelegram(
   opts: TelegramDeleteOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     pinMessageTelegramWithContext(chatIdInput, messageIdInput, opts, context),
   );
 }
@@ -1954,8 +1956,7 @@ export async function unpinMessageTelegram(
   opts: TelegramDeleteOpts,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     unpinMessageTelegramWithContext(chatIdInput, messageIdInput, opts, context),
   );
 }
@@ -2028,8 +2029,7 @@ export async function editForumTopicTelegram(
   }
 
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     editForumTopicTelegramWithContext(chatIdInput, messageThreadIdInput, opts, context),
   );
 }
@@ -2140,8 +2140,7 @@ export async function editMessageReplyMarkupTelegram(
   opts: TelegramEditReplyMarkupOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     editMessageReplyMarkupTelegramWithContext(chatIdInput, messageIdInput, buttons, opts, context),
   );
 }
@@ -2195,8 +2194,7 @@ export async function editMessageTelegram(
   opts: TelegramEditOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     editMessageTelegramWithContext(chatIdInput, messageIdInput, text, opts, context),
   );
 }
@@ -2438,8 +2436,7 @@ export async function sendStickerTelegram(
   }
 
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     sendStickerTelegramWithContext(to, fileId, opts, context),
   );
 }
@@ -2533,7 +2530,9 @@ export async function sendPollTelegram(
   opts: TelegramPollOpts,
 ): Promise<{ messageId: string; chatId: string; pollId?: string }> {
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(context, sendPollTelegramWithContext(to, poll, opts, context));
+  return withTelegramApiContextLease(context, () =>
+    sendPollTelegramWithContext(to, poll, opts, context),
+  );
 }
 
 async function sendPollTelegramWithContext(
@@ -2665,8 +2664,7 @@ export async function createForumTopicTelegram(
   }
 
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(
-    context,
+  return withTelegramApiContextLease(context, () =>
     createForumTopicTelegramWithContext(chatId, name, opts, context),
   );
 }
