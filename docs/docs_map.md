@@ -1372,7 +1372,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/claws
 - Headings:
   - H1: openclaw claws
-  - H2: Create a grouped manifest
+  - H2: Create a Claw package
   - H2: Inspect and preview
   - H2: Inspect installed state
   - H2: Update an installed Claw
