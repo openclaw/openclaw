@@ -1,10 +1,15 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
 import {
   executeMcpAppOperation,
+  McpAppViewExpiredError,
   type McpAppOperation,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
@@ -43,7 +48,17 @@ async function handle(
   try {
     respond(true, await operation());
   } catch (error) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        formatErrorMessage(error),
+        error instanceof McpAppViewExpiredError
+          ? { details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED } }
+          : undefined,
+      ),
+    );
   }
 }
 

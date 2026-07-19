@@ -143,6 +143,11 @@ describe.each([
       },
       revision: 1,
     });
+    expect(store.readWidgetMcpApp("agent:main:board", "app")).toMatchObject({
+      revision: 1,
+      grantGeneration: expect.stringMatching(/^[a-f0-9]{32}$/u),
+    });
+    expect(store.getSnapshot("agent:main:board").widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
   it("preserves grants only for equal or narrower declarations", () => {
@@ -194,6 +199,86 @@ describe.each([
       },
     });
     expect(wider.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
+  });
+
+  it("requires a fresh grant when an MCP app widget changes servers", () => {
+    const store = createStore();
+    const descriptor = {
+      serverName: "server-a",
+      toolName: "weather",
+      uiResourceUri: "ui://weather",
+      originSessionKey: "agent:main:board",
+      toolCallId: "call-a",
+    };
+    const first = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "weather",
+      content: { kind: "mcp-app", descriptor },
+      declared: { tools: ["refresh"] },
+    });
+    store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId);
+
+    const differentServer = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "weather",
+      content: {
+        kind: "mcp-app",
+        descriptor: { ...descriptor, serverName: "server-b", toolCallId: "call-b" },
+      },
+      declared: { tools: ["refresh"] },
+    });
+    expect(differentServer.widgets[0]).toMatchObject({ revision: 2, grantState: "pending" });
+
+    store.grant(
+      "agent:main:board",
+      "weather",
+      "granted",
+      2,
+      differentServer.widgets[0]?.instanceId,
+    );
+    const sameServer = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "weather",
+      content: {
+        kind: "mcp-app",
+        descriptor: { ...descriptor, serverName: "server-b", toolCallId: "call-c" },
+      },
+      declared: { tools: ["refresh"] },
+    });
+    expect(sameServer.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
+  });
+
+  it("rejects a delayed MCP App grant after remove and same-name replacement", () => {
+    const store = createStore();
+    const putApp = (serverName: string) =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "app",
+        content: {
+          kind: "mcp-app",
+          descriptor: {
+            serverName,
+            toolName: "tool",
+            uiResourceUri: `ui://${serverName}`,
+            originSessionKey: "agent:main:board",
+            toolCallId: `call-${serverName}`,
+          },
+        },
+        declared: { tools: ["refresh"] },
+      });
+    const original = putApp("server-a");
+    store.applyOps("agent:main:board", [{ kind: "widget_remove", name: "app" }]);
+    const replacement = putApp("server-b");
+
+    expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
+    expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
+    expect(() =>
+      store.grant("agent:main:board", "app", "granted", 1, original.widgets[0]?.instanceId),
+    ).toThrow("instance changed");
+    expect(
+      store.grant("agent:main:board", "app", "granted", 1, replacement.widgets[0]?.instanceId)
+        .widgets[0],
+    ).toMatchObject({ grantState: "granted" });
   });
 
   it("rejects stale grant revisions before accepting the current one", () => {

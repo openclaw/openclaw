@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 
 const mocks = vi.hoisted(() => ({
   completeDeferredSessionMcpRuntimeRetirement: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock("../mcp-app-standalone.js", () => ({
   createMcpAppStandaloneTicket: mocks.createMcpAppStandaloneTicket,
 }));
 
+import { resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 
 const view = {
@@ -37,6 +39,7 @@ const view = {
   uiResourceUri: "ui://demo/app",
   html: "<html>demo</html>",
   allowedAppToolNames: new Set(["shared", "app-only"]) as ReadonlySet<string> | undefined,
+  authorizeAppToolCall: undefined as (() => boolean | Promise<boolean>) | undefined,
   readOnly: undefined as boolean | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "ok" }] },
@@ -110,6 +113,7 @@ describe("MCP App gateway bridge", () => {
     view.toolCallCount = 0;
     view.activeRequests = 0;
     view.allowedAppToolNames = new Set(["shared", "app-only"]);
+    view.authorizeAppToolCall = undefined;
     view.readOnly = undefined;
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
@@ -303,6 +307,37 @@ describe("MCP App gateway bridge", () => {
     expect(denied.mock.calls[0]?.[0]).toBe(false);
   });
 
+  it("rechecks a board widget grant before every App tool call", async () => {
+    view.authorizeAppToolCall = vi.fn(async () => false);
+    const denied = await invoke("mcp.app.callTool", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+      toolName: "shared",
+    });
+
+    expect(denied.mock.calls[0]?.[0]).toBe(false);
+    expect(view.authorizeAppToolCall).toHaveBeenCalledOnce();
+    expect(mocks.peekSessionMcpRuntime.mock.results[0]?.value.callTool).not.toHaveBeenCalled();
+  });
+
+  it("captures only app-visible tools allowed by the originating view", async () => {
+    const activeRuntime = runtime();
+    const activeView = {
+      ...view,
+      allowedAppToolNames: new Set(["app-only", "model-only"]),
+    };
+
+    await expect(
+      resolveMcpAppAllowedToolNames({ runtime: activeRuntime as never, view: activeView as never }),
+    ).resolves.toEqual(["app-only"]);
+    await expect(
+      resolveMcpAppAllowedToolNames({
+        runtime: activeRuntime as never,
+        view: { ...activeView, readOnly: true } as never,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("rejects views that are not backed by the transcript", async () => {
     mocks.getMcpAppViewLease.mockReturnValue(undefined);
     const respond = await invoke("mcp.app.view", {
@@ -310,6 +345,9 @@ describe("MCP App gateway bridge", () => {
       viewId: "expired",
     });
     expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+    });
     expect(mocks.restoreMcpAppView).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",

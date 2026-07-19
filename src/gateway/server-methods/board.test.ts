@@ -26,10 +26,44 @@ vi.mock("./sessions.runtime.js", () => ({
   })),
 }));
 
-function createHarness(readCanvasHtml?: Parameters<typeof createBoardHandlers>[2]) {
-  const store = new InMemoryBoardStore();
+type BoardMcpAppDependencies = NonNullable<Parameters<typeof createBoardHandlers>[3]>;
+
+function createMcpAppDependencies(): BoardMcpAppDependencies {
+  let lease = 0;
+  const runtime = { getCatalog: vi.fn() };
+  return {
+    resolveActiveView: vi.fn(async ({ viewId }: { viewId: string }) => ({
+      runtime,
+      view: {
+        viewId,
+        serverName: "server",
+        toolName: "tool",
+        uiResourceUri: "ui://resource",
+        toolCallId: "call",
+      },
+    })),
+    resolveAllowedToolNames: vi.fn(async () => ["server.refresh", "server.search"]),
+    mintFromTranscript: vi.fn(async ({ readOnly }: { readOnly: boolean }) => {
+      lease += 1;
+      return {
+        runtime,
+        view: {
+          viewId: `mcp-app-board-${lease}`,
+          expiresAtMs: 10_000 + lease,
+          ...(readOnly ? { readOnly: true as const } : {}),
+        },
+      };
+    }),
+  } as unknown as BoardMcpAppDependencies;
+}
+
+function createHarness(
+  readCanvasHtml?: Parameters<typeof createBoardHandlers>[2],
+  mcpApp: BoardMcpAppDependencies = createMcpAppDependencies(),
+  store: InMemoryBoardStore = new InMemoryBoardStore(),
+) {
   const broadcast = vi.fn();
-  const handlers = createBoardHandlers(store, undefined, readCanvasHtml);
+  const handlers = createBoardHandlers(store, undefined, readCanvasHtml, mcpApp);
   const invoke = async (method: string, params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
     await handlers[method]!({
@@ -38,11 +72,14 @@ function createHarness(readCanvasHtml?: Parameters<typeof createBoardHandlers>[2
       client: null,
       isWebchatConnect: () => false,
       respond,
-      context: { broadcast } as unknown as GatewayRequestContext,
+      context: {
+        broadcast,
+        getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
+      } as unknown as GatewayRequestContext,
     });
     return respond;
   };
-  return { store, broadcast, invoke };
+  return { store, broadcast, invoke, mcpApp };
 }
 
 describe("board gateway methods", () => {
@@ -61,15 +98,21 @@ describe("board gateway methods", () => {
   it("registers every contract method with its required scope", () => {
     expect(
       Object.fromEntries(
-        ["board.get", "board.update", "board.widget.put", "board.widget.grant", "board.event"].map(
-          (method) => [method, resolveCoreOperatorGatewayMethodScope(method)],
-        ),
+        [
+          "board.get",
+          "board.update",
+          "board.widget.put",
+          "board.widget.grant",
+          "board.widget.appView",
+          "board.event",
+        ].map((method) => [method, resolveCoreOperatorGatewayMethodScope(method)]),
       ),
     ).toEqual({
       "board.get": "operator.read",
       "board.update": "operator.write",
       "board.widget.put": "operator.write",
       "board.widget.grant": "operator.approvals",
+      "board.widget.appView": "operator.read",
       "board.event": "operator.write",
     });
   });
@@ -109,8 +152,9 @@ describe("board gateway methods", () => {
           serverName: "server",
           toolName: "tool",
           uiResourceUri: "ui://resource",
-          originSessionKey: "origin",
+          originSessionKey: "agent:main:main",
           toolCallId: "call",
+          viewId: "mcp-app-source",
         },
       },
     });
@@ -232,6 +276,376 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       revision: 2,
     });
+  });
+
+  it("captures MCP App tools at pin time and mints grant-bound fresh leases", async () => {
+    const { invoke, mcpApp, store } = createHarness();
+    const descriptor = {
+      viewId: "mcp-app-source",
+      serverName: "server",
+      toolName: "tool",
+      uiResourceUri: "ui://resource",
+      originSessionKey: "agent:main:main",
+      toolCallId: "call",
+    };
+
+    const put = await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      content: { kind: "mcp-app", descriptor },
+    });
+    expect(put).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        widgets: [
+          expect.objectContaining({
+            name: "server-app",
+            grantState: "pending",
+            declaredSummary: ["Tool access: server.refresh", "Tool access: server.search"],
+          }),
+        ],
+      }),
+    );
+    expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:main", viewId: "mcp-app-source" }),
+    );
+    const originalGrantGeneration = store.readWidgetMcpApp(
+      "agent:main:main",
+      "server-app",
+    )?.grantGeneration;
+    expect(originalGrantGeneration).toMatch(/^[a-f0-9]{32}$/u);
+
+    const readOnly = await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      revision: 1,
+      instanceId: originalGrantGeneration,
+    });
+    expect(readOnly).toHaveBeenCalledWith(true, {
+      viewId: "mcp-app-board-1",
+      expiresAtMs: 10_001,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        allowedAppToolNames: new Set(),
+        readOnly: true,
+      }),
+    );
+
+    await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      decision: "granted",
+      revision: 1,
+      instanceId: originalGrantGeneration,
+    });
+    const interactive = await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      revision: 1,
+      instanceId: originalGrantGeneration,
+    });
+    expect(interactive).toHaveBeenCalledWith(true, {
+      viewId: "mcp-app-board-2",
+      expiresAtMs: 10_002,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allowedAppToolNames: new Set(["server.refresh", "server.search"]),
+        readOnly: false,
+      }),
+    );
+    const authorizeAppToolCall = vi
+      .mocked(mcpApp.mintFromTranscript)
+      .mock.calls.at(-1)?.[0].authorizeAppToolCall;
+    if (!authorizeAppToolCall) {
+      throw new Error("interactive board lease must carry a grant check");
+    }
+    expect(await authorizeAppToolCall()).toBe(true);
+
+    await invoke("board.update", {
+      sessionKey: "agent:main:main",
+      ops: [{ kind: "widget_remove", name: "server-app" }],
+    });
+    expect(await authorizeAppToolCall()).toBe(false);
+
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      content: { kind: "mcp-app", descriptor },
+    });
+    const replacementGrantGeneration = store.readWidgetMcpApp(
+      "agent:main:main",
+      "server-app",
+    )?.grantGeneration;
+    const staleGrant = await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      decision: "granted",
+      revision: 1,
+      instanceId: originalGrantGeneration,
+    });
+    expect(staleGrant.mock.calls[0]?.[0]).toBe(false);
+    await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      decision: "granted",
+      revision: 1,
+      instanceId: replacementGrantGeneration,
+    });
+    expect(replacementGrantGeneration).not.toBe(originalGrantGeneration);
+    expect(await authorizeAppToolCall()).toBe(false);
+  });
+
+  it("keeps validated zero-tool MCP Apps message-capable without granting tools", async () => {
+    const mcpApp = createMcpAppDependencies();
+    vi.mocked(mcpApp.resolveAllowedToolNames).mockResolvedValue([]);
+    const { invoke, store } = createHarness(undefined, mcpApp);
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "message-app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          viewId: "mcp-app-source",
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          originSessionKey: "agent:main:main",
+          toolCallId: "call",
+        },
+      },
+    });
+    const widget = store.getSnapshot("agent:main:main").widgets[0]!;
+    expect(widget.grantState).toBe("none");
+
+    await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "message-app",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({ allowedAppToolNames: new Set(), readOnly: false }),
+    );
+    expect(vi.mocked(mcpApp.mintFromTranscript).mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "authorizeAppToolCall",
+    );
+  });
+
+  it("canonicalizes equivalent board and MCP App origin session keys", async () => {
+    class AliasBoardStore extends InMemoryBoardStore {
+      private legacyOrigin = false;
+
+      private canonical(sessionKey: string): string {
+        return sessionKey === "main-alias" ? "agent:main:main" : sessionKey;
+      }
+
+      useLegacyOrigin(): void {
+        this.legacyOrigin = true;
+      }
+
+      override getSnapshot(sessionKey: string) {
+        return super.getSnapshot(this.canonical(sessionKey));
+      }
+
+      override putWidget(params: Parameters<InMemoryBoardStore["putWidget"]>[0]) {
+        return super.putWidget({ ...params, sessionKey: this.canonical(params.sessionKey) });
+      }
+
+      override readWidgetMcpApp(sessionKey: string, name: string) {
+        const current = super.readWidgetMcpApp(this.canonical(sessionKey), name);
+        return current && this.legacyOrigin
+          ? {
+              ...current,
+              descriptor: { ...current.descriptor, originSessionKey: "main-alias" },
+            }
+          : current;
+      }
+    }
+    const store = new AliasBoardStore();
+    const mcpApp = createMcpAppDependencies();
+    const { invoke } = createHarness(undefined, mcpApp, store);
+
+    await invoke("board.widget.put", {
+      sessionKey: "main-alias",
+      name: "aliased-app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          viewId: "mcp-app-source",
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          originSessionKey: "main-alias",
+          toolCallId: "call",
+        },
+      },
+    });
+
+    expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+    expect(store.readWidgetMcpApp("agent:main:main", "aliased-app")?.descriptor).toMatchObject({
+      originSessionKey: "agent:main:main",
+    });
+
+    store.useLegacyOrigin();
+    const widget = store.getSnapshot("agent:main:main").widgets[0]!;
+    await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "aliased-app",
+      revision: widget.revision,
+      instanceId: widget.instanceId,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        descriptor: expect.objectContaining({ originSessionKey: "agent:main:main" }),
+      }),
+    );
+  });
+
+  it("keeps pre-validation MCP App rows read-only even if their legacy grant says granted", async () => {
+    class LegacyBoardStore extends InMemoryBoardStore {
+      override readWidgetMcpApp(sessionKey: string, name: string) {
+        const current = super.readWidgetMcpApp(sessionKey, name);
+        if (!current) {
+          return undefined;
+        }
+        const { grantGeneration: _grantGeneration, ...legacy } = current;
+        return legacy;
+      }
+    }
+    const mcpApp = createMcpAppDependencies();
+    const store = new LegacyBoardStore();
+    const { invoke } = createHarness(undefined, mcpApp, store);
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "legacy-app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          viewId: "mcp-app-source",
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          originSessionKey: "agent:main:main",
+          toolCallId: "call",
+        },
+      },
+    });
+    await invoke("board.widget.grant", {
+      sessionKey: "agent:main:main",
+      name: "legacy-app",
+      decision: "granted",
+      revision: 1,
+      instanceId: store.getSnapshot("agent:main:main").widgets[0]?.instanceId,
+    });
+
+    await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "legacy-app",
+      revision: 1,
+      instanceId: store.getSnapshot("agent:main:main").widgets[0]?.instanceId,
+    });
+    expect(mcpApp.mintFromTranscript).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allowedAppToolNames: new Set(),
+        readOnly: true,
+      }),
+    );
+    expect(vi.mocked(mcpApp.mintFromTranscript).mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "authorizeAppToolCall",
+    );
+  });
+
+  it("rejects pre-validation MCP App rows that point at another session", async () => {
+    const store = new InMemoryBoardStore();
+    store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "legacy-cross-session",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          originSessionKey: "agent:main:origin",
+          toolCallId: "call",
+        },
+      },
+    });
+    const mcpApp = createMcpAppDependencies();
+    const { invoke } = createHarness(undefined, mcpApp, store);
+
+    const response = await invoke("board.widget.appView", {
+      sessionKey: "agent:main:board",
+      name: "legacy-cross-session",
+      revision: 1,
+      instanceId: store.getSnapshot("agent:main:board").widgets[0]?.instanceId,
+    });
+
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(mcpApp.mintFromTranscript).not.toHaveBeenCalled();
+  });
+
+  it("rejects app-view requests for a replaced widget revision", async () => {
+    const { invoke, mcpApp } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          viewId: "mcp-app-source",
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          originSessionKey: "agent:main:main",
+          toolCallId: "call",
+        },
+      },
+    });
+
+    const response = await invoke("board.widget.appView", {
+      sessionKey: "agent:main:main",
+      name: "server-app",
+      revision: 2,
+    });
+    expect(response.mock.calls[0]?.[0]).toBe(false);
+    expect(mcpApp.mintFromTranscript).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-session MCP App pins before resolving the source view", async () => {
+    const { invoke, mcpApp } = createHarness();
+    const response = await invoke("board.widget.put", {
+      sessionKey: "agent:main:other",
+      name: "server-app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          viewId: "mcp-app-source",
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://resource",
+          originSessionKey: "agent:main:main",
+          toolCallId: "call",
+        },
+      },
+    });
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(mcpApp.resolveActiveView).not.toHaveBeenCalled();
   });
 
   it("materializes canvas document sources before storing and broadcasting", async () => {
