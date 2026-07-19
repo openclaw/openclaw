@@ -107,11 +107,11 @@ patch_keyboard_shortcuts_bundle_lookup() {
   if grep -Fq "static let keyboardShortcutsResources" "$source"; then
     return 0
   fi
-  if ! git -C "$checkout" apply --check "$KEYBOARD_SHORTCUTS_PATCH"; then
+  if ! git -C "$checkout" apply --unidiff-zero --check "$KEYBOARD_SHORTCUTS_PATCH"; then
     echo "ERROR: KeyboardShortcuts resource lookup patch no longer applies" >&2
     exit 1
   fi
-  git -C "$checkout" apply "$KEYBOARD_SHORTCUTS_PATCH"
+  git -C "$checkout" apply --unidiff-zero "$KEYBOARD_SHORTCUTS_PATCH"
 }
 
 PNPM_CMD=()

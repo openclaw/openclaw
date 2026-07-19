@@ -1,9 +1,7 @@
 diff --git a/Sources/KeyboardShortcuts/Utilities.swift b/Sources/KeyboardShortcuts/Utilities.swift
 --- a/Sources/KeyboardShortcuts/Utilities.swift
 +++ b/Sources/KeyboardShortcuts/Utilities.swift
-@@ -11,10 +11,28 @@ import Carbon.HIToolbox
- 
- 
+@@ -12,0 +13,18 @@
 +private extension Bundle {
 +	static let keyboardShortcutsResources: Bundle = {
 +		// Packaged apps keep dependency resources in Contents/Resources, while SwiftPM's
@@ -22,12 +20,6 @@ diff --git a/Sources/KeyboardShortcuts/Utilities.swift b/Sources/KeyboardShortcu
 +}
 +
 +
- extension String {
- 	/**
- 	Makes the string localizable.
- 	*/
- 	var localized: String {
+@@ -18 +36 @@
 -		NSLocalizedString(self, bundle: .module, comment: self)
 +		NSLocalizedString(self, bundle: .keyboardShortcutsResources, comment: self)
- 	}
- }

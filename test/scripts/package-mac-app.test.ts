@@ -677,8 +677,10 @@ describe("package-mac-app plist stamping", () => {
     expect(script).toContain(
       'KEYBOARD_SHORTCUTS_PATCH="$ROOT_DIR/apps/macos/Patches/KeyboardShortcuts-3.0.1.patch"',
     );
-    expect(script).toContain('git -C "$checkout" apply --check "$KEYBOARD_SHORTCUTS_PATCH"');
-    expect(script).toContain('git -C "$checkout" apply "$KEYBOARD_SHORTCUTS_PATCH"');
+    expect(script).toContain(
+      'git -C "$checkout" apply --unidiff-zero --check "$KEYBOARD_SHORTCUTS_PATCH"',
+    );
+    expect(script).toContain('git -C "$checkout" apply --unidiff-zero "$KEYBOARD_SHORTCUTS_PATCH"');
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(patchCall));
     expect(script.indexOf(patchCall)).toBeLessThan(script.indexOf(buildCall));
     expect(patch).toContain("Bundle.main.url(");
