@@ -12,7 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { prepareCliPromptImagePayload, writeCliSystemPromptFile } from "./cli-runner/cli-images.js";
-import { loadPromptRefImages, writeCliImages } from "./cli-runner/cli-images.test-support.js";
+import { writeCliImages } from "./cli-runner/cli-images.test-support.js";
 import { buildCliArgs, buildClaudeOwnerKey, resolveCliRunQueueKey } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import * as toolImages from "./tool-images.js";
