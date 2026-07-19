@@ -1,5 +1,9 @@
 /** Combined session MCP runtime facade for static + requester partitions. */
-import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  createSharedSessionMcpRequest,
+  type SharedSessionMcpRequest,
+  waitForSharedSessionMcpRequest,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpRequestOptions,
@@ -76,7 +80,7 @@ export function createCombinedSessionMcpRuntime(params: {
   let lastUsedAt = Math.max(...parts.map((part) => part.lastUsedAt));
   let cachedCatalog: McpToolCatalog | null = null;
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
-  let catalogInFlight: Promise<McpToolCatalog> | undefined;
+  let catalogInFlight: SharedSessionMcpRequest<McpToolCatalog> | undefined;
   const serverOwner = new Map<string, SessionMcpRuntime>();
 
   const rememberServerOwners = (catalog: McpToolCatalog, owner: SessionMcpRuntime) => {
@@ -100,11 +104,15 @@ export function createCombinedSessionMcpRuntime(params: {
       options?.signal?.throwIfAborted();
       return cachedCatalog;
     }
-    if (catalogInFlight) {
-      return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
+    if (catalogInFlight && !catalogInFlight.controller.signal.aborted) {
+      return await waitForSharedSessionMcpRequest(catalogInFlight, options?.signal);
     }
-    const inFlight = (async () => {
-      const catalogs = await Promise.all(parts.map((part) => part.getCatalog(options)));
+    catalogInFlight = undefined;
+    const controller = new AbortController();
+    const promise = (async () => {
+      const catalogs = await Promise.all(
+        parts.map((part) => part.getCatalog({ signal: controller.signal })),
+      );
       serverOwner.clear();
       for (let index = 0; index < parts.length; index += 1) {
         rememberServerOwners(catalogs[index]!, parts[index]!);
@@ -113,14 +121,17 @@ export function createCombinedSessionMcpRuntime(params: {
       cachedCatalog = mergeMcpToolCatalogs(catalogs);
       return cachedCatalog;
     })();
+    const inFlight = createSharedSessionMcpRequest({
+      controller,
+      promise,
+      onSettled(request) {
+        if (catalogInFlight === request) {
+          catalogInFlight = undefined;
+        }
+      },
+    });
     catalogInFlight = inFlight;
-    try {
-      return await waitForSessionMcpRequest(inFlight, options?.signal);
-    } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
-    }
+    return await waitForSharedSessionMcpRequest(inFlight, options?.signal);
   };
 
   // Fresh combined facades have an empty owner map until the catalog is loaded.
@@ -244,6 +255,8 @@ export function createCombinedSessionMcpRuntime(params: {
       return await owner.getPrompt(serverName, name, args);
     },
     async dispose() {
+      catalogInFlight?.controller.abort(new Error("Combined MCP runtime disposed"));
+      catalogInFlight = undefined;
       await Promise.allSettled(parts.map((part) => part.dispose()));
     },
   };
