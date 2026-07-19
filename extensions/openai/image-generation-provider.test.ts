@@ -1631,19 +1631,40 @@ describe("openai image generation provider", () => {
 
   it.each([
     {
-      name: "output item",
+      name: "invalid alphabet from output item",
       event: {
         type: "response.output_item.done",
         item: { type: "image_generation_call", result: "aGVs!bG8=" },
       },
     },
     {
-      name: "completed output",
+      name: "invalid alphabet from completed output",
       event: {
         type: "response.completed",
         response: {
           output: [{ type: "image_generation_call", result: "aGVs!bG8=" }],
         },
+      },
+    },
+    {
+      name: "missing canonical padding",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVsbG8" },
+      },
+    },
+    {
+      name: "internal whitespace",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "aGVs bG8=" },
+      },
+    },
+    {
+      name: "non-zero trailing bits",
+      event: {
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", result: "Zh==" },
       },
     },
   ])("rejects malformed Codex image base64 from $name events", async ({ event }) => {
@@ -1666,7 +1687,7 @@ describe("openai image generation provider", () => {
     mockCodexRawStream(
       `data: ${JSON.stringify({
         type: "response.output_item.done",
-        item: { type: "image_generation_call", result: "\u00a0aGVsbG8=\u00a0" },
+        item: { type: "image_generation_call", result: "\u0085aGVsbG8=\u0085" },
       })}\n\n`,
     );
 
