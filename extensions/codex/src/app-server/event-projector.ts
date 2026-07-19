@@ -94,6 +94,7 @@ export class CodexAppServerEventProjector {
   private promptErrorSource: AttemptFailureSource | null = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
+  terminalReleaseInterruptClosed = false;
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
   private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
@@ -339,11 +340,10 @@ export class CodexAppServerEventProjector {
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
-        // Preserve audit synthesis on every path, but completed answers must not
-        // promote bookkeeping gaps into user-visible terminal failure evidence.
+        // Preserve audit synthesis without promoting bookkeeping gaps into terminal failure evidence.
         terminalDisposition: this.aborted
           ? "tool_error"
-          : hasDeliverableAssistantOnCompletedTurn
+          : hasDeliverableAssistantOnCompletedTurn || this.terminalReleaseInterruptClosed
             ? "diagnostic_only"
             : "prompt_error",
       });

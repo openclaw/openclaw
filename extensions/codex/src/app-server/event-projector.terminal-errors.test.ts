@@ -160,6 +160,26 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastToolError).toBeUndefined();
   });
 
+  it("does not fail the attempt for tool calls killed by a terminal-release interrupt", async () => {
+    const projector = await createProjector();
+    projector.terminalReleaseInterruptClosed = true;
+
+    await projector.handleNotification(pendingCommandStarted("cmd-terminal-release"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    // The reply was already delivered via the terminal message tool; in-flight
+    // work the deadline interrupt killed is expected, not a prompt failure.
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      promptError: null,
+      promptErrorSource: null,
+    });
+    expect(result.lastToolError).toBeUndefined();
+    expect(JSON.stringify(result.messagesSnapshot)).toContain("without a matching tool.result");
+  });
+
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
     const projector = await createProjector();
 
