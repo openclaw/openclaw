@@ -74,7 +74,7 @@ export function collectMediaGroupCaptions(
 ): MediaGroupCaption[] {
   const captions: MediaGroupCaption[] = [];
   for (let i = 0; i < messages.length; i++) {
-    const caption = messages[i].caption?.trim();
+    const caption = messages[i]?.caption?.trim();
     if (caption && caption.length > 0) {
       captions.push({ albumIndex: i + 1, caption });
     }
