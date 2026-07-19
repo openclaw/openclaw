@@ -38,6 +38,20 @@ export type SandboxFsBridge = {
     mkdir?: boolean;
     signal?: AbortSignal;
   }): Promise<void>;
+  /**
+   * Append at EOF without a userspace read-modify-write cycle.
+   * Optional because a backend must omit this capability unless its authoritative
+   * filesystem can provide native append semantics. One call is not a transactional
+   * record boundary if the kernel reports a short write.
+   */
+  appendFile?(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void>;
   mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
   remove(params: {
     filePath: string;

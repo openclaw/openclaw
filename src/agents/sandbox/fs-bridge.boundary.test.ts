@@ -32,6 +32,21 @@ describe("sandbox fs bridge boundary validation", () => {
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 
+  it("blocks appends into read-only bind mounts", async () => {
+    const sandbox = createSandbox({
+      docker: {
+        ...createSandbox().docker,
+        binds: ["/tmp/workspace-two:/workspace-two:ro"],
+      },
+    });
+    const bridge = createSandboxFsBridge({ sandbox });
+
+    await expect(
+      bridge.appendFile!({ filePath: "/workspace-two/new.txt", data: "hello" }),
+    ).rejects.toThrow(/read-only/);
+    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+  });
+
   it("allows mkdirp for existing in-boundary subdirectories", async () => {
     await expectMkdirpAllowsExistingDirectory();
   });

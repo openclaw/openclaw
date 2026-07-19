@@ -18,6 +18,7 @@ type CapturedEditOperations = {
 type CapturedWriteOperations = {
   mkdir: (dir: string) => Promise<void>;
   writeFile: (absolutePath: string, content: string) => Promise<void>;
+  appendFile: (absolutePath: string, content: string) => Promise<void>;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -131,6 +132,17 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     await readWriteOps().writeFile(toTildePath(testFile), "written via tilde");
 
     expect(await fs.readFile(testFile, "utf8")).toBe("written via tilde");
+  });
+
+  it("write appendFile expands ~ to the OS home directory", async () => {
+    const dir = await createTempDir("openclaw-tilde-test-append-");
+    const testFile = path.join(dir, "tilde-append-test.txt");
+    await fs.writeFile(testFile, "seed", "utf8");
+
+    createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
+    await readWriteOps().appendFile(toTildePath(testFile), "+next");
+
+    expect(await fs.readFile(testFile, "utf8")).toBe("seed+next");
   });
 
   it("write mkdir expands ~ to the OS home directory", async () => {

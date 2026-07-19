@@ -774,7 +774,7 @@ export function buildAgentSystemPrompt(params: {
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const coreToolSummaries: Record<string, string> = {
     read: "Read files",
-    write: "Write files",
+    write: "Write/overwrite; append if backend supports",
     edit: "Exact file edits",
     apply_patch: "Patch files",
     grep: "Search file contents",

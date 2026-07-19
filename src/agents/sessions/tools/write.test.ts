@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
 import { createWriteTool, type WriteOperations } from "./write.js";
 
@@ -24,10 +24,14 @@ describe("write tool", () => {
     return path.join(tmpDir, name);
   }
 
-  function createRecoverableOperations(writeFile: WriteOperations["writeFile"]): WriteOperations {
+  function createRecoverableOperations(
+    writeFile: WriteOperations["writeFile"],
+    appendFile?: NonNullable<WriteOperations["appendFile"]>,
+  ): WriteOperations {
     return {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
+      ...(appendFile ? { appendFile } : {}),
       readFile: (absolutePath) => fs.readFile(absolutePath),
       statFile: async (absolutePath) => {
         try {
@@ -324,5 +328,159 @@ describe("write tool", () => {
     );
 
     expect(result.details).toEqual({ changed: true });
+  });
+
+  it("appends natively without overwrite prechecks or duplicate-content suppression", async () => {
+    const filePath = await createTempPath("append.txt");
+    await fs.writeFile(filePath, "same\n", "utf8");
+    const statFile = vi.fn(async () => ({ type: "file" as const, size: 5, mtimeMs: 1 }));
+    const readFile = vi.fn(async () => Buffer.from("same\n"));
+    const appendFile = vi.fn(async (absolutePath: string, content: string) => {
+      await fs.appendFile(absolutePath, content, "utf8");
+    });
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+        writeFile: async () => {},
+        appendFile,
+        readFile,
+        statFile,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-append",
+      { path: filePath, content: "same\n", append: true },
+      undefined,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended 5 bytes to ${filePath}`,
+    });
+    expect(result.details).toEqual({ changed: true });
+    expect(statFile).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(appendFile).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("same\nsame\n");
+  });
+
+  it("creates a missing file in append mode", async () => {
+    const filePath = await createTempPath("nested/new.txt");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-append-create",
+      { path: filePath, content: "first\n", append: true },
+      undefined,
+    );
+
+    expect(result.details).toEqual({ changed: true });
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("first\n");
+  });
+
+  it("rejects an empty append instead of reporting a fabricated change", async () => {
+    const filePath = await createTempPath("empty-append.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const appendFile = vi.fn(async () => {});
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async () => {}, appendFile),
+    });
+
+    await expect(
+      tool.execute("call-empty-append", { path: filePath, content: "", append: true }, undefined),
+    ).rejects.toThrow("Append content must not be empty");
+    expect(appendFile).not.toHaveBeenCalled();
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\n");
+  });
+
+  it("hides and rejects append when an injected backend lacks native support", async () => {
+    const filePath = await createTempPath("unsupported/append.txt");
+    const mkdir = vi.fn(async () => {});
+    const tool = createWriteTool(tmpDir, {
+      operations: { mkdir, writeFile: async () => {} },
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-unsupported",
+        { path: filePath, content: "extra\n", append: true },
+        undefined,
+      ),
+    ).rejects.toThrow("Append mode is not supported");
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(
+      (tool as unknown as { parameters: { properties: Record<string, unknown> } }).parameters
+        .properties,
+    ).not.toHaveProperty("append");
+  });
+
+  it("keeps append success authoritative when cancellation follows acknowledgement", async () => {
+    const filePath = await createTempPath("append-abort.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf8");
+          controller.abort();
+        },
+      ),
+    });
+
+    const result = await tool.execute(
+      "call-append-abort",
+      { path: filePath, content: "more\n", append: true },
+      controller.signal,
+    );
+
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain(
+      "Successfully appended",
+    );
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\nmore\n");
+  });
+
+  it("reports an uncertain outcome after append dispatch fails", async () => {
+    const filePath = await createTempPath("append-uncertain.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf8");
+          throw new Error("remote append timed out");
+        },
+      ),
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-uncertain",
+        { path: filePath, content: "more\n", append: true },
+        undefined,
+      ),
+    ).rejects.toThrow(/Append outcome is uncertain; do not retry automatically/);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\nmore\n");
+  });
+
+  it("keeps cancellation before append dispatch as a definite abort", async () => {
+    const filePath = await createTempPath("append-prestart.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const controller = new AbortController();
+    controller.abort();
+    const appendFile = vi.fn(async () => {});
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async () => {}, appendFile),
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-prestart",
+        { path: filePath, content: "more\n", append: true },
+        controller.signal,
+      ),
+    ).rejects.toThrow(/^Operation aborted$/);
+    expect(appendFile).not.toHaveBeenCalled();
   });
 });

@@ -24,6 +24,7 @@ import {
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
 } from "./agent-tools.read.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 describe("FS tools with workspaceOnly=false", () => {
@@ -92,6 +93,21 @@ describe("FS tools with workspaceOnly=false", () => {
     );
     const content = await fs.readFile(outsideFile, "utf-8");
     expect(content).toBe("test content");
+  });
+
+  it("should allow append outside workspace when workspaceOnly=false", async () => {
+    await fs.writeFile(outsideFile, "seed", "utf8");
+    await runFsTool(
+      "write",
+      "test-call-append-outside",
+      {
+        path: outsideFile,
+        content: "+next",
+        append: true,
+      },
+      false,
+    );
+    await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("seed+next");
   });
 
   it("should allow write outside workspace via ../ path when workspaceOnly=false", async () => {
@@ -238,6 +254,26 @@ describe("FS tools with workspaceOnly=false", () => {
     ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
   });
 
+  it("should append inside workspace and block outside append when workspaceOnly=true", async () => {
+    const insideFile = path.join(workspaceDir, "inside.txt");
+    await fs.writeFile(insideFile, "seed", "utf8");
+    const writeTool = requireTool(toolsFor(true), "write");
+
+    await writeTool.execute("test-call-append-inside", {
+      path: insideFile,
+      content: "+inside",
+      append: true,
+    });
+    await expect(fs.readFile(insideFile, "utf8")).resolves.toBe("seed+inside");
+    await expect(
+      writeTool.execute("test-call-append-outside-blocked", {
+        path: outsideFile,
+        content: "+outside",
+        append: true,
+      }),
+    ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
+  });
+
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {
     const allowedRelativePath = "memory/2026-03-07.md";
     const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
@@ -264,6 +300,7 @@ describe("FS tools with workspaceOnly=false", () => {
     const result = await writeTool.execute("test-call-memory-append", {
       path: allowedRelativePath,
       content: "new note",
+      append: true,
     });
     expect(hasToolError(result)).toBe(false);
     expect(result).toStrictEqual({
@@ -274,6 +311,134 @@ describe("FS tools with workspaceOnly=false", () => {
       },
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+  });
+
+  it("uses a sandbox bridge native append for memory-triggered writes when available", async () => {
+    const allowedRelativePath = "memory/2026-03-10.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed", "utf8");
+    const bridge = createHostSandboxFsBridge(workspaceDir);
+    const appendSpy = vi.spyOn(bridge, "appendFile");
+    const writeSpy = vi.spyOn(bridge, "writeFile");
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+        sandbox: { root: workspaceDir, bridge },
+      },
+    );
+
+    const result = await writeTool.execute("test-call-memory-sandbox-append", {
+      path: allowedRelativePath,
+      content: "native append",
+      append: true,
+    });
+
+    expect(hasToolError(result)).toBe(false);
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).not.toHaveBeenCalled();
+    await expect(fs.readFile(allowedAbsolutePath, "utf8")).resolves.toBe("seed\nnative append");
+  });
+
+  it("marks a sandbox memory append uncertain when mutation precedes backend rejection", async () => {
+    const allowedRelativePath = "memory/2026-03-11.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed", "utf8");
+    const bridge = createHostSandboxFsBridge(workspaceDir);
+    const appendFile = bridge.appendFile?.bind(bridge);
+    if (!appendFile) {
+      throw new Error("test bridge must support append");
+    }
+    bridge.appendFile = async (params) => {
+      await appendFile(params);
+      throw new Error("fsync timed out");
+    };
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+        sandbox: { root: workspaceDir, bridge },
+      },
+    );
+
+    await expect(
+      writeTool.execute("test-call-memory-sandbox-uncertain-after", {
+        path: allowedRelativePath,
+        content: "durable note",
+        append: true,
+      }),
+    ).rejects.toThrow(/Append outcome is uncertain; do not retry automatically/);
+    await expect(fs.readFile(allowedAbsolutePath, "utf8")).resolves.toBe("seed\ndurable note");
+  });
+
+  it("marks a sandbox memory append uncertain when the backend rejects before persistence", async () => {
+    const allowedRelativePath = "memory/2026-03-12.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed", "utf8");
+    const bridge = createHostSandboxFsBridge(workspaceDir);
+    bridge.appendFile = async () => {
+      throw new Error("remote append rejected");
+    };
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+        sandbox: { root: workspaceDir, bridge },
+      },
+    );
+
+    await expect(
+      writeTool.execute("test-call-memory-sandbox-uncertain-before", {
+        path: allowedRelativePath,
+        content: "not persisted",
+        append: true,
+      }),
+    ).rejects.toThrow(/Append outcome is uncertain; do not retry automatically/);
+    await expect(fs.readFile(allowedAbsolutePath, "utf8")).resolves.toBe("seed");
+  });
+
+  it("accepts sandbox memory append acknowledgement before late cancellation", async () => {
+    const allowedRelativePath = "memory/2026-03-13.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed", "utf8");
+    const bridge = createHostSandboxFsBridge(workspaceDir);
+    const appendFile = bridge.appendFile?.bind(bridge);
+    if (!appendFile) {
+      throw new Error("test bridge must support append");
+    }
+    const controller = new AbortController();
+    bridge.appendFile = async (params) => {
+      await appendFile(params);
+      controller.abort();
+    };
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+        sandbox: { root: workspaceDir, bridge },
+      },
+    );
+
+    const result = await writeTool.execute(
+      "test-call-memory-sandbox-acknowledged",
+      {
+        path: allowedRelativePath,
+        content: "acknowledged",
+        append: true,
+      },
+      controller.signal,
+    );
+
+    expect(hasToolError(result)).toBe(false);
+    await expect(fs.readFile(allowedAbsolutePath, "utf8")).resolves.toBe("seed\nacknowledged");
   });
 
   it("accepts memory-triggered append-only writes with malformed XML arg-value path suffixes", async () => {

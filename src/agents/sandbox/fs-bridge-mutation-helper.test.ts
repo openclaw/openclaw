@@ -1,6 +1,6 @@
 // Pinned mutation helper tests cover the Python helper that performs sandbox
 // filesystem mutations through directory file descriptors.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import {
   SANDBOX_PINNED_MUTATION_PYTHON,
 } from "./fs-bridge-mutation-helper.js";
 
-function runMutation(args: string[], input?: string) {
+function runMutation(args: string[], input?: string | Buffer) {
   return spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...args], {
     input,
     encoding: "utf8",
@@ -18,11 +18,17 @@ function runMutation(args: string[], input?: string) {
   });
 }
 
-function runMutationWithSource(source: string, args: string[], input?: string) {
+function runMutationWithSource(
+  source: string,
+  args: string[],
+  input?: string | Buffer,
+  timeout?: number,
+) {
   return spawnSync("python3", ["-c", source, ...args], {
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
+    timeout,
   });
 }
 
@@ -113,6 +119,89 @@ const FORCED_EXDEV_WITH_SOURCE_REPLACEMENT_MUTATION_PYTHON = FORCED_EXDEV_MUTATI
   ].join("\n"),
 );
 
+const SHORT_WRITE_APPEND_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "operation = sys.argv[1]",
+  [
+    "_real_os_write = os.write",
+    "def _short_os_write(fd, data):",
+    "    return _real_os_write(fd, data[:7])",
+    "os.write = _short_os_write",
+    "",
+    "operation = sys.argv[1]",
+  ].join("\n"),
+);
+
+const PAUSED_APPEND_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  [
+    "    file_fd = os.open(basename, APPEND_FLAGS, 0o600, dir_fd=parent_fd)",
+    "    try:",
+    "        file_stat = os.fstat(file_fd)",
+  ].join("\n"),
+  [
+    "    file_fd = os.open(basename, APPEND_FLAGS, 0o600, dir_fd=parent_fd)",
+    "    try:",
+    "        os.write(2, b'APPEND_READY\\n')",
+    "        file_stat = os.fstat(file_fd)",
+  ].join("\n"),
+);
+
+const SWAPPED_TO_FIFO_APPEND_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  [
+    "    validate_append_target(parent_fd, basename)",
+    "    file_fd = os.open(basename, APPEND_FLAGS, 0o600, dir_fd=parent_fd)",
+  ].join("\n"),
+  [
+    "    validate_append_target(parent_fd, basename)",
+    "    os.unlink(basename, dir_fd=parent_fd)",
+    "    os.mkfifo(basename, 0o600, dir_fd=parent_fd)",
+    "    file_fd = os.open(basename, APPEND_FLAGS, 0o600, dir_fd=parent_fd)",
+  ].join("\n"),
+);
+
+function startPausedAppend(args: string[]) {
+  const child = spawn("python3", ["-c", PAUSED_APPEND_MUTATION_PYTHON, ...args], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  let readySettled = false;
+  let resolveReady: (() => void) | undefined;
+  let rejectReady: ((error: Error) => void) | undefined;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+    if (!readySettled && stderr.includes("APPEND_READY")) {
+      readySettled = true;
+      resolveReady?.();
+    }
+  });
+  const result = new Promise<{ status: number | null; stdout: string; stderr: string }>(
+    (resolve, reject) => {
+      child.once("error", (error) => {
+        if (!readySettled) {
+          readySettled = true;
+          rejectReady?.(error);
+        }
+        reject(error);
+      });
+      child.once("close", (status) => {
+        if (!readySettled) {
+          readySettled = true;
+          rejectReady?.(new Error(`append helper exited before ready: ${stderr}`));
+        }
+        resolve({ status, stdout, stderr });
+      });
+    },
+  );
+  return { child, ready, result };
+}
+
 describe("sandbox pinned mutation helper", () => {
   it("writes through a pinned directory fd", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
@@ -164,6 +253,171 @@ describe("sandbox pinned mutation helper", () => {
         await expect(fs.readFile(filePath, "utf8")).resolves.toBe("after");
         const fileStat = await fs.stat(filePath);
         expect(fileStat.mode & 0o777).toBe(0o600);
+      });
+    },
+  );
+
+  it("appends bytes and creates missing parent directories through pinned descriptors", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      const seed = Buffer.from([0xff, 0xfe, 0x00]);
+      const suffix = Buffer.from([0x80, 0x81, 0x0a]);
+
+      expect(runMutation(["append", workspace, "nested", "bytes.bin", "1"], seed).status).toBe(0);
+      expect(runMutation(["append", workspace, "nested", "bytes.bin", "1"], suffix).status).toBe(0);
+
+      await expect(fs.readFile(path.join(workspace, "nested", "bytes.bin"))).resolves.toEqual(
+        Buffer.concat([seed, suffix]),
+      );
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "creates missing append targets with the same restrictive mode as write",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const target = path.join(workspace, "created.txt");
+        await fs.mkdir(workspace, { recursive: true });
+
+        const result = runMutation(["append", workspace, "", "created.txt", "0"], "created");
+
+        expect(result.status).toBe(0);
+        const fileStat = await fs.stat(target);
+        expect(fileStat.mode & 0o777).toBe(0o600);
+      });
+    },
+  );
+
+  it("creates a missing file for an empty append and leaves an existing file unchanged", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(path.join(workspace, "existing.txt"), "seed", "utf8");
+
+      expect(
+        runMutation(["append", workspace, "", "missing.txt", "0"], Buffer.alloc(0)).status,
+      ).toBe(0);
+      expect(
+        runMutation(["append", workspace, "", "existing.txt", "0"], Buffer.alloc(0)).status,
+      ).toBe(0);
+
+      await expect(fs.readFile(path.join(workspace, "missing.txt"))).resolves.toEqual(
+        Buffer.alloc(0),
+      );
+      await expect(fs.readFile(path.join(workspace, "existing.txt"), "utf8")).resolves.toBe("seed");
+    });
+  });
+
+  it("honors mkdir false for append targets", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutation(["append", workspace, "missing", "file.txt", "0"], "blocked");
+
+      expect(result.status).not.toBe(0);
+      await expectPathMissing(path.join(workspace, "missing"));
+    });
+  });
+
+  it("retries short append writes until the complete payload is persisted", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      const payload = Buffer.from(Array.from({ length: 257 }, (_, index) => index % 256));
+
+      const result = runMutationWithSource(
+        SHORT_WRITE_APPEND_MUTATION_PYTHON,
+        ["append", workspace, "", "short-write.bin", "1"],
+        payload,
+      );
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(path.join(workspace, "short-write.bin"))).resolves.toEqual(payload);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves both independent process appends without a read-modify-write race",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-append-race-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const target = path.join(workspace, "race.bin");
+        await fs.mkdir(workspace, { recursive: true });
+        const seed = Buffer.from("seed\n");
+        const leftPayload = Buffer.alloc(128 * 1024, 0xa1);
+        const rightPayload = Buffer.alloc(128 * 1024, 0xb2);
+        await fs.writeFile(target, seed);
+
+        const args = ["append", workspace, "", "race.bin", "1"];
+        const left = startPausedAppend(args);
+        const right = startPausedAppend(args);
+        await Promise.all([left.ready, right.ready]);
+        left.child.stdin.end(leftPayload);
+        right.child.stdin.end(rightPayload);
+        const [leftResult, rightResult] = await Promise.all([left.result, right.result]);
+
+        expect(leftResult.status, leftResult.stderr).toBe(0);
+        expect(rightResult.status, rightResult.stderr).toBe(0);
+        const actual = await fs.readFile(target);
+        const expectedLeftFirst = Buffer.concat([seed, leftPayload, rightPayload]);
+        const expectedRightFirst = Buffer.concat([seed, rightPayload, leftPayload]);
+        expect(
+          actual.equals(expectedLeftFirst) || actual.equals(expectedRightFirst),
+          "independent appends above the former 64 KiB chunk boundary must both survive",
+        ).toBe(true);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects FIFO targets and does not block when a validated file is swapped to a FIFO",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const fifoPath = path.join(workspace, "target.pipe");
+        const swappedPath = path.join(workspace, "swapped.txt");
+        await fs.mkdir(workspace, { recursive: true });
+        expect(spawnSync("mkfifo", [fifoPath]).status).toBe(0);
+        await fs.writeFile(swappedPath, "seed", "utf8");
+
+        const directFifo = runMutation(["append", workspace, "", "target.pipe", "0"], "blocked");
+        const swappedFifo = runMutationWithSource(
+          SWAPPED_TO_FIFO_APPEND_MUTATION_PYTHON,
+          ["append", workspace, "", "swapped.txt", "0"],
+          "blocked",
+          2_000,
+        );
+
+        expect(directFifo.status).not.toBe(0);
+        expect(directFifo.stderr).toMatch(/regular files/i);
+        expect(swappedFifo.signal).not.toBe("SIGTERM");
+        expect(swappedFifo.status).not.toBe(0);
+        expect((await fs.lstat(swappedPath)).isFIFO()).toBe(true);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects hardlinked and symlink targets while appending",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const outside = path.join(root, "outside.txt");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(outside, "outside", "utf8");
+        await fs.link(outside, path.join(workspace, "hardlink.txt"));
+        await fs.symlink(outside, path.join(workspace, "symlink.txt"));
+
+        const hardlink = runMutation(["append", workspace, "", "hardlink.txt", "0"], "blocked");
+        const symlink = runMutation(["append", workspace, "", "symlink.txt", "0"], "blocked");
+
+        expect(hardlink.status).not.toBe(0);
+        expect(hardlink.stderr).toMatch(/hardlinked file/i);
+        expect(symlink.status).not.toBe(0);
+        await expect(fs.readFile(outside, "utf8")).resolves.toBe("outside");
       });
     },
   );

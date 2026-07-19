@@ -1,7 +1,7 @@
 /**
  * Sandbox filesystem bridge implementation.
  *
- * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
+ * Resolves container paths to mounted host paths and executes guarded reads, writes, appends, stats, renames, and deletes.
  */
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -11,6 +11,7 @@ import type {
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
+  buildPinnedAppendPlan,
   buildPinnedCopyPlan,
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
@@ -140,6 +141,36 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       ...buildPinnedWritePlan({
         check: writeCheck,
         pinned: pinnedWriteTarget,
+        mkdir: params.mkdir !== false,
+      }),
+      stdin: buffer,
+      signal: params.signal,
+    });
+  }
+
+  async appendFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const target = this.resolveResolvedPath(params);
+    this.ensureWriteAccess(target, "append to files");
+    const appendCheck = {
+      target,
+      options: { action: "append to files", requireWritable: true } as const,
+    };
+    await this.pathGuard.assertPathSafety(target, appendCheck.options);
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const pinnedTarget = await this.pathGuard.resolveAnchoredPinnedEntry(target, "append to files");
+    await this.runCheckedCommand({
+      ...buildPinnedAppendPlan({
+        check: appendCheck,
+        pinned: pinnedTarget,
         mkdir: params.mkdir !== false,
       }),
       stdin: buffer,

@@ -115,7 +115,12 @@ describe("tools.fs.workspaceOnly", () => {
       expect(getTextContent(readResult)).toContain("shh");
 
       await writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" });
-      expect(await fs.readFile(path.join(agentRoot, "owned.txt"), "utf8")).toBe("x");
+      await writeTool?.execute("t3", {
+        path: "/agent/owned.txt",
+        content: "+append",
+        append: true,
+      });
+      expect(await fs.readFile(path.join(agentRoot, "owned.txt"), "utf8")).toBe("x+append");
     });
   });
 
@@ -132,6 +137,13 @@ describe("tools.fs.workspaceOnly", () => {
 
       await expect(
         writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      await expect(
+        writeTool?.execute("t2-append", {
+          path: "/agent/owned.txt",
+          content: "x",
+          append: true,
+        }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
       const missingOwnedFile = await fs
         .stat(path.join(agentRoot, "owned.txt"))

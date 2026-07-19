@@ -4,6 +4,7 @@
  * Writes files through queued local or injected operations with readback/idempotency metadata.
  */
 import {
+  appendFile as fsAppendFile,
   mkdir as fsMkdir,
   readFile as fsReadFile,
   stat as fsStat,
@@ -13,6 +14,7 @@ import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { structuredPatch } from "diff";
 import { Type } from "typebox";
+import { createUncertainAppendOutcomeError } from "../../append-outcome.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -31,11 +33,22 @@ import {
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
-const writeSchema = Type.Object({
+const writeSchemaProperties = {
   path: Type.String({
     description: "File path; relative/absolute.",
   }),
   content: Type.String({ description: "File content." }),
+} as const;
+
+const writeSchemaWithoutAppend = Type.Object(writeSchemaProperties);
+const writeSchema = Type.Object({
+  ...writeSchemaProperties,
+  append: Type.Optional(
+    Type.Boolean({
+      description:
+        "Append content at EOF instead of overwriting it. Native backends avoid lost updates, but an append is not a transactional record boundary after a short write.",
+    }),
+  ),
 });
 
 const WriteToolOutputSchema = Type.Union([
@@ -72,6 +85,8 @@ const WriteToolOutputSchema = Type.Union([
 export interface WriteOperations {
   /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
+  /** Append content to a file. Omit unless the backend supports native append. */
+  appendFile?: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
   mkdir: (dir: string) => Promise<void>;
   /** Optional readback used to recover when a write succeeded but the tool aborted before returning */
@@ -82,6 +97,7 @@ export interface WriteOperations {
 
 const defaultWriteOperations: WriteOperations = {
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
+  appendFile: (path, content) => fsAppendFile(path, content, "utf-8"),
   mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),
   readFile: (path) => fsReadFile(path),
   statFile: async (path) => {
@@ -494,9 +510,14 @@ function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefine
   );
 }
 
-function successfulWriteResult(path: string, content: string, details: WriteToolDetails) {
+function successfulWriteResult(
+  path: string,
+  content: string,
+  details: WriteToolDetails,
+  operation: "wrote" | "appended" = "wrote",
+) {
   return textResult(
-    `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
+    `Successfully ${operation} ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
     details,
   );
 }
@@ -531,17 +552,24 @@ export function createWriteToolDefinition(
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
+  const supportsAppend = Boolean(ops.appendFile);
   return {
     name: "write",
     label: "write",
-    description: "Write/overwrite file; creates parent directories.",
-    promptSnippet: "Create/overwrite files",
-    promptGuidelines: ["Use only new files/complete rewrites."],
-    parameters: writeSchema,
+    description: supportsAppend
+      ? "Write/overwrite/append file; creates parent directories."
+      : "Write/overwrite file; creates parent directories.",
+    promptSnippet: supportsAppend ? "Create/overwrite/append files" : "Create/overwrite files",
+    promptGuidelines: supportsAppend
+      ? [
+          "Use only new files/complete rewrites, or append: true to add at EOF without read-modify-write. Append is not a transactional record boundary after a short write.",
+        ]
+      : ["Use only new files/complete rewrites."],
+    parameters: (supportsAppend ? writeSchema : writeSchemaWithoutAppend) as typeof writeSchema,
     outputSchema: WriteToolOutputSchema,
     async execute(
       toolCallId,
-      { path, content }: { path: string; content: string },
+      input: { path: string; content: string; append?: unknown },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -549,15 +577,30 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
+      const { path, content } = input;
+      if (input.append !== undefined && typeof input.append !== "boolean") {
+        throw new Error("Invalid append parameter: expected boolean when provided");
+      }
+      const append = input.append === true;
+      if (append && !ops.appendFile) {
+        throw new Error("Append mode is not supported by this write tool backend");
+      }
+      if (append && content.length === 0) {
+        throw new Error("Append content must not be empty");
+      }
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
-        const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        // Native append cannot use overwrite's identical-content precheck or readback recovery:
+        // duplicate payloads are intentional and readback cannot attribute bytes to one writer.
+        const precheck: WriteToolPrecheck = append
+          ? { state: "unknown" }
+          : await readOriginalWriteState(absolutePath, content, ops);
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        // Terminal no-op: file already has identical content.
-        if (precheck.state === "same") {
+        // Terminal no-op applies only to overwrite mode; duplicate appends are intentional.
+        if (!append && precheck.state === "same") {
           return {
             ...textResult(`No changes made to ${path}. The file already has identical content.`, {
               changed: false,
@@ -565,18 +608,34 @@ export function createWriteToolDefinition(
             terminate: true,
           };
         }
-        const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
+        const details: WriteToolDetails = append
+          ? { changed: true }
+          : await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
+        let appendStarted = false;
         try {
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          await ops.writeFile(absolutePath, content);
-          if (signal?.aborted) {
+          if (append) {
+            appendStarted = true;
+            await ops.appendFile!(absolutePath, content);
+          } else {
+            await ops.writeFile(absolutePath, content);
+          }
+          // Returning from appendFile is the acknowledgement. A cancellation after that point
+          // must not turn a known success into an ambiguous failure.
+          if (!append && signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          return successfulWriteResult(path, content, details);
+          return successfulWriteResult(path, content, details, append ? "appended" : "wrote");
         } catch (error: unknown) {
+          if (append) {
+            if (!appendStarted) {
+              throw error;
+            }
+            throw createUncertainAppendOutcomeError(error);
+          }
           const recovered = await recoverSuccessfulWrite({
             absolutePath,
             content,
