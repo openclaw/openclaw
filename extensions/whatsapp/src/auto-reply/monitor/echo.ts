@@ -7,10 +7,12 @@ export type EchoTracker = {
       combinedBody?: string;
       combinedBodySessionKey?: string;
       logVerboseMessage?: boolean;
+      /** WhatsApp JID of the conversation this text was sent to. */
+      conversationId?: string;
     },
   ) => void;
-  has: (key: string) => boolean;
-  forget: (key: string) => void;
+  has: (key: string, conversationId?: string) => boolean;
+  forget: (key: string, conversationId?: string) => void;
   buildCombinedKey: (params: { sessionKey: string; combinedBody: string }) => string;
 };
 
@@ -34,11 +36,15 @@ export function createEchoTracker(params: {
     }
   };
 
+  const scopedKey = (key: string, conversationId?: string) =>
+    conversationId ? `${conversationId}\0${key}` : key;
+
   const rememberText: EchoTracker["rememberText"] = (text, opts) => {
     if (!text) {
       return;
     }
-    recentlySent.add(text);
+    const key = scopedKey(text, opts.conversationId);
+    recentlySent.add(key);
     if (opts.combinedBody && opts.combinedBodySessionKey) {
       recentlySent.add(
         buildCombinedKey({
@@ -57,9 +63,9 @@ export function createEchoTracker(params: {
 
   return {
     rememberText,
-    has: (key) => recentlySent.has(key),
-    forget: (key) => {
-      recentlySent.delete(key);
+    has: (key, conversationId) => recentlySent.has(scopedKey(key, conversationId)),
+    forget: (key, conversationId) => {
+      recentlySent.delete(scopedKey(key, conversationId));
     },
     buildCombinedKey,
   };

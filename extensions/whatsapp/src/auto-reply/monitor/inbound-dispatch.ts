@@ -521,6 +521,7 @@ export function createWhatsAppReplyPlan(params: {
       combinedBody?: string;
       combinedBodySessionKey?: string;
       logVerboseMessage?: boolean;
+      conversationId?: string;
     },
   ) => void;
   replyLogger: ReturnType<typeof getChildLogger>;
@@ -604,6 +605,7 @@ export function createWhatsAppReplyPlan(params: {
       combinedBody: params.context.Body as string | undefined,
       combinedBodySessionKey: params.route.sessionKey,
       logVerboseMessage: shouldLog,
+      conversationId,
     });
     const fromDisplay = conversationId;
     if (shouldLogVerbose()) {
@@ -689,6 +691,7 @@ export function createWhatsAppReplyPlan(params: {
               combinedBody: params.context.Body as string | undefined,
               combinedBodySessionKey: params.route.sessionKey,
               logVerboseMessage: shouldLog,
+              conversationId,
             });
             return whatsAppReplyDeliveryVisibilityFromDurableResult(durable.delivery);
           }
