@@ -4,46 +4,22 @@ import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { icons } from "../../components/icons.ts";
+import { i18n, t } from "../../i18n/index.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import * as realtimeTalkInput from "./realtime-talk-input.ts";
 
-const discoverRealtimeTalkInputsMock = vi.hoisted(() => vi.fn());
-const openRealtimeTalkInputMock = vi.hoisted(() => vi.fn());
+const discoverRealtimeTalkInputsMock = vi.fn();
+const openRealtimeTalkInputMock = vi.fn();
 
-// Keep every real export present: shared-registry workers (isolate:false) can
-// evaluate sibling modules (e.g. chat-realtime's camera discovery) against this
-// factory, and a missing binding breaks unrelated files in the same worker.
-vi.mock("./realtime-talk-input.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./realtime-talk-input.ts")>()),
-  discoverRealtimeTalkInputs: discoverRealtimeTalkInputsMock,
-  openRealtimeTalkInput: openRealtimeTalkInputMock,
-  describeRealtimeTalkInputError: () => "Microphone access failed.",
-}));
+type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
-vi.mock("../../components/icons.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../components/icons.ts")>();
-  const { html: litHtml } = await import("lit");
-  return {
-    ...actual,
-    icons: {
-      ...actual.icons,
-      camera: litHtml`<svg data-icon="camera"></svg>`,
-      cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
-      switchCamera: litHtml`<svg data-icon="switch-camera"></svg>`,
-      check: litHtml`<svg data-icon="check"></svg>`,
-      chevronDown: litHtml`<svg data-icon="chevron-down"></svg>`,
-    },
-  };
-});
-
-type ComposerProps = Parameters<
-  typeof import("./components/chat-composer.ts").renderChatComposer
->[0];
-
-let loadSettings: typeof import("../../app/settings.ts").loadSettings;
-let patchSettings: typeof import("../../app/settings.ts").patchSettings;
-let i18n: typeof import("../../i18n/index.ts").i18n;
-let t: typeof import("../../i18n/index.ts").t;
-let renderChatComposer: typeof import("./components/chat-composer.ts").renderChatComposer;
-let resetChatComposerState: typeof import("./components/chat-composer.ts").resetChatComposerState;
+function iconMarkup(icon: unknown): string | undefined {
+  const container = document.createElement("div");
+  render(icon, container);
+  return container.querySelector("svg")?.innerHTML;
+}
 
 function props(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
@@ -143,13 +119,15 @@ function dictationPointerDown(pointerId: number): PointerEvent {
   return event as PointerEvent;
 }
 
-beforeEach(async () => {
-  // isolate:false keeps a worker's module registry across test files. chat-view
-  // eagerly imports the composer, so reload it after this file's mocks are active.
-  vi.resetModules();
-  ({ loadSettings, patchSettings } = await import("../../app/settings.ts"));
-  ({ i18n, t } = await import("../../i18n/index.ts"));
-  ({ renderChatComposer, resetChatComposerState } = await import("./components/chat-composer.ts"));
+beforeEach(() => {
+  // ESM imports remain live when the composer was cached by another test file.
+  // Patch the shared dependencies instead of clearing isolate:false's registry.
+  vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
+    discoverRealtimeTalkInputsMock,
+  );
+  vi.spyOn(realtimeTalkInput, "openRealtimeTalkInput").mockImplementation(
+    openRealtimeTalkInputMock,
+  );
 });
 
 afterEach(async () => {
@@ -278,9 +256,9 @@ describe("renderChatComposer controls", () => {
     expect(items.find((item) => item.value === "studio-mic")?.getAttribute("aria-checked")).toBe(
       "true",
     );
-    expect(
-      items.find((item) => item.value === "studio-mic")?.querySelector('[data-icon="check"]'),
-    ).not.toBeNull();
+    expect(items.find((item) => item.value === "studio-mic")?.querySelector("svg")?.innerHTML).toBe(
+      iconMarkup(icons.check),
+    );
 
     items.find((item) => item.value === "headset")?.click();
     await dropdown?.updateComplete;
@@ -371,8 +349,8 @@ describe("renderChatComposer controls", () => {
     });
 
     const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
-    expect(cameraToggle.querySelector('[data-icon="camera-off"]')).not.toBeNull();
-    expect(cameraToggle.querySelector('[data-icon="camera"]')).toBeNull();
+    expect(cameraToggle.querySelector("svg")?.innerHTML).toBe(iconMarkup(icons.cameraOff));
+    expect(cameraToggle.querySelector("svg")?.innerHTML).not.toBe(iconMarkup(icons.camera));
   });
 
   it("offers camera switching only for a live preview with multiple cameras", () => {

@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render, type ReactiveControllerHost } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -30,6 +30,7 @@ import {
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import { renderChat, resetChatViewState } from "./chat-view.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
+import * as chatMessage from "./components/chat-message.ts";
 import {
   renderChatModelControls,
   type ChatModelControlsProps,
@@ -253,9 +254,9 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-vi.mock("../../components/icons.ts", () => ({
-  icons: {},
-}));
+vi.mock("../../components/icons.ts", async (importOriginal) =>
+  importOriginal<typeof import("../../components/icons.ts")>(),
+);
 
 vi.mock("./chat-thread.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./chat-thread.ts")>();
@@ -267,34 +268,40 @@ vi.mock("./chat-thread.ts", async (importOriginal) => {
   };
 });
 
-vi.mock("./components/chat-message.ts", () => ({
-  getAssistantAttachmentAvailabilityRenderVersion: () => assistantAttachmentRenderVersionMock.value,
-  renderMessageGroup: renderMessageGroupMock,
-  renderStreamGroup: (parts: Array<{ kind: string; text?: string }>) => {
-    const group = document.createElement("div");
-    group.className = "chat-stream-run";
-    for (const part of parts) {
-      const bubble = document.createElement("div");
-      if (part.kind === "reading-indicator") {
-        bubble.className = "chat-reading-indicator";
-      } else {
-        bubble.className = "chat-stream";
-        bubble.textContent = part.text ?? "";
-      }
-      group.appendChild(bubble);
-    }
-    return group;
-  },
-  renderWorkGroupSummary: () => {
-    const summary = document.createElement("div");
-    summary.className = "chat-work-group";
-    return summary;
-  },
-}));
-
 vi.mock("../../lib/agents/tools-effective.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
+
+function renderStreamGroupMock(parts: Array<{ kind: string; text?: string }>) {
+  const group = document.createElement("div");
+  group.className = "chat-stream-run";
+  for (const part of parts) {
+    const bubble = document.createElement("div");
+    if (part.kind === "reading-indicator") {
+      bubble.className = "chat-reading-indicator";
+    } else {
+      bubble.className = "chat-stream";
+      bubble.textContent = part.text ?? "";
+    }
+    group.appendChild(bubble);
+  }
+  return group;
+}
+
+function renderWorkGroupSummaryMock() {
+  const summary = document.createElement("div");
+  summary.className = "chat-work-group";
+  return summary;
+}
+
+beforeEach(() => {
+  vi.spyOn(chatMessage, "getAssistantAttachmentAvailabilityRenderVersion").mockImplementation(
+    () => assistantAttachmentRenderVersionMock.value,
+  );
+  vi.spyOn(chatMessage, "renderMessageGroup").mockImplementation(renderMessageGroupMock);
+  vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
+  vi.spyOn(chatMessage, "renderWorkGroupSummary").mockImplementation(renderWorkGroupSummaryMock);
+});
 
 function createSessionsResultFromRows(
   sessions: GatewaySessionRow[],
@@ -1619,6 +1626,7 @@ afterEach(() => {
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("per-pane chat presentation state", () => {

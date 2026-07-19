@@ -1,44 +1,36 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
+import * as localStorageModule from "../../../local-storage.ts";
+import * as chatAvatar from "../chat-avatar.ts";
 import { renderMessageGroup, renderStreamGroup } from "./chat-message.ts";
 
-const localStorageValues = vi.hoisted(() => new Map<string, string>());
-const markdownRenderMock = vi.hoisted(() =>
-  vi.fn(
-    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
-  ),
+const localStorageValues = new Map<string, string>();
+const markdownRenderMock = vi.fn(
+  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
 );
-const streamingMarkdownRenderMock = vi.hoisted(() =>
-  vi.fn(
-    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
-      `<div class="streaming-markdown">${value}</div>`,
-  ),
+const streamingMarkdownRenderMock = vi.fn(
+  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
+    `<div class="streaming-markdown">${value}</div>`,
 );
 
-vi.mock("../../../local-storage.ts", () => ({
-  getSafeLocalStorage: () => ({
+function getSafeLocalStorageMock() {
+  return {
     getItem: (key: string) => localStorageValues.get(key) ?? null,
     removeItem: (key: string) => localStorageValues.delete(key),
     setItem: (key: string, value: string) => localStorageValues.set(key, value),
-  }),
-}));
-
-vi.mock("../../../components/markdown.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../components/markdown.ts")>();
-  return {
-    ...actual,
-    toSanitizedMarkdownHtml: markdownRenderMock,
-    toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   };
-});
+}
 
-vi.mock("../../../components/icons.ts", () => ({
-  icons: {},
-}));
+function renderChatAvatarMock(role: string) {
+  const element = document.createElement("div");
+  element.className = `chat-avatar ${role}`;
+  return element;
+}
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -67,13 +59,12 @@ function pointerClick(element: Element) {
   element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 }
 
-vi.mock("./chat-avatar.ts", () => ({
-  renderChatAvatar: (role: string) => {
-    const element = document.createElement("div");
-    element.className = `chat-avatar ${role}`;
-    return element;
-  },
-}));
+beforeEach(() => {
+  vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
+  vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
+  vi.spyOn(markdown, "toStreamingMarkdownHtml").mockImplementation(streamingMarkdownRenderMock);
+  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(renderChatAvatarMock);
+});
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
