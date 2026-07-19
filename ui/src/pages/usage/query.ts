@@ -14,11 +14,20 @@ function downloadTextFile(filename: string, content: string, type = "text/plain"
   URL.revokeObjectURL(url);
 }
 
+// Session labels and ids are user/agent-controlled: a cell whose first
+// non-whitespace character is a spreadsheet formula prefix executes on open, and a
+// bare \r breaks the row boundary. Neutralize only formula prefixes with a leading '
+// so plain whitespace-prefixed text keeps its bytes; quote \r like \n.
+function neutralizeSpreadsheetFormulaCell(text: string): string {
+  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(text) ? `'${text}` : text;
+}
+
 function csvEscape(value: string): string {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replaceAll('"', '""')}"`;
+  const safeValue = neutralizeSpreadsheetFormulaCell(value);
+  if (/[",\r\n]/.test(safeValue)) {
+    return `"${safeValue.replaceAll('"', '""')}"`;
   }
-  return value;
+  return safeValue;
 }
 
 function toCsvRow(values: Array<string | number | undefined | null>): string {
