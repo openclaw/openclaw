@@ -47,6 +47,15 @@ type SetupAppRecommendationDeps = {
   deferOfferToBootstrap?: () => boolean;
 };
 
+export type SetupAppRecommendationsOutcome = {
+  config: OpenClawConfig;
+  commitResult: () => void;
+};
+
+function unchangedOutcome(config: OpenClawConfig): SetupAppRecommendationsOutcome {
+  return { config, commitResult: () => undefined };
+}
+
 function resolveOfficialEntry(pluginId: string): OnboardingPluginInstallEntry | undefined {
   const catalogEntry = listOfficialExternalPluginCatalogEntries().find(
     (entry) => resolveOfficialExternalPluginId(entry) === pluginId,
@@ -91,7 +100,7 @@ export async function setupAppRecommendations(params: {
   modelRouteVerified: boolean;
   platform?: NodeJS.Platform;
   deps?: SetupAppRecommendationDeps;
-}): Promise<OpenClawConfig> {
+}): Promise<SetupAppRecommendationsOutcome> {
   const platform = params.platform ?? process.platform;
   // Product decision: default-on "magical" scan with a kill switch, not
   // consent-first. App labels/bundle ids go to the user's configured model and
@@ -102,12 +111,12 @@ export async function setupAppRecommendations(params: {
     platform !== "darwin" ||
     !params.modelRouteVerified
   ) {
-    return params.config;
+    return unchangedOutcome(params.config);
   }
   const readStored = params.deps?.readStored ?? readOnboardingRecommendations;
   const storedRecord = readStored();
   if (typeof storedRecord?.acceptedAt === "number") {
-    return params.config;
+    return unchangedOutcome(params.config);
   }
   const clearPendingStored =
     params.deps?.clearPendingStored ?? clearPendingOnboardingRecommendations;
@@ -136,7 +145,7 @@ export async function setupAppRecommendations(params: {
   let recordResult: (retryMatches: SetupAppRecommendationMatch[]) => void;
   if (stored) {
     if (deferOfferToBootstrap()) {
-      return params.config;
+      return unchangedOutcome(params.config);
     }
     matches = stored.matches;
     appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
@@ -162,16 +171,16 @@ export async function setupAppRecommendations(params: {
       params.runtime.log(
         t("wizard.appRecommendations.skipped", { reason: formatErrorMessage(error) }),
       );
-      return params.config;
+      return unchangedOutcome(params.config);
     }
     progress.stop();
     if (result.status !== "ok") {
       params.runtime.log(t("wizard.appRecommendations.noneFound"));
-      return params.config;
+      return unchangedOutcome(params.config);
     }
     if (deferOfferToBootstrap()) {
       writeOffer({ inventory: result.apps, matches: result.matches, answered: false });
-      return params.config;
+      return unchangedOutcome(params.config);
     }
     const scanned = result;
     matches = scanned.matches;
@@ -223,14 +232,22 @@ export async function setupAppRecommendations(params: {
   });
   if (selected.includes(SKIP_VALUE)) {
     recordResult([]);
-    return params.config;
+    return unchangedOutcome(params.config);
   }
 
   let next = params.config;
+  const selectedMatches = uniqueSelectedMatches(matches, selected);
+  if (selectedMatches.length === 0) {
+    recordResult([]);
+    return unchangedOutcome(params.config);
+  }
+  // Persist the selected set before external installs. Unselected matches are
+  // explicit declines; selected matches stay retryable until each install succeeds.
+  recordResult(selectedMatches);
   const retryMatches: SetupAppRecommendationMatch[] = [];
   const ensurePlugin = params.deps?.ensurePlugin ?? ensureOnboardingPluginInstalled;
   const installSkill = params.deps?.installSkill ?? installSkillFromClawHub;
-  for (const match of uniqueSelectedMatches(matches, selected)) {
+  for (const match of selectedMatches) {
     try {
       if (match.candidate.source === "clawhub-skill") {
         const installed = await installSkill({
@@ -249,23 +266,25 @@ export async function setupAppRecommendations(params: {
         if (!installed.ok) {
           throw new Error(installed.error);
         }
-        continue;
-      }
-      const entry = (params.deps?.resolveOfficialEntry ?? resolveOfficialEntry)(match.candidate.id);
-      if (!entry) {
-        throw new Error(t("wizard.appRecommendations.catalogEntryMissing"));
-      }
-      const installed = await ensurePlugin({
-        cfg: next,
-        entry,
-        prompter: params.prompter,
-        runtime: params.runtime,
-        workspaceDir: params.workspaceDir,
-        promptInstall: false,
-      });
-      next = installed.cfg;
-      if (!installed.installed) {
-        throw new Error(installed.error ?? installed.status);
+      } else {
+        const entry = (params.deps?.resolveOfficialEntry ?? resolveOfficialEntry)(
+          match.candidate.id,
+        );
+        if (!entry) {
+          throw new Error(t("wizard.appRecommendations.catalogEntryMissing"));
+        }
+        const installed = await ensurePlugin({
+          cfg: next,
+          entry,
+          prompter: params.prompter,
+          runtime: params.runtime,
+          workspaceDir: params.workspaceDir,
+          promptInstall: false,
+        });
+        next = installed.cfg;
+        if (!installed.installed) {
+          throw new Error(installed.error ?? installed.status);
+        }
       }
     } catch (error) {
       retryMatches.push(match);
@@ -277,8 +296,7 @@ export async function setupAppRecommendations(params: {
       );
     }
   }
-  // Unselected recommendations were explicitly declined. Keep only failed
-  // selected installs pending so later onboarding can retry them.
-  recordResult(retryMatches);
-  return next;
+  // Official plugin config is durable only after the caller writes `next`.
+  // Commit recommendation outcomes at that owner boundary, never inside the install catch.
+  return { config: next, commitResult: () => recordResult(retryMatches) };
 }
