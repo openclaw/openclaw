@@ -63,6 +63,19 @@ describe("resolveAvatar profile URL origin restriction", () => {
     ).resolves.toMatchObject({ kind: "initials" });
   });
 
+  it("rejects backslash and control-character parser bypasses", async () => {
+    for (const url of [
+      "/\\evil.example/a.png",
+      "\\/evil.example/a.png",
+      "/\t/evil.example/a.png",
+      "htt\nps://evil.example/a.png",
+    ]) {
+      await expect(
+        resolveAvatar({ id: "alice@example.com", profileAvatarUrl: url }),
+      ).resolves.toMatchObject({ kind: "initials" });
+    }
+  });
+
   it("accepts same-origin relative profile URLs", async () => {
     await expect(
       resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/avatars/alice.png" }),

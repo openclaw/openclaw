@@ -24,6 +24,17 @@ function initialsFromLabel(label: string): string {
   return initials.toUpperCase() || "?";
 }
 
+const ORIGIN_PROBE = "https://origin-probe.invalid";
+
+/** True only when the value resolves inside the embedding origin for any base. */
+function isOriginRelativePath(value: string): boolean {
+  try {
+    return new URL(value, ORIGIN_PROBE).origin === ORIGIN_PROBE;
+  } catch {
+    return false;
+  }
+}
+
 function stableColorSeed(value: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -55,9 +66,10 @@ export async function resolveAvatar(input: IdentityAvatarInput): Promise<Resolve
   const profileAvatarUrl = input.profileAvatarUrl?.trim();
   // Same-origin only: profile URLs arrive via sender metadata, and an
   // absolute URL would let a sender make every viewing browser contact an
-  // arbitrary host. Relative paths (gateway avatar route) are the contract;
-  // anything else falls through to the proxied/initials tiers.
-  if (profileAvatarUrl && profileAvatarUrl.startsWith("/") && !profileAvatarUrl.startsWith("//")) {
+  // arbitrary host. Validate with the URL parser (not string prefixes) so
+  // browser normalization quirks — backslashes as slashes, stripped tab or
+  // newline characters — cannot smuggle in a cross-origin target.
+  if (profileAvatarUrl && isOriginRelativePath(profileAvatarUrl)) {
     return { kind: "profile", url: profileAvatarUrl };
   }
 
