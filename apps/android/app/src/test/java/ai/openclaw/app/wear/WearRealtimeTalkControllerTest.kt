@@ -660,6 +660,45 @@ class WearRealtimeTalkControllerTest {
     }
 
   @Test
+  fun `stops chunking provider output when the session is aborted`() =
+    runTest {
+      val output = mutableListOf<ByteArray>()
+      lateinit var controller: WearRealtimeTalkController
+      controller =
+        WearRealtimeTalkController(
+          scope = this,
+          isConnected = { true },
+          requestGateway = { method, _, _ ->
+            if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else """{"ok":true}"""
+          },
+          sendGatewayFrame = { _, _, _, _ -> },
+          sendWatchFrame = { _, type, payload ->
+            if (type == WearRealtimeAudioFrameType.OUTPUT_PCM) {
+              output += payload
+              if (output.size == 1) controller.abort()
+            }
+          },
+        )
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "de"))
+      val audio = ByteArray(WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES * 3)
+
+      controller.handleGatewayEvent(
+        "talk.event",
+        """
+        {
+          "relaySessionId":"relay-1",
+          "type":"audio",
+          "audioBase64":"${Base64.encodeToString(audio, Base64.NO_WRAP)}"
+        }
+        """.trimIndent(),
+      )
+      runCurrent()
+
+      assertEquals(1, output.size)
+      assertEquals(WearRealtimeTalkStatus.OFF, controller.snapshot.value.status)
+    }
+
+  @Test
   fun `fails when queued provider output exceeds the byte budget`() =
     runTest {
       val outputStarted = CompletableDeferred<Unit>()

@@ -19,9 +19,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -464,15 +466,28 @@ internal class WearRealtimeTalkController(
     outputJob =
       scope.launch {
         for (message in messages) {
+          var delivered = false
           try {
             if (sessionId != activeSessionId) continue
             val nodeId = ownerNodeId ?: continue
             when (message.type) {
-              WearRealtimeAudioFrameType.OUTPUT_PCM ->
-                chunkWearRealtimeOutput(message.payload).forEach { chunk ->
+              WearRealtimeAudioFrameType.OUTPUT_PCM -> {
+                delivered = true
+                for (chunk in chunkWearRealtimeOutput(message.payload)) {
+                  if (!isCurrentOutput(activeSessionId, nodeId)) {
+                    delivered = false
+                    break
+                  }
                   sendWatchFrame(nodeId, message.type, chunk)
                 }
-              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> sendWatchFrame(nodeId, message.type, message.payload)
+                if (!isCurrentOutput(activeSessionId, nodeId)) {
+                  delivered = false
+                }
+              }
+              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
+                sendWatchFrame(nodeId, message.type, message.payload)
+                delivered = isCurrentOutput(activeSessionId, nodeId)
+              }
               WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
             }
           } catch (err: Throwable) {
@@ -490,6 +505,7 @@ internal class WearRealtimeTalkController(
               }
             }
           }
+          if (!delivered) continue
           when (message.type) {
             WearRealtimeAudioFrameType.OUTPUT_PCM -> {
               val sampleCount = message.payload.size / PCM_16_BYTES
@@ -519,6 +535,14 @@ internal class WearRealtimeTalkController(
         }
       }
   }
+
+  private suspend fun isCurrentOutput(
+    activeSessionId: String,
+    nodeId: String,
+  ): Boolean =
+    currentCoroutineContext().isActive &&
+      sessionId == activeSessionId &&
+      ownerNodeId == nodeId
 
   private fun enqueueOutput(
     type: WearRealtimeAudioFrameType,
