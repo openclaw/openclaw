@@ -510,11 +510,14 @@ async function processMessage(
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
   const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg: config, route });
+  // Account/channel-prepared messagePrefix (merged account config) then global.
+  const messagePrefix = account.config.messagePrefix ?? config.messages?.messagePrefix ?? "";
+  const bodyForPrefix = messagePrefix ? `${messagePrefix} ${rawBody}` : rawBody;
   const body = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: message.timestampMs,
-    body: rawBody,
+    body: bodyForPrefix,
   });
   const combinedBody =
     isGroup && historyKey
@@ -582,7 +585,7 @@ async function processMessage(
     },
     message: {
       body: combinedBody,
-      bodyForAgent: rawBody,
+      bodyForAgent: bodyForPrefix,
       rawBody,
       commandBody,
       inboundHistory,
