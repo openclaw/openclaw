@@ -10,6 +10,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { resolveNodePairingGeneration } from "./device-pairing.js";
+import { loadPairedDevicePairingStoreRecordFromDatabase } from "./device-pairing-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -54,6 +56,7 @@ type RegisterDirectApnsParams = {
   token: string;
   topic: string;
   environment?: unknown;
+  expectedPairingGeneration?: string;
   baseDir?: string;
 };
 
@@ -68,6 +71,7 @@ type RegisterRelayApnsParams = {
   distribution?: unknown;
   relayOrigin?: unknown;
   tokenDebugSuffix?: unknown;
+  expectedPairingGeneration?: string;
   baseDir?: string;
 };
 
@@ -507,6 +511,16 @@ export async function registerApnsRegistration(
   }
 
   return runOpenClawStateWriteTransaction(({ db }) => {
+    if (params.expectedPairingGeneration) {
+      // The Gateway admission check happens before this transaction. Reread the
+      // pairing here so removal and APNs ownership cannot commit out of order.
+      const pairing = resolveNodePairingGeneration(
+        loadPairedDevicePairingStoreRecordFromDatabase(db, nodeId),
+      );
+      if (pairing?.key !== params.expectedPairingGeneration) {
+        throw new Error("node pairing changed before APNs registration");
+      }
+    }
     const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
     const current = executeSqliteQueryTakeFirstSync(
       db,

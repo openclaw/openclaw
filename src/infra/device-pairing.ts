@@ -1,5 +1,5 @@
 // Manages device pairing requests, approvals, and token issuance.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
@@ -35,6 +35,11 @@ export type {
   PairedDevice,
   PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
+
+export type NodePairingGeneration = {
+  nodeId: string;
+  key: string;
+};
 
 /** Pending request summary returned when a replacement supersedes older requests. */
 type DevicePairingSupersededRequest = Pick<DevicePairingPendingRequest, "requestId" | "deviceId">;
@@ -261,6 +266,32 @@ export function hasEffectivePairedDeviceRole(
     return false;
   }
   return listEffectivePairedDeviceRoles(device).includes(normalized);
+}
+
+/** Resolve the durable node-owned identity used to admit asynchronous work. */
+export function resolveNodePairingGeneration(
+  device: PairedDevice | null,
+): NodePairingGeneration | null {
+  if (!device || !hasEffectivePairedDeviceRole(device, "node") || !device.nodeSurface) {
+    return null;
+  }
+  const nodeToken = device.tokens?.node;
+  const nodeSurface = device.nodeSurface;
+  // Device-wide approval also changes for unrelated operator upgrades, so only
+  // node-owned identity participates in the generation.
+  const key = createHash("sha256")
+    .update(
+      [
+        device.publicKey,
+        device.createdAtMs,
+        nodeToken?.token ?? "",
+        nodeToken?.revokedAtMs ?? "",
+        nodeSurface.createdAtMs,
+        nodeSurface.approvedAtMs,
+      ].join("\0"),
+    )
+    .digest("hex");
+  return { nodeId: device.deviceId, key };
 }
 
 function mergeScopes(...items: Array<string[] | undefined>): string[] | undefined {

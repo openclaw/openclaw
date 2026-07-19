@@ -441,17 +441,9 @@ export class NodeRegistry {
   /** Return only the session authenticated for the requested persistent pairing generation. */
   getForPairingGeneration(nodeId: string, pairingGeneration: string): NodeSession | undefined {
     const node = this.get(nodeId);
-    if (!node) {
-      return undefined;
-    }
-    if (node.pairingGeneration === pairingGeneration) {
-      return node;
-    }
-    // A pairing mutation may happen outside this Gateway process (for example
-    // the CLI). Fence the stale socket as soon as generation-owned work sees it.
-    node.client.invalidated = true;
-    node.client.invalidatedReason = "node-pairing-generation-changed";
-    return undefined;
+    // A mismatch alone does not reveal whether the session or the requesting
+    // operation is stale, so lookup must not revoke either generation.
+    return node?.pairingGeneration === pairingGeneration ? node : undefined;
   }
 
   /** Updates recent input activity for the exact authenticated node connection. */
@@ -734,8 +726,6 @@ export class NodeRegistry {
       params.expectedPairingGeneration &&
       node.pairingGeneration !== params.expectedPairingGeneration
     ) {
-      node.client.invalidated = true;
-      node.client.invalidatedReason = "node-pairing-generation-changed";
       return {
         ok: false,
         error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },

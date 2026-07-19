@@ -64,7 +64,7 @@ function resolveClientNodeId(
 
 /** Gateway handlers for queueing work until a paired node reconnects. */
 export const nodePendingHandlers: GatewayRequestHandlers = {
-  "node.pending.drain": async ({ params, respond, client }) => {
+  "node.pending.drain": async ({ params, respond, client, context }) => {
     if (!validateNodePendingDrainParams(params)) {
       respondInvalidParams({
         respond,
@@ -91,6 +91,13 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         respondPairingChanged(respond);
         return;
       }
+      // Draining deletes work, so the authenticated caller must still be the
+      // registry session that owns the persisted generation.
+      const session = context.nodeRegistry.getForPairingGeneration(nodeId, generation.key);
+      if (!client?.connId || session?.connId !== client.connId) {
+        respondPairingChanged(respond);
+        return;
+      }
       const p = params as { maxItems?: number };
       const drained = drainNodePendingWork(nodeId, {
         maxItems: p.maxItems,
@@ -98,6 +105,11 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         pairingGeneration: generation.key,
       });
       if (!(await isNodePairingGenerationCurrent(generation))) {
+        respondPairingChanged(respond);
+        return;
+      }
+      const currentSession = context.nodeRegistry.getForPairingGeneration(nodeId, generation.key);
+      if (currentSession?.connId !== client.connId) {
         respondPairingChanged(respond);
         return;
       }

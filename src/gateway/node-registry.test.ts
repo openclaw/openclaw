@@ -237,7 +237,7 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
-  it("rejects lookup and dispatch through a prior pairing-generation session", async () => {
+  it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
     const client = makeClient("conn-old-generation", "node-generation", frames);
@@ -246,8 +246,7 @@ describe("gateway/node-registry", () => {
     expect(
       registry.getForPairingGeneration("node-generation", "generation-b"),
     ).toBeUndefined();
-    expect(client.invalidated).toBe(true);
-    expect(client.invalidatedReason).toBe("node-pairing-generation-changed");
+    expect(client.invalidated).not.toBe(true);
     await expect(
       registry.invoke({
         nodeId: "node-generation",
@@ -258,7 +257,21 @@ describe("gateway/node-registry", () => {
       ok: false,
       error: { code: "PAIRING_CHANGED" },
     });
+    expect(client.invalidated).not.toBe(true);
     expect(frames).toEqual([]);
+  });
+
+  it("does not let a stale operation invalidate the valid replacement generation", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    const replacement = makeClient("conn-replacement", "node-replaced", frames);
+    registry.register(replacement, { pairingGeneration: "generation-b" });
+
+    expect(registry.getForPairingGeneration("node-replaced", "generation-a")).toBeUndefined();
+    expect(replacement.invalidated).not.toBe(true);
+    expect(registry.getForPairingGeneration("node-replaced", "generation-b")?.connId).toBe(
+      "conn-replacement",
+    );
   });
 
   it("routes ordered input to the pending invoke connection and rejects unknown invokes", async () => {

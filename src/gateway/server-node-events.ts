@@ -387,7 +387,7 @@ export const handleNodeEvent = async (
     connId?: string;
     deviceId?: string;
     presenceAllowed?: boolean;
-    isApnsRegistrationAllowed?: () => boolean | Promise<boolean>;
+    resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
   },
 ): Promise<NodeEventHandleResult | undefined> => {
   switch (evt.event) {
@@ -852,10 +852,9 @@ export const handleNodeEvent = async (
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {
-        if (
-          !opts?.isApnsRegistrationAllowed ||
-          !(await opts.isApnsRegistrationAllowed())
-        ) {
+        const expectedPairingGeneration =
+          await opts?.resolveApnsRegistrationGeneration?.();
+        if (!expectedPairingGeneration) {
           ctx.logGateway.warn(
             `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
           );
@@ -881,6 +880,7 @@ export const handleNodeEvent = async (
             distribution: obj.distribution,
             relayOrigin: obj.relayOrigin,
             tokenDebugSuffix: obj.tokenDebugSuffix,
+            expectedPairingGeneration,
           });
         } else {
           await registerApnsRegistration({
@@ -889,6 +889,7 @@ export const handleNodeEvent = async (
             token: typeof obj.token === "string" ? obj.token : "",
             topic,
             environment,
+            expectedPairingGeneration,
           });
         }
       } catch (err) {

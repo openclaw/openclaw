@@ -1,40 +1,10 @@
-import { createHash } from "node:crypto";
 import {
   getPairedDevice,
-  hasEffectivePairedDeviceRole,
-  type PairedDevice,
+  resolveNodePairingGeneration,
+  type NodePairingGeneration,
 } from "../../infra/device-pairing.js";
 
-export type NodePairingGeneration = {
-  nodeId: string;
-  key: string;
-};
-
-function resolveNodePairingGeneration(device: PairedDevice | null): NodePairingGeneration | null {
-  if (!device || !hasEffectivePairedDeviceRole(device, "node") || !device.nodeSurface) {
-    return null;
-  }
-  const nodeToken = device.tokens?.node;
-  const nodeSurface = device.nodeSurface;
-  // Only node-owned identity participates here. Device-wide approval time also
-  // changes for unrelated operator upgrades and would invalidate valid node work.
-  const key = createHash("sha256")
-    .update(
-      [
-        device.publicKey,
-        device.createdAtMs,
-        nodeToken?.token ?? "",
-        nodeToken?.revokedAtMs ?? "",
-        nodeSurface?.createdAtMs ?? "",
-        nodeSurface?.approvedAtMs ?? "",
-      ].join("\0"),
-    )
-    .digest("hex");
-  return {
-    nodeId: device.deviceId,
-    key,
-  };
-}
+export type { NodePairingGeneration } from "../../infra/device-pairing.js";
 
 /** Captures the persistent node pairing generation admitted for new work. */
 export async function captureNodePairingGeneration(

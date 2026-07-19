@@ -774,7 +774,7 @@ describe("node exec events", () => {
           environment: "sandbox",
         }),
       },
-      { isApnsRegistrationAllowed: () => true },
+      { resolveApnsRegistrationGeneration: () => "generation-node-direct" },
     );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
@@ -783,6 +783,7 @@ describe("node exec events", () => {
       token: "abcd1234abcd1234abcd1234abcd1234",
       topic: "ai.openclaw.ios",
       environment: "sandbox",
+      expectedPairingGeneration: "generation-node-direct",
     });
   });
 
@@ -805,7 +806,7 @@ describe("node exec events", () => {
           tokenDebugSuffix: "abcd1234",
         }),
       },
-      { isApnsRegistrationAllowed: () => true },
+      { resolveApnsRegistrationGeneration: () => "generation-node-relay" },
     );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
@@ -818,6 +819,7 @@ describe("node exec events", () => {
       environment: "production",
       distribution: "official",
       tokenDebugSuffix: "abcd1234",
+      expectedPairingGeneration: "generation-node-relay",
     });
   });
 
@@ -840,7 +842,7 @@ describe("node exec events", () => {
           tokenDebugSuffix: "abcd1234",
         }),
       },
-      { isApnsRegistrationAllowed: () => true },
+      { resolveApnsRegistrationGeneration: () => "generation-node-relay-sandbox" },
     );
 
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
@@ -853,6 +855,7 @@ describe("node exec events", () => {
       environment: "sandbox",
       distribution: "official",
       tokenDebugSuffix: "abcd1234",
+      expectedPairingGeneration: "generation-node-relay-sandbox",
     });
   });
 
@@ -889,7 +892,7 @@ describe("node exec events", () => {
           environment: "sandbox",
         }),
       },
-      { isApnsRegistrationAllowed: async () => false },
+      { resolveApnsRegistrationGeneration: async () => null },
     );
 
     expect(registerApnsRegistrationVi).not.toHaveBeenCalled();

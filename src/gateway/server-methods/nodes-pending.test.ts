@@ -98,6 +98,12 @@ describe("node.pending handlers", () => {
       hasMore: false,
     });
     const respond = vi.fn();
+    const context = makeContext({
+      nodeRegistry: {
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() => ({ connId: "conn-ios-node-1" })),
+      },
+    });
 
     await expectDefined(
       nodePendingHandlers["node.pending.drain"],
@@ -105,8 +111,11 @@ describe("node.pending handlers", () => {
     )({
       params: { maxItems: 3 },
       respond: respond as never,
-      client: { connect: { device: { id: "ios-node-1" } } } as never,
-      context: makeContext() as never,
+      client: {
+        connId: "conn-ios-node-1",
+        connect: { device: { id: "ios-node-1" } },
+      } as never,
+      context: context as never,
       req: { type: "req", id: "req-node-pending-drain", method: "node.pending.drain" },
       isWebchatConnect: () => false,
     });
@@ -156,6 +165,12 @@ describe("node.pending handlers", () => {
     });
     mocks.isNodePairingGenerationCurrent.mockResolvedValue(false);
     const respond = vi.fn();
+    const context = makeContext({
+      nodeRegistry: {
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() => ({ connId: "conn-stale-drain" })),
+      },
+    });
 
     await expectDefined(
       nodePendingHandlers["node.pending.drain"],
@@ -163,12 +178,47 @@ describe("node.pending handlers", () => {
     )({
       params: {},
       respond: respond as never,
-      client: { connect: { device: { id: "ios-node-stale-drain" } } } as never,
-      context: makeContext() as never,
+      client: {
+        connId: "conn-stale-drain",
+        connect: { device: { id: "ios-node-stale-drain" } },
+      } as never,
+      context: context as never,
       req: { type: "req", id: "req-node-stale-drain", method: "node.pending.drain" },
       isWebchatConnect: () => false,
     });
 
+    expect(respondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      { details: { code: "PAIRING_CHANGED" } },
+    ]);
+  });
+
+  it("rejects a prior-generation socket before it drains replacement work", async () => {
+    const respond = vi.fn();
+    const context = makeContext({
+      nodeRegistry: {
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() => ({ connId: "conn-replacement" })),
+      },
+    });
+
+    await expectDefined(
+      nodePendingHandlers["node.pending.drain"],
+      'nodePendingHandlers["node.pending.drain"] test invariant',
+    )({
+      params: {},
+      respond: respond as never,
+      client: {
+        connId: "conn-prior-generation",
+        connect: { device: { id: "ios-node-replaced" } },
+      } as never,
+      context: context as never,
+      req: { type: "req", id: "req-node-prior-drain", method: "node.pending.drain" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
     expect(respondCall(respond)).toMatchObject([
       false,
       undefined,
@@ -338,6 +388,7 @@ describe("node.pending handlers", () => {
       context,
       timeoutMs: 3_000,
       lifecycle: wakeLifecycle,
+      pairingGeneration: "generation:ios-node-invalidated:1",
     });
     expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
     expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith(

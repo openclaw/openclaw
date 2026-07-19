@@ -2127,23 +2127,23 @@ export const nodeHandlers: GatewayRequestHandlers = {
           connId: client?.connId,
           deviceId: client?.connect?.device?.id,
           presenceAllowed,
-          isApnsRegistrationAllowed: async () => {
+          resolveApnsRegistrationGeneration: async () => {
             if (!apnsGeneration || !client?.connId) {
-              return false;
+              return null;
             }
             const before = resolveDispatchableNodeSession(
               context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key),
             );
             if (!before || before.connId !== client.connId) {
-              return false;
+              return null;
             }
             if (!(await isNodePairingGenerationCurrent(apnsGeneration))) {
-              return false;
+              return null;
             }
             const after = resolveDispatchableNodeSession(
               context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key),
             );
-            return after?.connId === client.connId;
+            return after?.connId === client.connId ? apnsGeneration.key : null;
           },
         },
       );

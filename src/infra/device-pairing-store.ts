@@ -14,6 +14,7 @@ import type {
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import type {
@@ -254,11 +255,19 @@ export function loadPairedDevicePairingStoreRecord(
   deviceId: string,
   baseDir?: string,
 ): PairedDevice | null {
+  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
+  return loadPairedDevicePairingStoreRecordFromDatabase(db, deviceId);
+}
+
+/** Load one paired-device row from an existing shared-state transaction. */
+export function loadPairedDevicePairingStoreRecordFromDatabase(
+  db: OpenClawStateDatabase["db"],
+  deviceId: string,
+): PairedDevice | null {
   const normalizedDeviceId = deviceId.trim();
   if (!normalizedDeviceId) {
     return null;
   }
-  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,
