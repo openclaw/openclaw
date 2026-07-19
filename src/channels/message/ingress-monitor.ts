@@ -145,6 +145,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let stopped = false;
   let requested = false;
   let pumping: Promise<void> | undefined;
+  let drainIdleWake: Promise<void> | undefined;
+  let drainIdleWakeRequested = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
@@ -345,6 +347,37 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     lastPrunedAt = currentTime;
   };
 
+  const scheduleDrainIdleWake = (activeDrain: ChannelIngressDrain): void => {
+    if (drainIdleWake) {
+      drainIdleWakeRequested = true;
+      return;
+    }
+    drainIdleWakeRequested = false;
+    const wake = activeDrain.waitForIdle();
+    drainIdleWake = wake;
+    void wake.then(
+      () => {
+        if (drainIdleWake !== wake) {
+          return;
+        }
+        const shouldRearm = drainIdleWakeRequested && running && !isAborted();
+        drainIdleWake = undefined;
+        drainIdleWakeRequested = false;
+        if (shouldRearm) {
+          scheduleDrainIdleWake(activeDrain);
+        }
+        requestDrain();
+      },
+      (error: unknown) => {
+        if (drainIdleWake === wake) {
+          drainIdleWake = undefined;
+          drainIdleWakeRequested = false;
+        }
+        reportError(error);
+      },
+    );
+  };
+
   const runPump = async (): Promise<void> => {
     try {
       for (;;) {
@@ -369,7 +402,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         if (started > 0) {
           // Failed-retryable delivery settles after the channel callback returns.
           // Wake once the drain has released or failed those claims.
-          void activeDrain.waitForIdle().then(requestDrain);
+          scheduleDrainIdleWake(activeDrain);
         }
         if (!running || isAborted() || (!requested && started === 0)) {
           break;
@@ -379,7 +412,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       reportError(error);
     } finally {
       pumping = undefined;
-      if (running && !isAborted() && requested) {
+      if (!running || isAborted()) {
+        requested = false;
+      } else if (requested) {
         requestDrain();
       }
       publishActivity();
@@ -387,8 +422,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   };
 
   const requestDrain = (): void => {
+    if (!running || isAborted()) {
+      publishActivity();
+      return;
+    }
     requested = true;
-    if (!running || isAborted() || pumping) {
+    if (pumping) {
       publishActivity();
       return;
     }
@@ -511,11 +550,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         shutdown.abort(createStoppedError());
         await waitForPumpIdle();
         await waitForActiveDeliveries();
-        // Let an aborted dispatcher return failed-retryable before disposal.
-        // Drain idle waits handler tasks, not deferred adoption; those tasks already settled.
-        await drain?.waitForIdle();
-        // A pump may have created the lazy drain just before observing running=false.
+        // Let an aborted dispatcher return failed-retryable before disposal, then
+        // retire settlement tasks so a blocked queue write cannot wedge shutdown.
+        // A pump may also have created the lazy drain just before observing running=false.
         drain?.dispose();
+        await drain?.waitForIdle();
       })();
       return stopTask;
     },

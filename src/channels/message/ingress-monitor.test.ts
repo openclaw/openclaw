@@ -3,6 +3,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelIngressMonitor,
+  type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "./ingress-monitor.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
@@ -27,9 +28,18 @@ async function withQueue<T>(
 
 function createMonitor(
   queue: ChannelIngressQueue<StoredEvent>,
-  deliver: (raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => Promise<void> | void,
+  deliver: (
+    raw: RawEvent,
+    lifecycle: ChannelIngressMonitorLifecycle,
+  ) =>
+    | Promise<ChannelIngressMonitorDeliveryResult | void>
+    | ChannelIngressMonitorDeliveryResult
+    | void,
   onActivityChange?: (active: boolean) => void,
   onError?: (error: unknown) => void,
+  abortSignal?: AbortSignal,
+  pollIntervalMs = 10,
+  retryBaseMs = 1_000,
 ) {
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
@@ -42,10 +52,11 @@ function createMonitor(
       createClaimError: (kind) => new PermanentIngressError(kind),
     },
     deliver,
-    pollIntervalMs: 10,
+    pollIntervalMs,
     retention: { pruneIntervalMs: 60_000 },
     drain: {
       adoptionStallTimeoutMs: 5_000,
+      retryPolicy: { baseMs: retryBaseMs, maxMs: retryBaseMs },
       resolveNonRetryableFailure: (error) =>
         error instanceof PermanentIngressError
           ? { reason: "invalid-event", message: error.message }
@@ -53,6 +64,7 @@ function createMonitor(
     },
     ...(onActivityChange ? { onActivityChange } : {}),
     ...(onError ? { onError } : {}),
+    ...(abortSignal ? { abortSignal } : {}),
   });
 }
 
@@ -212,6 +224,56 @@ describe("channel ingress monitor", () => {
     });
   });
 
+  it("re-arms a coalesced idle wake for a later retryable delivery", async () => {
+    await withQueue(async (queue) => {
+      let releaseFirst = () => {};
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let releaseRetry = () => {};
+      const retryGate = new Promise<void>((resolve) => {
+        releaseRetry = resolve;
+      });
+      const delivered: string[] = [];
+      let retryAttempts = 0;
+      const monitor = createMonitor(
+        queue,
+        async (raw) => {
+          delivered.push(raw.id);
+          if (raw.id === "event-first") {
+            await firstGate;
+          } else if (retryAttempts++ === 0) {
+            await retryGate;
+            return { kind: "failed-retryable", error: new Error("retry") };
+          }
+          return { kind: "completed" };
+        },
+        undefined,
+        undefined,
+        undefined,
+        60_000,
+        0,
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-first", lane: "first", text: "slow" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-first"]));
+      await monitor.admit({ id: "event-retry", lane: "retry", text: "retry" });
+      await vi.waitFor(() => expect(delivered).toEqual(["event-first", "event-retry"]));
+
+      releaseFirst();
+      await vi.waitFor(async () =>
+        expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(["event-retry"]),
+      );
+      releaseRetry();
+      await vi.waitFor(() =>
+        expect(delivered).toEqual(["event-first", "event-retry", "event-retry"]),
+      );
+      await monitor.waitForIdle();
+
+      await monitor.stop();
+    });
+  });
+
   it("reports active delivery work until the channel callback settles", async () => {
     await withQueue(async (queue) => {
       let releaseDelivery: (() => void) | undefined;
@@ -290,6 +352,76 @@ describe("channel ingress monitor", () => {
       await expect(queue.listPending()).resolves.toEqual([
         expect.objectContaining({ id: "event-stop-retry", lastError: expect.any(String) }),
       ]);
+      await expect(monitor.waitForIdle()).resolves.toBeUndefined();
+    });
+  });
+
+  it("does not let a blocked settlement write wedge stop", async () => {
+    await withQueue(async (queue) => {
+      let markReleaseStarted = () => {};
+      const releaseStarted = new Promise<void>((resolve) => {
+        markReleaseStarted = resolve;
+      });
+      let releaseSettlement = () => {};
+      const settlementGate = new Promise<void>((resolve) => {
+        releaseSettlement = resolve;
+      });
+      const release = queue.release.bind(queue);
+      const blockedRelease: typeof queue.release = async (idOrClaim, releaseOptions) => {
+        markReleaseStarted();
+        await settlementGate;
+        return await release(idOrClaim, releaseOptions);
+      };
+      queue.release = vi.fn(blockedRelease);
+      const monitor = createMonitor(queue, async () => ({
+        kind: "failed-retryable",
+        error: new Error("retry later"),
+      }));
+      monitor.start();
+      await monitor.admit({ id: "event-stop-settlement", lane: "a", text: "hello" });
+      await releaseStarted;
+
+      const stopping = monitor.stop();
+      let stopped = false;
+      void stopping.then(() => {
+        stopped = true;
+      });
+      try {
+        await vi.waitFor(() => expect(stopped).toBe(true));
+      } finally {
+        releaseSettlement();
+        await stopping;
+      }
+    });
+  });
+
+  it("clears a queued drain request when abort wins an active pump", async () => {
+    await withQueue(async (queue) => {
+      let markPruneStarted = () => {};
+      const pruneStarted = new Promise<void>((resolve) => {
+        markPruneStarted = resolve;
+      });
+      let releasePrune = () => {};
+      const pruneGate = new Promise<void>((resolve) => {
+        releasePrune = resolve;
+      });
+      const prune = queue.prune.bind(queue);
+      queue.prune = async (...args) => {
+        markPruneStarted();
+        await pruneGate;
+        return await prune(...args);
+      };
+      const abortController = new AbortController();
+      const monitor = createMonitor(queue, vi.fn(), undefined, undefined, abortController.signal);
+      monitor.start();
+      await pruneStarted;
+
+      await monitor.admit({ id: "event-abort-requested", lane: "a", text: "hello" });
+      abortController.abort();
+      releasePrune();
+
+      await expect(monitor.waitForIdle()).resolves.toBeUndefined();
+      await monitor.stop();
     });
   });
 
