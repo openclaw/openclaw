@@ -8,6 +8,7 @@ import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network
 import { makeProxyFetch } from "./proxy.js";
 import {
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
+  resolveTelegramEmptyPollFloorMs,
   resolveTelegramLongPollTimeoutSeconds,
 } from "./request-timeouts.js";
 import type {
@@ -278,12 +279,27 @@ export async function runTelegramIngressWorkerRuntime(params: {
           port.postMessage({ type: "spooled", updateId, queued: result.length });
         }
         failures = 0;
+        const finishedAt = Date.now();
         port.postMessage({
           type: "poll-success",
           offset,
           count: result.length,
-          finishedAt: Date.now(),
+          finishedAt,
         });
+        // Pace empty polls. When a Bot API server (e.g. a self-hosted
+        // telegram-bot-api, or a proxy) answers getUpdates immediately
+        // instead of holding the requested long-poll timeout, the loop
+        // below would re-issue getUpdates with no delay and pin a CPU
+        // core while the chat is idle (#111062). Enforce a minimum gap
+        // between empty polls so idle bots issue roughly one request per
+        // floor window instead of spinning.
+        if (result.length === 0) {
+          const elapsedMs = finishedAt - startedAt;
+          const emptyPollFloorMs = resolveTelegramEmptyPollFloorMs();
+          if (elapsedMs < emptyPollFloorMs) {
+            await sleep(emptyPollFloorMs - elapsedMs, stopController.signal);
+          }
+        }
       } catch (err) {
         if (stopped) {
           break;

@@ -8,6 +8,12 @@ export const TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS = 45_000;
 const TELEGRAM_DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const TELEGRAM_DEFAULT_LONG_POLL_TIMEOUT_SECONDS = 30;
 const TELEGRAM_LONG_POLL_ABORT_MARGIN_SECONDS = 5;
+// Minimum gap between consecutive empty getUpdates polls. When a Bot API
+// server returns an empty result without honoring the long-poll timeout
+// (e.g. a self-hosted telegram-bot-api or a misbehaving proxy), the worker
+// would otherwise re-poll with no delay and pin a CPU core (#111062). The
+// floor keeps an idle bot at ~1 request/second instead of spinning.
+const TELEGRAM_EMPTY_POLL_FLOOR_MS = 1_000;
 
 const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   // Bound startup/control-plane calls so the gateway cannot report Telegram as
@@ -83,4 +89,13 @@ export function resolveTelegramStartupProbeTimeoutMs(timeoutSeconds: unknown): n
   }
   const configuredTimeoutMs = resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 1_000;
   return Math.max(getMeTimeoutMs, configuredTimeoutMs);
+}
+
+/**
+ * Minimum gap (ms) between consecutive empty getUpdates polls. Returns the
+ * constant floor; see TELEGRAM_EMPTY_POLL_FLOOR_MS for the rationale
+ * (#111062).
+ */
+export function resolveTelegramEmptyPollFloorMs(): number {
+  return TELEGRAM_EMPTY_POLL_FLOOR_MS;
 }

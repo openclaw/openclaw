@@ -270,3 +270,71 @@ describe("telegram ingress worker retry policy", () => {
     );
   });
 });
+
+describe("telegram ingress worker empty-poll pacing (#111062)", () => {
+  it("paces consecutive empty getUpdates polls to avoid a CPU-spin loop", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+    const calls: number[] = [];
+    const messages: TelegramIngressWorkerMessage[] = [];
+    let emptyPollSuccesses = 0;
+    const listeners = new Set<(message: TelegramIngressWorkerCommand) => void>();
+    const sendCommand = (message: TelegramIngressWorkerCommand) => {
+      for (const listener of listeners) {
+        listener(message);
+      }
+    };
+    // A server that answers getUpdates immediately (does NOT hold the
+    // long-poll timeout) reproduces the idle-spin: every poll returns [] fast.
+    const port: RuntimePort = {
+      postMessage(message) {
+        messages.push(message);
+        if (message.type === "poll-success") {
+          emptyPollSuccesses += 1;
+          // Let two empty polls happen, then stop.
+          if (emptyPollSuccesses >= 2) {
+            sendCommand({ type: "stop" });
+          }
+        }
+      },
+      onMessage(listener) {
+        listeners.add(listener);
+      },
+      close() {},
+    };
+    const fetchImpl: typeof fetch = async () => {
+      calls.push(Date.now());
+      return jsonResponse(200, { ok: true, result: [] });
+    };
+    const done = runTelegramIngressWorkerRuntime({
+      options: {
+        token: "test-auth-token",
+        accountId: "acct",
+        initialUpdateId: null,
+        spoolDir: "/tmp/openclaw-telegram-ingress-worker-pacing-test",
+        apiRoot: "https://api.telegram.test",
+        timeoutSeconds: 1,
+      },
+      port,
+      deps: { fetch: fetchImpl, closeTransport: async () => {} },
+    });
+
+    // First empty poll returns immediately.
+    await flushRuntime();
+    expect(calls).toHaveLength(1);
+    expect(messages).toContainEqual(expect.objectContaining({ type: "poll-success", count: 0 }));
+
+    // Before the floor elapses, no second poll has been issued (no spin).
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toHaveLength(1);
+
+    // After the floor, the second empty poll is issued.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toHaveLength(2);
+    const secondCall = expectDefined(calls[1], "second Telegram poll call");
+    const firstCall = expectDefined(calls[0], "first Telegram poll call");
+    expect(secondCall - firstCall).toBeGreaterThanOrEqual(1000);
+
+    await done;
+  });
+});
