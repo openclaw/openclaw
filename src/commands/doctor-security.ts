@@ -314,6 +314,9 @@ export async function collectSecurityWarnings(
 
       // Browser-origin protections are independent of proxy-auth readiness. Report both classes
       // together so fixing one critical exposure does not leave the other hidden until a rerun.
+      // Origin findings stay trusted-proxy-only: proxy identity headers are ambient credentials,
+      // so the Origin allowlist is the CSRF boundary here; token/password modes require explicit
+      // per-request credentials and keep the generic exposure warnings below.
       if (hasDangerousHostHeaderOriginFallback) {
         warnings.push(
           `- CRITICAL: Gateway bound to ${bindDescriptor} with dangerous browser Host-header origin fallback enabled.`,

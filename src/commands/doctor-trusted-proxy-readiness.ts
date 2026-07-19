@@ -22,42 +22,8 @@ type TrustedProxyReadiness = {
   problems: string[];
 };
 
-type IpRange = {
-  start: bigint;
-  end: bigint;
-};
-
-const UNUSABLE_PROXY_SOURCE_RANGES: Record<32 | 128, readonly IpRange[]> = {
-  32: [
-    { start: 0x0n, end: 0x00ffffffn },
-    { start: 0xe0000000n, end: 0xefffffffn },
-    { start: 0xffffffffn, end: 0xffffffffn },
-  ],
-  128: [
-    { start: 0x0n, end: 0x0n },
-    { start: 0xff000000000000000000000000000000n, end: 0xffffffffffffffffffffffffffffffffn },
-  ],
-};
-
-function ipBytesToBigInt(bytes: readonly number[]): bigint {
-  return bytes.reduce((value, byte) => (value << 8n) | BigInt(byte), 0n);
-}
-
-function formatIpValue(value: bigint, bits: 32 | 128): string {
-  const bytes = Array.from({ length: bits / 8 }, (_, index) => {
-    const shift = BigInt(bits - (index + 1) * 8);
-    return Number((value >> shift) & 0xffn);
-  });
-  if (bits === 32) {
-    return bytes.join(".");
-  }
-  const hextets = Array.from({ length: 8 }, (_, index) => {
-    const high = bytes[index * 2] ?? 0;
-    const low = bytes[index * 2 + 1] ?? 0;
-    return ((high << 8) | low).toString(16);
-  });
-  return hextets.join(":");
-}
+// ipaddr.js range classes that can never originate a proxy TCP connection.
+const UNUSABLE_PROXY_SOURCE_RANGES = new Set(["unspecified", "broadcast", "multicast"]);
 
 function parseHostScopedTrustedProxySource(entry: string): TrustedProxySource | undefined {
   const parts = entry.split("/");
@@ -69,7 +35,7 @@ function parseHostScopedTrustedProxySource(entry: string): TrustedProxySource | 
   if (!parsedAddress) {
     return undefined;
   }
-  const rawBits: 32 | 128 = parsedAddress.kind() === "ipv6" ? 128 : 32;
+  const rawBits = parsedAddress.kind() === "ipv6" ? 128 : 32;
   const rawPrefix = parts.length === 1 ? rawBits : Number(parts[1]?.trim());
   // Doctor only downgrades host-scoped proxy identities. The public setup
   // checklist requires actual proxy IPs, not subnets, because every address in
@@ -77,28 +43,27 @@ function parseHostScopedTrustedProxySource(entry: string): TrustedProxySource | 
   if (!Number.isInteger(rawPrefix) || rawPrefix !== rawBits) {
     return undefined;
   }
-  const normalizedAddress = parseCanonicalIpAddress(normalizeIpAddress(rawAddress));
-  if (!normalizedAddress) {
+  // normalizeIpAddress folds IPv4-mapped IPv6 into IPv4 text, matching runtime isIpInCidr.
+  const address = normalizeIpAddress(rawAddress);
+  const normalizedAddress = parseCanonicalIpAddress(address);
+  if (!address || !normalizedAddress) {
     return undefined;
   }
-  const bits: 32 | 128 = normalizedAddress.kind() === "ipv6" ? 128 : 32;
-  const value = ipBytesToBigInt(normalizedAddress.toByteArray());
-  if (
-    UNUSABLE_PROXY_SOURCE_RANGES[bits].some((range) => range.start <= value && value <= range.end)
-  ) {
+  if (UNUSABLE_PROXY_SOURCE_RANGES.has(normalizedAddress.range())) {
     return undefined;
   }
-  const address = formatIpValue(value, bits);
   return isTrustedProxyAddress(address, [entry]) ? { entry, address } : undefined;
 }
 
-async function isPotentiallyUsableProxySource(
+type ProxySourceProbe = { ok: true } | { ok: false; reason: string };
+
+async function probeProxySource(
   source: TrustedProxySource,
   auth: ReturnType<typeof resolveGatewayAuth>,
-): Promise<boolean> {
+): Promise<ProxySourceProbe> {
   const trustedProxy = auth.trustedProxy;
   if (!trustedProxy) {
-    return false;
+    return { ok: false, reason: "trusted_proxy_config_missing" };
   }
   const allowUsers = trustedProxy.allowUsers ?? [];
   const userHeader = normalizeLowercaseStringOrEmpty(trustedProxy.userHeader);
@@ -119,7 +84,7 @@ async function isPotentiallyUsableProxySource(
           }
         });
   if (!user) {
-    return false;
+    return { ok: false, reason: "trusted_proxy_no_deliverable_allow_user" };
   }
   const headers: Record<string, string> = {};
   for (const header of trustedProxy.requiredHeaders ?? []) {
@@ -133,7 +98,7 @@ async function isPotentiallyUsableProxySource(
     trustedProxies: [source.entry],
     req: { socket: { remoteAddress: source.address }, headers } as never,
   });
-  return result.ok;
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason ?? "unauthorized" };
 }
 
 export async function resolveTrustedProxyReadiness(params: {
@@ -197,14 +162,22 @@ export async function resolveTrustedProxyReadiness(params: {
   if (problems.length > 0) {
     return { problems };
   }
+  // Surface the runtime rejection codes so operators can see why each source failed
+  // (e.g. trusted_proxy_local_interface_source) instead of guessing.
+  const failureReasons = new Set<string>();
   for (const source of sources) {
-    if (source && (await isPotentiallyUsableProxySource(source, params.auth))) {
+    if (!source) {
+      continue;
+    }
+    const probe = await probeProxySource(source, params.auth);
+    if (probe.ok) {
       return { problems: [] };
     }
+    failureReasons.add(probe.reason);
   }
   return {
     problems: [
-      "No configured proxy source can pass the Gateway's source checks in this runtime environment.",
+      `No configured proxy source can pass the Gateway's source checks in this runtime environment (runtime reasons: ${[...failureReasons].join(", ")}).`,
     ],
   };
 }
