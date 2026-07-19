@@ -1329,7 +1329,9 @@ jobs:
             # Do not retry whole files: several rely on one-shot mocked browser globals.
             pnpm --dir ui test --testTimeout=30000 --isolate
           else
-            pnpm --dir ui test
+            # Three workers deliberately exercise stable non-default file packing so
+            # isolate:false mock-registry leaks fail close to the introducing change.
+            pnpm --dir ui test --maxWorkers 3
           fi
 
   control-ui-i18n:
