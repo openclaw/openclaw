@@ -20,6 +20,7 @@ import {
 describe("gh-read helpers", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("prints wrapper usage before reading auth env", () => {
@@ -57,6 +58,26 @@ describe("gh-read helpers", () => {
       stdio: "inherit",
       timeout: 120_000,
     });
+  });
+
+  it("accepts a longer operator-selected GitHub CLI timeout", () => {
+    vi.stubEnv("OPENCLAW_GH_READ_COMMAND_TIMEOUT_MS", "900000");
+    const spawnSyncImpl = vi.fn(() => ({ status: 0 }));
+
+    expect(
+      runGitHubCli(["run", "watch", "123"], "test-fixture-credential", { spawnSyncImpl }),
+    ).toBe(0);
+    expect(spawnSyncImpl.mock.calls[0]?.[2].timeout).toBe(900_000);
+  });
+
+  it("rejects invalid operator-selected GitHub CLI timeouts", () => {
+    vi.stubEnv("OPENCLAW_GH_READ_COMMAND_TIMEOUT_MS", "15m");
+    const spawnSyncImpl = vi.fn(() => ({ status: 0 }));
+
+    expect(() =>
+      runGitHubCli(["run", "watch", "123"], "test-fixture-credential", { spawnSyncImpl }),
+    ).toThrow(/OPENCLAW_GH_READ_COMMAND_TIMEOUT_MS must be an integer/u);
+    expect(spawnSyncImpl).not.toHaveBeenCalled();
   });
 
   it("finds repo from gh args", () => {

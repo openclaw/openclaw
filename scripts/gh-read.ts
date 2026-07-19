@@ -18,10 +18,11 @@ const APP_ID_ENV = "OPENCLAW_GH_READ_APP_ID";
 const KEY_FILE_ENV = "OPENCLAW_GH_READ_PRIVATE_KEY_FILE";
 const INSTALLATION_ID_ENV = "OPENCLAW_GH_READ_INSTALLATION_ID";
 const PERMISSIONS_ENV = "OPENCLAW_GH_READ_PERMISSIONS";
+const COMMAND_TIMEOUT_ENV = "OPENCLAW_GH_READ_COMMAND_TIMEOUT_MS";
 const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
-// gh-read accepts broad read commands, including pagination. Match the measured
-// script-family budget while preventing a stalled gh child from blocking forever.
+// Use the measured script-family budget for ordinary broad reads. Intentionally
+// long-lived commands can select a larger finite deadline through COMMAND_TIMEOUT_ENV.
 const DEFAULT_GH_COMMAND_TIMEOUT_MS = 120_000;
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
@@ -120,6 +121,15 @@ export function resolveGitHubFetchTimeoutMs(raw = process.env.OPENCLAW_GH_READ_F
   return parseStrictIntegerOption({
     fallback: DEFAULT_GITHUB_FETCH_TIMEOUT_MS,
     label: "OPENCLAW_GH_READ_FETCH_TIMEOUT_MS",
+    min: 1,
+    raw,
+  });
+}
+
+function resolveGitHubCommandTimeoutMs(raw = process.env[COMMAND_TIMEOUT_ENV]) {
+  return parseStrictIntegerOption({
+    fallback: DEFAULT_GH_COMMAND_TIMEOUT_MS,
+    label: COMMAND_TIMEOUT_ENV,
     min: 1,
     raw,
   });
@@ -395,7 +405,7 @@ export function runGitHubCli(
       GITHUB_TOKEN: token,
     },
     killSignal: "SIGKILL",
-    timeout: options.timeoutMs ?? DEFAULT_GH_COMMAND_TIMEOUT_MS,
+    timeout: options.timeoutMs ?? resolveGitHubCommandTimeoutMs(),
   });
 
   if (child.error) {
