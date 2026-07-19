@@ -82,7 +82,7 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
-const loadModelCatalogDefinitionModule = async () => await import("../agents/model-catalog.js");
+const loadCatalogLookupModule = async () => await import("../agents/model-catalog.js");
 const loadPreparedModelCatalogModule = async () =>
   await import("../agents/prepared-model-catalog.js");
 const loadModelSelectionModule = async () => await import("../agents/model-selection.js");
@@ -914,7 +914,7 @@ async function collectToolResultCapTargetAdvice(params: {
   }>
 > {
   const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
-  const { findModelCatalogEntry } = await loadModelCatalogDefinitionModule();
+  const { findModelCatalogEntry } = await loadCatalogLookupModule();
   const { loadPreparedModelCatalog } = await loadPreparedModelCatalogModule();
   const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
   const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
