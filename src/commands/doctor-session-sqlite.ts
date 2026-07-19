@@ -407,7 +407,9 @@ function readLegacySessionRecords(
       let totalBytes = 0;
       while (totalBytes < storeStat.size) {
         const bytesRead = fs.readSync(fd, buf, totalBytes, storeStat.size - totalBytes, totalBytes);
-        if (bytesRead === 0) break;
+        if (bytesRead === 0) {
+          break;
+        }
         totalBytes += bytesRead;
       }
       parsed = JSON.parse(buf.subarray(0, totalBytes).toString("utf-8"));
