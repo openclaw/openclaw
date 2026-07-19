@@ -66,4 +66,36 @@ describe("gateway method authorization", () => {
       },
     });
   });
+
+  it("enforces the admin scope for user profile mutations", async () => {
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: { type: "req", id: "req-users-1", method: "users.setAvatar" },
+      respond,
+      client: {
+        connId: "conn-users-1",
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+          client: { id: "test", version: "1", platform: "test", mode: "test" },
+          minProtocol: 1,
+          maxProtocol: 1,
+        },
+      } as Parameters<typeof handleGatewayRequest>[0]["client"],
+      isWebchatConnect: () => false,
+      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
+        typeof handleGatewayRequest
+      >[0]["context"],
+    });
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "FORBIDDEN",
+      message: "missing scope: operator.admin",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.admin",
+        requiredScopes: ["operator.admin"],
+      },
+    });
+  });
 });

@@ -124,6 +124,8 @@ const getSessionKillHttpModule = createLazyRuntimeModule(() => import("./session
 
 const getToolsInvokeHttpModule = createLazyRuntimeModule(() => import("./tools-invoke-http.js"));
 
+const getUserProfilesHttpModule = createLazyRuntimeModule(() => import("./user-profiles-http.js"));
+
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),
 );
@@ -147,6 +149,10 @@ function isControlUiCatalogIconRequest(pathname: string, basePath: string): bool
   return [CONTROL_UI_PLUGIN_ICON_PATH_PREFIX, CONTROL_UI_CATALOG_ICON_PATH_PREFIX].some((prefix) =>
     pathname.startsWith(`${normalizedBasePath}${prefix}/`),
   );
+}
+
+function isUserProfileAvatarPath(pathname: string): boolean {
+  return /^\/api\/users\/[^/]+\/avatar$/u.test(pathname);
 }
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
@@ -694,6 +700,20 @@ export function createGatewayHttpServer(opts: {
           run: async () =>
             await runWithGatewayHttpWorkAdmission(res, async () =>
               (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
+            ),
+        });
+      }
+      if (isUserProfileAvatarPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "user-profile-avatar",
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
             ),
         });
       }
