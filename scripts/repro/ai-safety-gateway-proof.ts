@@ -149,7 +149,9 @@ async function main(): Promise<void> {
       } catch (error) {
         lastError = error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 250);
+      });
     }
     if (!matched) {
       throw new Error(
