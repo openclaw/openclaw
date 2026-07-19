@@ -775,6 +775,17 @@ function normalizeQueryLimit(limit: number | undefined, fallback: number): numbe
   return Math.max(1, Math.min(5000, Math.trunc(limit ?? fallback)));
 }
 
+const NO_SILENCE_DIAGNOSTIC_PATHS = {
+  overdue: "$.diagnostics.noSilenceSla.overdue",
+  slaMs: "$.diagnostics.noSilenceSla.slaMs",
+} as const;
+
+function noSilenceDiagnosticNumber(
+  jsonPath: (typeof NO_SILENCE_DIAGNOSTIC_PATHS)[keyof typeof NO_SILENCE_DIAGNOSTIC_PATHS],
+) {
+  return sql<number>`json_extract(metadata_json, ${jsonPath})`; // kysely-allow-raw: closed path union
+}
+
 function isTerminalRunStatus(status: DurableRuntimeRunStatus): boolean {
   return (
     status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
@@ -1188,16 +1199,8 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
         .where("created_at", "<=", input.overdueBefore)
         .where((eb) =>
           eb.or([
-            eb(
-              sql<number>`json_extract(metadata_json, '$.diagnostics.noSilenceSla.overdue')`,
-              "is not",
-              1,
-            ),
-            eb(
-              sql<number>`json_extract(metadata_json, '$.diagnostics.noSilenceSla.slaMs')`,
-              "is not",
-              input.slaMs,
-            ),
+            eb(noSilenceDiagnosticNumber(NO_SILENCE_DIAGNOSTIC_PATHS.overdue), "is not", 1),
+            eb(noSilenceDiagnosticNumber(NO_SILENCE_DIAGNOSTIC_PATHS.slaMs), "is not", input.slaMs),
           ]),
         )
         .orderBy("created_at", "asc")

@@ -1195,6 +1195,58 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
+  it("finds overdue wakes whose no-silence diagnostic is missing or stale", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-wake-diagnostic-"));
+    const store = openDurableRuntimeSqliteStore({ path: path.join(dir, "openclaw.sqlite") });
+    try {
+      const missing = store.createWakeObligation({
+        wakeId: "wake-diagnostic-missing",
+        sourceOwner: "task_runs",
+        sourceRef: "task-diagnostic-missing",
+        targetKind: "agent_session",
+        targetRef: "agent:test:main",
+        reason: "operator_requested",
+        dedupeKey: "wake-diagnostic-missing",
+        now: 100,
+      });
+      const current = store.createWakeObligation({
+        wakeId: "wake-diagnostic-current",
+        sourceOwner: "task_runs",
+        sourceRef: "task-diagnostic-current",
+        targetKind: "agent_session",
+        targetRef: "agent:test:main",
+        reason: "operator_requested",
+        dedupeKey: "wake-diagnostic-current",
+        metadata: { diagnostics: { noSilenceSla: { overdue: true, slaMs: 500 } } },
+        now: 110,
+      });
+      const stale = store.createWakeObligation({
+        wakeId: "wake-diagnostic-stale",
+        sourceOwner: "task_runs",
+        sourceRef: "task-diagnostic-stale",
+        targetKind: "agent_session",
+        targetRef: "agent:test:main",
+        reason: "operator_requested",
+        dedupeKey: "wake-diagnostic-stale",
+        metadata: { diagnostics: { noSilenceSla: { overdue: true, slaMs: 250 } } },
+        now: 120,
+      });
+
+      expect(
+        store
+          .listWakeObligationsNeedingNoSilenceDiagnostic({
+            overdueBefore: 200,
+            slaMs: 500,
+          })
+          .map((wake) => wake.wakeId),
+      ).toEqual([missing.wakeId, stale.wakeId]);
+      expect(store.getWakeObligation(current.wakeId)).toMatchObject({ status: "pending" });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects stale wake and uncertainty control revisions", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-control-revision-"));
     const store = openDurableRuntimeSqliteStore({ path: path.join(dir, "openclaw.sqlite") });
