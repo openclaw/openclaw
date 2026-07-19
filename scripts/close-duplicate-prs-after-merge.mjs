@@ -1,10 +1,12 @@
-// Finds duplicate PRs after merge and closes overlapping candidates.
+﻿// Finds duplicate PRs after merge and closes overlapping candidates.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const CLOSE_DUPES_TIMEOUT_MS = 120_000;
-
 const DEFAULT_LABELS = ["duplicate", "close:duplicate", "dedupe:child"];
+// Duplicate PR closure performs multiple sequential gh API reads and writes.
+// Keep enough headroom for GitHub latency while preventing one stalled request
+// from blocking the surrounding workflow job.
+const GH_COMMAND_TIMEOUT_MS = 60_000;
 
 function usage() {
   return `Usage: node scripts/close-duplicate-prs-after-merge.mjs --landed-pr <number> --duplicates <numbers> [--repo owner/repo] [--apply]
@@ -91,12 +93,13 @@ function ghJson(args, runGh) {
   return JSON.parse(runGh(args));
 }
 
-function defaultRunGh(args, options = {}) {
-  return execFileSync("gh", args, {
+export function defaultRunGh(args, options = {}, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl("gh", args, {
     encoding: "utf8",
-    timeout: CLOSE_DUPES_TIMEOUT_MS,
     killSignal: "SIGKILL",
     stdio: options.input ? ["pipe", "pipe", "inherit"] : ["ignore", "pipe", "inherit"],
+    timeout: GH_COMMAND_TIMEOUT_MS,
     ...(options.input ? { input: options.input } : {}),
   });
 }
