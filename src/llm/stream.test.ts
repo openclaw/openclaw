@@ -20,6 +20,13 @@ describe("LLM stream facade", () => {
         api: "test-lifecycle-api",
         provider: "test-provider",
         id: "test-model",
+        name: "Test Model",
+        baseUrl: "https://example.test",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1024,
+        maxTokens: 512,
       },
       runtime,
     );

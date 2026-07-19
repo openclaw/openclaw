@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import type { ApiRegistry } from "@openclaw/ai";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
@@ -159,7 +160,6 @@ import {
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
-import type { ModelRegistry } from "../sessions/model-registry.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
   filterProviderNormalizableTools,
@@ -259,14 +259,14 @@ function resolveCompactionProviderStream(params: {
   config?: OpenClawConfig;
   agentDir: string;
   effectiveWorkspace: string;
-  modelRegistry: ModelRegistry;
+  apiRegistry: ApiRegistry;
 }) {
   return registerProviderStreamForModel({
     model: params.effectiveModel,
     cfg: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.effectiveWorkspace,
-    apiRegistry: getModelRegistryRuntime(params.modelRegistry).apiRegistry,
+    apiRegistry: params.apiRegistry,
   });
 }
 
@@ -1503,7 +1503,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         config: params.config,
         agentDir,
         effectiveWorkspace,
-        modelRegistry,
+        apiRegistry: getModelRegistryRuntime(modelRegistry).apiRegistry,
       });
       while (true) {
         // Rebuild the compaction session on retry so provider wrappers, payload
