@@ -129,6 +129,7 @@ function createSubscriptionMock(): SubscriptionMock {
     assistantTexts: [] as string[],
     getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
+    getLatestMcpAppChannelView: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),

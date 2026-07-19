@@ -1393,6 +1393,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
+    getLatestMcpAppChannelView: () =>
+      state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
     runToolLifecycle: async <T>(toolParams: {
       toolName: string;
       toolCallId: string;
