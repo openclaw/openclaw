@@ -42,34 +42,4 @@ describe("OutputAccumulator", () => {
     expect(snapshot.fullOutputPath).toBeDefined();
     await rm(snapshot.fullOutputPath!, { force: true });
   });
-
-  it("flushes stateful transforms on finish", async () => {
-    let pending = "";
-    const accumulator = new OutputAccumulator({
-      maxBytes: 100,
-      maxLines: 10,
-      tempFilePrefix: "openclaw-output-test",
-      transformDecodedText: {
-        write: (text) => {
-          const combined = pending + text;
-          if (combined.endsWith("<")) {
-            pending = "<";
-            return combined.slice(0, -1);
-          }
-          pending = "";
-          return combined;
-        },
-        finish: () => {
-          const text = pending;
-          pending = "";
-          return text ? "[pending]" : "";
-        },
-      },
-    });
-
-    expect(accumulator.append(Buffer.from("hello<"))).toBe("hello");
-    expect(accumulator.finish()).toBe("[pending]");
-
-    expect(accumulator.snapshot().content).toBe("hello[pending]");
-  });
 });

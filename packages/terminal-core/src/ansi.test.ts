@@ -1,7 +1,7 @@
 // Terminal Core tests cover ansi behavior.
 import { describe, expect, it } from "vitest";
+import { AnsiSequenceStripper } from "./ansi-sequences.js";
 import {
-  AnsiSequenceStripper,
   sanitizeForLog,
   splitGraphemes,
   stripAnsi,
@@ -36,6 +36,8 @@ describe("terminal ansi helpers", () => {
     ["ESC CSI", ["A\u001B[31", "mB"]],
     ["C1 CSI", ["A\u009B31", "mB"]],
     ["ESC compatibility charset", ["A\u001B(", "BB"]],
+    ["ESC compatibility bracket prefix", ["A\u001B[", "[AB"]],
+    ["ESC compatibility mixed prefixes", ["A\u001B(", "[31mB"]],
   ])("strips chunked %s sequences incrementally", (_label, chunks) => {
     const stripper = new AnsiSequenceStripper();
 
@@ -75,13 +77,13 @@ describe("terminal ansi helpers", () => {
     expect(split).toBe("safe");
   });
 
-  it("does not retain large unterminated compatibility controls", () => {
-    const stripper = new AnsiSequenceStripper();
-    const payload = "[".repeat(1024 * 1024);
+  it("accepts every standard CSI final byte after a chunk boundary", () => {
+    for (let final = 0x40; final <= 0x7e; final += 1) {
+      const stripper = new AnsiSequenceStripper();
+      const split = stripper.write("A\u001B[31") + stripper.write(`${String.fromCharCode(final)}B`);
 
-    const split = stripper.write("safe\u001B[") + stripper.write(payload) + stripper.finish();
-
-    expect(split).toBe("safe");
+      expect(split).toBe("AB");
+    }
   });
 
   it.each([

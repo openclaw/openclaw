@@ -6,8 +6,7 @@
  * - Direct calls from modes that need bash execution
  */
 
-import { AnsiSequenceStripper } from "../../../packages/terminal-core/src/ansi.js";
-import { sanitizeBinaryOutput } from "../shell-utils.js";
+import { createStreamingBinaryOutputSanitizer } from "../shell-utils.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { OutputAccumulator } from "./tools/output-accumulator.js";
 
@@ -49,13 +48,10 @@ export async function executeBashWithOperations(
   operations: BashOperations,
   options?: BashExecutorOptions,
 ): Promise<BashResult> {
-  const ansiStripper = new AnsiSequenceStripper();
+  const sanitizeOutput = createStreamingBinaryOutputSanitizer();
   const output = new OutputAccumulator({
     tempFilePrefix: "openclaw-bash",
-    transformDecodedText: {
-      write: (text) => sanitizeBinaryOutput(ansiStripper.write(text)).replace(/\r/g, ""),
-      finish: () => sanitizeBinaryOutput(ansiStripper.finish()).replace(/\r/g, ""),
-    },
+    transformDecodedText: (text) => sanitizeOutput(text).replace(/\r/g, ""),
   });
 
   const onData = (data: Buffer) => {
