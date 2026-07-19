@@ -195,7 +195,7 @@ export async function handleAcpSessionsAction(
     : readAcpSessionEntry({ cfg: params.cfg, sessionKey: currentSessionKey });
   const visibleEntries = params.command.senderIsOwner
     ? await listAcpSessionEntries({ cfg: params.cfg })
-    : currentEntry
+    : currentEntry?.entry && currentEntry.acp
       ? [currentEntry]
       : [];
 

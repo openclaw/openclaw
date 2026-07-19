@@ -1969,6 +1969,10 @@ describe("/acp command", () => {
   });
 
   it("returns an empty listing when a non-owner's raw session key is not an ACP session", async () => {
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      ...createAcpSessionEntry({ sessionKey: "agent:main:raw-requester" }),
+      acp: undefined,
+    });
     const params = createDiscordParams("/acp sessions");
     params.command.senderIsOwner = false;
     params.sessionKey = "agent:main:raw-requester";
