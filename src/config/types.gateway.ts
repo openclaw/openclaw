@@ -206,8 +206,10 @@ export type GatewayTrustedProxyConfig = {
     /** Enable automatic approval for new browser devices. @default false */
     enabled?: boolean;
     /**
-     * Maximum operator scopes granted by automatic approval. operator.admin
-     * is intentionally forbidden. @default operator.read, operator.write,
+     * Maximum operator scopes granted by automatic approval. Listing
+     * operator.admin explicitly lets every proxy-authenticated user request
+     * automatic full-admin device grants. Requests without scopes receive the
+     * configured maximum. @default operator.read, operator.write,
      * operator.approvals
      */
     scopes?: string[];
