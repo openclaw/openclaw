@@ -410,12 +410,35 @@ function aggregateSqliteUsageSnapshots(messages: unknown[]): SessionTranscriptUs
   return aggregate;
 }
 
+// Match file-backed sessions.preview: clamp item/char caps and read only a
+// bounded recent window. Full materialisation would make macOS menu preview /
+// Gateway sessions.preview scale with transcript size.
+const SQLITE_PREVIEW_MAX_ITEMS = 50;
+const SQLITE_PREVIEW_MAX_CHARS = 2000;
+const SQLITE_PREVIEW_MAX_LINES = 200;
+const SQLITE_PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024] as const;
+
 function buildSqlitePreviewItems(
   target: ResolvedTranscriptReadTarget,
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
-  return buildSessionPreviewItems(readSqliteMessagesSync(target), maxItems, maxChars);
+  const boundedItems = Math.max(1, Math.min(maxItems, SQLITE_PREVIEW_MAX_ITEMS));
+  const boundedChars = Math.max(20, Math.min(maxChars, SQLITE_PREVIEW_MAX_CHARS));
+  const scope = toTranscriptReadScope(target);
+  for (const [index, maxBytes] of SQLITE_PREVIEW_READ_SIZES.entries()) {
+    const messages = extractMessageRecordsFromEventEntries(
+      readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes,
+        maxLines: SQLITE_PREVIEW_MAX_LINES,
+        maxMessages: boundedItems,
+      }).events,
+    ).map((record) => record.message);
+    if (messages.length > 0 || index === SQLITE_PREVIEW_READ_SIZES.length - 1) {
+      return buildSessionPreviewItems(messages, boundedItems, boundedChars);
+    }
+  }
+  return [];
 }
 
 /** Reads display messages asynchronously through the reader seam. */

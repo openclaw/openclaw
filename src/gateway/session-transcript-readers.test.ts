@@ -8,6 +8,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
@@ -15,6 +20,7 @@ import {
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
+  readSessionPreviewItemsFromTranscript,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
@@ -31,6 +37,8 @@ describe("session transcript reader facade", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -451,5 +459,83 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "explicit file test" }),
     ).resolves.toMatchObject([{ content: "explicit prompt" }]);
+  });
+
+  test("SQLite session preview stays bounded when a middle event is unreadable", async () => {
+    // sessions.preview (macOS menu / Gateway RPC) → readSessionPreviewItemsFromTranscript.
+    // Full SQLite materialisation would throw on the corrupt middle row; recent-window
+    // preview must still return the latest assistant text.
+    const sessionId = "reader-sqlite-preview-bound";
+    // Keep the corrupt row outside the preview recent window (maxLines=200).
+    const fillerCount = 250;
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    const messages: Array<{
+      eventId: string;
+      parentId: string | null;
+      message: { role: string; content: string };
+    }> = [
+      {
+        eventId: "preview-head",
+        parentId: null,
+        message: { role: "user", content: "preview-head" },
+      },
+    ];
+    for (let index = 0; index < fillerCount; index += 1) {
+      messages.push({
+        eventId: `filler-${index}`,
+        parentId: index === 0 ? "preview-head" : `filler-${index - 1}`,
+        message: { role: "assistant", content: `filler-${index}` },
+      });
+    }
+    messages.push({
+      eventId: "preview-tail",
+      parentId: `filler-${fillerCount - 1}`,
+      message: { role: "assistant", content: "bounded-preview-tail" },
+    });
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+
+    expect(await readSessionMessageCountAsync(scope)).toBe(fillerCount + 2);
+    const sqliteFile = fs
+      .readdirSync(tempDir, { recursive: true })
+      .map(String)
+      .find((entry) => entry.endsWith("openclaw-agent.sqlite"));
+    expect(sqliteFile).toBeTruthy();
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      path: path.join(tempDir, sqliteFile ?? ""),
+    });
+    const eventRows = database.db
+      .prepare(
+        "SELECT session_id, seq, substr(event_json, 1, 120) AS preview FROM transcript_events",
+      )
+      .all() as Array<{ session_id: string; seq: number; preview: string }>;
+    const middlePreview = eventRows.find((row) => row.preview.includes("filler-20"));
+    if (!middlePreview) {
+      throw new Error("expected filler-20 event in SQLite transcript");
+    }
+    expect(
+      database.db
+        .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = ?")
+        .run(middlePreview.session_id, middlePreview.seq).changes,
+    ).toBe(1);
+
+    await expect(
+      readSessionMessagesAsync(scope, { mode: "full", reason: "preview bound full-read sentinel" }),
+    ).rejects.toThrow();
+
+    const items = readSessionPreviewItemsFromTranscript(scope, 3, 120);
+    expect(items.some((item) => item.text.includes("bounded-preview-tail"))).toBe(true);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.length).toBeLessThanOrEqual(3);
   });
 });
