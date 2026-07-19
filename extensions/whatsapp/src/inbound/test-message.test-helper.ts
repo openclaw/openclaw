@@ -1,3 +1,4 @@
+import { mapChannelIngressDecisionToTurnAdmission } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { WhatsAppInboundAdmission } from "./admission.js";
 import { resolveWhatsAppGroupConversationId } from "./group-conversation.js";
 import { withDeprecatedWebInboundMessageFlatAliases } from "./message-aliases.js";
@@ -23,6 +24,7 @@ type TestWhatsAppInboundAdmissionOverrides = Partial<
     | "senderAccess"
     | "commandAccess"
     | "activationAccess"
+    | "turnAdmission"
   >
 > & {
   account?: Partial<WhatsAppInboundAdmission["account"]>;
@@ -32,6 +34,7 @@ type TestWhatsAppInboundAdmissionOverrides = Partial<
   senderAccess?: Partial<WhatsAppInboundAdmission["senderAccess"]>;
   commandAccess?: Partial<WhatsAppInboundAdmission["commandAccess"]>;
   activationAccess?: Partial<WhatsAppInboundAdmission["activationAccess"]>;
+  turnAdmission?: WhatsAppInboundAdmission["turnAdmission"];
 };
 
 type TestInboundMessageOverrides = Partial<
@@ -61,6 +64,16 @@ export function createTestWhatsAppInboundAdmission(
   const accountId = overrides.accountId ?? overrides.account?.accountId ?? "default";
   const kind = overrides.conversation?.kind ?? "direct";
 
+  const ingress: WhatsAppInboundAdmission["ingress"] = {
+    admission: "dispatch",
+    decision: "allow",
+    decisiveGateId: "activation",
+    reasonCode: "activation_allowed",
+    ...overrides.ingress,
+  };
+  const turnAdmission: WhatsAppInboundAdmission["turnAdmission"] =
+    overrides.turnAdmission ?? mapChannelIngressDecisionToTurnAdmission(ingress);
+
   return {
     accountId,
     isSelfChat: overrides.isSelfChat ?? false,
@@ -81,13 +94,7 @@ export function createTestWhatsAppInboundAdmission(
       id: overrides.sender?.id ?? conversationId,
       isSamePhone: overrides.sender?.isSamePhone ?? false,
     },
-    ingress: {
-      admission: "dispatch",
-      decision: "allow",
-      decisiveGateId: "activation",
-      reasonCode: "activation_allowed",
-      ...overrides.ingress,
-    },
+    ingress,
     senderAccess: {
       allowed: true,
       decision: "allow",
@@ -109,6 +116,7 @@ export function createTestWhatsAppInboundAdmission(
       reasonCode: "activation_allowed",
       ...overrides.activationAccess,
     },
+    turnAdmission,
   };
 }
 

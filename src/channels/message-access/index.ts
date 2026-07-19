@@ -8,6 +8,7 @@ export {
   resolveStableChannelMessageIngress,
 } from "./runtime.js";
 export { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
+export { mapChannelIngressDecisionToTurnAdmission } from "./turn-admission.js";
 
 export type {
   ChannelIngressAccessGroupMembershipResolver,

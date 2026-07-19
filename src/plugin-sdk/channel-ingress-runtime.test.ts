@@ -1,6 +1,7 @@
 // Channel ingress runtime tests cover inbound message normalization and runtime contracts.
 import { describe, expect, it, vi } from "vitest";
 import {
+  mapChannelIngressDecisionToTurnAdmission,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
   type ResolveChannelMessageIngressParams,
@@ -25,6 +26,15 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
+  it.each([
+    ["dispatch", "activation_allowed", { kind: "dispatch", reason: "activation_allowed" }],
+    ["observe", "activation_allowed", { kind: "observeOnly", reason: "activation_allowed" }],
+    ["skip", "activation_skipped", { kind: "handled", reason: "activation_skipped" }],
+    ["drop", "route_blocked", { kind: "drop", reason: "route_blocked", recordHistory: false }],
+  ] as const)("maps %s ingress decisions", (admission, reasonCode, expected) => {
+    expect(mapChannelIngressDecisionToTurnAdmission({ admission, reasonCode })).toEqual(expected);
+  });
+
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {
     const sender = "Secret-Sender@example.test";
     const readStoreAllowFrom = vi.fn(async () => ["secret-sender@example.test"]);

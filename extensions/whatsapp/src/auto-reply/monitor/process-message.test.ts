@@ -1,4 +1,5 @@
 // Whatsapp tests cover process message plugin behavior.
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
@@ -8,7 +9,8 @@ const {
   resolvePolicyMock,
   buildContextMock,
   isControlCommandMessageMock,
-  dispatchBufferedReplyMock,
+  deliverReplyMock,
+  replyResolverMock,
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
@@ -16,10 +18,10 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
-  dispatchBufferedReplyMock: vi.fn(async (_params?: unknown) => ({
-    queuedFinal: false,
-    counts: { tool: 0, block: 0, final: 0 },
-  })),
+  deliverReplyMock: vi.fn(async () => ({ visibleReplySent: true })),
+  replyResolverMock: vi.fn<() => Promise<ReplyPayload | ReplyPayload[] | undefined>>(
+    async () => undefined,
+  ),
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
@@ -41,13 +43,12 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
     buildWhatsAppInboundContext: buildContextMock,
     createWhatsAppReplyPlan: (...args: unknown[]) => {
       const params = args[0] as { replyResolver?: unknown };
-      void dispatchBufferedReplyMock(params);
       return {
         dispatcherOptions: {},
-        delivery: { deliver: async () => {} },
+        delivery: { deliver: deliverReplyMock },
         replyOptions: {},
         replyResolver: params.replyResolver,
-        finalize: () => true,
+        finalize: (result: { queuedFinal?: boolean }) => result.queuedFinal === true,
       };
     },
     resolveWhatsAppDmRouteTarget: () => null,
@@ -245,12 +246,13 @@ function callProcessMessage(
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
+    groupHistoryLimit: 20,
     groupHistories: (overrides.groupHistories ?? new Map()) as never,
     groupMemberNames: new Map(),
     connectionId: "conn-1",
     verbose: false,
     maxMediaBytes: 1024,
-    replyResolver: (async () => undefined) as never,
+    replyResolver: replyResolverMock as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
     rememberSentText: () => {},
@@ -278,7 +280,9 @@ function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex 
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
-    dispatchBufferedReplyMock.mockClear();
+    deliverReplyMock.mockClear();
+    replyResolverMock.mockReset();
+    replyResolverMock.mockResolvedValue(undefined);
     isControlCommandMessageMock.mockReset();
     isControlCommandMessageMock.mockReturnValue(false);
     resolvePolicyMock.mockReset();
@@ -557,6 +561,70 @@ describe("processMessage group system prompt wiring", () => {
     );
   });
 
+  it.each([
+    { label: "silent", reply: undefined },
+    { label: "visible", reply: { text: "reply" } },
+  ])("clears pending group history after a successful $label dispatch", async ({ reply }) => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    replyResolverMock.mockResolvedValueOnce(reply);
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const groupHistories = new Map<string, unknown[]>([
+      [historyKey, [{ sender: "Alice", body: "pending" }]],
+    ]);
+
+    await callProcessMessage({ groupHistories });
+
+    expect(replyResolverMock).toHaveBeenCalledTimes(1);
+    expect(groupHistories.get(historyKey)).toEqual([]);
+  });
+
+  it("suppresses observe-only delivery without clearing pending group history", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const pending = [{ sender: "Alice", body: "pending" }];
+    const groupHistories = new Map<string, unknown[]>([[historyKey, pending]]);
+
+    const result = await callProcessMessage({
+      groupHistories,
+      msg: createTestWebInboundMessage({
+        admission: {
+          conversation: { kind: "group", id: GROUP_JID },
+          ingress: {
+            admission: "observe",
+            decision: "allow",
+            reasonCode: "activation_skipped",
+          },
+          senderAccess: {
+            reasonCode: "group_policy_allowed",
+          },
+          activationAccess: {
+            allowed: false,
+            shouldSkip: true,
+            reasonCode: "activation_skipped",
+          },
+        },
+      }),
+    });
+
+    expect(result).toBe(false);
+    expect(replyResolverMock).toHaveBeenCalledTimes(1);
+    expect(deliverReplyMock).not.toHaveBeenCalled();
+    expect(groupHistories.get(historyKey)).toBe(pending);
+  });
+
+  it("retains pending group history when dispatch fails", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const failure = new Error("dispatch failed");
+    replyResolverMock.mockRejectedValueOnce(failure);
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const pending = [{ sender: "Alice", body: "pending" }];
+    const groupHistories = new Map<string, unknown[]>([[historyKey, pending]]);
+
+    await expect(callProcessMessage({ groupHistories })).rejects.toThrow(failure);
+
+    expect(groupHistories.get(historyKey)).toBe(pending);
+  });
+
   it("drops blocked admission before session record and reply dispatch", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     buildContextMock.mockImplementationOnce(() => ({
@@ -593,7 +661,7 @@ describe("processMessage group system prompt wiring", () => {
     expect(result).toBe(false);
     expect(buildContextMock).not.toHaveBeenCalled();
     expect(trackBackgroundTaskMock).not.toHaveBeenCalled();
-    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+    expect(replyResolverMock).not.toHaveBeenCalled();
     expect(runMessageReceivedMock).not.toHaveBeenCalled();
   });
 });

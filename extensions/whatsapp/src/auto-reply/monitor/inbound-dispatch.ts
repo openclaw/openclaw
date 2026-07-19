@@ -509,8 +509,6 @@ export function createWhatsAppReplyPlan(params: {
     skipLog?: boolean;
     tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
   }) => Promise<WhatsAppReplyDeliveryResult>;
-  groupHistories: Map<string, GroupHistoryEntry[]>;
-  groupHistoryKey: string;
   maxMediaBytes: number;
   maxMediaTextChunkLimit?: number;
   msg: AdmittedWebInboundMessage;
@@ -527,7 +525,6 @@ export function createWhatsAppReplyPlan(params: {
   replyPipeline: WhatsAppDispatchPipeline;
   replyResolver: typeof getReplyFromConfig;
   route: ReturnType<typeof resolveAgentRoute>;
-  shouldClearGroupHistory: boolean;
   statusReactionController?: StatusReactionController | null;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
@@ -789,9 +786,6 @@ export function createWhatsAppReplyPlan(params: {
             timing: statusReactionTiming,
           });
         }
-        if (params.shouldClearGroupHistory) {
-          params.groupHistories.set(params.groupHistoryKey, []);
-        }
         logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
         return false;
       }
@@ -804,9 +798,6 @@ export function createWhatsAppReplyPlan(params: {
           removeAckAfterReply,
           timing: statusReactionTiming,
         });
-      }
-      if (params.shouldClearGroupHistory) {
-        params.groupHistories.set(params.groupHistoryKey, []);
       }
       return didDeliverVisibleReply;
     },

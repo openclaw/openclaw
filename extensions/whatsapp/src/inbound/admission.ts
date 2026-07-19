@@ -1,4 +1,7 @@
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  mapChannelIngressDecisionToTurnAdmission,
+  type ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { WhatsAppIdentity } from "../identity.js";
 import type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
@@ -8,6 +11,8 @@ type WhatsAppInboundIngressDecision = Pick<
   ResolvedChannelMessageIngress["ingress"],
   "admission" | "decision" | "decisiveGateId" | "reasonCode"
 >;
+
+type WhatsAppInboundTurnAdmission = ReturnType<typeof mapChannelIngressDecisionToTurnAdmission>;
 
 type WhatsAppInboundSenderAccess = Pick<
   ResolvedChannelMessageIngress["senderAccess"],
@@ -71,9 +76,9 @@ type AdmittedWhatsAppInboundMessage<T extends WhatsAppInboundAdmissionCarrier> =
 /**
  * Public-safe accepted inbound facts resolved by access control.
  *
- * Keep this as an admission envelope around canonical channel ingress
- * projections. Later PRs can migrate consumers to these projections without
- * publishing raw allowlist material or session-dependent post-admission state.
+ * Keep this as an admission envelope around the canonical turn admission and
+ * shipped redacted ingress projections. Never publish the complete resolved
+ * ingress result because its sender-access projection contains effective allowlists.
  */
 export type WhatsAppInboundAdmission = {
   accountId: string;
@@ -99,7 +104,26 @@ export type WhatsAppInboundAdmission = {
   senderAccess: WhatsAppInboundSenderAccess;
   commandAccess: WhatsAppInboundCommandAccess;
   activationAccess: WhatsAppInboundActivationAccess;
+  turnAdmission: WhatsAppInboundTurnAdmission;
 };
+
+export type WhatsAppInboundAdmissionInput =
+  | WhatsAppInboundAdmission
+  | Omit<WhatsAppInboundAdmission, "turnAdmission">;
+
+export function normalizeWhatsAppInboundAdmission(
+  admission: WhatsAppInboundAdmissionInput,
+): WhatsAppInboundAdmission {
+  if ("turnAdmission" in admission) {
+    return admission;
+  }
+  // Shipped nested callbacks predate turnAdmission. Normalize once at the
+  // callback boundary so all runtime consumers receive the canonical shape.
+  return {
+    ...admission,
+    turnAdmission: mapChannelIngressDecisionToTurnAdmission(admission.ingress),
+  };
+}
 
 function copyAccount(
   account: WhatsAppInboundAdmissionPolicy["account"],
@@ -165,6 +189,7 @@ export function buildWhatsAppInboundAdmission(params: {
       shouldSkip: params.access.activationAccess.shouldSkip,
       reasonCode: params.access.activationAccess.reasonCode,
     },
+    turnAdmission: mapChannelIngressDecisionToTurnAdmission(params.access.ingress),
   };
 }
 
@@ -192,7 +217,6 @@ export function buildDeprecatedFlatWhatsAppInboundAdmission(
       ? "group_policy_allowed"
       : "dm_policy_allowlisted"
     : "no_policy_match";
-
   // Compatibility only: deprecated listenerFactory flat inputs predate the
   // admission envelope, so convert them through the canonical admission builder.
   // Canonical nested inputs without admission remain malformed for runtime use.

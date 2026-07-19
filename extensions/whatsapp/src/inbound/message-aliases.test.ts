@@ -340,6 +340,11 @@ describe("WhatsApp inbound flat aliases", () => {
         decision: "block",
         reasonCode: "no_policy_match",
       },
+      turnAdmission: {
+        kind: "drop",
+        reason: "no_policy_match",
+        recordHistory: false,
+      },
     });
     expect(normalized.accessControlPassed).toBe(false);
   });

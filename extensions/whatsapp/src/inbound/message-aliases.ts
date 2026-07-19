@@ -1,4 +1,7 @@
-import { buildDeprecatedFlatWhatsAppInboundAdmission } from "./admission.js";
+import {
+  buildDeprecatedFlatWhatsAppInboundAdmission,
+  normalizeWhatsAppInboundAdmission,
+} from "./admission.js";
 import { resolveWhatsAppGroupConversationId } from "./group-conversation.js";
 import type {
   DeprecatedWebInboundAdmissionTopLevelFields,
@@ -202,6 +205,9 @@ function defineDeprecatedAdmissionTopLevelAccessors<T extends WebInboundCallback
 export function withDeprecatedWebInboundMessageFlatAliases<T extends WebInboundCallbackMessage>(
   msg: T,
 ): T & WebInboundMessage {
+  if (msg.admission) {
+    msg.admission = normalizeWhatsAppInboundAdmission(msg.admission);
+  }
   // Keep the shipped callback shape alive while nested/admission contexts remain canonical.
   const withAdmissionAliases = defineDeprecatedAdmissionTopLevelAccessors(msg);
   return defineDeprecatedAliasAccessors(withAdmissionAliases, {

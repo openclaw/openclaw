@@ -147,7 +147,8 @@ treating its `payload` as authoritative.
 Accepted WhatsApp callback messages carry `admission`, a public-safe
 envelope for the access-control decision that admitted the message. New
 callback code should read admission facts from `msg.admission` instead of
-the older top-level admission fields.
+the older top-level admission fields. The envelope keeps the shipped redacted
+access projections, adds `turnAdmission`, and never exposes effective allowlists.
 
 The top-level fields remain available until **2026-08-30**. Each field's
 TypeScript `@deprecated` annotation names its replacement:

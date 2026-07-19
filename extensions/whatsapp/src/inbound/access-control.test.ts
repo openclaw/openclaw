@@ -155,13 +155,13 @@ describe("checkInboundAccessControl admission contract", () => {
     expect("admission" in result).toBe(false);
   });
 
-  it("returns accepted facts through admission while preserving legacy access fields", async () => {
+  it("adds the SDK turn admission while preserving shipped redacted access projections", async () => {
     const cfg = {
       channels: {
         whatsapp: {
           dmPolicy: "allowlist",
           contextVisibility: "allowlist_quote",
-          allowFrom: ["+15550001111"],
+          allowFrom: ["+15550001111", "+15557778888"],
           direct: {
             "+15550001111": {
               systemPrompt: "direct prompt",
@@ -228,11 +228,18 @@ describe("checkInboundAccessControl admission contract", () => {
         shouldSkip: false,
         reasonCode: "activation_allowed",
       },
+      turnAdmission: {
+        kind: "dispatch",
+        reason: "activation_allowed",
+      },
     });
     expect(result.admission.account).not.toHaveProperty("authDir");
     expect(result.admission.conversation).not.toHaveProperty("requireMention");
     expect(result.admission.senderAccess).not.toHaveProperty("effectiveAllowFrom");
     expect(result.admission.senderAccess).not.toHaveProperty("effectiveGroupAllowFrom");
+    expect(JSON.stringify(result.admission)).not.toContain("effectiveAllowFrom");
+    expect(JSON.stringify(result.admission)).not.toContain("effectiveGroupAllowFrom");
+    expect(JSON.stringify(result.admission)).not.toContain("+15557778888");
     expect(result.admission).not.toHaveProperty("resolvedPolicy");
   });
 

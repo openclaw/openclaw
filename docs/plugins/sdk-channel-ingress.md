@@ -72,7 +72,8 @@ decisive `ingress.reasonCode`; no separate event projection is emitted.
 
 Deprecated third-party SDK helpers may rebuild older shapes internally. New
 bundled receive paths should not translate modern results back into local
-DTOs.
+DTOs. Use `mapChannelIngressDecisionToTurnAdmission(result.ingress)` from this
+runtime subpath when carrying the decision into a channel turn plan.
 
 ## Access groups
 

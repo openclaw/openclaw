@@ -10,6 +10,7 @@ export {
   channelIngressRoutes,
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  mapChannelIngressDecisionToTurnAdmission,
   readChannelIngressStoreAllowFromForDmPolicy,
   resolveChannelMessageIngress,
   resolveStableChannelMessageIngress,
