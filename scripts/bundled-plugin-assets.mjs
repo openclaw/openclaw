@@ -9,6 +9,8 @@ import { listGeneratedExtensionAssetSources } from "./lib/static-extension-asset
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VALID_PHASES = new Set(["build", "copy"]);
+// Keep asset generation aligned with the existing 10-minute build command ceilings.
+const BUNDLED_PLUGIN_ASSET_HOOK_TIMEOUT_MS = 10 * 60_000;
 
 async function readJsonFile(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -118,6 +120,7 @@ export async function readBundledPluginAssetHooks(options = {}) {
  */
 export async function runBundledPluginAssetHooks(options = {}) {
   const phase = options.phase;
+  const timeoutMs = options.timeoutMs ?? BUNDLED_PLUGIN_ASSET_HOOK_TIMEOUT_MS;
   const hooks = await readBundledPluginAssetHooks(options);
   if (hooks.length === 0) {
     const scope = options.plugins?.length ? ` for ${options.plugins.join(", ")}` : "";
@@ -130,9 +133,20 @@ export async function runBundledPluginAssetHooks(options = {}) {
     const result = spawnSync(hook.command, {
       cwd: hook.pluginDir,
       env: process.env,
+      // spawnSync keeps waiting when a timed-out child handles SIGTERM, so force termination.
+      killSignal: "SIGKILL",
       shell: true,
       stdio: "inherit",
+      timeout: timeoutMs,
     });
+    if (result.error?.code === "ETIMEDOUT") {
+      throw Object.assign(
+        new Error(
+          `Bundled plugin asset ${phase} hook timed out after ${timeoutMs}ms: ${hook.pluginId}`,
+        ),
+        { code: "ETIMEDOUT" },
+      );
+    }
     if (result.status !== 0) {
       process.exit(result.status ?? 1);
     }

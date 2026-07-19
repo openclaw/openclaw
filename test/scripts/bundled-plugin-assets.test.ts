@@ -8,6 +8,7 @@ import {
   listStaleGeneratedPluginAssets,
   parseBundledPluginAssetArgs,
   readBundledPluginAssetHooks,
+  runBundledPluginAssetHooks,
 } from "../../scripts/bundled-plugin-assets.mjs";
 import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mjs";
 import {
@@ -158,6 +159,48 @@ describe("bundled plugin assets", () => {
           pluginId: "canvas",
         },
       ]);
+    });
+  });
+
+  it("bounds stalled asset hooks and reports the affected plugin safely", async () => {
+    await withPluginAssetFixture(async (rootDir) => {
+      const pluginDir = path.join(rootDir, "extensions", "canvas");
+      const packagePath = path.join(pluginDir, "package.json");
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
+        openclaw: { assetScripts: { build: string } };
+      };
+      packageJson.openclaw.assetScripts.build = "node scripts/stall.mjs";
+      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
+      fs.mkdirSync(path.join(pluginDir, "scripts"));
+      const pidFile = path.join(pluginDir, "stall.pid");
+      fs.writeFileSync(
+        path.join(pluginDir, "scripts", "stall.mjs"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+          'process.on("SIGTERM", () => {});',
+          "setTimeout(() => process.exit(0), 2_000);",
+          "setInterval(() => {}, 100);",
+          "",
+        ].join("\n"),
+      );
+
+      const startedAt = Date.now();
+      let thrown: unknown;
+      try {
+        await runBundledPluginAssetHooks({ phase: "build", rootDir, timeoutMs: 100 });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      const childPid = Number(fs.readFileSync(pidFile, "utf8"));
+      expect(() => process.kill(childPid, 0)).toThrow();
+      expect(thrown).toMatchObject({
+        code: "ETIMEDOUT",
+        message: "Bundled plugin asset build hook timed out after 100ms: canvas",
+      });
+      expect((thrown as Error).message).not.toContain("stall.mjs");
     });
   });
 
