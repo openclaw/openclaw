@@ -418,6 +418,60 @@ type TuiProcessExitTimer = {
 
 type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
 
+type TuiShutdownTask = () => void | Promise<void>;
+
+export function beginTuiShutdown(params: {
+  stopClient: TuiShutdownTask;
+  stopTui: TuiShutdownTask;
+  stopStatusTimeout: () => void;
+  requestFinish: () => void;
+  forceExit: () => void;
+  hardExitMs: number;
+  keepHardExitArmed?: boolean;
+  onError: (error: unknown) => void;
+  clearTimeoutFn?: (timer: TuiProcessExitTimer) => void;
+  setTimeoutFn?: TuiProcessExitTimeout;
+}): TuiProcessExitTimer {
+  const setTimeoutFn =
+    params.setTimeoutFn ??
+    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
+  const hardExitTimer = setTimeoutFn(params.forceExit, params.hardExitMs);
+  hardExitTimer.unref?.();
+  void Promise.resolve()
+    .then(params.stopClient)
+    .then(params.stopTui)
+    .finally(() => {
+      if (params.keepHardExitArmed !== true) {
+        const clearTimeoutFn =
+          params.clearTimeoutFn ??
+          ((timer) => clearTimeout(timer as unknown as ReturnType<typeof setTimeout>));
+        clearTimeoutFn(hardExitTimer);
+      }
+      params.stopStatusTimeout();
+    })
+    .catch(params.onError)
+    .finally(params.requestFinish);
+
+  // For the standalone command, settled teardown is not proof that runTui
+  // returned. Its unref keeps clean exits fast while preserving the deadline.
+  return hardExitTimer;
+}
+
+export function createTuiSignalHandlers(params: {
+  handleCtrlC: () => void;
+  requestExit: () => void;
+}): {
+  sigintHandler: () => void;
+  sigtermHandler: () => void;
+  sighupHandler: () => void;
+} {
+  return {
+    sigintHandler: params.handleCtrlC,
+    sigtermHandler: params.requestExit,
+    sighupHandler: params.requestExit,
+  };
+}
+
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
     try {
@@ -1375,19 +1429,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     };
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
-    const hardExitTimer = setTimeout(
+    beginTuiShutdown({
+      stopClient: () => client.stop(),
+      stopTui: () => drainAndStopTuiSafely(tui),
+      stopStatusTimeout,
+      requestFinish: deferredFinish.requestFinish,
       forceExit,
-      resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
-    );
-    hardExitTimer.unref?.();
-    void Promise.resolve()
-      .then(() => client.stop())
-      .then(() => drainAndStopTuiSafely(tui))
-      .finally(() => {
-        clearTimeout(hardExitTimer);
-        stopStatusTimeout();
-      })
-      .catch((err: unknown) => {
+      hardExitMs: resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
+      keepHardExitArmed: opts.forceProcessExitOnReturn === true,
+      onError: (err) => {
         if (!isTuiTerminalLossError(err)) {
           try {
             process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
@@ -1395,10 +1445,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
             // Best effort only; exit must still complete.
           }
         }
-      })
-      .finally(() => {
-        deferredFinish.requestFinish();
-      });
+      },
+    });
   };
   const exitAwareClient = client as TuiBackend & {
     setRequestExitHandler?: (handler: () => void) => void;
@@ -1690,15 +1738,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateHeader();
   setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
   updateFooter();
-  const sigintHandler = () => {
-    handleCtrlC();
-  };
-  const sigtermHandler = () => {
-    requestExit();
-  };
-  const sighupHandler = () => {
-    requestExit();
-  };
+  const { sigintHandler, sigtermHandler, sighupHandler } = createTuiSignalHandlers({
+    handleCtrlC,
+    requestExit,
+  });
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
   process.on("SIGHUP", sighupHandler);

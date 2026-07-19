@@ -21,7 +21,7 @@ import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -812,6 +812,12 @@ class OpenClawShell extends OpenClawLightDomElement {
     resolved?.focus();
   }
 
+  private visibleNavDrawerToggle(): HTMLElement | undefined {
+    return [
+      ...this.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle"),
+    ].find((candidate) => candidate.checkVisibility());
+  }
+
   private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
     if (this.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
@@ -884,14 +890,14 @@ class OpenClawShell extends OpenClawLightDomElement {
   };
 
   private readonly handleWindowResize = () => {
-    const dismissedHiddenMenus =
-      isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
     this.requestUpdate();
-    if (dismissedHiddenMenus) {
-      void this.updateComplete.then(() => {
-        this.restoreFocusTo(this.querySelector<HTMLElement>(".topbar-nav-toggle"));
-      });
-    }
+    void this.updateComplete.then(() => {
+      if (isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus()) {
+        requestAnimationFrame(() => {
+          this.restoreFocusTo(this.visibleNavDrawerToggle());
+        });
+      }
+    });
   };
 
   private dismissSidebarTransientMenus(): boolean {
@@ -1394,7 +1400,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
-                .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
+                .sidebarEntries=${navigationSnapshot.sidebarEntries}
                 .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
@@ -1414,8 +1420,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                   this.navigate("new-session", { search });
                 }}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
-                .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
-                  context.navigation.update({ sidebarPinnedRoutes: routes })}
+                .onUpdateSidebarEntries=${(entries: string[]) =>
+                  context.navigation.update({ sidebarEntries: entries })}
                 .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
                 .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
                   this.navigate(routeId, options)}

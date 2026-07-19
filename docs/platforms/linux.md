@@ -203,6 +203,8 @@ KillMode=control-group
 WantedBy=default.target
 ```
 
+Hand-written units do not inherit the adaptive heap sizing that `openclaw gateway install` writes for managed Gateway services. Prefer the managed installer, or set an explicit heap limit in the custom supervisor after accounting for native-memory headroom.
+
 Enable it:
 
 ```bash

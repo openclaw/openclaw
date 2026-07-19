@@ -55,6 +55,19 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
   mkdirSync(binDir, { recursive: true });
   const crabboxPath = path.join(binDir, "crabbox");
   const helperPath = path.join(binDir, "fake-crabbox-json.cjs");
+  const stampClaimScript = [
+    "const fs = require('node:fs');",
+    "const claimPaths = [process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_PATH, process.env.OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH].filter(Boolean);",
+    "for (const claimPath of claimPaths) {",
+    "  const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID };",
+    "  claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd();",
+    "  fs.mkdirSync(require('node:path').dirname(claimPath), { recursive: true });",
+    "  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8');",
+    "}",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID) {",
+    "  process.stderr.write(JSON.stringify({ provider: 'blacksmith-testbox', leaseId: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID, exitCode: 0 }) + '\\n');",
+    "}",
+  ].join("\n");
 
   if (process.platform !== "win32") {
     const signalIgnoringDescendantScript = [
@@ -77,6 +90,9 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
       `  printf "%s" ${shellSingleQuote(helpText)}`,
       "  exit 0",
+      "fi",
+      'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && { [ -n "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}" ] || [ -n "${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}" ]; }; then',
+      `  ${shellSingleQuote(process.execPath)} --eval ${shellSingleQuote(stampClaimScript)}`,
       "fi",
       'if [ "$1" = "run" ] && [ -n "${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}" ] && [ "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS" != "0" ]; then',
       '  printf "%s\\n" "fake run failure" >&2',
@@ -247,6 +263,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     `  process.stdout.write(${JSON.stringify(helpText)});`,
     "  process.exit(0);",
     "}",
+    `if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }`,
     'if (args[0] === "run" && Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10) !== 0) {',
     "  process.stderr.write('fake run failure\\n');",
     "  process.exit(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS, 10));",
@@ -942,6 +959,202 @@ describe("scripts/crabbox-wrapper", () => {
     );
     expect(reclaimed.status).toBe(0);
     expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
+  });
+
+  it.each([
+    { label: "successful", status: 0 },
+    { label: "failed", status: 7 },
+  ])("restores delegated Blacksmith claims after $label runs", ({ status }) => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const id = `tbx_restore_${status}`;
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    const originalClaim = {
+      leaseID: id,
+      repoRoot,
+      owner: "preserved-owner",
+      metadata: { keep: true },
+    };
+    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          ...(status > 0 ? { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: String(status) } : {}),
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(status);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+  });
+
+  it("restores a created delegated Blacksmith claim by captured timing lease id", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const stateRoot = path.join(home, ".local", "state");
+    const claimsDir = path.join(stateRoot, "crabbox", "claims");
+    const id = "tbx_created_timing";
+    const claimPath = path.join(claimsDir, `${id}.json`);
+    const decoyPath = path.join(claimsDir, "tbx_created_decoy.json");
+    const originalClaim = { leaseID: id, repoRoot, metadata: { keep: true } };
+    const decoyClaim = { leaseID: "tbx_created_decoy", repoRoot };
+    mkdirSync(claimsDir, { recursive: true });
+    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+    writeFileSync(decoyPath, `${JSON.stringify(decoyClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--keep", "--timing-json", "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: decoyPath,
+          OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+    expect(JSON.parse(readFileSync(decoyPath, "utf8"))).toEqual({
+      ...decoyClaim,
+      repoRoot: parseFakeCrabboxOutput(result).cwd,
+    });
+  });
+
+  it("restores created delegated Blacksmith claims from the temporary checkout fallback", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const stateRoot = path.join(home, ".local", "state");
+    const claimsDir = path.join(stateRoot, "crabbox", "claims");
+    const claimPath = path.join(claimsDir, "tbx_created_fallback.json");
+    const siblingPath = path.join(claimsDir, "tbx_created_sibling.json");
+    const foreignPath = path.join(claimsDir, "tbx_foreign_fallback.json");
+    const createdClaim = { leaseID: "tbx_created_fallback", repoRoot, owner: "created" };
+    const siblingClaim = { leaseID: "tbx_created_sibling", repoRoot, owner: "sibling" };
+    const foreignClaim = {
+      leaseID: "tbx_foreign_fallback",
+      repoRoot: "/tmp/genuinely-foreign-repo",
+    };
+    mkdirSync(claimsDir, { recursive: true });
+    writeFileSync(claimPath, `${JSON.stringify(createdClaim)}\n`, "utf8");
+    writeFileSync(siblingPath, `${JSON.stringify(siblingClaim)}\n`, "utf8");
+    writeFileSync(foreignPath, `${JSON.stringify(foreignClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--keep", "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: siblingPath,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(createdClaim);
+    expect(JSON.parse(readFileSync(siblingPath, "utf8"))).toEqual(siblingClaim);
+    expect(JSON.parse(readFileSync(foreignPath, "utf8"))).toEqual(foreignClaim);
+  });
+
+  it("restores a failed delegated Blacksmith claim kept on failure", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", "tbx_created_failure.json");
+    const originalClaim = {
+      leaseID: "tbx_created_failure",
+      repoRoot,
+      metadata: { keepOnFailure: true },
+    };
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--keep-on-failure", "--", "false"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "7",
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(7);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+  });
+
+  it("leaves genuinely foreign delegated Blacksmith claims untouched", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const id = "tbx_foreign_claim";
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    const foreignClaim = {
+      leaseID: id,
+      repoRoot: "/tmp/genuinely-foreign-repo",
+      owner: "foreign-owner",
+    };
+    writeFileSync(claimPath, `${JSON.stringify({ ...foreignClaim, repoRoot })}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT: foreignClaim.repoRoot,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(foreignClaim);
   });
 
   it("lets Crabbox resolve reusable Testbox slugs", () => {

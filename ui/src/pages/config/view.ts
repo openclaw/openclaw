@@ -2,6 +2,7 @@
 import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
@@ -39,6 +40,7 @@ import {
   canonicalLobsterLook,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
+import { highlightJsonHtml } from "../../components/markdown.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
@@ -66,7 +68,7 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   140: "configView.textSizes.xxl",
 };
 
-type SettingsMicrophoneState = {
+type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
   selectedDeviceId: string;
   loading: boolean;
@@ -137,6 +139,9 @@ export type ConfigProps = {
   viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
+  /** Set when the form renders under a composite page's custom rows; an empty
+   *  schema section stays silent instead of claiming the page is empty. */
+  embeddedEditor?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -181,9 +186,12 @@ export type ConfigProps = {
   setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
   catalogOpenTarget: CatalogOpenTarget;
   setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
-  microphone?: SettingsMicrophoneState;
+  microphone?: SettingsMediaDeviceState;
   onMicrophoneRefresh?: () => void;
   onMicrophoneSelect?: (deviceId: string) => void;
+  camera?: SettingsMediaDeviceState;
+  onCameraRefresh?: () => void;
+  onCameraSelect?: (deviceId: string) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -865,7 +873,9 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
    back to the spark icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if (id === "custom" && activeTheme !== "custom") {
-    return html`<span class="settings-theme-card__icon" aria-hidden="true">${icons.spark}</span>`;
+    return html`<span class="settings-theme-card__icon" aria-hidden="true"
+      >${icons.download}</span
+    >`;
   }
   return html`
     <span class="settings-theme-card__palette" aria-hidden="true">
@@ -902,50 +912,56 @@ function focusCustomThemeImportInput() {
   });
 }
 
-function renderSettingsMicrophoneField(props: ConfigProps) {
-  const microphone = props.microphone;
-  if (!microphone || !props.onMicrophoneSelect) {
+function renderSettingsMediaDeviceField(options: {
+  state: SettingsMediaDeviceState | undefined;
+  title: string;
+  systemDefaultLabel: string;
+  emptyLabel: string;
+  fallbackLabel: (number: number) => string;
+  dataAttribute: "microphone" | "camera";
+  onRefresh: (() => void) | undefined;
+  onSelect: ((deviceId: string) => void) | undefined;
+}) {
+  const state = options.state;
+  if (!state || !options.onSelect) {
     return nothing;
   }
-  const selectedDeviceId = microphone.selectedDeviceId.trim();
-  const selectedDeviceKnown = microphone.devices.some(
-    (device) => device.deviceId === selectedDeviceId,
-  );
-  const options = [
-    { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
-    ...microphone.devices.map((device) => ({ label: device.label, value: device.deviceId })),
+  const selectedDeviceId = state.selectedDeviceId.trim();
+  const selectedDeviceKnown = state.devices.some((device) => device.deviceId === selectedDeviceId);
+  const selectOptions = [
+    { label: options.systemDefaultLabel, value: "" },
+    ...state.devices.map((device) => ({ label: device.label, value: device.deviceId })),
     // A remembered device that is unplugged right now stays selectable so the
     // choice survives until the user picks something else.
     ...(selectedDeviceId && !selectedDeviceKnown
       ? [
           {
-            label: t("chat.composer.microphoneFallback", {
-              number: String(microphone.devices.length + 1),
-            }),
+            label: options.fallbackLabel(state.devices.length + 1),
             value: selectedDeviceId,
           },
         ]
       : []),
   ];
-  const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
-  const note = microphone.error
-    ? html`<span role="alert">${microphone.error}</span>`
-    : !microphone.loading && microphone.devices.length === 0
-      ? t("chat.composer.noMicrophones")
+  const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  const note = state.error
+    ? html`<span role="alert">${state.error}</span>`
+    : !state.loading && state.devices.length === 0
+      ? options.emptyLabel
       : undefined;
   return renderSettingsRow({
-    title: t("chat.composer.microphoneInput"),
+    title: options.title,
     description: note,
     control: html`
       <select
         class="settings-select"
-        data-settings-microphone
-        aria-label=${t("chat.composer.microphoneInput")}
+        data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
+        data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
+        aria-label=${options.title}
         .value=${selectedDeviceId}
         @change=${(event: Event) =>
-          props.onMicrophoneSelect?.((event.currentTarget as HTMLSelectElement).value)}
+          options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
-        ${options.map(
+        ${selectOptions.map(
           (option) => html`
             <option value=${option.value} ?selected=${option.value === selectedDeviceId}>
               ${option.label}
@@ -957,12 +973,38 @@ function renderSettingsMicrophoneField(props: ConfigProps) {
         type="button"
         class="btn btn--sm btn--icon"
         aria-label=${refreshLabel}
-        ?disabled=${microphone.loading}
-        @click=${() => props.onMicrophoneRefresh?.()}
+        ?disabled=${state.loading}
+        @click=${() => options.onRefresh?.()}
       >
-        ${microphone.loading ? icons.loader : icons.refresh}
+        ${state.loading ? icons.loader : icons.refresh}
       </button>
     `,
+  });
+}
+
+function renderSettingsMicrophoneField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.microphone,
+    title: t("chat.composer.microphoneInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultMicrophone"),
+    emptyLabel: t("chat.composer.noMicrophones"),
+    fallbackLabel: (number) => t("chat.composer.microphoneFallback", { number: String(number) }),
+    dataAttribute: "microphone",
+    onRefresh: props.onMicrophoneRefresh,
+    onSelect: props.onMicrophoneSelect,
+  });
+}
+
+function renderSettingsCameraField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.camera,
+    title: t("chat.composer.cameraInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultCamera"),
+    emptyLabel: t("chat.composer.noCameras"),
+    fallbackLabel: (number) => t("chat.composer.cameraFallback", { number: String(number) }),
+    dataAttribute: "camera",
+    onRefresh: props.onCameraRefresh,
+    onSelect: props.onCameraSelect,
   });
 }
 
@@ -1040,7 +1082,7 @@ function renderChatPreferencesSection(props: ConfigProps) {
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
-        ${renderSettingsMicrophoneField(props)}
+        ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
       </div>
     </section>
   `;
@@ -1885,6 +1927,7 @@ export function renderConfig(props: ConfigProps) {
                       schema: analysis.schema,
                       uiHints: props.uiHints,
                       value: props.formValue,
+                      embedded: props.embeddedEditor === true,
                       rawAvailable,
                       disabled: configBusy || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,
@@ -2026,7 +2069,8 @@ export function renderConfig(props: ConfigProps) {
               })()}
       ${props.issues.length > 0
         ? html`<div class="callout danger" style="margin-top: 12px;">
-            <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+            <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.issues, null, 2)))}</pre>
           </div>`
         : nothing}
     </div>

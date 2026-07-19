@@ -1,11 +1,17 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import {
+  serializeSidebarEntry,
+  type NavigationRouteId,
+  type SidebarZoneEntry,
+} from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
@@ -14,11 +20,12 @@ import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { sessionHasBoard } from "../lib/board/provider.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -64,6 +71,15 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   constructor() {
     super();
+    void new BoardAvailabilityController(this, () => {
+      const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
+      return [
+        mainKey,
+        ...this.visibleSessionRowsInOrder()
+          .filter((session) => !session.isChild)
+          .map((session) => session.key),
+      ];
+    });
     // The footer pet announces logo stand-in phases through this bubbling event.
     this.addEventListener(LOBSTER_LOGO_VISIT_EVENT, this.handleLogoVisit as EventListener);
   }
@@ -82,6 +98,7 @@ class AppSidebar extends AppSidebarSessionListElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>) {
+    super.willUpdate(changed);
     if (changed.has("connected")) {
       this.syncOfflineIndicator();
     }
@@ -124,6 +141,8 @@ class AppSidebar extends AppSidebarSessionListElement {
     const cardAvatarText =
       (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
       (cardName || cardAgentId).slice(0, 1).toUpperCase();
+    // The sidebar action follows gateway availability; collapsed native chrome
+    // keeps its separate offline-tolerant ⌘N mirror.
     return html`
       <div class="sidebar-brand">
         <openclaw-sidebar-agent-card
@@ -139,6 +158,21 @@ class AppSidebar extends AppSidebarSessionListElement {
           .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
         ></openclaw-sidebar-agent-card>
         <div class="sidebar-brand__actions">
+          <openclaw-tooltip
+            .content=${this.connected
+              ? t("chat.runControls.newSession")
+              : t("chat.runControls.newSessionDisconnected")}
+          >
+            <button
+              class="sidebar-brand__icon sidebar-brand__new-thread"
+              type="button"
+              @click=${() => this.onOpenNewSession?.(this.expandedAgentId())}
+              aria-label=${t("chat.runControls.newSession")}
+              ?disabled=${!this.connected}
+            >
+              ${icons.plus}
+            </button>
+          </openclaw-tooltip>
           ${this.renderSearch()}
           <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
             <button
@@ -156,8 +190,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
-  /** Home: the first page. Opens the agent's rolling main session and carries
-      its unread/running state; later grows into the docked dashboard surface. */
+  /** Home: the first page. Opens the rolling main session on its saved face. */
   private renderHomeRow() {
     const agentId = this.activeChipAgent().activeId;
     const mainKey = this.selectedAgentMainSessionKey(agentId);
@@ -194,6 +227,15 @@ class AppSidebar extends AppSidebarSessionListElement {
       >
         <span class="nav-item__icon" aria-hidden="true">${icons.home}</span>
         <span class="nav-item__text">${t("nav.home")}</span>
+        ${sessionHasBoard(mainKey)
+          ? html`<span
+              class="sidebar-board-glyph"
+              role="img"
+              aria-label=${t("sessionsView.dashboardAvailable")}
+              title=${t("sessionsView.dashboardAvailable")}
+              >${icons.barChart}</span
+            >`
+          : nothing}
         ${stateBadge}
       </a>
     `;
@@ -282,7 +324,43 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
+  private renderSidebarZoneEntry(
+    entry: SidebarZoneEntry,
+    sessionRows: ReadonlyMap<string, SidebarRecentSession>,
+  ) {
+    if (entry.type === "route" && !this.isRouteEnabled(entry.route)) {
+      return nothing;
+    }
+    const serialized = serializeSidebarEntry(entry);
+    const dropPosition =
+      this.sidebarZoneDropTarget?.entry === serialized ? this.sidebarZoneDropTarget.position : null;
+    const content =
+      entry.type === "route"
+        ? this.renderRoute(entry.route)
+        : sessionRows.has(entry.key)
+          ? this.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
+          : nothing;
+    return html`
+      <div
+        class="sidebar-zone-entry ${dropPosition
+          ? `sidebar-zone-entry--drop-${dropPosition}`
+          : ""} ${this.draggingSidebarEntry === serialized ? "sidebar-zone-entry--dragging" : ""}"
+        data-sidebar-entry=${serialized}
+        draggable=${entry.type === "route" ? "true" : "false"}
+        @dragstart=${entry.type === "route"
+          ? (event: DragEvent) => this.startSidebarRouteDrag(event, entry.route)
+          : nothing}
+        @dragend=${entry.type === "route" ? () => this.finishSidebarEntryDrag() : nothing}
+        @dragover=${(event: DragEvent) => this.handleSidebarZoneDragOver(event, serialized)}
+        @drop=${(event: DragEvent) => this.handleSidebarZoneDrop(event, serialized)}
+      >
+        ${content}
+      </div>
+    `;
+  }
+
   override render() {
+    const sidebarZone = this.reconciledSidebarZone();
     return html`
       <aside class="sidebar">
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
@@ -294,9 +372,16 @@ class AppSidebar extends AppSidebarSessionListElement {
           >
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               ${this.renderPagesHead()}
-              <div class="nav-section__items">
+              <div
+                class="nav-section__items"
+                @dragover=${(event: DragEvent) => this.handleSidebarZoneDragOver(event)}
+                @dragleave=${(event: DragEvent) => this.handleSidebarZoneDragLeave(event)}
+                @drop=${(event: DragEvent) => this.handleSidebarZoneDrop(event)}
+              >
                 ${this.renderHomeRow()}
-                ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
+                ${sidebarZone.entries.map((entry) =>
+                  this.renderSidebarZoneEntry(entry, sidebarZone.sessionRows),
+                )}
               </div>
             </nav>
             ${this.renderSessions()}

@@ -203,6 +203,13 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS session_transcript_generations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  generation TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,

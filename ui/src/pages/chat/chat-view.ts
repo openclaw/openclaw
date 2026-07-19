@@ -56,6 +56,7 @@ import {
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
+import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
@@ -106,6 +107,7 @@ export type ChatProps = {
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
+  realtimeTalkCameraDevices?: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable?: boolean;
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
@@ -160,6 +162,7 @@ export type ChatProps = {
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
+  onSwitchRealtimeCamera?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -196,9 +199,21 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing;
-  replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+  replyTarget?: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+    sourceMessageId?: string | null;
+  } | null;
   onClearReply?: () => void;
-  onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
+  onSetReply?: (target: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+    sourceMessageId?: string | null;
+  }) => void;
+  onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
+  onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;
   backgroundTasks?: BackgroundTasksProps;
   taskSuggestions?: TaskSuggestion[];
@@ -218,6 +233,28 @@ export type ChatProps = {
 export function resetChatViewState(paneId?: string) {
   resetChatComposerState(paneId);
   resetChatThreadPresentationState(paneId);
+}
+
+export function renderChatResizableDivider(props: {
+  className?: string;
+  label: string;
+  maxRatio?: number;
+  minRatio?: number;
+  onElement?: (element: Element | undefined) => void;
+  onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
+  orientation: "horizontal" | "vertical";
+  splitRatio: number;
+}) {
+  return html`<resizable-divider
+    ${ref(props.onElement ?? (() => {}))}
+    class=${props.className ?? nothing}
+    .splitRatio=${props.splitRatio}
+    .minRatio=${props.minRatio ?? 0.4}
+    .maxRatio=${props.maxRatio ?? 0.7}
+    .label=${props.label}
+    .orientation=${props.orientation}
+    @resize=${props.onResize}
+  ></resizable-divider>`;
 }
 
 export function renderChat(props: ChatProps) {
@@ -312,6 +349,8 @@ export function renderChat(props: ChatProps) {
       getDraft: props.getDraft,
       onSend: props.onSend,
       onSetReply: props.onSetReply,
+      onRewindMessage: props.onRewindMessage,
+      onForkMessage: props.onForkMessage,
       // Archived/non-composable sessions must not offer selection actions:
       // withholding the callback keeps the popup from rendering at all.
       onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
@@ -359,6 +398,7 @@ export function renderChat(props: ChatProps) {
     realtimeTalkInputLevel: props.realtimeTalkInputLevel,
     realtimeTalkConversation: props.realtimeTalkConversation,
     realtimeTalkVideoStream: props.realtimeTalkVideoStream,
+    realtimeTalkCameraDevices: props.realtimeTalkCameraDevices,
     realtimeTalkVideoCapable: props.realtimeTalkVideoCapable,
     realtimeTalkVideoPending: props.realtimeTalkVideoPending,
     realtimeTalkCameraError: props.realtimeTalkCameraError,
@@ -372,6 +412,7 @@ export function renderChat(props: ChatProps) {
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
+    onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
@@ -566,14 +607,12 @@ export function renderChat(props: ChatProps) {
             </div>
 
             ${sidebarOpen
-              ? html`
-                  <resizable-divider
-                    .splitRatio=${splitRatio}
-                    .label=${t("nav.resize")}
-                    .orientation=${sidebarStacked ? "horizontal" : "vertical"}
-                    @resize=${(event: CustomEvent) =>
-                      props.onSplitRatioChange?.(event.detail.splitRatio)}
-                  ></resizable-divider>
+              ? html`${renderChatResizableDivider({
+                    label: t("nav.resize"),
+                    orientation: sidebarStacked ? "horizontal" : "vertical",
+                    splitRatio,
+                    onResize: (event) => props.onSplitRatioChange?.(event.detail.splitRatio),
+                  })}
                   <openclaw-chat-detail-panel
                     class="chat-sidebar"
                     .content=${props.sidebarContent ?? null}
@@ -584,8 +623,7 @@ export function renderChat(props: ChatProps) {
                     .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
                     .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
-                  ></openclaw-chat-detail-panel>
-                `
+                  ></openclaw-chat-detail-panel> `
               : nothing}
           </div>
         </div>
