@@ -7,6 +7,8 @@ type LoopbackIrcServer = {
   port: number;
   lines: string[];
   close(): Promise<void>;
+  /** Destroys all active sockets without closing the listener (simulates transient disconnect). */
+  closeSockets(): void;
 };
 
 type HangingIrcServer = {
@@ -62,6 +64,11 @@ async function startLoopbackIrcServer(options?: {
   return {
     port: address.port,
     lines,
+    closeSockets: () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+    },
     close: async () => {
       for (const socket of sockets) {
         socket.destroy();
@@ -410,6 +417,55 @@ describe("irc client privmsg byte-limit chunking", () => {
       const bodies = await collectPrivmsgBodies(server, text, 1);
       expect(bodies.map((body) => body.length)).toEqual(Array(10).fill(2));
       expect(bodies.join("")).toBe(text);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects sendPrivmsg after a peer-side disconnect (server drops socket)", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+      });
+      // Peer-side disconnect: the server destroys its side of the socket.
+      server.closeSockets();
+      // Wait for the client's close event to propagate. On Node, the client
+      // socket's close event fires asynchronously after the server side is
+      // destroyed; the guard covers both the destroyed state (immediate) and
+      // the closed flag (close-event path).
+      await waitForIrcCondition(
+        () => !client.isReady(),
+        "expected client to become unready after peer disconnect",
+      );
+      expect(() => client.sendPrivmsg("#general", "reply after remote disconnect")).toThrow(
+        "IRC not connected",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects sendPrivmsg after the client is locally closed", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+      });
+      client.close();
+      expect(() => client.sendPrivmsg("#general", "reply after local close")).toThrow(
+        "IRC not connected",
+      );
     } finally {
       await server.close();
     }

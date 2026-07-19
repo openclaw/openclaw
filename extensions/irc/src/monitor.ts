@@ -169,7 +169,10 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
             runtime,
             connectedNick: client.nick,
             sendReply: async (target, text) => {
-              client?.sendPrivmsg(target, text);
+              if (!client) {
+                throw new Error("IRC not connected");
+              }
+              client.sendPrivmsg(target, text);
               opts.statusSink?.({ lastOutboundAt: Date.now() });
               core.channel.activity.record({
                 channel: "irc",

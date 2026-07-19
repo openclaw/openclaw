@@ -238,6 +238,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   };
 
   const sendPrivmsg = (target: string, text: string) => {
+    if (!ready || closed || socket.destroyed) {
+      throw new Error("IRC not connected");
+    }
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
