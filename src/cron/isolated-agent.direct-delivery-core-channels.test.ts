@@ -340,6 +340,31 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
       });
     });
 
+    if (testCase.channel === "slack") {
+      it("delivers final assistant text after recovered tool warnings without channel opt-in", async () => {
+        await expectCoreChannelAnnounceDelivery({
+          testCase,
+          payloads: [
+            { text: "⚠️ 🛠️ zsh (agent) failed", isError: true },
+            { text: "⚠️ 🛠️ node (agent) failed", isError: true },
+          ],
+          meta: {
+            meta: makeRunMeta("**Daily GTM analytics**\nPostHog and revenue summary complete."),
+          },
+          assertSend: (sendFn, cfg) => {
+            expect(sendFn).toHaveBeenCalledTimes(1);
+            expectCoreChannelSendCall({
+              cfg,
+              expectedText: "**Daily GTM analytics**\nPostHog and revenue summary complete.",
+              expectedTo: testCase.expectedTo,
+              sendFn,
+              sentAt: 0,
+            });
+          },
+        });
+      });
+    }
+
     if (testCase.channel === "discord") {
       it("keeps isolated Discord delivery on the active runtime snapshot after agent-default derivation", async () => {
         await withTempCronHome(async (home) => {
