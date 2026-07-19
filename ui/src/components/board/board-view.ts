@@ -577,7 +577,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
                 .sessions=${this.sessions}
-                .sessionKey=${sessionKey}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}

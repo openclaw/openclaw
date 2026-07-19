@@ -5,8 +5,8 @@ import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import { toCssPlacement } from "../../lib/board/grid.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
   BoardViewWidget,
@@ -472,7 +472,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     `;
   }
 
-  private renderMcpApp(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderMcpApp(
+    widget: BoardViewWidget,
+    callbacks: BoardWidgetCellCallbacks,
+  ): TemplateResult {
     void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
     const appView = this.appViewState;
     const accessNotice =
