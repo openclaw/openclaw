@@ -65,6 +65,14 @@ export async function readCustodianTranscript(
   }
 }
 
+/**
+ * Sensitive turns are masked server-side before persistence: the engine pushes
+ * only "<redacted secret>" into history (never raw input), so durable turns
+ * cannot carry credentials. This mapping only localizes that marker to the
+ * same display text live sensitive replies use.
+ */
+const SERVER_SENSITIVE_MASK = "<redacted secret>";
+
 export function createCustodianTranscriptMessages(
   turns: readonly SystemAgentChatHistoryTurn[],
   firstMessageId: number,
@@ -73,7 +81,10 @@ export function createCustodianTranscriptMessages(
   const messages = turns.map((turn) => ({
     id: nextMessageId++,
     role: turn.role,
-    text: turn.text,
+    text:
+      turn.role === "user" && turn.text === SERVER_SENSITIVE_MASK
+        ? t("custodian.sensitiveReply")
+        : turn.text,
     at: turn.at,
     question: null,
   }));
