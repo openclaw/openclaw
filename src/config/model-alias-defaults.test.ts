@@ -429,6 +429,36 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(8192);
   });
 
+  it("inherits provider-level context and output token defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-completions",
+            contextWindow: 50_000,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(50_000);
+    expect(model?.maxTokens).toBe(4_096);
+  });
+
   it("clamps maxTokens to contextWindow", () => {
     const cfg = buildProxyProviderConfig({ contextWindow: 32768, maxTokens: 40960 });
 
