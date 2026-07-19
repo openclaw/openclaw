@@ -85,6 +85,7 @@ import {
   shouldUseClaudeLiveSession,
 } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { prepareCliPromptImagePayload, writeCliSystemPromptFile } from "./cli-images.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
@@ -113,7 +114,6 @@ import {
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
 } from "./helpers.js";
-import { prepareCliPromptImagePayload, writeCliSystemPromptFile } from "./cli-images.js";
 import {
   cliBackendLog,
   CLI_BACKEND_LOG_OUTPUT_ENV,

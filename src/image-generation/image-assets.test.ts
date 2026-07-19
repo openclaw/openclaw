@@ -147,10 +147,7 @@ describe("image asset helpers", () => {
     const oversizedBase64 = "A".repeat(200);
     const images = parseOpenAiCompatibleImageResponse(
       {
-        data: [
-          { b64_json: smallBase64 },
-          { b64_json: oversizedBase64 },
-        ],
+        data: [{ b64_json: smallBase64 }, { b64_json: oversizedBase64 }],
       },
       { defaultMimeType: "image/png", maxBytes: 10 },
     );
