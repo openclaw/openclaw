@@ -59,7 +59,7 @@ function sseResponse(
           controller.enqueue(encodeLine(line));
         },
         cancel() {
-          options?.cancel?.();
+          return options?.cancel?.();
         },
       }),
       { status: 200, headers: { "content-type": "text/event-stream" } },
