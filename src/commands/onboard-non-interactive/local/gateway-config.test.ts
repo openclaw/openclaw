@@ -111,6 +111,15 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
+  it("selects token auth when --gateway-token overrides a no-auth config", () => {
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "none" } } },
+      opts: { gatewayToken: "flag-token" } as OnboardOptions,
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "token", token: "flag-token" });
+  });
+
   it("uses OPENCLAW_GATEWAY_TOKEN to fill an empty config on first-run", () => {
     const result = applyGatewayConfig({ env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } });
 
@@ -209,6 +218,22 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(newTokenRef?.id).toBe(newRefId);
     expect(newToken).not.toEqual(SAMPLE_SECRET_REF);
     expect(randomToken).not.toHaveBeenCalled();
+  });
+
+  it("selects token auth when --gateway-token-ref-env overrides password auth", () => {
+    const newRefId = "OPENCLAW_GATEWAY_TOKEN_NEW_REF";
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "password", password: "test-password" } } },
+      opts: { gatewayTokenRefEnv: newRefId } as OnboardOptions,
+      env: { [newRefId]: "resolved-new-ref-value" },
+    });
+
+    expect(result?.nextConfig.gateway?.auth?.mode).toBe("token");
+    expect(result?.nextConfig.gateway?.auth?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: newRefId,
+    });
   });
 
   it("fails when --gateway-token-ref-env points to a missing env var", () => {
