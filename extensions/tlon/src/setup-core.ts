@@ -196,8 +196,18 @@ export function applyTlonSetupConfig(params: {
   });
 }
 
+function normalizeTlonSetupInputUrl(input: ChannelSetupInput): ChannelSetupInput {
+  const url = normalizeOptionalString(input.url);
+  if (!url) {
+    return input;
+  }
+  const validated = validateUrbitBaseUrl(url);
+  return validated.ok ? { ...input, url: validated.baseUrl } : input;
+}
+
 export const tlonSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  prepareAccountConfigInput: ({ input }) => normalizeTlonSetupInputUrl(input),
   applyAccountName: ({ cfg, accountId, name }) =>
     prepareScopedSetupConfig({
       cfg,
@@ -216,6 +226,10 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
       }
       if (!url) {
         return "Tlon requires --url.";
+      }
+      const validatedUrl = validateUrbitBaseUrl(url);
+      if (!validatedUrl.ok) {
+        return `Invalid URL: ${validatedUrl.error}`;
       }
       if (!code) {
         return "Tlon requires --code.";
