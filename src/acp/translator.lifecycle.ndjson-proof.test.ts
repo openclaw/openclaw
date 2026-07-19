@@ -123,8 +123,12 @@ class NdjsonCapturingClient {
    */
   findLine(predicate: (msg: Record<string, unknown>) => boolean, startAt = 0): number {
     for (let i = startAt; i < this.agentNdjsonLines.length; i++) {
+      const line = this.agentNdjsonLines[i];
+      if (!line) {
+        continue;
+      }
       try {
-        if (predicate(JSON.parse(this.agentNdjsonLines[i]) as Record<string, unknown>)) {
+        if (predicate(JSON.parse(line) as Record<string, unknown>)) {
           return i;
         }
       } catch {
@@ -172,8 +176,12 @@ class NdjsonCapturingClient {
     });
 
     for (let i = 0; i < this.agentNdjsonLines.length; i++) {
+      const line = this.agentNdjsonLines[i];
+      if (!line) {
+        continue;
+      }
       try {
-        const msg = JSON.parse(this.agentNdjsonLines[i]) as Record<string, unknown>;
+        const msg = JSON.parse(line) as Record<string, unknown>;
         if (msg.id === id) {
           return { response: msg, responseIndex: i };
         }
