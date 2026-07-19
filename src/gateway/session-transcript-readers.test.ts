@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
@@ -15,6 +16,7 @@ import {
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
+  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
@@ -31,6 +33,7 @@ describe("session transcript reader facade", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     envSnapshot.restore();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -451,5 +454,84 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "explicit file test" }),
     ).resolves.toMatchObject([{ content: "explicit prompt" }]);
+  });
+
+  test("SQLite full visits page instead of materialising every message", async () => {
+    // sessions.files.list → visitSessionMessagesAsync({ mode: "full" }).
+    // Keep visiting every active message, but never allocate the full array via
+    // readSessionTranscriptMessageEvents.
+    const sessionId = "reader-sqlite-visit-paged";
+    const fillerCount = 250;
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    const messages: Array<{
+      eventId: string;
+      parentId: string | null;
+      message: Record<string, unknown>;
+    }> = [
+      {
+        eventId: "file-head",
+        parentId: null,
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "edit", arguments: { path: "src/head.ts" } }],
+        },
+      },
+    ];
+    for (let index = 0; index < fillerCount; index += 1) {
+      messages.push({
+        eventId: `filler-${index}`,
+        parentId: index === 0 ? "file-head" : `filler-${index - 1}`,
+        message: { role: "assistant", content: `filler-${index}` },
+      });
+    }
+    messages.push({
+      eventId: "file-tail",
+      parentId: `filler-${fillerCount - 1}`,
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: { path: "src/tail.ts" } }],
+      },
+    });
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    });
+
+    const fullReadSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEvents");
+    const pageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
+    const touched = new Set<string>();
+    const visited = await visitSessionMessagesAsync(
+      scope,
+      (message) => {
+        const record = message as {
+          role?: unknown;
+          content?: Array<{ type?: string; name?: string; arguments?: { path?: string } }>;
+        };
+        if (record.role !== "assistant" || !Array.isArray(record.content)) {
+          return;
+        }
+        for (const part of record.content) {
+          if (
+            part?.type === "toolCall" &&
+            (part.name === "edit" || part.name === "read") &&
+            typeof part.arguments?.path === "string"
+          ) {
+            touched.add(part.arguments.path);
+          }
+        }
+      },
+      { mode: "full", reason: "session files transcript scan" },
+    );
+
+    expect(visited).toBe(fillerCount + 2);
+    expect(touched).toEqual(new Set(["src/head.ts", "src/tail.ts"]));
+    expect(fullReadSpy).not.toHaveBeenCalled();
+    expect(pageSpy.mock.calls.length).toBeGreaterThan(1);
   });
 });
