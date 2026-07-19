@@ -161,7 +161,7 @@ async function postGitHubDeviceFlowForm(params: {
   });
   try {
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
     return parseJsonResponse(

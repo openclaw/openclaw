@@ -150,6 +150,50 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
     expect(cleanupEvents).toEqual(["cancel", "release"]);
   });
 
+  it("releases without waiting for a cloned capture branch", async () => {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("unauthorized"));
+        },
+      }),
+      { status: 401 },
+    );
+    const captureBranch = response.clone();
+    let resolveRelease!: () => void;
+    const released = new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    });
+    mocks.fetchWithSsrFGuard.mockResolvedValue({
+      response,
+      finalUrl: DEVICE_CODE_URL,
+      release: async () => {
+        resolveRelease();
+      },
+    });
+
+    const errorMessage = runGitHubCopilotDeviceFlow({ showCode: vi.fn() }).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    let releaseState: "released" | "pending";
+    try {
+      releaseState = await Promise.race([
+        released.then(() => "released" as const),
+        new Promise<"pending">((resolve) => {
+          setImmediate(() => {
+            resolve("pending");
+          });
+        }),
+      ]);
+    } finally {
+      await captureBranch.body?.cancel();
+    }
+
+    expect(releaseState).toBe("released");
+    await expect(errorMessage).resolves.toBe("GitHub device code failed: HTTP 401");
+  });
+
   it("throws with failureLabel on non-OK device code response", async () => {
     mocks.fetchWithSsrFGuard.mockImplementation(async () => guardResponse({}, 401));
 
