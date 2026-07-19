@@ -82,29 +82,33 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
 // A shallow clone leaves nested registration objects (e.g. hook/tool entries)
 // shared with the live registry, so in-transaction mutations survive a rollback
 // and orphan registers remain in the manifest cache (#107514). Deep clone nested
-// data so restore fully reverts nested config changes, but preserve value
-// semantics: function-valued fields stay by reference (they are never mutated),
-// while typed values such as Date keep their constructor across
-// snapshot/restore (#107514).
+// data so restore fully reverts nested config changes.
+//
+// Snapshot value contract:
+// - Plain objects, arrays, Maps and Sets are cloned recursively; function-valued
+//   fields stay by reference (they are never mutated).
+// - structuredClone-able typed values (Date, RegExp, URL, typed arrays, ...)
+//   are cloned so they keep their constructor.
+// - Opaque custom-class instances are shared BY REFERENCE and are NOT rolled
+//   back: rebuilding them from their prototype alone cannot reproduce
+//   constructor invariants or private fields, and structuredClone drops custom
+//   prototypes. Plugin-provided class instances are therefore treated as
+//   immutable opaque values for snapshot purposes (#107514).
 function cloneTypedValue(value: object): unknown {
-  // Prefer a structured clone so typed values (Date, etc.) keep their
-  // constructor. structuredClone silently drops custom-class prototypes (and
-  // throws on nested functions), so rebuild those instances manually: sharing
-  // the reference would let in-transaction mutations of a plugin-provided
-  // instance survive a rollback (#107514).
   try {
     const cloned = structuredClone(value);
     if (Object.getPrototypeOf(cloned) === Object.getPrototypeOf(value)) {
+      // Built-in typed value (Date, RegExp, URL, typed arrays, ...) cloned
+      // with its constructor intact.
       return cloned;
     }
   } catch {
-    // Fall through to the prototype-preserving recursive clone below.
+    // Not structuredClone-able (e.g. a custom instance holding functions):
+    // share by reference per the documented contract above.
   }
-  const cloned = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>;
-  for (const [key, val] of Object.entries(value)) {
-    cloned[key] = deepCloneRegistryValue(val);
-  }
-  return cloned;
+  // Opaque custom-class instance (structuredClone drops its prototype):
+  // share by reference per the documented contract above.
+  return value;
 }
 
 function deepCloneRegistryValue(value: unknown): unknown {

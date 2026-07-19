@@ -135,7 +135,7 @@ describe("plugin registration transaction", () => {
     expect(restored.resolver()).toBe("typed");
   });
 
-  it("preserves custom-class instance identity across rollback (#107514)", () => {
+  it("shares opaque custom-class instances by reference across rollback (#107514)", () => {
     const registry = createEmptyPluginRegistry();
     class CustomMeta {
       count: number;
@@ -161,13 +161,38 @@ describe("plugin registration transaction", () => {
     transaction.rollback();
 
     const restored = registry.hostedMediaResolvers[0] as typeof entry;
-    // Custom-class instances get a prototype-preserving recursive clone, so the
-    // in-transaction mutation is reverted instead of leaking through a shared
-    // reference; the constructor/methods must survive rollback intact.
-    expect(restored.meta).toBeInstanceOf(CustomMeta);
-    expect(restored.meta).not.toBe(meta);
-    expect(meta.doubled).toBe(200);
-    expect(restored.meta.doubled).toBe(14);
+    // Documented snapshot contract: opaque custom-class instances are treated
+    // as immutable opaque values and shared by reference (structuredClone would
+    // drop the prototype, and prototype-only reconstruction cannot reproduce
+    // constructor invariants or private fields), so the in-transaction
+    // mutation is NOT reverted for these instances.
+    expect(restored.meta).toBe(meta);
+    expect(restored.meta.doubled).toBe(200);
+  });
+
+  it("rolls back in-transaction mutation of a built-in Date entry (#107514)", () => {
+    const registry = createEmptyPluginRegistry();
+    const validUntil = new Date("2026-01-01T00:00:00.000Z");
+    const entry = {
+      pluginId: "date-plugin",
+      resolver: () => "date",
+      source: "date-plugin",
+      validUntil,
+    };
+    registry.hostedMediaResolvers.push(entry);
+
+    const transaction = createPluginRegistrationTransaction({ registry });
+    entry.validUntil.setUTCFullYear(2030);
+
+    transaction.rollback();
+
+    const restored = registry.hostedMediaResolvers[0] as typeof entry;
+    // Built-in typed values are cloned with their constructor intact, so the
+    // in-transaction mutation reverts.
+    expect(restored.validUntil).toBeInstanceOf(Date);
+    expect(restored.validUntil).not.toBe(validUntil);
+    expect(restored.validUntil.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+    expect(validUntil.getUTCFullYear()).toBe(2030);
   });
 
   it("rolls back callback-bearing Map and Set entries across rollback (#107514)", () => {
