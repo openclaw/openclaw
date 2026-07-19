@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   display_name TEXT,
   avatar BLOB,
   avatar_mime TEXT,
+  avatar_sha256 TEXT,
   merged_into TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL

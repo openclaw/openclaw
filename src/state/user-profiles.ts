@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Durable user profiles and mutable login-email aliases in the shared state DB.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
@@ -36,12 +37,17 @@ export type UserProfileListItem = UserProfile & {
 export type UserProfileAvatar = {
   bytes: Uint8Array;
   mime: UserProfileAvatarMime;
+  sha256: string;
   updatedAt: number;
 };
 
 export type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
+
+export function formatUserProfileAvatarEtag(sha256: string): string {
+  return `"${sha256}"`;
+}
 
 export class UserProfileNotFoundError extends Error {
   constructor(profileId: string) {
@@ -56,6 +62,7 @@ type UserProfilesDatabase = {
     display_name: string | null;
     avatar: Uint8Array | null;
     avatar_mime: string | null;
+    avatar_sha256: string | null;
     merged_into: string | null;
     created_at: number;
     updated_at: number;
@@ -133,8 +140,8 @@ function selectResolvedProfileById(
   if (!profile?.merged_into) {
     return profile;
   }
-  // Aliases are re-pointed on merge. This one hop only preserves references
-  // written before that merge without turning tombstones into an unbounded chain.
+  // Every merge re-points aliases and tombstones targeting its source, so this
+  // one hop preserves durable references while the stored chain stays depth one.
   return selectProfileById(db, profile.merged_into) ?? profile;
 }
 
@@ -195,6 +202,7 @@ export function ensureProfileForEmail(
         display_name: normalizedEmail.split("@", 1)[0] || normalizedEmail,
         avatar: null,
         avatar_mime: null,
+        avatar_sha256: null,
         merged_into: null,
         created_at: now,
         updated_at: now,
@@ -271,6 +279,13 @@ export function linkEmail(
             .set({ merged_into: target.id, updated_at: now })
             .where("id", "=", existingAlias.profile_id),
         );
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("user_profiles")
+            .set({ merged_into: target.id, updated_at: now })
+            .where("merged_into", "=", existingAlias.profile_id),
+        );
       }
       return toUserProfile(target);
     },
@@ -321,11 +336,12 @@ export function setAvatar(
   const value = runOpenClawStateWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedProfileById(db, profileId);
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
       executeSqliteQuerySync(
         db,
         profileDb(db)
           .updateTable("user_profiles")
-          .set({ avatar: bytes, avatar_mime: mime, updated_at: now })
+          .set({ avatar: bytes, avatar_mime: mime, avatar_sha256: sha256, updated_at: now })
           .where("id", "=", profile.id),
       );
       return {
@@ -347,11 +363,13 @@ export function getProfileAvatar(
   ensureUserProfilesSchema(options);
   const { db } = openOpenClawStateDatabase(options);
   const profile = selectResolvedProfileById(db, profileId);
-  if (!profile?.avatar || !profile.avatar_mime) {
+  if (!profile?.avatar || !profile.avatar_mime || !profile.avatar_sha256) {
     return undefined;
   }
   const mime = toAvatarMime(profile.avatar_mime);
-  return mime ? { bytes: profile.avatar, mime, updatedAt: profile.updated_at } : undefined;
+  return mime
+    ? { bytes: profile.avatar, mime, sha256: profile.avatar_sha256, updatedAt: profile.updated_at }
+    : undefined;
 }
 
 export function listProfiles(options: OpenClawStateDatabaseOptions = {}): UserProfileListItem[] {

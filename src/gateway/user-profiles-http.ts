@@ -1,6 +1,6 @@
 // Authenticated HTTP avatar serving for durable user profiles.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getProfileAvatar } from "../state/user-profiles.js";
+import { formatUserProfileAvatarEtag, getProfileAvatar } from "../state/user-profiles.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
@@ -62,7 +62,7 @@ export async function handleUserProfileAvatarHttpRequest(
     sendJson(res, 404, { ok: false, error: { type: "not_found" } });
     return true;
   }
-  const etag = `"${avatar.updatedAt}"`;
+  const etag = formatUserProfileAvatarEtag(avatar.sha256);
   if (req.headers["if-none-match"] === etag) {
     res.writeHead(304, { ETag: etag });
     res.end();

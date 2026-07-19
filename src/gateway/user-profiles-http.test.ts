@@ -9,7 +9,10 @@ vi.mock("./http-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-utils.js")>()),
   authorizeScopedGatewayHttpRequestOrReply,
 }));
-vi.mock("../state/user-profiles.js", () => ({ getProfileAvatar }));
+vi.mock("../state/user-profiles.js", () => ({
+  formatUserProfileAvatarEtag: (sha256: string) => `"${sha256}"`,
+  getProfileAvatar,
+}));
 
 function response() {
   return {
@@ -34,6 +37,7 @@ describe("profile avatar HTTP endpoint", () => {
     getProfileAvatar.mockReturnValue({
       bytes: new Uint8Array([1, 2, 3]),
       mime: "image/webp",
+      sha256: "first-hash",
       updatedAt: 42,
     });
     const res = response();
@@ -47,7 +51,7 @@ describe("profile avatar HTTP endpoint", () => {
     );
     expect(res.writeHead).toHaveBeenCalledWith(
       200,
-      expect.objectContaining({ "Content-Type": "image/webp", ETag: '"42"' }),
+      expect.objectContaining({ "Content-Type": "image/webp", ETag: '"first-hash"' }),
     );
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
   });
@@ -56,17 +60,18 @@ describe("profile avatar HTTP endpoint", () => {
     getProfileAvatar.mockReturnValue({
       bytes: new Uint8Array([1]),
       mime: "image/png",
+      sha256: "current-hash",
       updatedAt: 42,
     });
     const res = response();
 
     await handleUserProfileAvatarHttpRequest(
-      request("/api/users/profile-1/avatar", { "if-none-match": '"42"' }),
+      request("/api/users/profile-1/avatar", { "if-none-match": '"current-hash"' }),
       res,
       { auth: {} as never },
     );
 
-    expect(res.writeHead).toHaveBeenCalledWith(304, { ETag: '"42"' });
+    expect(res.writeHead).toHaveBeenCalledWith(304, { ETag: '"current-hash"' });
     expect(res.end).toHaveBeenCalledWith();
   });
 });

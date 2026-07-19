@@ -31,4 +31,24 @@ describe("registerUsersCli", () => {
       { scopes: ["operator.admin"] },
     );
   });
+
+  it("prints the link result as JSON when requested", async () => {
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    callGatewayFromCli.mockResolvedValue({ profile: { id: "p-1" } });
+    const program = new Command().exitOverride();
+    registerUsersCli(program);
+
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "users",
+      "link-email",
+      "Ada@example.com",
+      "--to",
+      "p-1",
+      "--json",
+    ]);
+
+    expect(output).toHaveBeenCalledWith('{\n  "profile": {\n    "id": "p-1"\n  }\n}\n');
+  });
 });

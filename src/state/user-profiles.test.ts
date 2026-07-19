@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -9,6 +9,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   ensureProfileForEmail,
+  formatUserProfileAvatarEtag,
   getProfileAvatar,
   linkEmail,
   listProfiles,
@@ -28,6 +29,7 @@ function stateOptions() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -57,6 +59,42 @@ describe("user profiles", () => {
     expect(resolveProfileByEmail("source@example.com", options)?.id).toBe(target.id);
     expect(listProfiles(options)).toContainEqual(
       expect.objectContaining({ id: source.id, mergedInto: target.id, emails: [] }),
+    );
+  });
+
+  it("compresses tombstones so durable profile references resolve to the merge head", () => {
+    const options = stateOptions();
+    const a = ensureProfileForEmail("a@example.com", options);
+    const b = ensureProfileForEmail("b@example.com", options);
+    const c = ensureProfileForEmail("c@example.com", options);
+
+    linkEmail("a@example.com", b.id, options);
+    linkEmail("a@example.com", c.id, options);
+    linkEmail("b@example.com", c.id, options);
+
+    expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
+    expect(listProfiles(options)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: a.id, mergedInto: c.id }),
+        expect.objectContaining({ id: b.id, mergedInto: c.id }),
+      ]),
+    );
+  });
+
+  it("resolves a tombstoned link target to its head without forming a cycle", () => {
+    const options = stateOptions();
+    const a = ensureProfileForEmail("a@example.com", options);
+    const b = ensureProfileForEmail("b@example.com", options);
+
+    linkEmail("a@example.com", b.id, options);
+    linkEmail("a@example.com", a.id, options);
+
+    expect(resolveProfileByEmail("a@example.com", options)?.id).toBe(b.id);
+    expect(listProfiles(options)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: a.id, mergedInto: b.id }),
+        expect.objectContaining({ id: b.id, mergedInto: null }),
+      ]),
     );
   });
 
@@ -102,7 +140,24 @@ describe("user profiles", () => {
     expect(getProfileAvatar(profile.id, options)).toEqual({
       bytes: new Uint8Array([1, 2, 3]),
       mime: "image/png",
+      sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("keeps distinct avatar ETags when updates share a millisecond", () => {
+    const options = stateOptions();
+    const profile = ensureProfileForEmail("ada@example.com", options);
+    vi.spyOn(Date, "now").mockReturnValue(100);
+
+    expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
+    const first = getProfileAvatar(profile.id, options);
+    expect(setAvatar(profile.id, new Uint8Array([2]), "image/png", options).ok).toBe(true);
+    const second = getProfileAvatar(profile.id, options);
+
+    expect(first?.updatedAt).toBe(second?.updatedAt);
+    expect(formatUserProfileAvatarEtag(first?.sha256 ?? "")).not.toBe(
+      formatUserProfileAvatarEtag(second?.sha256 ?? ""),
+    );
   });
 });

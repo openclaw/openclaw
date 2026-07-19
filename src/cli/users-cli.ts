@@ -58,12 +58,15 @@ export function registerUsersCli(program: Command) {
       .description("Link an email alias to a user profile")
       .requiredOption("--to <profileId>", "Target profile id")
       .action(async (email: string, opts: UsersCliOpts) => {
-        await callGatewayFromCli(
+        const result = await callGatewayFromCli(
           "users.linkEmail",
           opts,
           { email, targetProfileId: opts.to },
           { scopes: ["operator.admin"] },
         );
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        }
       }),
   );
 
