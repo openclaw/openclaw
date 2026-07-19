@@ -94,6 +94,47 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves provider aborts when no model fallback is configured", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("timeout");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        aborted: true,
+        externalAbort: false,
+        assistantTexts: [],
+        promptError: Object.assign(new Error("This operation was aborted"), {
+          name: "AbortError",
+        }),
+        promptErrorSource: "prompt",
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "amazon-bedrock",
+      model: "global.anthropic.claude-sonnet-4-6",
+      runId: "run-bedrock-prompt-abort-without-fallback",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+              fallbacks: [],
+            },
+          },
+        },
+      }),
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Agent couldn't generate a response. Please try again.",
+        isError: true,
+      },
+    ]);
+    expect(result.meta?.aborted).toBe(true);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves visible output from a provider abort instead of handing off fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(

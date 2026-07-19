@@ -268,6 +268,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   // Some provider SDK stream aborts mark the attempt aborted without an external stop.
   // Only replay the model call when no visible output, timeout, or side effect made it unsafe.
   const replaySafePromptAbortFallback =
+    runInput.fallbackConfigured &&
     aborted &&
     !externalAbort &&
     !signalOwnedInterruption &&
