@@ -158,6 +158,18 @@ export function findLatestCurrentAttemptUsageSnapshot(params: {
   return undefined;
 }
 
+/** Prevents transcript fallback from crossing a compaction-owned context boundary. */
+export function findLatestUncompactedAttemptUsageSnapshot(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+  compactionOccurred: boolean;
+}): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
+  if (params.compactionOccurred) {
+    return undefined;
+  }
+  return findLatestCurrentAttemptUsageSnapshot(params);
+}
+
 function parsePromptCacheTouchTimestamp(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;

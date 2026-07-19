@@ -28,7 +28,7 @@ import {
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
-  findLatestCurrentAttemptUsageSnapshot,
+  findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt.context-engine-helpers.js";
 import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
@@ -298,9 +298,10 @@ export async function settleEmbeddedAttemptStream(input: {
           usage: attemptUsage,
         })
       : null;
-    const transcriptUsageSnapshot = findLatestCurrentAttemptUsageSnapshot({
+    const transcriptUsageSnapshot = findLatestUncompactedAttemptUsageSnapshot({
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
+      compactionOccurred: compactionOccurredThisAttempt,
     });
     const completedAssistantUsage = normalizeUsage(currentAttemptCompletedAssistant?.usage);
     lastCallUsage =

@@ -1,0 +1,31 @@
+import { describe, expect, it } from "vitest";
+import type { AgentMessage } from "../../runtime/index.js";
+import { findLatestUncompactedAttemptUsageSnapshot } from "./attempt.context-engine-helpers.js";
+
+const ASSISTANT_WITH_USAGE = {
+  role: "assistant",
+  content: [],
+  usage: { input: 12, output: 4, total: 16 },
+} as AgentMessage;
+
+describe("findLatestUncompactedAttemptUsageSnapshot", () => {
+  it("uses current-attempt transcript usage when no compaction changed the context", () => {
+    expect(
+      findLatestUncompactedAttemptUsageSnapshot({
+        messagesSnapshot: [ASSISTANT_WITH_USAGE],
+        prePromptMessageCount: 0,
+        compactionOccurred: false,
+      })?.usage,
+    ).toMatchObject({ input: 12, output: 4, total: 16 });
+  });
+
+  it("does not resurrect transcript usage across a compaction retry", () => {
+    expect(
+      findLatestUncompactedAttemptUsageSnapshot({
+        messagesSnapshot: [ASSISTANT_WITH_USAGE],
+        prePromptMessageCount: 0,
+        compactionOccurred: true,
+      }),
+    ).toBeUndefined();
+  });
+});
