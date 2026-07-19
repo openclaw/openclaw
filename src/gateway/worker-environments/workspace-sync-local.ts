@@ -5,6 +5,7 @@ import path from "node:path";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { killProcessTree } from "../../process/kill-tree.js";
 import { workerSshCommandOptions } from "./ssh.js";
+import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 const STDERR_LIMIT = 4_096;
 const COMMAND_KILL_GRACE_MS = 300;
@@ -96,7 +97,10 @@ export async function runLocalCommandToFile(params: {
         terminationStarted = true;
         const pid = child.pid;
         if (typeof pid === "number" && pid > 0) {
-          killProcessTree(pid, { graceMs: COMMAND_KILL_GRACE_MS });
+          killProcessTree(pid, {
+            graceMs: COMMAND_KILL_GRACE_MS,
+            detached: process.platform !== "win32",
+          });
         } else {
           child.kill("SIGTERM");
         }
@@ -104,7 +108,7 @@ export async function runLocalCommandToFile(params: {
         // shutdown so placement replacement cannot wait forever on that pipe.
         terminationTimer = setTimeout(() => {
           if (typeof pid === "number" && pid > 0) {
-            killProcessTree(pid, { force: true });
+            killProcessTree(pid, { force: true, detached: process.platform !== "win32" });
           } else {
             child.kill("SIGKILL");
           }
@@ -177,6 +181,9 @@ export async function writeEligibleGitFiles(params: {
     bufferedBytes = 0;
   };
   const appendIfTransferable = async (file: string) => {
+    if (isDerivedWorkspacePath(file)) {
+      return;
+    }
     const absolute = path.join(canonicalRoot, file);
     const stats = await fs.lstat(absolute).catch((error: unknown) => {
       if (hasErrorCode(error, "ENOENT")) {

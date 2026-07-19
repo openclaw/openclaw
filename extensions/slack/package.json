@@ -35,6 +35,7 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "slack",
+      "approvalFlags": ["native"],
       "label": "Slack",
       "selectionLabel": "Slack (Socket Mode)",
       "detailLabel": "Slack Bot",
@@ -54,9 +55,7 @@
             "SLACK_BOT_TOKEN",
             "SLACK_USER_TOKEN"
           ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasSlackConfiguredState"
+        }
       }
     },
     "install": {

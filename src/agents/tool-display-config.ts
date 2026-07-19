@@ -54,6 +54,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Computer",
       detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
     },
+    screen: {
+      emoji: "🖥️",
+      title: "Screen",
+      detailKeys: ["action", "sessionKey", "dock"],
+    },
+    terminal: {
+      emoji: "⌨️",
+      title: "Terminal",
+      detailKeys: ["action", "sessionId", "command", "cwd"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -186,6 +196,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    dashboard: {
+      emoji: "📋",
+      title: "Dashboard",
+      detailKeys: ["action", "tabId", "name", "title"],
+    },
     nodes: {
       emoji: "📱",
       title: "Nodes",
@@ -290,6 +305,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
     },
+    ask_user: {
+      emoji: "❓",
+      title: "Ask User",
+      detailKeys: ["questions.0.question"],
+    },
     spawn_task: {
       emoji: "✨",
       title: "Suggest Task",
@@ -363,6 +383,21 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         "includeLastMessage",
         "messageLimit",
       ],
+    },
+    conversations_list: {
+      emoji: "💬",
+      title: "Conversations",
+      detailKeys: ["channel", "limit"],
+    },
+    conversations_send: {
+      emoji: "📨",
+      title: "Conversation Send",
+      detailKeys: ["conversationRef"],
+    },
+    conversations_turn: {
+      emoji: "↔️",
+      title: "Conversation Turn",
+      detailKeys: ["conversationRef", "timeoutSeconds"],
     },
     sessions_send: {
       emoji: "📨",

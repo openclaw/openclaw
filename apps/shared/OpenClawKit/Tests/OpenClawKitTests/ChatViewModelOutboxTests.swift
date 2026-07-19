@@ -489,8 +489,10 @@ private func queuedStateCount(_ vm: OpenClawChatViewModel) -> Int {
 private actor DelayingOutbox: OpenClawChatCommandOutbox {
     private nonisolated let base: OpenClawChatSQLiteTranscriptCache
     private var loadDelayNanoseconds: UInt64 = 0
+    private var enqueueRelease: DeleteGate?
     private var recoveryAvailable = true
     private var terminalWritesAvailable = true
+    private let enqueueStarted = DeleteGate()
     private let recoveryAttempted = DeleteGate()
 
     init(base: OpenClawChatSQLiteTranscriptCache) {
@@ -517,8 +519,25 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
         await self.recoveryAttempted.wait()
     }
 
+    func holdEnqueue() {
+        self.enqueueRelease = DeleteGate()
+    }
+
+    func waitUntilEnqueueStarted() async {
+        await self.enqueueStarted.wait()
+    }
+
+    func releaseEnqueue() async {
+        await self.enqueueRelease?.open()
+        self.enqueueRelease = nil
+    }
+
     func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
-        await self.base.enqueueCommand(command)
+        if let enqueueRelease {
+            await self.enqueueStarted.open()
+            await enqueueRelease.wait()
+        }
+        return await self.base.enqueueCommand(command)
     }
 
     func loadCommands() async -> [OpenClawChatOutboxCommand] {
@@ -1517,17 +1536,19 @@ struct ChatViewModelOutboxTests {
         await transport.state.setStaleHistoryRows([])
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm.load() }
-        try await waitUntil("reconnect history request") {
-            await transport.state.historyRequestCount >= 1
+        try await waitUntil("bootstrap history settles") {
+            let bootstrapComplete = await MainActor.run { !vm.isLoading }
+            let requestCount = await transport.state.historyRequestCount
+            return bootstrapComplete && requestCount >= 1
         }
-        try await Task.sleep(nanoseconds: 200_000_000)
-        let settledRequestCount = await transport.state.historyRequestCount
-        try await Task.sleep(nanoseconds: 200_000_000)
+        // A recursive refresh starts immediately after applying stale history.
+        // Observe beyond bootstrap completion instead of sampling between its
+        // ordinary history request and the health-triggered reconciliation.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
 
         // load() also owns its ordinary visible-session history request. The
         // exact count can be one or two; neither may trigger a recursive pass.
-        #expect(settledRequestCount <= 2)
-        #expect(await transport.state.historyRequestCount == settledRequestCount)
+        #expect(await transport.state.historyRequestCount <= 2)
         #expect(await store.loadCommands().map(\.status) == [.awaitingConfirmation])
     }
 
@@ -1632,8 +1653,10 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("bootstrap healthy") {
-            await MainActor.run { vm.healthOK }
+            await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages }
         }
         await MainActor.run {
             vm.input = "keep this draft"
@@ -1658,8 +1681,10 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("bootstrap healthy") {
-            await MainActor.run { vm.healthOK }
+            await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages }
         }
         await MainActor.run {
             vm.input = "stale health send"
@@ -1933,6 +1958,80 @@ struct ChatViewModelOutboxTests {
         #expect(await MainActor.run { vm.input } == "does not fit")
         #expect(await userTexts(vm).isEmpty)
         #expect(await store.loadCommands().count == OpenClawChatSQLiteTranscriptCache.maxQueuedCommands)
+    }
+
+    @Test func `accepted enqueue after session switch preserves newer original-session draft`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let outbox = DelayingOutbox(base: store)
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        await MainActor.run { vm.load() }
+        try await waitUntil("initial outbox restore") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        await outbox.holdEnqueue()
+
+        await MainActor.run {
+            vm.input = "queued once"
+            vm.send()
+        }
+        await outbox.waitUntilEnqueueStarted()
+        await MainActor.run {
+            vm.switchSession(to: "other")
+            vm.switchSession(to: "main")
+            vm.input = ""
+            vm.input = "queued once"
+            vm.switchSession(to: "other")
+        }
+        await outbox.releaseEnqueue()
+        try await waitUntil("enqueue accepted after switch") {
+            await store.loadCommands().count == 1
+        }
+        try await waitUntil("newer original-session draft preserved") {
+            await MainActor.run { vm.draftsBySession["main"] == "queued once" }
+        }
+
+        await MainActor.run { vm.switchSession(to: "main") }
+        #expect(await MainActor.run { vm.input } == "queued once")
+        #expect(await MainActor.run { vm.recallPreviousInput(caretOnFirstLine: true) })
+        #expect(await MainActor.run { vm.input } == "queued once")
+        #expect(await MainActor.run { vm.recallNextInput() })
+        #expect(await MainActor.run { vm.input } == "queued once")
+    }
+
+    @Test func `accepted enqueue preserves retyped identical current-session draft`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let outbox = DelayingOutbox(base: store)
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        await MainActor.run { vm.load() }
+        try await waitUntil("initial outbox restore") {
+            await MainActor.run { vm.hasRestoredOutboxMessages }
+        }
+        await outbox.holdEnqueue()
+
+        await MainActor.run {
+            vm.input = "queued once"
+            vm.send()
+        }
+        await outbox.waitUntilEnqueueStarted()
+        await MainActor.run {
+            vm.input = ""
+            vm.input = "queued once"
+        }
+        await outbox.releaseEnqueue()
+        try await waitUntil("enqueue accepted") {
+            await store.loadCommands().count == 1
+        }
+        try await waitUntil("submission finished") {
+            await MainActor.run { !vm.isSubmittingDraft }
+        }
+
+        #expect(await MainActor.run { vm.input } == "queued once")
     }
 
     @Test func `queued send transport failure fails closed until explicit retry`() async throws {

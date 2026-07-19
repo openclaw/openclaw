@@ -15,6 +15,7 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { buildWaitResponse, type WaitReasonResolver } from "./approval-wait-response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -293,12 +294,14 @@ export function resolveApprovalDecisionParams<TParams extends ApprovalResolvePar
 
 /** Resolves the approval clients that should receive request or resolution events. */
 export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
+  approvalKind: "exec" | "plugin" | "system-agent";
   context: GatewayRequestContext;
   record: ExecApprovalRecord<TPayload>;
   excludeConnId?: string;
 }): ReadonlySet<string> | null {
   return (
     params.context.getApprovalClientConnIds?.({
+      approvalKind: params.approvalKind,
       excludeConnId: params.excludeConnId,
       record: params.record,
       filter: (client) =>
@@ -363,7 +366,6 @@ function resolveApprovalRecordForState<TPayload>(
   return { ok: true, approvalId: resolvedId.id, snapshot };
 }
 
-/** Sends the public lookup failure shape for missing, expired, or ambiguous approvals. */
 export function respondPendingApprovalLookupError(params: {
   respond: RespondFn;
   response: PendingApprovalLookupError;
@@ -375,12 +377,12 @@ export function respondPendingApprovalLookupError(params: {
   params.respond(false, undefined, errorShape(params.response.code, params.response.message));
 }
 
-/** Waits for an already-registered approval decision visible to the caller. */
 export async function handleApprovalWaitDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: unknown;
   client?: GatewayClient | null;
   respond: RespondFn;
+  resolveTerminalReason?: WaitReasonResolver<TPayload>;
 }): Promise<void> {
   const id = normalizeOptionalString(params.inputId) ?? "";
   if (!id) {
@@ -412,14 +414,11 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     return;
   }
   const decision = await decisionPromise;
+  const terminalSnapshot = params.manager.getSnapshot(id) ?? snapshot;
+  const terminalReason = params.resolveTerminalReason?.(terminalSnapshot);
   params.respond(
     true,
-    {
-      id,
-      decision,
-      createdAtMs: snapshot?.createdAtMs,
-      expiresAtMs: snapshot?.expiresAtMs,
-    },
+    buildWaitResponse(id, decision, terminalSnapshot, terminalReason),
     undefined,
   );
 }
@@ -456,6 +455,7 @@ export async function handlePendingApprovalRequest<
     const approvalClientConnIds = suppressDelivery
       ? null
       : resolveApprovalRequestRecipientConnIds({
+          approvalKind: params.approvalKind ?? "exec",
           context: params.context,
           record: params.record,
           excludeConnId: params.clientConnId,
@@ -588,6 +588,7 @@ export async function handlePendingApprovalRequest<
 
 /** Resolves a pending approval and broadcasts the final decision exactly once. */
 export async function handleApprovalResolve<TPayload, TResolvedEvent extends object>(params: {
+  approvalKind: "exec" | "plugin";
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
   decision: ExecApprovalDecision;
@@ -609,7 +610,6 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     snapshot: ExecApprovalRecord<TPayload>;
   }) => boolean;
   resolvedEventName: string;
-  approvalKind?: "exec" | "plugin";
   buildResolvedEvent: (params: {
     approvalId: string;
     decision: ExecApprovalDecision;
@@ -729,6 +729,7 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     nowMs: Date.now(),
   });
   const resolvedEventConnIds = resolveApprovalRequestRecipientConnIds({
+    approvalKind: params.approvalKind,
     context: params.context,
     record: resolved.snapshot,
   });

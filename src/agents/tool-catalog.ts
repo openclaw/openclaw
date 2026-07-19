@@ -4,6 +4,7 @@
  * for OpenClaw-owned tools.
  */
 import {
+  ASK_USER_TOOL_DISPLAY_SUMMARY,
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
@@ -184,6 +185,30 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "conversations_list",
+    label: "conversations_list",
+    description: "List exact external conversation addresses",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "conversations_send",
+    label: "conversations_send",
+    description: "Send to an exact external conversation",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "conversations_turn",
+    label: "conversations_turn",
+    description: "Send and wait for a correlated external reply",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_send",
     label: "sessions_send",
     description: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -196,7 +221,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_spawn",
     description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -204,7 +229,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_yield",
     description: "End turn to receive sub-agent results",
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -212,7 +237,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "subagents",
     description: "Background work: subagents, media gen, cron runs. list/cancel.",
     sectionId: "sessions",
-    profiles: ["coding"],
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -248,11 +273,43 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "screen",
+    label: "screen",
+    description: "Drive operator web UI",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "dashboard",
+    label: "dashboard",
+    description: "Read and arrange the session dashboard",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "terminal",
+    label: "terminal",
+    description: "Own visible gateway terminal",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "canvas",
     label: "canvas",
     description: "Control node Canvas surfaces when the Canvas plugin is enabled",
     sectionId: "ui",
     profiles: [],
+  },
+  {
+    id: "show_widget",
+    label: "show_widget",
+    description: "Show an interactive widget on supported chat surfaces",
+    sectionId: "ui",
+    profiles: [],
+    includeInOpenClawGroup: true,
   },
   {
     id: "message",
@@ -340,6 +397,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "ask_user",
+    label: "ask_user",
+    description: ASK_USER_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {

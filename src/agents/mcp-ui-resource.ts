@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
@@ -29,6 +30,7 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
   expiresAtMs: number;
@@ -61,6 +63,7 @@ function deleteView(viewId: string, expected?: McpAppViewLease): void {
     return;
   }
   clearTimeout(view.expiryTimer);
+  clearMcpAppModelContextForView(view.runtime, view);
   view.releaseRuntimeLease?.();
   store.delete(viewId);
   void completeDeferredSessionMcpRuntimeRetirement(view.runtime).catch((error: unknown) => {
@@ -201,6 +204,7 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
+  readOnly?: true;
   viewId?: string;
 }): Promise<
   | {
@@ -260,6 +264,7 @@ export async function fetchMcpAppView(params: {
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
         : {}),
+      ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,

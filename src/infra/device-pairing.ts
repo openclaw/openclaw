@@ -308,6 +308,9 @@ function samePendingApprovalSnapshot(
   if (existing.publicKey !== incoming.publicKey) {
     return false;
   }
+  if (existing.browserOrigin !== incoming.browserOrigin) {
+    return false;
+  }
   if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
     return false;
   }
@@ -338,6 +341,9 @@ function incomingApprovalCoveredByExisting(
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
 ): boolean {
   if (existing.publicKey !== incoming.publicKey) {
+    return false;
+  }
+  if (existing.browserOrigin !== incoming.browserOrigin) {
     return false;
   }
   if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
@@ -376,6 +382,7 @@ function refreshPendingDevicePairingRequest(
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
+    browserOrigin: existing.browserOrigin,
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // If either request is interactive, keep the pending request visible for approval.
     silent: Boolean(existing.silent && incoming.silent),
@@ -421,6 +428,7 @@ function buildPendingDevicePairingRequest(params: {
     deviceFamily: params.req.deviceFamily,
     clientId: params.req.clientId,
     clientMode: params.req.clientMode,
+    browserOrigin: params.req.browserOrigin,
     role,
     roles: mergeRoles(params.req.roles, role),
     scopes: mergeScopes(params.req.scopes),
@@ -524,6 +532,7 @@ function buildApprovedPairedDevice(params: {
     deviceFamily: params.pending.deviceFamily,
     clientId: params.pending.clientId,
     clientMode: params.pending.clientMode,
+    browserOrigin: params.pending.browserOrigin,
     role: params.pending.role,
     roles: params.roles,
     scopes: params.approvedScopes,
@@ -780,8 +789,14 @@ export async function approveDevicePairing(
     accessMetadata?: DevicePairingAccessMetadata;
     approvedVia?: Extract<
       PairedDeviceApprovalKind,
-      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+      "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
     >;
+    /**
+     * Replace the pending scopes only if this is still a brand-new device.
+     * Used by trusted-proxy auto-approval to cap grants without ever approving
+     * an existing-device repair or upgrade request.
+     */
+    autoApproveNewDeviceScopes?: readonly string[];
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -793,8 +808,9 @@ export async function approveDevicePairing(
         accessMetadata?: DevicePairingAccessMetadata;
         approvedVia?: Extract<
           PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
+        autoApproveNewDeviceScopes?: readonly string[];
       }
     | string,
   maybeBaseDir?: string,
@@ -806,10 +822,19 @@ export async function approveDevicePairing(
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
+    const pendingRecord = state.pendingById[requestId];
+    if (!pendingRecord) {
       return null;
     }
+    if (
+      options?.autoApproveNewDeviceScopes &&
+      (pendingRecord.isRepair || state.pairedByDeviceId[pendingRecord.deviceId])
+    ) {
+      return null;
+    }
+    const pending = options?.autoApproveNewDeviceScopes
+      ? { ...pendingRecord, scopes: [...options.autoApproveNewDeviceScopes] }
+      : pendingRecord;
     const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     const roleMismatchScope = resolveScopeOutsideRequestedRoles({

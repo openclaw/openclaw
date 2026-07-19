@@ -25,7 +25,7 @@ scenario:
   execution:
     kind: flow
     summary: Start a goal, send an unrelated next turn, and inspect the exact mock-provider request payload.
-    driver: qa-channel
+    channel: qa-channel
     config:
       requiredProviderMode: mock-openai
       conversationId: goal-context-next-turn

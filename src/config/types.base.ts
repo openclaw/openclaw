@@ -170,7 +170,7 @@ export type SessionSendPolicyConfig = {
   rules?: SessionSendPolicyRule[];
 };
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "none" | "daily" | "idle";
 export type SessionResetConfig = {
   mode?: SessionResetMode;
   /** Local hour (0-23) for the daily reset boundary. */
@@ -272,7 +272,7 @@ export type SessionMaintenanceConfig = {
    */
   resetArchiveRetention?: string | number | false;
   /**
-   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "2gb".
+   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
    * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
    * (mode=enforce). Set `false` to disable the budget entirely.
    */

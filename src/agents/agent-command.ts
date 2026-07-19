@@ -22,6 +22,7 @@ import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   shouldPersistRestartRecoveryCleanup,
@@ -42,10 +43,7 @@ import {
 } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
-import {
-  persistSessionEntry,
-  resolveCurrentRunDeliveryContext,
-} from "./command/session-helpers.js";
+import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
@@ -54,12 +52,14 @@ import {
   resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
 async function agentCommandInternal(
+  prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
   initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
@@ -69,7 +69,6 @@ async function agentCommandInternal(
   const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
   const preserveUserFacingSessionModelState =
     initialOpts.preserveUserFacingSessionModelState === true;
-  const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
   const lifecycleAbortController = new AbortController();
   const storedDeliveryMediaUrls =
     prepared.sessionEntry?.restartRecoveryDeliveryRunId === prepared.runId &&
@@ -100,7 +99,7 @@ async function agentCommandInternal(
       "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
     );
   }
-  const opts = {
+  let opts: AgentCommandOpts = {
     ...preparedOpts,
     abortSignal: preparedOpts.abortSignal
       ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
@@ -132,7 +131,6 @@ async function agentCommandInternal(
     pluginsEnabled,
     manifestMetadataSnapshot,
     modelManifestContext,
-    runLease,
   } = prepared;
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   let sessionEntry = prepared.sessionEntry,
@@ -237,6 +235,46 @@ async function agentCommandInternal(
         throw acpResolution.error;
       }
 
+      let currentRunDeliveryPrepared = false;
+      const prepareDeliveryForRun = async (candidateSessionEntry?: SessionEntry) => {
+        if (currentRunDeliveryPrepared || opts.deliver !== true) {
+          return;
+        }
+        currentRunDeliveryPrepared = true;
+        let preparedDelivery: Awaited<ReturnType<typeof prepareCurrentRunDelivery>>;
+        try {
+          preparedDelivery = await prepareCurrentRunDelivery({
+            cfg,
+            opts,
+            agentId: sessionAgentId,
+            currentSessionKey: sessionKey,
+            sessionEntry: candidateSessionEntry,
+          });
+        } catch (error) {
+          if (opts.bestEffortDeliver !== true) {
+            throw error;
+          }
+          log.warn(
+            `delivery preflight failed; continuing session-only because bestEffortDeliver is enabled: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          opts = { ...opts, deliver: false };
+        }
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+        if (preparedDelivery) {
+          currentRunDeliveryContext = preparedDelivery.context;
+          opts = {
+            ...opts,
+            replyChannel: preparedDelivery.context.channel,
+            replyTo: preparedDelivery.context.to,
+            replyAccountId: preparedDelivery.context.accountId,
+            threadId: preparedDelivery.context.threadId,
+            deliveryTargetMode: preparedDelivery.targetMode,
+          };
+        }
+      };
+
       if (
         sessionStore &&
         sessionKey &&
@@ -251,11 +289,13 @@ async function agentCommandInternal(
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
-        currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
-          cfg,
-          opts,
-          sessionEntry: entry,
-        });
+        await prepareDeliveryForRun(entry);
+        const generatedMediaSourceRunId =
+          opts.internalDeliveryMediaUrls !== undefined &&
+          opts.inputProvenance?.kind === "inter_session" &&
+          isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
+            ? runId
+            : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const next: SessionEntry = {
           ...entry,
@@ -270,12 +310,8 @@ async function agentCommandInternal(
             entry,
             forceRestartSafeTools: opts.forceRestartSafeTools,
             runId,
-            sourceRunId:
-              opts.internalDeliveryMediaUrls !== undefined &&
-              opts.inputProvenance?.kind === "inter_session" &&
-              isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
-                ? runId
-                : undefined,
+            sourceIngress: generatedMediaSourceRunId ? "internal" : undefined,
+            sourceRunId: generatedMediaSourceRunId,
             sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
@@ -299,6 +335,7 @@ async function agentCommandInternal(
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
       }
+      await prepareDeliveryForRun(sessionEntry);
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -418,9 +455,6 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
-    if (runLease) {
-      await runLease.release();
-    }
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned
@@ -453,6 +487,7 @@ async function agentCommandInternal(
             ...buildRestartRecoveryClaimCleanupPatch({
               entry,
               recordTerminalSource: true,
+              terminalRunId: runId,
               terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
             }),
             updatedAt: Date.now(),
@@ -496,8 +531,10 @@ export async function agentCommand(
         getRuntimeConfig,
       },
       async () =>
-        await agentCommandInternal(
-          {
+        await runWithAgentCommandRecoveryOwner({
+          lifecycleGeneration,
+          mode: "reject_uncoordinated",
+          opts: {
             ...opts,
             lifecycleGeneration,
             // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
@@ -507,11 +544,48 @@ export async function agentCommand(
             // Local/CLI callers are trusted by default for per-run model overrides.
             allowModelOverride: opts.allowModelOverride ?? true,
           },
-          runtime,
-          resolvedDeps,
-        ),
+          prepare: async (preparedOpts) =>
+            await prepareAgentCommandExecution(preparedOpts, runtime),
+          run: async (prepared) =>
+            await agentCommandInternal(prepared, prepared.opts, runtime, resolvedDeps),
+        }),
     ),
   );
+}
+
+async function agentCommandFromIngressInternal(
+  opts: AgentCommandIngressOpts,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps?: CliDeps,
+  recovery?: {
+    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  },
+) {
+  if (typeof opts.allowModelOverride !== "boolean") {
+    throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
+  }
+  const lifecycleGeneration =
+    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    const result = await runWithAgentCommandRecoveryOwner({
+      lifecycleGeneration,
+      mode: "claim",
+      opts: {
+        ...opts,
+        lifecycleGeneration,
+        senderIsOwner: opts.senderIsOwner === true,
+      },
+      prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
+      restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
+      run: async (prepared) => await agentCommandInternal(prepared, prepared.opts, runtime, deps),
+    });
+
+    if (result) {
+      emitIngressModelUsageDiagnostic(result, opts);
+    }
+
+    return result;
+  });
 }
 
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
@@ -520,28 +594,19 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  if (typeof opts.allowModelOverride !== "boolean") {
-    throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
-  }
-  const lifecycleGeneration =
-    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    const result = await agentCommandInternal(
-      {
-        ...opts,
-        lifecycleGeneration,
-        senderIsOwner: opts.senderIsOwner === true,
-      },
-      runtime,
-      deps,
-    );
+  return await agentCommandFromIngressInternal(opts, runtime, deps);
+}
 
-    if (result) {
-      emitIngressModelUsageDiagnostic(result, opts);
-    }
-
-    return result;
-  });
+/** Internal Gateway entrypoint that restores a rejected restart-recovery admission. */
+export async function agentCommandFromGatewayIngress(
+  opts: AgentCommandIngressOpts,
+  runtime: RuntimeEnv,
+  deps: CliDeps | undefined,
+  recovery: {
+    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  },
+) {
+  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery);
 }
 
 export const testing = {
@@ -552,6 +617,3 @@ export const testing = {
   ingressDiagnosticChannel,
   emitIngressModelUsageDiagnostic,
 };
-
-/** @deprecated Use `testing`. */
-export { testing as __testing };

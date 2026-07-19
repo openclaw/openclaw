@@ -340,6 +340,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         pendingFinalDeliveryCreatedAt: 1,
         pendingFinalDeliveryAttemptCount: 4,
         pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryIntentId: "stale-heartbeat-intent",
       },
     });
     const cfg = withFastReplyConfig({
@@ -361,6 +362,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(stored.pendingFinalDelivery).toBeUndefined();
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
     expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("keeps non-ack heartbeat pending delivery without direct replay", async () => {
@@ -522,7 +524,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       throw new Error("expected single reply payload");
     }
     expect(reply.text).toContain("Think: high");
-    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
@@ -576,7 +578,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     }
     expect(reply.text).toContain("Think: xhigh");
     expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({ config: cfg, readOnly: true });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();

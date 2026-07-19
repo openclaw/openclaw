@@ -1,8 +1,19 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
 
-/** Durable gateway ownership states for one session execution placement. */
+export {
+  isCloudWorkerPlacementState,
+  SESSION_PLACEMENT_STATES,
+  type SessionPlacementState,
+} from "./session-placement-state.js";
+
+/** Durable gateway ownership states for one session execution placement.
+ * The literal list stays explicit because Type.Union needs a tuple for
+ * Static inference (a mapped array collapses Static to never); the guard
+ * below keeps it in lockstep with SESSION_PLACEMENT_STATES. */
 export const SessionPlacementStateSchema = Type.Union([
   Type.Literal("local"),
   Type.Literal("requested"),
@@ -15,6 +26,13 @@ export const SessionPlacementStateSchema = Type.Union([
   Type.Literal("reclaimed"),
   Type.Literal("failed"),
 ]);
+
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const placementStateVocabularyInSync: MutuallyAssignable<
+  Static<typeof SessionPlacementStateSchema>,
+  (typeof SESSION_PLACEMENT_STATES)[number]
+> = true;
+void placementStateVocabularyInSync;
 
 const SessionPlacementTimingProperties = {
   generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -60,85 +78,64 @@ const TerminalSessionPlacementProperties = {
 function createUnownedSessionPlacementSchema<const State extends "local" | "requested">(
   state: State,
 ) {
-  return Type.Object(
-    { state: Type.Literal(state), ...SessionPlacementTimingProperties },
-    { additionalProperties: false },
-  );
+  return closedObject({ state: Type.Literal(state), ...SessionPlacementTimingProperties });
 }
 
 function createWorkerOwnedSessionPlacementSchema<
   const State extends "active" | "draining" | "reconciling",
 >(state: State) {
-  return Type.Object(
-    {
-      state: Type.Literal(state),
-      ...SessionPlacementTimingProperties,
-      environmentId: NonEmptyString,
-      activeOwnerEpoch: SessionPlacementOwnerEpochSchema,
-      workerBundleHash: WorkerBundleHashSchema,
-      ...SessionPlacementWorkspaceProperties,
-      ...SessionPlacementAckProperties,
-    },
-    { additionalProperties: false },
-  );
+  return closedObject({
+    state: Type.Literal(state),
+    ...SessionPlacementTimingProperties,
+    environmentId: NonEmptyString,
+    activeOwnerEpoch: SessionPlacementOwnerEpochSchema,
+    workerBundleHash: WorkerBundleHashSchema,
+    ...SessionPlacementWorkspaceProperties,
+    ...SessionPlacementAckProperties,
+  });
 }
 
 export const LocalSessionPlacementSchema = createUnownedSessionPlacementSchema("local");
 export const RequestedSessionPlacementSchema = createUnownedSessionPlacementSchema("requested");
 
-export const ProvisioningSessionPlacementSchema = Type.Object(
-  {
-    state: Type.Literal("provisioning"),
-    ...SessionPlacementTimingProperties,
-    environmentId: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const ProvisioningSessionPlacementSchema = closedObject({
+  state: Type.Literal("provisioning"),
+  ...SessionPlacementTimingProperties,
+  environmentId: Type.Optional(NonEmptyString),
+});
 
-export const SyncingSessionPlacementSchema = Type.Object(
-  {
-    state: Type.Literal("syncing"),
-    ...SessionPlacementTimingProperties,
-    environmentId: NonEmptyString,
-    workerBundleHash: WorkerBundleHashSchema,
-  },
-  { additionalProperties: false },
-);
+export const SyncingSessionPlacementSchema = closedObject({
+  state: Type.Literal("syncing"),
+  ...SessionPlacementTimingProperties,
+  environmentId: NonEmptyString,
+  workerBundleHash: WorkerBundleHashSchema,
+});
 
-export const StartingSessionPlacementSchema = Type.Object(
-  {
-    state: Type.Literal("starting"),
-    ...SessionPlacementTimingProperties,
-    environmentId: NonEmptyString,
-    workerBundleHash: WorkerBundleHashSchema,
-    ...SessionPlacementWorkspaceProperties,
-  },
-  { additionalProperties: false },
-);
+export const StartingSessionPlacementSchema = closedObject({
+  state: Type.Literal("starting"),
+  ...SessionPlacementTimingProperties,
+  environmentId: NonEmptyString,
+  workerBundleHash: WorkerBundleHashSchema,
+  ...SessionPlacementWorkspaceProperties,
+});
 
 export const ActiveWorkerSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("active");
 export const DrainingSessionPlacementSchema = createWorkerOwnedSessionPlacementSchema("draining");
 export const ReconcilingSessionPlacementSchema =
   createWorkerOwnedSessionPlacementSchema("reconciling");
 
-export const ReclaimedSessionPlacementSchema = Type.Object(
-  {
-    state: Type.Literal("reclaimed"),
-    ...SessionPlacementTimingProperties,
-    ...TerminalSessionPlacementProperties,
-  },
-  { additionalProperties: false },
-);
+export const ReclaimedSessionPlacementSchema = closedObject({
+  state: Type.Literal("reclaimed"),
+  ...SessionPlacementTimingProperties,
+  ...TerminalSessionPlacementProperties,
+});
 
-export const FailedSessionPlacementSchema = Type.Object(
-  {
-    state: Type.Literal("failed"),
-    ...SessionPlacementTimingProperties,
-    ...TerminalSessionPlacementProperties,
-    recoveryError: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+export const FailedSessionPlacementSchema = closedObject({
+  state: Type.Literal("failed"),
+  ...SessionPlacementTimingProperties,
+  ...TerminalSessionPlacementProperties,
+  recoveryError: NonEmptyString,
+});
 
 /** Gateway-visible placement projection; `state` remains the closed discriminator. */
 export const SessionPlacementSchema = Type.Union([
@@ -155,25 +152,19 @@ export const SessionPlacementSchema = Type.Union([
 ]);
 
 /** Requests one-way dispatch of an existing local session to a configured worker profile. */
-export const SessionsDispatchParamsSchema = Type.Object(
-  {
-    key: NonEmptyString,
-    agentId: Type.Optional(NonEmptyString),
-    profileId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+export const SessionsDispatchParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  profileId: NonEmptyString,
+});
 
 /** Result returned once session dispatch reaches durable worker ownership. */
-export const SessionsDispatchResultSchema = Type.Object(
-  {
-    ok: Type.Literal(true),
-    key: NonEmptyString,
-    sessionId: NonEmptyString,
-    placement: ActiveWorkerSessionPlacementSchema,
-  },
-  { additionalProperties: false },
-);
+export const SessionsDispatchResultSchema = closedObject({
+  ok: Type.Literal(true),
+  key: NonEmptyString,
+  sessionId: NonEmptyString,
+  placement: ActiveWorkerSessionPlacementSchema,
+});
 
 /** Requests safe workspace reconciliation and teardown of an active cloud worker. */
 export const SessionsReclaimParamsSchema = Type.Object(
@@ -214,7 +205,6 @@ export const SessionPlacementProtocolSchemas = {
   SessionsReclaimResult: SessionsReclaimResultSchema,
 } as const;
 
-export type SessionPlacementState = Static<typeof SessionPlacementStateSchema>;
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;

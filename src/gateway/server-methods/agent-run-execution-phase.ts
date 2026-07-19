@@ -2,7 +2,21 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { consumeExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
+import {
+  restoreAdmittedRecoveryWithRetries,
+  scheduleAdmittedRecoveryRestore,
+} from "../../agents/main-session-recovery-restore.js";
+import {
+  releaseMainSessionRecoveryOwner,
+  type MainSessionRecoveryPendingTarget,
+  type MainSessionRecoveryOwnerLease,
+} from "../../agents/main-session-recovery-store.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import {
+  setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
+} from "../../auto-reply/reply/source-turn-id.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,7 +26,10 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  buildRunUserTurnIdempotencyKey,
+  createUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -25,6 +42,7 @@ import {
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
+import { resolveAgentRestartRecoveryChannelContext } from "./agent-restart-recovery-context.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
   resolveAbortedAgentStopReason,
@@ -37,6 +55,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function startAgentRunExecution(params: {
   prepared: PreparedAgentRunDispatch;
+  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -51,6 +70,7 @@ export function startAgentRunExecution(params: {
   isNewSession: boolean;
   isRawModelRun: boolean;
   isOneShotModelRun: boolean;
+  isRestartRecoveryResumeRun: boolean;
   suppressVisibleSessionEffects: boolean;
   message: string;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
@@ -93,8 +113,10 @@ export function startAgentRunExecution(params: {
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
+    let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       if (prepared.activeRunAbort.controller.signal.aborted) {
+        pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
         const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
         setAbortedAgentDedupeEntries({
           dedupe: params.context.dedupe,
@@ -164,7 +186,10 @@ export function startAgentRunExecution(params: {
               input: {
                 text: params.effectiveTranscriptInputText,
                 timestamp: Date.now(),
-                idempotencyKey: `${params.runId}:user`,
+                idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
+                ...(params.client?.authenticatedUserId
+                  ? { sender: { id: params.client.authenticatedUserId } }
+                  : {}),
                 ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
               },
               target: () => {
@@ -253,6 +278,33 @@ export function startAgentRunExecution(params: {
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
 
+      const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
+        canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
+        expectedExistingSessionId: params.request.expectedExistingSessionId,
+        resolvedSessionId: params.resolvedSessionId,
+        runId: params.runId,
+        sessionEntry: params.sessionEntry,
+      });
+      const runContext = {
+        messageChannel:
+          restartRecoveryChannelContext?.channel ?? params.delivery.originMessageChannel,
+        accountId:
+          restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
+        senderId: restartRecoveryChannelContext?.requesterSenderId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        currentChannelId: restartRecoveryChannelContext?.currentChannelId,
+        currentThreadTs:
+          restartRecoveryChannelContext?.currentThreadTs ??
+          (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
+      };
+      setChannelSourceTurnId(runContext, restartRecoveryChannelContext?.sourceTurnId);
+      setChannelSourceTurnSameThreadRequired(
+        runContext,
+        restartRecoveryChannelContext?.sameChannelThreadRequired,
+      );
+
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
@@ -270,15 +322,7 @@ export function startAgentRunExecution(params: {
           channel: params.delivery.resolvedChannel,
           accountId: params.delivery.resolvedAccountId,
           threadId: prepared.resolvedThreadId,
-          runContext: {
-            messageChannel: params.delivery.originMessageChannel,
-            accountId: params.delivery.resolvedAccountId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            currentThreadTs:
-              prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined,
-          },
+          runContext,
           ...(execApprovalFollowupRuntimeHandoff?.bashElevated
             ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }
             : {}),
@@ -355,6 +399,10 @@ export function startAgentRunExecution(params: {
             sessionEntry: params.sessionEntry,
           }),
           allowGatewaySubagentBinding: true,
+          ...(params.mainRestartRecoveryOwnerLease
+            ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
+            : {}),
+          ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
           allowModelOverride: prepared.effectiveAllowModelOverride,
         },
         runId: params.runId,
@@ -371,6 +419,7 @@ export function startAgentRunExecution(params: {
         respond: params.respond,
         context: params.context,
         taskTrackingMode: prepared.dispatchTaskTrackingMode,
+        restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
       });
       dispatched = true;
     } catch (err) {
@@ -392,9 +441,38 @@ export function startAgentRunExecution(params: {
     } finally {
       if (!dispatched) {
         try {
-          await params.releaseCronContinuationClaimWithRecovery();
+          if (prepared.restoreAdmittedRestartRecoveryInterrupted) {
+            try {
+              pendingRecovery ??= await restoreAdmittedRecoveryWithRetries(
+                prepared.restoreAdmittedRestartRecoveryInterrupted,
+              );
+            } catch (err) {
+              params.context.logGateway.warn(
+                `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
+              );
+              scheduleAdmittedRecoveryRestore(prepared.restoreAdmittedRestartRecoveryInterrupted);
+            }
+          }
         } finally {
-          cleanupAdmittedRun({ force: true });
+          try {
+            await params.releaseCronContinuationClaimWithRecovery();
+          } finally {
+            try {
+              pendingRecovery ??= await releaseMainSessionRecoveryOwner(
+                params.mainRestartRecoveryOwnerLease,
+              );
+            } catch (err) {
+              params.context.logGateway.warn(
+                `failed to release undispatched main restart recovery owner: ${formatForLog(err)}`,
+              );
+            } finally {
+              try {
+                cleanupAdmittedRun({ force: true });
+              } finally {
+                scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+              }
+            }
+          }
         }
       }
     }

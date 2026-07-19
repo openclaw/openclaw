@@ -968,6 +968,10 @@ function writeFakePnpm(filePath: string): void {
       "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
       "  process.exit(0);",
       "}",
+      'process.on("SIGTERM", () => {',
+      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
+      "  process.exit(0);",
+      "});",
       "if (process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH) {",
       "  const child = spawn(process.execPath, [",
       '    "-e",',
@@ -975,11 +979,8 @@ function writeFakePnpm(filePath: string): void {
       "  ], { stdio: 'ignore' });",
       "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
       "}",
+      "// Publishing the PID marks the fixture ready for SIGTERM delivery.",
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
-      'process.on("SIGTERM", () => {',
-      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
-      "  process.exit(0);",
-      "});",
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"),
@@ -1005,7 +1006,7 @@ async function waitForClose(
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);

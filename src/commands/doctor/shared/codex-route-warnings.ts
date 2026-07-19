@@ -17,7 +17,7 @@ import {
   rewriteConfigModelRefs,
 } from "./codex-route-config-repair.js";
 import {
-  codexPluginIsBlockedOutsideEntry,
+  codexPluginRepairIsBlocked,
   collectConfigModelRefs,
   collectDisabledCodexPluginRouteHits,
   collectDisabledCodexPluginRouteIssues,
@@ -82,10 +82,10 @@ function formatLegacyLosslessCompactionWarning(params: {
 
 function formatDisabledCodexPluginWarning(params: {
   hits: DisabledCodexPluginRouteHit[];
-  blockedOutsideEntry: boolean;
+  repairBlocked: boolean;
 }): string {
-  const fixHint = params.blockedOutsideEntry
-    ? "- Enable plugin loading and remove `codex` from plugins.deny, or set the affected OpenAI models to an OpenClaw runtime policy."
+  const fixHint = params.repairBlocked
+    ? "- Enable plugins.entries.codex and plugin loading, and remove `codex` from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy."
     : "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.";
   return [
     "- Codex runtime is selected, but the Codex plugin is disabled.",
@@ -245,7 +245,7 @@ export function collectCodexRouteWarnings(params: {
     warnings.push(
       formatDisabledCodexPluginWarning({
         hits: disabledCodexPluginHits,
-        blockedOutsideEntry: codexPluginIsBlockedOutsideEntry(params.cfg),
+        repairBlocked: codexPluginRepairIsBlocked(params.cfg),
       }),
     );
   }

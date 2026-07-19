@@ -22,6 +22,7 @@ import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js"
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -46,6 +47,7 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
@@ -128,6 +130,12 @@ import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
+import {
+  buildChannelSourceTurnId,
+  readChannelSourceTurnId,
+  setChannelSourceTurnId,
+  shouldMintChannelSourceTurnId,
+} from "./source-turn-id.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -1408,14 +1416,17 @@ export async function runPreparedReply(
   );
   // Abort-signal attachment for queued followups:
   // - room_event: always inherit (source admission fence / ambient cancel).
-  // - Gateway-owned lifecycle (chat.send): always inherit so Esc can cancel a
-  //   turn after chat.send terminalizes while still queued.
+  // - Gateway-owned lifecycle (chat.send / turnAdoptionLifecycle): always inherit
+  //   so Esc can cancel a turn after chat.send terminalizes while still queued.
   // - plain user_request without lifecycle: deliberately detach from the
   //   source/active-lane signal so a superseded parent abort does not cancel a
   //   still-valid queued user turn.
+  const hasQueuedOwnershipLifecycle = Boolean(opts?.turnAdoptionLifecycle);
   const queuedFollowupAbortSignal =
-    opts?.queuedFollowupLifecycle || inboundEventKind === "room_event"
-      ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
+    hasQueuedOwnershipLifecycle || inboundEventKind === "room_event"
+      ? (opts?.queuedFollowupAbortSignal ??
+        opts?.turnAdoptionLifecycle?.abortSignal ??
+        opts?.abortSignal)
       : undefined;
   const replyRoute = resolveEffectiveReplyRoute({
     ctx: {
@@ -1429,25 +1440,81 @@ export async function runPreparedReply(
     },
     entry: preparedSessionState.sessionEntry,
   });
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: replyRoute.channel,
+    // Prefer Provider over Surface for fallback channel identity.
+    // Surface can carry relayed metadata while Provider owns reply routing.
+    provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
+  });
+  const sourceMessageId =
+    normalizeOptionalString(sessionCtx.MessageSidFull) ??
+    normalizeOptionalString(sessionCtx.MessageSid);
+  const sourceTurnId =
+    readChannelSourceTurnId(sessionCtx) ??
+    (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider)
+      ? buildChannelSourceTurnId({
+          provider: messageProvider,
+          accountId: replyRoute.accountId,
+          conversationId: replyRoute.to,
+          messageId: sourceMessageId,
+        })
+      : undefined);
+  setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
-  const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
-    hasMedia: userTurnMediaForPersistence.length > 0,
-  });
+  // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
+  // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
+  // room-event lines that merely contain the marker keep their real text.
+  const userTurnTranscriptText =
+    !hasUserBody && transcriptBody === MEDIA_ONLY_USER_TEXT
+      ? ""
+      : resolvePersistedUserTurnText(transcriptBody, {
+          hasMedia: userTurnMediaForPersistence.length > 0,
+        });
+  const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
+  const conversationRef = conversationIdentity?.conversationRef;
+  const transportMessageId =
+    normalizeOptionalString(sessionCtx.MessageSidFull) ??
+    normalizeOptionalString(sessionCtx.MessageSid);
+  const transportReplyToId =
+    normalizeOptionalString(sessionCtx.ReplyToIdFull) ??
+    normalizeOptionalString(sessionCtx.ReplyToId);
+  const transportThreadId =
+    sessionCtx.MessageThreadId === undefined
+      ? undefined
+      : normalizeOptionalString(String(sessionCtx.MessageThreadId));
+  const transportChannel =
+    normalizeOptionalString(conversationIdentity?.channel) ??
+    normalizeOptionalString(sessionCtx.OriginatingChannel) ??
+    normalizeOptionalString(sessionCtx.Provider);
+  const transport =
+    conversationRef ||
+    transportMessageId ||
+    transportReplyToId ||
+    transportThreadId ||
+    transportChannel
+      ? {
+          ...(transportChannel ? { channel: transportChannel } : {}),
+          ...(conversationRef ? { conversationRef } : {}),
+          ...(transportMessageId ? { messageId: transportMessageId } : {}),
+          ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
+          ...(transportThreadId ? { threadId: transportThreadId } : {}),
+        }
+      : undefined;
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
-          ...(inputProvenance ? { provenance: inputProvenance } : {}),
-          ...(userTurnMediaForPersistence.length > 0
-            ? {
-                media: userTurnMediaForPersistence,
-                mediaOnlyText: "[User sent media without caption]",
-              }
+          ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
+          ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
+          ...(isHeartbeat
+            ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
             : {}),
+          ...(transport ? { transport } : {}),
+          ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           // Persist the message's own arrival timestamp so the single
           // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
           // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that
@@ -1492,12 +1559,6 @@ export async function runPreparedReply(
             : undefined,
         })
       : undefined);
-  const messageProvider = resolveOriginMessageProvider({
-    originatingChannel: replyRoute.channel,
-    // Prefer Provider over Surface for fallback channel identity.
-    // Surface can carry relayed metadata while Provider owns reply routing.
-    provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
-  });
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
@@ -1510,7 +1571,7 @@ export async function runPreparedReply(
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
-    queuedLifecycle: opts?.queuedFollowupLifecycle,
+    turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -1538,6 +1599,7 @@ export async function runPreparedReply(
       runtimePolicySessionKey,
       messageProvider,
       clientCaps: ctx.GatewayClientCaps,
+      toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,

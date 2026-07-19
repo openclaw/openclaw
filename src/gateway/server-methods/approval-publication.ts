@@ -32,13 +32,19 @@ export type ExecApprovalIosPushDelivery = {
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
 };
 
+export type PluginApprovalIosPushDelivery = {
+  handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+};
+
 function broadcastResolvedEvent(params: {
+  approvalKind: "exec" | "plugin" | "system-agent";
   context: GatewayRequestContext;
   eventName: "exec.approval.resolved" | "plugin.approval.resolved" | "openclaw.approval.resolved";
   event: ExecApprovalResolved | PluginApprovalResolved | SystemAgentApprovalResolved;
   liveRecord: ExecApprovalRecord<ApprovalRequest>;
 }): void {
   const recipientConnIds = resolveApprovalRequestRecipientConnIds({
+    approvalKind: params.approvalKind,
     context: params.context,
     record: {
       id: params.liveRecord.id,
@@ -96,6 +102,7 @@ export async function publishAppliedApprovalResolution(params: {
   context: GatewayRequestContext;
   forwarder?: ExecApprovalForwarder;
   iosPushDelivery?: ExecApprovalIosPushDelivery;
+  pluginIosPushDelivery?: PluginApprovalIosPushDelivery;
 }): Promise<void> {
   const decision = params.record.decision ?? "deny";
   const resolvedBy = params.liveRecord.resolvedBy ?? null;
@@ -119,6 +126,7 @@ export async function publishAppliedApprovalResolution(params: {
     effect: "broadcast",
     run: () =>
       broadcastResolvedEvent({
+        approvalKind: params.record.kind,
         context: params.context,
         eventName,
         event,
@@ -157,6 +165,14 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: "plugin",
       effect: "forwarder",
       run: () => params.forwarder!.handlePluginApprovalResolved!(event as PluginApprovalResolved),
+    });
+  }
+  if (params.record.kind === "plugin" && params.pluginIosPushDelivery?.handleResolved) {
+    await runSideEffect({
+      context: params.context,
+      approvalKind: "plugin",
+      effect: "ios-push",
+      run: () => params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
     });
   }
 }

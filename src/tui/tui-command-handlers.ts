@@ -490,6 +490,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("Usage: /btw [side question]");
         }
         break;
+      case "queue":
+        await sendMessage(raw);
+        break;
       case "openclaw":
         chatLog.addSystem(
           args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",
@@ -744,7 +747,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           const result = await client.createSession({
             key: uniqueKey,
             agentId: state.currentAgentId,
-            ...(state.currentSessionId ? { parentSessionKey: state.currentSessionKey } : {}),
+            ...(state.currentSessionId
+              ? { parentSessionKey: state.currentSessionKey, succeedsParent: true }
+              : {}),
           });
           if (!result.key) {
             throw new Error("sessions.create returned no session key");

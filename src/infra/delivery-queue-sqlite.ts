@@ -6,12 +6,16 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
 type QueueStatus = "pending" | "failed" | "completed";
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
+
+export type DeliveryQueueCompletionRetention = "permanent";
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
 export type DeliveryQueueRowMetadata = {
@@ -23,15 +27,30 @@ export type DeliveryQueueRowMetadata = {
 };
 
 /** Persisted queue entry fields common to all delivery queue payloads. */
-type DeliveryQueueEntryState = {
+export type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
+  /** Durable delivery-call count reserved before invoking the provider path. */
+  attemptCount?: number;
+  completionRetention?: DeliveryQueueCompletionRetention;
   acknowledgedAt?: number;
   lastAttemptAt?: number;
   lastError?: string;
   platformSendStartedAt?: number;
   recoveryState?: string;
+};
+
+type UpsertDeliveryQueueEntryParams = {
+  queueName: string;
+  entry: DeliveryQueueEntryState;
+  metadata?: DeliveryQueueRowMetadata;
+  status?: QueueStatus;
+  stateDir?: string;
+  insertOnly?: boolean;
+  reviveFailedOrCorruptPending?: boolean;
+  updatePendingOnly?: boolean;
+  completeExisting?: boolean;
 };
 
 type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
@@ -102,22 +121,13 @@ function metadata(entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
   };
 }
 
-/** Insert or replace a delivery queue entry under a queue namespace. */
-export function upsertDeliveryQueueEntry(params: {
-  queueName: string;
-  entry: DeliveryQueueEntryState;
-  metadata?: DeliveryQueueRowMetadata;
-  status?: QueueStatus;
-  stateDir?: string;
-  insertOnly?: boolean;
-  reviveFailedOrCorruptPending?: boolean;
-  updatePendingOnly?: boolean;
-  completeExisting?: boolean;
-}): boolean {
+function upsertDeliveryQueueEntryInDatabase(
+  params: UpsertDeliveryQueueEntryParams,
+  database: ReturnType<typeof openStateDatabase>,
+): boolean {
   const now = Date.now();
   const status = params.status ?? "pending";
   const meta = params.metadata ?? metadata(params.entry);
-  const database = openStateDatabase(params.stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const insert = queueDb.insertInto("delivery_queue_entries").values({
     queue_name: params.queueName,
@@ -180,6 +190,159 @@ export function upsertDeliveryQueueEntry(params: {
         );
       });
   return executeSqliteQuerySync(database.db, query).numAffectedRows === 1n;
+}
+
+/** Insert or replace a delivery queue entry under a queue namespace. */
+export function upsertDeliveryQueueEntry(params: UpsertDeliveryQueueEntryParams): boolean {
+  return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir));
+}
+
+type CommitStagedDeliveryQueueEntryParams = {
+  queueName: string;
+  entry: DeliveryQueueEntryState;
+  metadata?: DeliveryQueueRowMetadata;
+  stagingId: string;
+  stagingQueueName: string;
+  stateDir?: string;
+};
+
+function commitStagedDeliveryQueueEntryInternal(
+  params: CommitStagedDeliveryQueueEntryParams,
+): "created" | "existing" | "missing" {
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const staging = executeSqliteQueryTakeFirstSync(
+        database.db,
+        queueDb
+          .selectFrom("delivery_queue_entries")
+          .select("id")
+          .where("queue_name", "=", params.stagingQueueName)
+          .where("id", "=", params.stagingId)
+          .where("status", "=", "pending"),
+      ) as { id: string } | undefined;
+      if (!staging) {
+        return "missing";
+      }
+      const inserted = upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: params.entry,
+          metadata: params.metadata,
+          insertOnly: true,
+        },
+        database,
+      );
+      if (!inserted) {
+        return "existing";
+      }
+      const deleted = executeSqliteQuerySync(
+        database.db,
+        queueDb
+          .deleteFrom("delivery_queue_entries")
+          .where("queue_name", "=", params.stagingQueueName)
+          .where("id", "=", params.stagingId)
+          .where("status", "=", "pending"),
+      );
+      if (deleted.numAffectedRows !== 1n) {
+        throw new Error(
+          `Delivery queue staging row changed during commit: ${params.stagingQueueName}/${params.stagingId}`,
+        );
+      }
+      return "created";
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: "commit staged delivery queue entry",
+    },
+  );
+}
+
+/** Atomically publish a queue row only while its staging row still exists. */
+export function commitStagedDeliveryQueueEntry(
+  params: CommitStagedDeliveryQueueEntryParams,
+): boolean {
+  const result = commitStagedDeliveryQueueEntryInternal(params);
+  if (result === "existing") {
+    throw new Error(`Delivery queue entry already exists: ${params.queueName}/${params.entry.id}`);
+  }
+  return result === "created";
+}
+
+/** Atomically publishes a stable queue id while preserving prior ownership. */
+export function commitStagedDeliveryQueueEntryOnce(
+  params: CommitStagedDeliveryQueueEntryParams,
+): "created" | "existing" | "missing" {
+  return commitStagedDeliveryQueueEntryInternal(params);
+}
+
+/**
+ * Expire abandoned staging rows and capture destination/staging ownership in
+ * one write snapshot. A concurrent commit either lands before this snapshot or
+ * loses its staging row and must fail closed.
+ */
+export function expireStagingAndLoadDeliveryQueueEntries(params: {
+  expireBeforeMs: number;
+  queueName: string;
+  stagingQueueName: string;
+  stateDir?: string;
+}): {
+  entries: DeliveryQueueEntryState[];
+  stagingEntries: DeliveryQueueEntryState[];
+} {
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const snapshot = runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      executeSqliteQuerySync(
+        database.db,
+        queueDb
+          .deleteFrom("delivery_queue_entries")
+          .where("queue_name", "=", params.stagingQueueName)
+          .where("status", "=", "pending")
+          .where("enqueued_at", "<=", params.expireBeforeMs),
+      );
+      const selectPending = (queueName: string) =>
+        executeSqliteQuerySync(
+          database.db,
+          queueDb
+            .selectFrom("delivery_queue_entries")
+            .select([
+              "id",
+              "entry_json",
+              "enqueued_at",
+              "retry_count",
+              "last_attempt_at",
+              "last_error",
+              "platform_send_started_at",
+              "recovery_state",
+            ])
+            .where("queue_name", "=", queueName)
+            .where("status", "=", "pending")
+            .orderBy("enqueued_at", "asc")
+            .orderBy("id", "asc"),
+        ).rows as QueueRow[];
+      return {
+        entryRows: selectPending(params.queueName),
+        stagingRows: selectPending(params.stagingQueueName),
+      };
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: "expire delivery queue staging entries",
+    },
+  );
+  return {
+    entries: snapshot.entryRows
+      .map(inflate)
+      .filter((entry): entry is DeliveryQueueEntryState => entry != null),
+    stagingEntries: snapshot.stagingRows
+      .map(inflate)
+      .filter((entry): entry is DeliveryQueueEntryState => entry != null),
+  };
 }
 
 /** Load a single pending delivery queue entry. */
@@ -276,11 +439,19 @@ export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir
 /** Retain a delivered row as a durable idempotency tombstone. */
 export function completeDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
   const now = Date.now();
+  const current = loadDeliveryQueueEntry(queueName, id, stateDir);
+  const retainPermanently = current?.completionRetention === "permanent";
   const tombstone = {
     id,
     enqueuedAt: now,
     retryCount: 0,
     acknowledgedAt: now,
+    ...(retainPermanently
+      ? {
+          completionRetention: "permanent" as const,
+          recoveryState: PERMANENT_COMPLETION_RECOVERY_STATE,
+        }
+      : {}),
   };
   const completed = upsertDeliveryQueueEntry({
     queueName,
@@ -296,7 +467,8 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
     }
     throw enoent(queueName, id);
   }
-  // Thirty days covers delayed producer replays while bounding successful-row growth.
+  // Ordinary receipts expire after thirty days. Permanent producer receipts
+  // survive because their source intent can outlive any bounded retry window.
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   executeSqliteQuerySync(
@@ -305,7 +477,13 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
       .deleteFrom("delivery_queue_entries")
       .where("queue_name", "=", queueName)
       .where("status", "=", "completed")
-      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
+      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS)
+      .where((eb) =>
+        eb.or([
+          eb("recovery_state", "is", null),
+          eb("recovery_state", "!=", PERMANENT_COMPLETION_RECOVERY_STATE),
+        ]),
+      ),
   );
 }
 
@@ -321,6 +499,59 @@ export function updateDeliveryQueueEntry(
     throw enoent(queueName, id);
   }
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
+}
+
+type ReserveDeliveryQueueAttemptResult =
+  | { status: "reserved"; attemptCount: number }
+  | { status: "exhausted"; attemptCount: number };
+
+/** Atomically reserve one provider-delivery call before executing it. */
+export function reserveDeliveryQueueEntryAttempt(params: {
+  queueName: string;
+  id: string;
+  maxAttempts: number;
+  stateDir?: string;
+}): ReserveDeliveryQueueAttemptResult {
+  if (!Number.isInteger(params.maxAttempts) || params.maxAttempts <= 0) {
+    throw new Error(`Invalid delivery attempt budget: ${params.maxAttempts}`);
+  }
+  const database = openStateDatabase(params.stateDir);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      if (!current) {
+        throw enoent(params.queueName, params.id);
+      }
+      const persistedAttemptCount =
+        typeof current.attemptCount === "number" &&
+        Number.isInteger(current.attemptCount) &&
+        current.attemptCount >= 0
+          ? current.attemptCount
+          : 0;
+      const attemptCount = Math.max(persistedAttemptCount, current.retryCount);
+      if (attemptCount >= params.maxAttempts) {
+        return { status: "exhausted", attemptCount };
+      }
+      const reservedAttemptCount = attemptCount + 1;
+      const updated = upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: { ...current, attemptCount: reservedAttemptCount },
+          updatePendingOnly: true,
+        },
+        database,
+      );
+      if (!updated) {
+        throw enoent(params.queueName, params.id);
+      }
+      return { status: "reserved", attemptCount: reservedAttemptCount };
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: `reserve ${params.queueName} delivery attempt`,
+    },
+  );
 }
 
 /** Dead-lettered entry counts for one queue namespace. */

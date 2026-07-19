@@ -43,6 +43,13 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
 vi.mock("../../commands/status.js", () => ({
@@ -2730,6 +2737,7 @@ describe("exec approval handlers", () => {
   type ExecApprovalGetArgs = Parameters<ExecApprovalHandlers["exec.approval.get"]>[0];
   type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
   type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
+  type ExecApprovalWaitArgs = Parameters<ExecApprovalHandlers["exec.approval.waitDecision"]>[0];
 
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
@@ -2777,6 +2785,7 @@ describe("exec approval handlers", () => {
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
     hasExecApprovalClients?: () => boolean;
+    chatAbortedRuns?: Map<string, number>;
   }): ExecApprovalRequestArgs["context"] {
     return context as unknown as ExecApprovalRequestArgs["context"];
   }
@@ -2907,6 +2916,25 @@ describe("exec approval handlers", () => {
     });
   }
 
+  async function waitExecApproval(params: {
+    handlers: ExecApprovalHandlers;
+    id: string;
+    respond: ReturnType<typeof vi.fn>;
+    context: object;
+  }) {
+    return expectDefined(
+      params.handlers["exec.approval.waitDecision"],
+      'params.handlers["exec.approval.waitDecision"] test invariant',
+    )({
+      params: { id: params.id },
+      respond: params.respond as unknown as ExecApprovalWaitArgs["respond"],
+      context: params.context as ExecApprovalWaitArgs["context"],
+      client: null,
+      req: { id: "req-wait", type: "req", method: "exec.approval.waitDecision" },
+      isWebchatConnect: execApprovalNoop,
+    });
+  }
+
   function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
@@ -2918,6 +2946,7 @@ describe("exec approval handlers", () => {
         broadcasts.push({ event, payload });
       },
       hasExecApprovalClients: () => true,
+      chatAbortedRuns: new Map<string, number>(),
     };
     return { manager, handlers, broadcasts, respond, context };
   }
@@ -2942,9 +2971,12 @@ describe("exec approval handlers", () => {
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
   ): Promise<{ id: string; request: Record<string, unknown> }> {
-    await vi.waitFor(() => {
-      expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
-    });
+    await waitForFast(
+      () => {
+        expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
+      },
+      { timeout: 5_000 },
+    );
     return getRequestedExecApprovalPayload(broadcasts);
   }
 
@@ -3101,6 +3133,76 @@ describe("exec approval handlers", () => {
     expect(broadcasts).toEqual([]);
   });
 
+  it("rejects approval registration after the owning run was aborted", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    context.chatAbortedRuns.set("run-aborted", Date.now());
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        runId: "run-aborted",
+        toolCallId: "tool-late",
+        host: "gateway",
+        command: "echo too-late",
+        commandArgv: ["echo", "too-late"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "approval run already aborted",
+    });
+    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+      reason: "EXEC_APPROVAL_RUN_ABORTED",
+    });
+    expect(manager.listPendingRecords()).toEqual([]);
+    expect(broadcasts).toEqual([]);
+  });
+
+  it("marks an allowed wait result run-aborted when abort wins before consumption", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: "approval-allowed-before-abort",
+        runId: "run-allowed-before-abort",
+        toolCallId: "tool-allowed-before-abort",
+        twoPhase: true,
+        host: "gateway",
+        command: "echo allowed",
+        commandArgv: ["echo", "allowed"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+    expect((await waitForRequestedExecApprovalPayload(broadcasts)).id).toBe(
+      "approval-allowed-before-abort",
+    );
+    expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
+    context.chatAbortedRuns.set("run-allowed-before-abort", Date.now());
+    await requestPromise;
+
+    const waitRespond = vi.fn();
+    await waitExecApproval({
+      handlers,
+      id: "approval-allowed-before-abort",
+      respond: waitRespond,
+      context,
+    });
+
+    expect(mockCallArg(waitRespond)).toBe(true);
+    expectRecordFields(mockCallArg(waitRespond, 0, 1), {
+      decision: "allow-once",
+      terminalReason: "run-aborted",
+    });
+  });
+
   it("returns pending approval details for exec.approval.get", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -3216,7 +3318,7 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3343,7 +3445,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3404,7 +3506,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3476,7 +3578,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3522,7 +3624,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3574,7 +3676,7 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3618,7 +3720,7 @@ describe("exec approval handlers", () => {
       client: requesterClient,
       params: { id: "approval-auto-review-mismatch", twoPhase: true },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3669,7 +3771,7 @@ describe("exec approval handlers", () => {
         approvalReviewerDeviceIds: ["device-ios-reviewer"],
       },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -3702,7 +3804,7 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
     const acceptedId = respond.mock.calls.find((call) => call[1]?.status === "accepted")?.[1]?.id;
@@ -4300,6 +4402,32 @@ describe("exec approval handlers", () => {
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it.each([
+    ["URL dot segment", ".."],
+    ["ANSI escape", "approval-\u001b[31mred"],
+    ["Unicode control", "approval-\u202Ehidden"],
+    ["embedded line feed", "approval-\nunsafe"],
+    ["overlong value", "a".repeat(129)],
+  ])("rejects an unsafe explicit approval id containing an %s", async (_label, id) => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id, host: "gateway" },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expect(mockCallArg(respond, 0, 2)).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "INVALID_APPROVAL_ID" },
+    });
+    expect(manager.getSnapshot(id)).toBeNull();
+    expect(broadcasts).toEqual([]);
+  });
+
   it("rejects explicit approval ids with the reserved plugin prefix", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
 
@@ -4482,7 +4610,7 @@ describe("exec approval handlers", () => {
       },
     });
     await waitForRequestedExecApprovalPayload(broadcasts);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
@@ -4563,7 +4691,7 @@ describe("exec approval handlers", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(lastMockCallArg(respond)).toBe(true);
       expectRecordFields(lastMockCallArg(respond, 1), {
         status: "accepted",
@@ -4646,7 +4774,7 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-ios-cleanup", host: "gateway" },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
     });
 
@@ -4658,7 +4786,7 @@ describe("exec approval handlers", () => {
     });
     await requestPromise;
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expectRecordFields(mockCallArg(iosPushDelivery.handleResolved), {
         id: "approval-ios-cleanup",
         decision: "allow-once",
@@ -4693,7 +4821,7 @@ describe("exec approval handlers", () => {
       await vi.advanceTimersByTimeAsync(250);
       await requestPromise;
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expectRecordFields(mockCallArg(iosPushDelivery.handleExpired), {
           id: "approval-ios-expire",
         });
@@ -4724,7 +4852,7 @@ describe("exec approval handlers", () => {
         },
       });
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(lastMockCallArg(respond)).toBe(true);
         expectRecordFields(lastMockCallArg(respond, 1), {
           status: "accepted",
@@ -4756,7 +4884,7 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     });
     expect(expireSpy).not.toHaveBeenCalled();

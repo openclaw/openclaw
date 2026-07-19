@@ -13,7 +13,6 @@ scenario:
     channel: matrix
     timeoutMs: 8000
     retryCount: 0
-    driver: live
     config:
       matrixConfigOverrides:
         groupPolicy: open

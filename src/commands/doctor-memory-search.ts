@@ -30,6 +30,7 @@ import {
   checkQmdBinaryAvailability,
   resolveQmdBinaryUnavailableReason,
 } from "../memory-host-sdk/engine-qmd.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditDreamingArtifacts,
@@ -440,6 +441,104 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   return entry.enabled === true || entry.config !== undefined;
 }
 
+function listRememberAcrossConversationAgentIds(
+  cfg: OpenClawConfig,
+  defaultAgentId: string,
+): string[] {
+  const configuredAgents = cfg.agents?.list ?? [];
+  const enabledAgentIds = configuredAgents
+    .filter((agent) => resolveRememberAcrossConversations(cfg, agent.id))
+    .map((agent) => agent.id.trim());
+  if (
+    resolveRememberAcrossConversations(cfg, defaultAgentId) &&
+    !enabledAgentIds.some(
+      (agentId) => agentId.toLowerCase() === defaultAgentId.trim().toLowerCase(),
+    )
+  ) {
+    enabledAgentIds.push(defaultAgentId);
+  }
+  return [...new Set(enabledAgentIds)];
+}
+
+function isActiveMemoryPluginAvailable(cfg: OpenClawConfig): boolean {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  if (!plugins.enabled || plugins.deny.includes("active-memory")) {
+    return false;
+  }
+  if (plugins.allow.length > 0 && !plugins.allow.includes("active-memory")) {
+    return false;
+  }
+  const entry = plugins.entries["active-memory"];
+  if (entry?.enabled === false) {
+    return false;
+  }
+  const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
+  return pluginConfig?.enabled !== false;
+}
+
+function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig): {
+  providerSupported: boolean;
+  memorySearchAllowed: boolean;
+} {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  const providerSupported = plugins.slots.memory === defaultSlotIdForKey("memory");
+  const entry = cfg.plugins?.entries?.["active-memory"];
+  const config = isRecord(entry?.config) ? entry.config : undefined;
+  if (!Array.isArray(config?.toolsAllow)) {
+    return { providerSupported, memorySearchAllowed: true };
+  }
+  return {
+    providerSupported,
+    memorySearchAllowed: config.toolsAllow.some(
+      (toolName) =>
+        typeof toolName === "string" && toolName.trim().toLowerCase() === "memory_search",
+    ),
+  };
+}
+
+function noteRememberAcrossConversationsHealth(params: {
+  cfg: OpenClawConfig;
+  defaultAgentId: string;
+  noteFn: typeof note;
+}): { defaultAgentEnabled: boolean } {
+  const agentIds = listRememberAcrossConversationAgentIds(params.cfg, params.defaultAgentId);
+  const activeMemoryAvailable = isActiveMemoryPluginAvailable(params.cfg);
+  const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
+  for (const agentId of agentIds) {
+    if (!activeMemoryAvailable) {
+      params.noteFn(
+        `Remember across conversations is effectively enabled for agent "${agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memorySearch.rememberAcrossConversations to false.`,
+        "Memory search",
+      );
+    }
+    if (activeMemoryAvailable && !conversationRecallSupport.providerSupported) {
+      params.noteFn(
+        `Remember across conversations is effectively enabled for agent "${agentId}", but the current memory provider does not support protected private transcript recall. Set memorySearch.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
+        "Memory search",
+      );
+    } else if (activeMemoryAvailable && !conversationRecallSupport.memorySearchAllowed) {
+      params.noteFn(
+        `Remember across conversations is effectively enabled for agent "${agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memorySearch.rememberAcrossConversations to false.`,
+        "Memory search",
+      );
+    }
+    if (
+      agentId.trim().toLowerCase() !== params.defaultAgentId.trim().toLowerCase() &&
+      !resolveMemorySearchConfig(params.cfg, agentId)
+    ) {
+      params.noteFn(
+        `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.`,
+        "Memory search",
+      );
+    }
+  }
+  return {
+    defaultAgentEnabled: agentIds.some(
+      (agentId) => agentId.trim().toLowerCase() === params.defaultAgentId.trim().toLowerCase(),
+    ),
+  };
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only checks where possible;
@@ -469,11 +568,21 @@ export async function noteMemorySearchHealth(
 
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+  const recallHealth = noteRememberAcrossConversationsHealth({
+    cfg,
+    defaultAgentId: agentId,
+    noteFn,
+  });
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
-    noteFn("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    noteFn(
+      recallHealth.defaultAgentEnabled
+        ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.`
+        : "Memory search is explicitly disabled (enabled: false).",
+      "Memory search",
+    );
     return;
   }
   const provider =
@@ -527,7 +636,11 @@ export async function noteMemorySearchHealth(
         );
       }
     }
-    if (resolved.sources?.includes("sessions") && cfg.memory?.qmd?.sessions?.enabled !== true) {
+    if (
+      resolved.sources?.includes("sessions") &&
+      !resolved.rememberAcrossConversations &&
+      cfg.memory?.qmd?.sessions?.enabled !== true
+    ) {
       noteFn(
         [
           "QMD memory backend is configured and the default agent resolves memorySearch.sources with sessions,",

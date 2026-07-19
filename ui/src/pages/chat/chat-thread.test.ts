@@ -8,9 +8,24 @@ import {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
+  persistedMessageEntryId,
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+
+describe("persistedMessageEntryId", () => {
+  it("rejects optimistic pending bubbles and accepts transcript identities", () => {
+    expect(
+      persistedMessageEntryId({
+        role: "user",
+        __openclaw: { id: "pending-send:1", kind: "pending-send" },
+      }),
+    ).toBeNull();
+    expect(persistedMessageEntryId({ role: "user", __openclaw: { id: "entry-1", seq: 2 } })).toBe(
+      "entry-1",
+    );
+  });
+});
 
 type CachedChatItemsProps = Parameters<typeof buildCachedChatItems>[0];
 type WorkGroupItem = Extract<
@@ -554,6 +569,24 @@ describe("buildCachedChatItems working spark", () => {
 
   it("shows the spark while a run works with nothing streaming", () => {
     expect(hasReadingIndicator({ runWorking: true })).toBe(true);
+  });
+
+  it("adds the plan to the active stream run and removes it when the run stops", () => {
+    const planStatus = {
+      steps: [{ step: "Inspect the route", status: "in_progress" as const }],
+    };
+    const activeItems = buildCachedChatItems(
+      createProps({ runActive: true, runWorking: true, planStatus }),
+    );
+
+    expect(coalesceStreamRuns(activeItems)).toMatchObject([
+      { kind: "stream-run", parts: [{ kind: "reading-indicator" }, { kind: "plan" }] },
+    ]);
+
+    const idleItems = buildCachedChatItems(
+      createProps({ runActive: false, runWorking: false, planStatus }),
+    );
+    expect(idleItems.some((item) => item.kind === "plan")).toBe(false);
   });
 
   it("keeps the run start time on the working indicator", () => {
@@ -1837,6 +1870,26 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(groupAt(groups, 0)).content).toBe("still visible");
   });
 
+  it("does not expose malformed tool stream entries to message rendering", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        toolMessages: [
+          null,
+          undefined,
+          {
+            role: "assistant",
+            content: [{ type: "toolcall", name: "heartbeat_respond", arguments: {} }],
+            timestamp: 1,
+          },
+        ],
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).role).toBe("assistant");
+  });
+
   it("does not collapse duplicate text messages separated by another message", () => {
     const groups = messageGroups({
       messages: [
@@ -2494,7 +2547,7 @@ describe("buildCachedChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Compacted history");
     expect(divider.description).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
     );
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");

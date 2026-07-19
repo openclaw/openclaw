@@ -61,6 +61,7 @@ const state = vi.hoisted(() => ({
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
   resolveAgentDeliveryPlanMock: vi.fn(),
+  resolveAgentDeliveryPlanWithSessionRouteMock: vi.fn(),
   resolveAgentOutboundTargetMock: vi.fn(),
   resolveMessageChannelSelectionMock: vi.fn(),
   createTrajectoryRuntimeRecorderMock: vi.fn(),
@@ -198,6 +199,15 @@ vi.mock("./command/session.js", () => ({
 
 vi.mock("./command/types.js", () => ({}));
 
+// Recovery ownership has dedicated store-backed coverage. This command suite
+// uses an intentionally synthetic session resolver with no durable store path.
+vi.mock("./main-session-recovery-store.js", () => ({
+  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
+  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
+  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
+  validateMainSessionRecoveryOwner: vi.fn(async () => true),
+}));
+
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
@@ -329,6 +339,8 @@ vi.mock("../infra/outbound/session-context.js", () => ({
 
 vi.mock("../infra/outbound/agent-delivery.js", () => ({
   resolveAgentDeliveryPlan: (...args: unknown[]) => state.resolveAgentDeliveryPlanMock(...args),
+  resolveAgentDeliveryPlanWithSessionRoute: (...args: unknown[]) =>
+    state.resolveAgentDeliveryPlanWithSessionRouteMock(...args),
   resolveAgentOutboundTarget: (...args: unknown[]) => state.resolveAgentOutboundTargetMock(...args),
 }));
 
@@ -1145,6 +1157,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         };
       },
     );
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockImplementation((params: unknown) =>
+      state.resolveAgentDeliveryPlanMock(params),
+    );
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
     state.prepareInternalSessionEffectsSessionMock.mockResolvedValue({
@@ -1646,7 +1661,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         userInput: {
           text: "",
           media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
-          mediaOnlyText: "[User sent media without caption]",
         },
       }),
     );
@@ -2974,7 +2988,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["control-ui-run", "recovery-run"]);
   });
 
   it("refreshes delivery session entries through the session accessor", async () => {
@@ -3252,6 +3266,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: "hello",
       sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
       deliver: true,
       runId: "stale-run",
     });
@@ -3404,7 +3421,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(sessionStore["agent:main:main"]).toEqual(laterRunEntry);
   });
 
-  it("stores pending final delivery with the current run delivery context", async () => {
+  it("stores and delivers with the prepared canonical current-run target", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     const sessionEntry: SessionEntry = {
@@ -3415,11 +3432,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
     state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: false });
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:1524410080953634829",
+      resolvedAccountId: "main",
+      deliveryTargetMode: "explicit",
+    });
 
     await agentCommand({
       message: "hello",
       channel: "discord",
-      to: "discord:dm:123",
+      to: "channel:general",
       accountId: "main",
       deliver: true,
     });
@@ -3432,10 +3456,71 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         pendingFinalDeliveryText: "ok",
         pendingFinalDeliveryContext: {
           channel: "discord",
-          to: "discord:dm:123",
+          to: "channel:1524410080953634829",
           accountId: "main",
         },
       }),
+    );
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({
+          replyChannel: "discord",
+          replyTo: "channel:1524410080953634829",
+          replyAccountId: "main",
+          deliveryTargetMode: "explicit",
+        }),
+      }),
+    );
+  });
+
+  it("rejects a strict delivery target before the model run", async () => {
+    setupSingleAttemptFallback();
+    const targetError = new Error('Unknown Discord target "channel:missing"');
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: targetError,
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+      }),
+    ).rejects.toBe(targetError);
+
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it("downgrades a rejected best-effort target to session-only before the model run", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+        bestEffortDeliver: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: expect.objectContaining({ deliver: false }) }),
     );
   });
 
@@ -3461,6 +3546,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await agentCommand({
       message: "hello",
+      channel: "whatsapp",
       to: "+1234567890",
       deliver: true,
     });
@@ -4206,7 +4292,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.suppressPromptPersistenceOnRetry).toBe(false);
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
-      content: "[User sent media without caption]",
+      content: "",
       MediaPath: "/media/inbound/image-1.png",
       MediaPaths: ["/media/inbound/image-1.png"],
       MediaType: "image/png",

@@ -24,7 +24,7 @@ scenario:
   execution:
     kind: flow
     summary: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
-    driver: qa-channel
+    channel: qa-channel
     config:
       memoryFact: "Thread-hidden codename: ORBIT-22."
       memoryQuery: "hidden thread codename ORBIT-22"

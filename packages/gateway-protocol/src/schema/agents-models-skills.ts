@@ -97,10 +97,10 @@ export const AgentsListResultSchema = closedObject({
   agents: Type.Array(AgentSummarySchema),
 });
 
-/** Creates a configured agent with workspace, identity, and optional model. */
+/** Creates a configured agent; the server supplies an omitted workspace. */
 export const AgentsCreateParamsSchema = closedObject({
   name: NonEmptyString,
-  workspace: NonEmptyString,
+  workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
@@ -115,12 +115,12 @@ export const AgentsCreateResultSchema = closedObject({
   model: Type.Optional(NonEmptyString),
 });
 
-/** Updates mutable agent identity, workspace, and model fields. */
+/** Updates mutable agent identity, workspace, and model fields; null clears the model override. */
 export const AgentsUpdateParamsSchema = closedObject({
   agentId: NonEmptyString,
   name: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
-  model: Type.Optional(NonEmptyString),
+  model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
 });
@@ -142,6 +142,22 @@ export const AgentsDeleteResultSchema = closedObject({
   ok: Type.Literal(true),
   agentId: NonEmptyString,
   removedBindings: Type.Integer({ minimum: 0 }),
+  removed: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        method: Type.Union([Type.Literal("trash"), Type.Literal("missing")]),
+      }),
+    ),
+  ),
+  failed: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: NonEmptyString,
+        reason: NonEmptyString,
+      }),
+    ),
+  ),
 });
 
 /** File metadata and optional content for agent-local editable files. */

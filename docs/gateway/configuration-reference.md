@@ -39,7 +39,7 @@ See [Configuration - agents](/gateway/config-agents) for:
 - `talk.*` (Talk mode)
   - `talk.consultThinkingLevel`: thinking level override for the full OpenClaw agent run behind Control UI Talk realtime consults
   - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
-  - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
+  - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on Android, iOS, and macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
   - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
@@ -450,9 +450,24 @@ See [Inferred commitments](/concepts/commitments).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
-- `tabCleanup` reclaims tracked primary-agent tabs after idle time or when a
-  session exceeds its cap. Set `idleMinutes: 0` or `maxTabsPerSession: 0` to
-  disable those individual cleanup modes.
+- `tabCleanup` controls best-effort periodic cleanup for tracked primary-agent
+  tabs after idle time or when a session exceeds its cap. Tracking applies only
+  to tabs created by browser tool `action: "open"`; tabs opened by the user or
+  with unknown ownership are never adopted. Set `idleMinutes: 0` or
+  `maxTabsPerSession: 0` to disable those individual cleanup modes. Disabling
+  `tabCleanup` does not disable explicit session lifecycle cleanup.
+- Host-local opens with a stable native CDP target and browser identity are
+  stored in shared SQLite state and remain eligible across Gateway restarts for
+  `/new` and session lifecycle cleanup. Native tool-facing CDP targets also
+  remain eligible for idle and cap cleanup after restart. Chrome MCP uses
+  process-local target handles, so cold existing-session records wait for
+  lifecycle cleanup rather than risking an idle sweep against unattributable
+  post-restart activity. OpenClaw verifies the profile and browser instance
+  before closing. Chrome MCP auto-connect, missing `/json/version` browser
+  identity, and unresolved native targets remain fully process-local, so they
+  are not automatically closed after a restart. Older untracked tabs require
+  manual closure. Transient failures stay pending for a later retry. See
+  [Tab cleanup ownership](/tools/browser#tab-cleanup-ownership).
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled when unset, so browser navigation stays strict by default.
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when you intentionally trust private-network browser navigation.
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
@@ -512,12 +527,31 @@ See [Inferred commitments](/concepts/commitments).
       name: "OpenClaw",
       avatar: "CB", // emoji, short text, image URL, or data URI
     },
+    prefs: {
+      theme: "claw", // claw | knot | dash | custom
+      themeMode: "system", // light | dark | system
+      textScale: 100, // 90 | 100 | 110 | 125 | 140
+      locale: "en",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatPersistCommentary: false,
+      chatSendShortcut: "enter", // enter | modifier-enter
+      chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
+    },
   },
 }
 ```
 
 - `seamColor`: accent color for native app UI chrome (Talk Mode bubble tint, etc.).
 - `assistant`: Control UI identity override. Falls back to active agent identity.
+- `prefs`: operator display preferences. This is the canonical home so agents can
+  change them through the approval gate and every Control UI client stays in
+  sync; browsers mirror the values into local storage for instant boot and keep
+  a device-local copy when they cannot write config (viewer scope, offline).
+  Connected clients apply server-side changes live: the gateway broadcasts a
+  hash-only `config.changed` event after every persisted config write and
+  clients refresh their snapshot (skipped while a local settings draft has
+  unsaved edits). Reconnecting clients reconcile on connect.
 
 ---
 
@@ -1441,11 +1475,13 @@ writer is best-effort, not a lossless compliance archive.
 
 ## Wizard
 
-Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
+Behavior and metadata for CLI guided setup flows (`onboard`, `configure`, `doctor`):
 
 ```json5
 {
   wizard: {
+    accessMode: "full",
+    appRecommendations: true,
     lastRunAt: "2026-01-01T00:00:00.000Z",
     lastRunVersion: "2026.1.4",
     lastRunCommit: "abc1234",
@@ -1455,6 +1491,10 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
   },
 }
 ```
+
+- `wizard.accessMode`: discovery consent chosen at the start of guided onboarding. `"full"` (recommended) lets setup look for AI apps, keys, and local runtimes automatically; `"guarded"` makes setup ask once before looking around and offers manual configuration instead.
+
+- `wizard.appRecommendations` defaults to `true`. Set it to `false` to disable installed-application recommendations during guided or classic onboarding and block Gateway `device.apps` access. Node hosts still require their separate, default-off installed-app sharing flag before they advertise the command.
 
 ---
 
