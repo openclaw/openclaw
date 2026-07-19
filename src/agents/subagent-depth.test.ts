@@ -59,7 +59,7 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(3);
   });
 
-  it("does not derive depth from parentSessionKey alone — /new rollover ancestry must not inflate subagent depth", () => {
+  it("derives visible dashboard depth from parentSessionKey", () => {
     const depth = getSubagentDepthFromSessionStore("agent:main:dashboard:child", {
       store: {
         "agent:main:main": { sessionId: "root" },
@@ -70,21 +70,26 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     });
 
-    expect(depth).toBe(0);
+    expect(depth).toBe(1);
   });
 
-  it("ignores parentSessionKey chain from repeated /new — all direct sessions report depth 0", () => {
+  it("resolves /new rollover sessions with explicit spawnDepth 0 to depth 0", () => {
+    // After session.ts writes spawnDepth: 0 on /new rollover, the resolver
+    // returns 0 directly without following parentSessionKey ancestry.
     const depth = getSubagentDepthFromSessionStore("agent:main:tui:third", {
       store: {
         "agent:main:tui:first": {
           sessionId: "first",
+          spawnDepth: 0,
         },
         "agent:main:tui:second": {
           sessionId: "second",
+          spawnDepth: 0,
           parentSessionKey: "agent:main:tui:first",
         },
         "agent:main:tui:third": {
           sessionId: "third",
+          spawnDepth: 0,
           parentSessionKey: "agent:main:tui:second",
         },
       },
@@ -135,7 +140,7 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(2);
   });
 
-  it("does not follow cross-agent parentSessionKey without spawnedBy lineage", async () => {
+  it("resolves a cross-agent parent outside the supplied child store", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-cross-agent-"));
     try {
       const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
@@ -163,10 +168,7 @@ describe("getSubagentDepthFromSessionStore", () => {
         },
       });
 
-      // parentSessionKey alone does not inflate depth — only spawnedBy (subagent
-      // lineage) or explicit spawnDepth counts. A dashboard child without subagent
-      // markers has depth 0.
-      expect(depth).toBe(0);
+      expect(depth).toBe(3);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

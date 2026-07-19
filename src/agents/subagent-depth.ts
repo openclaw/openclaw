@@ -157,7 +157,8 @@ export function getSubagentDepthFromSessionStore(
       return storedDepth;
     }
 
-    const parentKey = normalizeOptionalString(entry?.spawnedBy);
+    const parentKey =
+      normalizeOptionalString(entry?.spawnedBy) ?? normalizeOptionalString(entry?.parentSessionKey);
     if (!parentKey) {
       return undefined;
     }

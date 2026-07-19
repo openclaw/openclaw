@@ -906,7 +906,7 @@ describe("sessions_spawn tool", () => {
     expect(callGateway).toHaveBeenCalledTimes(2);
   });
 
-  it("allows spawn from visible dashboard descendants — parentSessionKey alone does not inflate depth", async () => {
+  it("applies spawn depth limits to visible dashboard descendants", async () => {
     await withTempDir({ prefix: "openclaw-visible-depth-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const childKey = "agent:main:dashboard:child";
@@ -918,9 +918,7 @@ describe("sessions_spawn tool", () => {
         { agentId: "main", sessionKey: childKey, storePath },
         { sessionId: "child", updatedAt: 1, parentSessionKey: "agent:main:main" },
       );
-      const callGateway = vi
-        .fn()
-        .mockResolvedValue({ key: "agent:main:subagent:nested", runId: "run-1" });
+      const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({
         agentSessionKey: childKey,
         config: {
@@ -936,8 +934,8 @@ describe("sessions_spawn tool", () => {
 
       const result = await tool.execute("visible-depth", { task: "inspect", visible: true });
 
-      expect(result.details).not.toBeUndefined();
-      expect(callGateway).toHaveBeenCalled();
+      expect(result.details).toMatchObject({ status: "forbidden" });
+      expect(callGateway).not.toHaveBeenCalled();
     });
   });
 
