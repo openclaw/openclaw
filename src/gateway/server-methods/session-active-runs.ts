@@ -116,8 +116,7 @@ export function resolveVisibleActiveSessionRunState(params: {
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
   });
-  const embeddedRunInProgress =
-    sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
+  const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
   return {

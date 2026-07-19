@@ -56,19 +56,19 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
+    hello: null,
     ...over,
   };
 }
 
 describe("replayPendingChatAbort", () => {
   it("dispatches a queued channel-session stop through sessions.abort", async () => {
-    let host!: AbortHost;
     const request = vi.fn(async () => {
       expect(host.pendingAbort).toBeNull();
       return { abortedRunId: null, status: "aborted" };
     });
     const sessionKey = "agent:main:telegram:direct:queued-user";
-    host = makeAbortHost({
+    const host = makeAbortHost({
       client: { request } as unknown as GatewayBrowserClient,
       pendingAbort: { runId: null, sessionKey, clearQueued: true },
     });

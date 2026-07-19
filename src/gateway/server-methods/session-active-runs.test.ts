@@ -1,13 +1,13 @@
 // Tests gateway active-run matching by logical session key and backing id.
 import { expect, it } from "vitest";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   hasVisibleActiveSessionRun,
@@ -99,6 +99,7 @@ it("does not project a terminal reply operation retained for settlement as activ
       }),
     ).toEqual({ active: true, runIds: [] });
 
+    operation.setPhase("running");
     expect(operation.abortByUser()).toBe(true);
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
     expect(

@@ -11,12 +11,13 @@ const chatAbortMock = vi.fn();
 const resolveSessionKeyForRunMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
-const isEmbeddedAgentRunActiveMock = vi.fn();
+const isEmbeddedAgentRunInProgressMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
 const clearSessionQueuesMock = vi.fn();
 const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
   canonicalKey: sessionKey,
 }));
+const loadGatewaySessionRowMock = vi.fn();
 
 vi.mock("../server-session-key.js", () => ({
   resolveSessionKeyForRun: (...args: unknown[]) => resolveSessionKeyForRunMock(...args),
@@ -48,6 +49,7 @@ vi.mock("../session-utils.js", async () => {
       loadCombinedSessionStoreForGatewayMock(...args),
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
   };
 });
 
@@ -61,7 +63,7 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
       abortEmbeddedAgentRunMock(sessionId);
       return actual.abortEmbeddedAgentRun(sessionId);
     },
-    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+    isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
   };
 });
 
@@ -220,8 +222,10 @@ describe("sessions.abort agent scope", () => {
       store: {},
     });
     loadSessionEntryMock.mockClear();
-    isEmbeddedAgentRunActiveMock.mockReset();
-    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    loadGatewaySessionRowMock.mockReset();
+    loadGatewaySessionRowMock.mockReturnValue(null);
+    isEmbeddedAgentRunInProgressMock.mockReset();
+    isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
     abortEmbeddedAgentRunMock.mockReset();
     clearSessionQueuesMock.mockReset();
     clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
@@ -254,7 +258,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({
       sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
     });
-    isEmbeddedAgentRunActiveMock.mockImplementation(
+    isEmbeddedAgentRunInProgressMock.mockImplementation(
       (sessionId: string) => sessionId === "sess-weixin",
     );
 
@@ -264,7 +268,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-channel-active" },
     );
 
-    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-weixin");
+    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith("sess-weixin");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -395,9 +399,12 @@ describe("sessions.abort agent scope", () => {
       canonicalKey: sessionKey,
       entry: { sessionId: "weixin-session" },
     }));
-    isEmbeddedAgentRunActiveMock.mockImplementation(
-      (sessionId: string) => sessionId === "weixin-session",
-    );
+    loadGatewaySessionRowMock.mockReturnValue({
+      key: "agent:main:openclaw-weixin:direct:wechat-user",
+      kind: "direct",
+      sessionId: "weixin-session",
+      updatedAt: null,
+    });
     const context = createContext({
       extra: {
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),

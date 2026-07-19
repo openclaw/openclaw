@@ -45,8 +45,7 @@ async function invokeAbort({
 }) {
   return await invokeChatAbortHandler({
     handler: onAuthorizedAfterQueuedAbort
-      ? (options) =>
-          handleChatAbortRequestWithLifecycle(options, { onAuthorizedAfterQueuedAbort })
+      ? (options) => handleChatAbortRequestWithLifecycle(options, { onAuthorizedAfterQueuedAbort })
       : expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
     context,
     request: {

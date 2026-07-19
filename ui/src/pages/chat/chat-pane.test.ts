@@ -472,7 +472,9 @@ describe("chat pane initialization", () => {
       },
     } as unknown as ApplicationContext;
     state.loadAssistantIdentity = vi.fn(async () => {});
-    state.realtimeTalkInputLevel = { set: vi.fn() } as ChatPageHost["realtimeTalkInputLevel"];
+    state.realtimeTalkInputLevel = {
+      set: vi.fn(),
+    } as unknown as ChatPageHost["realtimeTalkInputLevel"];
     state.resetToolStream = vi.fn();
     const snapshot = {
       ...pane.context.gateway.snapshot,
