@@ -32,9 +32,19 @@ describe("createReplyRestartRecoveryClaimController", () => {
       };
     });
     const recorder = {
+      message: undefined,
+      resolveMessage: async () => undefined,
+      markRuntimePersistencePending: () => {},
+      markRuntimePersisted: () => {},
+      markBlocked: () => {},
       hasPersisted: () => false,
+      isBlocked: () => false,
+      hasRuntimePersistencePending: () => false,
+      waitForRuntimePersistence: async () => {},
       persistApproved,
-    } satisfies Pick<UserTurnTranscriptRecorder, "hasPersisted" | "persistApproved">;
+      persistBlocked: async () => undefined,
+      persistFallback: async () => undefined,
+    } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
       getEntry: () => entry,
       getSessionId: () => sessionId,
