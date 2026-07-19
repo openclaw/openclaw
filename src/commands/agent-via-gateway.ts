@@ -873,7 +873,6 @@ async function agentViaGatewayCommand(
     );
 
   const recoverOriginalRun = async (
-    cause: unknown,
     fallbackReason: "gateway_timeout" | "gateway_closed",
   ): Promise<GatewayAgentResponse> => {
     const runId = acceptedRunId ?? idempotencyKey;
@@ -881,7 +880,6 @@ async function agentViaGatewayCommand(
     runtime.error?.(
       `Gateway connection became uncertain; waiting for original run ${runId} before considering fallback.`,
     );
-    let recoveryError: unknown = cause;
     let waitResponse: GatewayAgentResponse | undefined;
     try {
       waitResponse = await callGateway<GatewayAgentResponse>({
@@ -899,13 +897,13 @@ async function agentViaGatewayCommand(
       if (signalBridge.signal.aborted) {
         throw createAbortError("gateway agent recovery aborted");
       }
-      recoveryError = waitError;
     }
     if (waitResponse?.status === "error") {
       throw new Error(waitResponse.error?.trim() || `Gateway run ${runId} failed.`);
     }
+    let replay: GatewayAgentResponse;
     try {
-      const replay = await callGateway<GatewayAgentResponse>({
+      replay = await callGateway<GatewayAgentResponse>({
         method: "agent",
         params: { ...agentParams, replayOnly: true },
         expectFinal: true,
@@ -914,11 +912,6 @@ async function agentViaGatewayCommand(
         signal: signalBridge.signal,
         ...gatewayIdentity,
       });
-      if (!isInFlightGatewayAgentResponse(replay)) {
-        runtime.error?.(`Recovered terminal result for original Gateway run ${runId}.`);
-        return replay;
-      }
-      recoveryError = new Error(`Gateway run ${runId} is still in flight after recovery wait.`);
     } catch (replayError) {
       if (isAbortError(replayError)) {
         throw replayError;
@@ -926,10 +919,18 @@ async function agentViaGatewayCommand(
       if (signalBridge.signal.aborted) {
         throw createAbortError("gateway agent recovery aborted");
       }
-      recoveryError = replayError;
+      throw new GatewayAgentOutcomeUnknownError({
+        cause: replayError,
+        fallbackReason,
+        runId,
+      });
+    }
+    if (!isInFlightGatewayAgentResponse(replay)) {
+      runtime.error?.(`Recovered terminal result for original Gateway run ${runId}.`);
+      return replay;
     }
     throw new GatewayAgentOutcomeUnknownError({
-      cause: recoveryError,
+      cause: new Error(`Gateway run ${runId} is still in flight after recovery wait.`),
       fallbackReason,
       runId,
     });
@@ -941,10 +942,7 @@ async function agentViaGatewayCommand(
     try {
       response = await dispatchGatewayAgentCall(cfg);
       if (recoverInFlightResponse && isInFlightGatewayAgentResponse(response)) {
-        response = await recoverOriginalRun(
-          new Error(`Gateway retry found original run ${idempotencyKey} still in flight.`),
-          "gateway_closed",
-        );
+        response = await recoverOriginalRun("gateway_closed");
       }
       break;
     } catch (err) {
@@ -978,7 +976,7 @@ async function agentViaGatewayCommand(
         fallbackReason &&
         (!isTransientGatewayAgentConnectClose(err) || acceptedGatewayRun || recoverTransientClose)
       ) {
-        response = await recoverOriginalRun(err, fallbackReason);
+        response = await recoverOriginalRun(fallbackReason);
         break;
       }
       throw err;
