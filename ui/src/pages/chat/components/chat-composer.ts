@@ -2075,7 +2075,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
           `
         : hasComposedContent || !props.onToggleVoice
           ? props.dictation
-            ? html`${dictationControl} ${sendAction}`
+            ? html`${sendAction} ${dictationControl}`
             : sendAction
           : dictationControl}
   `;
@@ -2574,7 +2574,13 @@ export function renderChatComposer(props: ChatComposerProps) {
     },
     onError: (message: string) => props.onDictationError?.(message),
     onStateChange: requestUpdate,
-    onTap: () => props.onToggleRealtimeTalk?.(),
+    // With an initial empty composer, this button retains the existing
+    // send-after-typing behavior until the host rerenders the primary actions.
+    // Once a draft is rendered, the separate voice control starts Talk directly.
+    onTap:
+      actionDraft.trim() || props.attachments?.length
+        ? () => props.onToggleRealtimeTalk?.()
+        : handleVoicePrimaryAction,
   };
   state.dictation ??= new ComposerDictationController(dictationOptions);
   state.dictation.update(dictationOptions);
