@@ -4120,6 +4120,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Configuration
   - H3: Configuration reference
+  - H2: Automatic device approval
   - H2: Control UI pairing behavior
   - H2: Operator scopes header
   - H2: TLS termination and HSTS
