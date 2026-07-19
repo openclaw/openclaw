@@ -1,22 +1,25 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const expectedVersion = "0.1.0";
-const expectedTreeSHA256 = "9d603e69d28eb76faabb3cfce7d756103ce0163929c53ae1256278711a616e7e";
+const expectedTreeSHA256 = "f7faaf55a6c1c542116df0c32d4fa44ead8dbb3742eb0c7736915eb56972ab76";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const artifactRoot = resolve(root, "vendor", "openclaw-contracts");
-const packageJSON = JSON.parse(readFileSync(resolve(artifactRoot, "package.json"), "utf8"));
+const runtimeEntry = resolve(artifactRoot, "src", "index.mjs");
+const typesEntry = resolve(artifactRoot, "generated", "types", "index.d.ts");
 
-if (packageJSON.name !== "@openclaw/contracts" || packageJSON.version !== expectedVersion) {
-  throw new Error(
-    `@openclaw/contracts vendor package must be ${expectedVersion}, received ${packageJSON.name}@${packageJSON.version}`,
-  );
+for (const required of [runtimeEntry, typesEntry]) {
+  if (!existsSync(required)) {
+    throw new Error(`missing required contracts artifact file: ${relative(root, required)}`);
+  }
 }
 
-if (packageJSON.dependencies || packageJSON.devDependencies || packageJSON.peerDependencies) {
-  throw new Error("@openclaw/contracts vendor package must remain dependency-free");
+if (existsSync(join(artifactRoot, "package.json"))) {
+  throw new Error(
+    "vendor/openclaw-contracts/package.json must not exist; it trips dependency-guard as a nested manifest",
+  );
 }
 
 function listFiles(dir) {

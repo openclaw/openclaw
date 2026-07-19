@@ -41,7 +41,7 @@ Core consumes the committed vendored source tree at
 npm dependency and does not modify lockfiles. Approved tree SHA-256:
 
 ```text
-9d603e69d28eb76faabb3cfce7d756103ce0163929c53ae1256278711a616e7e
+f7faaf55a6c1c542116df0c32d4fa44ead8dbb3742eb0c7736915eb56972ab76
 ```
 
 Run:
