@@ -11,7 +11,7 @@ import {
   resolveRepoToolBinPath,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -316,7 +316,7 @@ const ENTRY_SHIMS_INPUTS = [
  */
 export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
   const entries =
-    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : publicPluginSdkEntrypoints;
+    env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : productionPluginSdkEntrypoints;
   return entries
     .flatMap((entry) => [
       `dist/plugin-sdk/${entry}.d.ts`,

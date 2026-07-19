@@ -405,7 +405,7 @@ For runtime hook debugging:
 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the shared SQLite state database under the active OpenClaw state directory. The `installed_plugin_index` row stores durable `installRecords` metadata, including records for broken or missing plugin manifests, plus a manifest-derived cold registry cache used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
 
-When OpenClaw sees shipped legacy `plugins.installs` records in config, runtime reads treat them as compatibility input without rewriting `openclaw.json`. Explicit plugin writes and `openclaw doctor --fix` move those records into the plugin index and remove the config key when config writes are allowed; if either write fails, the config records are kept so the install metadata is not lost.
+`plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite installed-plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
 
 ## Uninstall
 

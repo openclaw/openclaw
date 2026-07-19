@@ -3093,24 +3093,22 @@ describe("config cli", () => {
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: {
+            mode: "token",
+            token: {
+              source: "file",
+              provider: "vaultfile",
+              id: "/providers/search/apiKey",
+            },
+          },
+        },
         secrets: {
           providers: {
             vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: {
-                source: "file",
-                provider: "vaultfile",
-                id: "/providers/search/apiKey",
-              },
-            },
-          },
-        } as never,
       };
       setSnapshot(resolved, resolved);
       mockResolveSecretRefValue.mockImplementationOnce(async () => {
@@ -3134,24 +3132,22 @@ describe("config cli", () => {
 
     it("fails dry-run for nested provider edits that make existing refs unresolvable", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: {
+            mode: "token",
+            token: {
+              source: "file",
+              provider: "vaultfile",
+              id: "/providers/search/apiKey",
+            },
+          },
+        },
         secrets: {
           providers: {
             vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: {
-                source: "file",
-                provider: "vaultfile",
-                id: "/providers/search/apiKey",
-              },
-            },
-          },
-        } as never,
       };
       setSnapshot(resolved, resolved);
       mockResolveSecretRefValue.mockImplementationOnce(async () => {
@@ -3582,24 +3578,22 @@ describe("config cli", () => {
 
     it("validates existing refs when unset dry-run removes all secret providers", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: {
+            mode: "token",
+            token: {
+              source: "file",
+              provider: "vaultfile",
+              id: "/providers/search/apiKey",
+            },
+          },
+        },
         secrets: {
           providers: {
             vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: {
-                source: "file",
-                provider: "vaultfile",
-                id: "/providers/search/apiKey",
-              },
-            },
-          },
-        } as never,
       };
       setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);
@@ -3620,7 +3614,10 @@ describe("config cli", () => {
 
     it("validates existing refs when unset dry-run removes secret defaults", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: { mode: "token", token: "${WEB_SEARCH_API_KEY}" },
+        },
         secrets: {
           defaults: {
             env: "vaultenv",
@@ -3630,14 +3627,6 @@ describe("config cli", () => {
             vaultenv: { source: "env" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: "${WEB_SEARCH_API_KEY}",
-            },
-          },
-        } as never,
       } as OpenClawConfig;
       setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);

@@ -620,6 +620,19 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     );
   });
 
+  it("keeps bundled-private runtime shims in production while gating QA helpers", () => {
+    const productionOutputs = resolveBoundaryEntryShimRequiredOutputs({});
+    const privateQaOutputs = resolveBoundaryEntryShimRequiredOutputs({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+    });
+
+    expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
+    expect(productionOutputs).not.toContain("dist/plugin-sdk/codex-native-task-runtime.d.ts");
+    expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    expect(privateQaOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
+    expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
+  });
+
   it("parses prep mode and rejects unknown values", () => {
     expect(parseMode([])).toBe("all");
     expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");

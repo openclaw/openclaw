@@ -9,7 +9,7 @@ import {
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
-  publicPluginSdkEntrypoints,
+  productionPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -165,9 +165,9 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
+const selectedPluginSdkEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
-  : publicPluginSdkEntrypoints;
+  : productionPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -504,7 +504,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
+      Object.entries(buildPluginSdkEntrySources(selectedPluginSdkEntrypoints)).map(
         ([entry, source]) => [`plugin-sdk/${entry}`, source],
       ),
     ),

@@ -980,36 +980,35 @@ describe("web_search unsupported filter response", () => {
 });
 
 describe("web_search scoped config merge", () => {
-  it("returns the original config when no plugin config exists", () => {
+  it("drops retired provider config when no plugin config exists", () => {
     const searchConfig = { provider: "grok", grok: { model: "grok-4-1-fast" } };
-    expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toBe(searchConfig);
+    expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toEqual({ provider: "grok" });
   });
 
-  it("merges plugin config into the scoped provider object", () => {
-    expect(
-      mergeScopedSearchConfig({ provider: "grok", grok: { model: "old-model" } }, "grok", {
+  it("projects plugin config into a runtime-only provider object", () => {
+    const merged = mergeScopedSearchConfig(
+      { provider: "grok", grok: { model: "old-model" } },
+      "grok",
+      {
         model: "new-model",
         apiKey: "xai-test-key",
-      }),
-    ).toEqual({
-      provider: "grok",
-      grok: { model: "new-model", apiKey: "xai-test-key" },
-    });
+      },
+    );
+
+    expect(merged?.grok).toEqual({ model: "new-model", apiKey: "xai-test-key" });
+    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
   });
 
   it("can mirror the plugin apiKey to the top level config", () => {
-    expect(
-      mergeScopedSearchConfig(
-        { provider: "brave", brave: { count: 5 } },
-        "brave",
-        { apiKey: "brave-test-key" },
-        { mirrorApiKeyToTopLevel: true },
-      ),
-    ).toEqual({
-      provider: "brave",
-      apiKey: "brave-test-key",
-      brave: { count: 5, apiKey: "brave-test-key" },
-    });
+    const merged = mergeScopedSearchConfig(
+      { provider: "brave", brave: { count: 5 } },
+      "brave",
+      { apiKey: "brave-test-key" },
+      { mirrorApiKeyToTopLevel: true },
+    );
+
+    expect(merged).toEqual({ provider: "brave", apiKey: "brave-test-key" });
+    expect(merged?.brave).toEqual({ apiKey: "brave-test-key" });
   });
 
   it("keeps mirrored Brave plugin config runtime-only when newly injected", () => {

@@ -41,6 +41,41 @@ export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
  */
 export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints;
 
+// These local-only entries were already omitted from ordinary packaged builds
+// before bundled runtime facades moved behind the same private-local boundary.
+const nonProductionPluginSdkSubpathSet = new Set([
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "codex-native-task-runtime",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-state-test-runtime",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "qa-channel",
+  "qa-channel-protocol",
+  "qa-lab",
+  "qa-runtime",
+  "reply-payload-testing",
+  "sqlite-runtime-testing",
+  "ssrf-runtime-internal",
+  "test-env",
+  "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
+  "test-node-mocks",
+]);
+
+/** Plugin SDK entrypoints built in ordinary source and packaged runtime builds. */
+export const productionPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
+  (entry) => !nonProductionPluginSdkSubpathSet.has(entry),
+);
+
 /**
  * Deprecated public plugin SDK subpaths kept for compatibility.
  * @internal Shared repository-script contract.
