@@ -2330,11 +2330,7 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return false;
     }
-    return reconcileWaitingApprovalsFromSnapshot(
-      state,
-      approvalQueue,
-      hasAbortableSessionRun(state),
-    );
+    return reconcileWaitingApprovalsFromSnapshot(state, approvalQueue);
   }
 
   private applyApplicationConfig(config: ApplicationContext["config"]["current"]) {

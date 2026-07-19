@@ -225,6 +225,11 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
 }
 
 function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
+  if (runId) {
+    host.knownAgentRunIds?.delete(runId);
+  } else {
+    host.knownAgentRunIds?.clear();
+  }
   clearTimer(host.compactionClearTimer);
   host.compactionClearTimer = null;
   if (host.compactionStatus) {
