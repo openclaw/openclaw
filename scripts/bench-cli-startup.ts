@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
-import { signalExitCode, terminateManagedChild } from "./lib/managed-child-process.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mjs";
 
 type CommandCase = {
   id: string;
@@ -110,61 +110,27 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
 const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
-const TERMINATION_SIGNALS: NodeJS.Signals[] =
-  process.platform === "win32"
-    ? ["SIGHUP", "SIGINT", "SIGTERM"]
-    : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+const BENCHMARK_BUDGET_MESSAGE_KIND = "openclaw-cli-startup-bench-budget";
 const ACTIVE_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-active-sample";
 const CLEARED_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-cleared-sample";
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
-let activeSampleProcess: ReturnType<typeof spawn> | undefined;
-let requestedTerminationSignal: NodeJS.Signals | undefined;
 
-function notifySampleProcess(kind: string, pid: number | undefined): void {
-  if (!pid || typeof process.send !== "function") {
+function notifyParent(message: object): void {
+  if (typeof process.send !== "function") {
     return;
   }
   try {
-    process.send({ kind, pid }, () => {});
+    process.send(message, () => {});
   } catch {
     // The updater may close its IPC channel while force-terminating this driver.
   }
 }
 
-class BenchmarkTerminationError extends Error {
-  constructor(readonly signal: NodeJS.Signals) {
-    super(`CLI startup benchmark terminated by ${signal}`);
-    this.name = "BenchmarkTerminationError";
+function notifySampleProcess(kind: string, pid: number | undefined): void {
+  if (pid) {
+    notifyParent({ kind, pid });
   }
-}
-
-function throwIfTerminationRequested(): void {
-  if (requestedTerminationSignal) {
-    throw new BenchmarkTerminationError(requestedTerminationSignal);
-  }
-}
-
-function installTerminationHandlers(): () => void {
-  const handlers = new Map<NodeJS.Signals, () => void>();
-  for (const signal of TERMINATION_SIGNALS) {
-    const handler = () => {
-      requestedTerminationSignal ??= signal;
-      process.exitCode = signalExitCode(requestedTerminationSignal);
-      if (activeSampleProcess) {
-        // Samples run in their own process groups. Reap the active group before
-        // the updater's force-kill grace expires, or the CLI can outlive its driver.
-        terminateManagedChild(activeSampleProcess, "SIGKILL");
-      }
-    };
-    handlers.set(signal, handler);
-    process.on(signal, handler);
-  }
-  return () => {
-    for (const [signal, handler] of handlers) {
-      process.off(signal, handler);
-    }
-  };
 }
 
 function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
@@ -820,7 +786,6 @@ async function runSample(params: {
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
-      activeSampleProcess = proc;
       notifySampleProcess(ACTIVE_SAMPLE_MESSAGE_KIND, proc.pid);
 
       const finish = (sample: Omit<Sample, "ms" | "firstOutputMs" | "maxRssMb">) => {
@@ -831,9 +796,6 @@ async function runSample(params: {
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
           forceKillTimer = null;
-        }
-        if (activeSampleProcess === proc) {
-          activeSampleProcess = undefined;
         }
         notifySampleProcess(CLEARED_SAMPLE_MESSAGE_KIND, proc.pid);
         const ms = Number(process.hrtime.bigint() - started) / 1e6;
@@ -897,10 +859,7 @@ async function runSample(params: {
                   stderrTail: tailLines(stderr, 20),
                 }),
           });
-        if (
-          (timedOut || requestedTerminationSignal) &&
-          isSampleProcessGroupAlive(proc, useProcessGroup)
-        ) {
+        if (timedOut && isSampleProcessGroupAlive(proc, useProcessGroup)) {
           void finishAfterTimeoutCleanup({
             complete,
             forceKillAt,
@@ -986,9 +945,7 @@ async function runCase(params: {
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
   for (let i = 0; i < totalRuns; i += 1) {
-    throwIfTerminationRequested();
     const sample = await runSample(params);
-    throwIfTerminationRequested();
     if (i < params.warmup) {
       continue;
     }
@@ -1266,6 +1223,16 @@ async function main(): Promise<void> {
     printDelta(baseline, candidate);
     return;
   }
+  const suiteCount = options.entrySecondary ? 2 : 1;
+  const timeoutMs =
+    options.cases.length *
+    suiteCount *
+    (options.runs + options.warmup) *
+    (options.timeoutMs + 2 * TIMEOUT_KILL_GRACE_MS);
+  if (!Number.isSafeInteger(timeoutMs)) {
+    throw new Error("CLI startup benchmark total timeout exceeds the safe integer range");
+  }
+  notifyParent({ kind: BENCHMARK_BUDGET_MESSAGE_KIND, timeoutMs });
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-"));
   const rssHookPath = buildRssHook(tmpDir);
   try {
@@ -1357,15 +1324,8 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const removeTerminationHandlers = installTerminationHandlers();
-  try {
-    await main();
-  } catch (error: unknown) {
-    if (!(error instanceof BenchmarkTerminationError)) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
-    }
-  } finally {
-    removeTerminationHandlers();
-  }
+  await main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
 }

@@ -1,5 +1,5 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,57 +19,6 @@ function isProcessAlive(pid: number): boolean {
     stdio: ["ignore", "pipe", "ignore"],
   });
   return status.status !== 0 || !/^\s*Z/u.test(status.stdout);
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (!existsSync(filePath)) {
-    if (Date.now() >= deadlineAt) {
-      throw new Error(`Timed out waiting for ${filePath}`);
-    }
-    await new Promise<void>((resolveWait) => {
-      setTimeout(resolveWait, 25);
-    });
-  }
-}
-
-async function waitForChildExit(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return true;
-  }
-  return await new Promise<boolean>((resolveWait) => {
-    const onClose = () => {
-      clearTimeout(timeout);
-      resolveWait(true);
-    };
-    const timeout = setTimeout(() => {
-      child.off("close", onClose);
-      resolveWait(false);
-    }, timeoutMs);
-    child.once("close", onClose);
-    if (child.exitCode !== null || child.signalCode !== null) {
-      child.off("close", onClose);
-      clearTimeout(timeout);
-      resolveWait(true);
-    }
-  });
-}
-
-async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  if (await waitForChildExit(child, 1_000)) {
-    return;
-  }
-  child.kill("SIGKILL");
-  if (!(await waitForChildExit(child, 1_000))) {
-    child.unref();
-  }
 }
 
 describe("bench-cli-startup", () => {
@@ -222,101 +171,6 @@ describe("bench-cli-startup", () => {
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
-        }
-        tempDirs.cleanup();
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "cleans the active benchmark process group when the driver receives SIGQUIT",
-    async () => {
-      const tempDirs = createTempDirTracker();
-      const tmpDir = tempDirs.make("openclaw-cli-startup-driver-termination-");
-      const entryPath = join(tmpDir, "entry.mjs");
-      const samplePidPath = join(tmpDir, "sample.pid");
-      const descendantPidPath = join(tmpDir, "descendant.pid");
-      let samplePid: number | undefined;
-      let descendantPid: number | undefined;
-      let driver: ReturnType<typeof spawn> | undefined;
-      try {
-        writeFileSync(
-          entryPath,
-          [
-            "import { spawn } from 'node:child_process';",
-            "import { writeFileSync } from 'node:fs';",
-            `writeFileSync(${JSON.stringify(samplePidPath)}, String(process.pid));`,
-            "const child = spawn(process.execPath, [",
-            "  '-e',",
-            "  \"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);\",",
-            "], { stdio: 'ignore' });",
-            `writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));`,
-            "process.on('SIGTERM', () => {});",
-            "setInterval(() => {}, 1000);",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
-
-        const runningDriver = spawn(
-          process.execPath,
-          [
-            "--import",
-            "tsx",
-            "scripts/bench-cli-startup.ts",
-            "--entry",
-            entryPath,
-            "--case",
-            "version",
-            "--runs",
-            "1",
-            "--warmup",
-            "0",
-            "--timeout-ms",
-            "60000",
-            "--json",
-          ],
-          {
-            cwd: join(__dirname, "../.."),
-            env: {
-              ...process.env,
-              OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "50",
-              VITEST: "1",
-            },
-            stdio: "ignore",
-          },
-        );
-        driver = runningDriver;
-
-        await waitForFile(descendantPidPath, 5_000);
-        samplePid = Number(readFileSync(samplePidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        runningDriver.kill("SIGQUIT");
-        const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-          (resolveResult, rejectResult) => {
-            runningDriver.once("error", rejectResult);
-            runningDriver.once("close", (code, signal) => resolveResult({ code, signal }));
-          },
-        );
-
-        expect(result.code).toBe(131);
-        expect(result.signal).toBeNull();
-        expect(isProcessAlive(samplePid)).toBe(false);
-        expect(isProcessAlive(descendantPid)).toBe(false);
-      } finally {
-        if (driver) {
-          await stopChild(driver);
-        }
-        if (samplePid === undefined && existsSync(samplePidPath)) {
-          samplePid = Number(readFileSync(samplePidPath, "utf8"));
-        }
-        if (descendantPid === undefined && existsSync(descendantPidPath)) {
-          descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        }
-        if (samplePid !== undefined && isProcessAlive(samplePid)) {
-          process.kill(-samplePid, "SIGKILL");
-        } else if (descendantPid !== undefined && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
         }
         tempDirs.cleanup();
       }

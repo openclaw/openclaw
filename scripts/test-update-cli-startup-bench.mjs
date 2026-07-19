@@ -18,22 +18,15 @@ import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
 import { signalExitCode, terminateManagedChild } from "./lib/managed-child-process.mjs";
 
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
-const DEFAULT_BENCHMARK_TIMEOUT_KILL_GRACE_MS = 1_000;
+const DEFAULT_BENCHMARK_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS = 5_000;
 const FORWARDED_SIGNALS =
   process.platform === "win32"
     ? ["SIGHUP", "SIGINT", "SIGTERM"]
     : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+const BENCHMARK_BUDGET_MESSAGE_KIND = "openclaw-cli-startup-bench-budget";
 const ACTIVE_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-active-sample";
 const CLEARED_SAMPLE_MESSAGE_KIND = "openclaw-cli-startup-bench-cleared-sample";
-// A timed-out sample can spend one grace before SIGKILL and another reaping its process group.
-// Keep these preset counts aligned with COMMAND_CASES or a valid fixture run can be cut short.
-const BENCHMARK_TIMEOUT_CLEANUP_WINDOWS = 2;
-const BENCHMARK_CASE_COUNTS = {
-  startup: 6,
-  real: 14,
-  all: 43,
-};
 
 function resolveTestDurationMs(envName, fallback) {
   const raw = process.env.VITEST ? process.env[envName] : undefined;
@@ -42,25 +35,6 @@ function resolveTestDurationMs(envName, fallback) {
   }
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) ? parsed : fallback;
-}
-
-function resolveBenchmarkProcessTimeoutMs(opts) {
-  const caseCount = BENCHMARK_CASE_COUNTS[opts.preset] ?? BENCHMARK_CASE_COUNTS.all;
-  const timeoutKillGraceMs = resolveTestDurationMs(
-    "OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS",
-    DEFAULT_BENCHMARK_TIMEOUT_KILL_GRACE_MS,
-  );
-  const processCleanupGraceMs = resolveTestDurationMs(
-    "OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS",
-    DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS,
-  );
-  const totalRuns = opts.runs + opts.warmup;
-  const perRunBudgetMs = opts.timeoutMs + BENCHMARK_TIMEOUT_CLEANUP_WINDOWS * timeoutKillGraceMs;
-  const totalTimeoutMs = caseCount * totalRuns * perRunBudgetMs + processCleanupGraceMs;
-  if (!Number.isSafeInteger(totalTimeoutMs)) {
-    throw new Error("CLI startup benchmark total timeout exceeds the safe integer range");
-  }
-  return totalTimeoutMs;
 }
 
 function resolveTemporaryOutputPath(outputPath) {
@@ -142,8 +116,11 @@ function publishBenchmarkOutput(temporaryOutputPath, outputDestination) {
   renameSync(temporaryOutputPath, outputDestination.path);
 }
 
-async function runBenchmarkDriver(args, opts) {
-  const timeoutMs = resolveBenchmarkProcessTimeoutMs(opts);
+async function runBenchmarkDriver(args) {
+  const startupTimeoutMs = resolveTestDurationMs(
+    "OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS",
+    DEFAULT_BENCHMARK_STARTUP_TIMEOUT_MS,
+  );
   const terminationGraceMs = resolveTestDurationMs(
     "OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS",
     DEFAULT_BENCHMARK_PROCESS_CLEANUP_GRACE_MS,
@@ -162,9 +139,21 @@ async function runBenchmarkDriver(args, opts) {
     let forceKillTimer;
     let forceKillSettleTimer;
     let activeSamplePid;
+    let deadlineTimer;
     const signalHandlers = new Map();
     const onMessage = (message) => {
       if (
+        message?.kind === BENCHMARK_BUDGET_MESSAGE_KIND &&
+        Number.isSafeInteger(message.timeoutMs) &&
+        message.timeoutMs > 0 &&
+        !timedOut &&
+        !receivedSignal
+      ) {
+        const totalTimeoutMs = message.timeoutMs + terminationGraceMs;
+        if (Number.isSafeInteger(totalTimeoutMs)) {
+          scheduleDeadline(totalTimeoutMs);
+        }
+      } else if (
         message?.kind === ACTIVE_SAMPLE_MESSAGE_KIND &&
         Number.isSafeInteger(message.pid) &&
         message.pid > 1
@@ -247,6 +236,15 @@ async function runBenchmarkDriver(args, opts) {
         forceKillDriver();
       }, terminationGraceMs);
     };
+    const scheduleDeadline = (timeoutMs) => {
+      clearTimeout(deadlineTimer);
+      deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        // The driver owns detached sample groups, so let it reap them before the
+        // bounded force-kill fallback restores control to this updater.
+        terminateDriver("SIGTERM");
+      }, timeoutMs);
+    };
     for (const signal of FORWARDED_SIGNALS) {
       const handler = () => {
         receivedSignal ??= signal;
@@ -255,12 +253,7 @@ async function runBenchmarkDriver(args, opts) {
       signalHandlers.set(signal, handler);
       process.on(signal, handler);
     }
-    const deadlineTimer = setTimeout(() => {
-      timedOut = true;
-      // The driver owns detached sample groups, so let it reap them before the
-      // bounded force-kill fallback restores control to this updater.
-      terminateDriver("SIGTERM");
-    }, timeoutMs);
+    scheduleDeadline(startupTimeoutMs);
 
     const onError = () => finish(null, null);
     const onClose = (status, signal) => {
@@ -340,7 +333,7 @@ const args = [
 ];
 
 try {
-  const run = await runBenchmarkDriver(args, opts);
+  const run = await runBenchmarkDriver(args);
 
   if (run.status !== 0 || run.timedOut || run.receivedSignal) {
     process.exitCode = run.timedOut

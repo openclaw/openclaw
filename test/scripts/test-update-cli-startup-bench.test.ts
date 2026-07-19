@@ -41,21 +41,9 @@ const UPDATE_SCRIPT_PATH = path.resolve(process.cwd(), "scripts/test-update-cli-
 const originalArgv = [...process.argv];
 const originalExitCode = process.exitCode;
 const originalVitest = process.env.VITEST;
-const originalTimeoutCleanupGrace = process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS;
+const originalStartupTimeout = process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS;
 const originalProcessCleanupGrace =
   process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS;
-
-function countBenchmarkCases(preset: "startup" | "real" | "all"): number {
-  const source = readFileSync(path.resolve(process.cwd(), "scripts/bench-cli-startup.ts"), "utf8");
-  const start = source.indexOf("const COMMAND_CASES");
-  const end = source.indexOf("] as const;", start);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  const cases = [...source.slice(start, end).matchAll(/presets:\s*\[([^\]]+)\]/gu)].map((match) =>
-    [...(match[1] ?? "").matchAll(/"([^"]+)"/gu)].map((entry) => entry[1]),
-  );
-  return preset === "all" ? cases.length : cases.filter((entry) => entry.includes(preset)).length;
-}
 
 function mockSuccessfulBenchmarkRun(contents = "replacement\n") {
   spawnMock.mockImplementation((_command, args: string[]) => {
@@ -93,10 +81,10 @@ afterEach(() => {
   } else {
     process.env.VITEST = originalVitest;
   }
-  if (originalTimeoutCleanupGrace === undefined) {
-    delete process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS;
+  if (originalStartupTimeout === undefined) {
+    delete process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS;
   } else {
-    process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS = originalTimeoutCleanupGrace;
+    process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS = originalStartupTimeout;
   }
   if (originalProcessCleanupGrace === undefined) {
     delete process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS;
@@ -111,46 +99,41 @@ afterEach(() => {
 });
 
 describe("test-update-cli-startup-bench", () => {
-  it("gives the benchmark driver a hard total deadline beyond all internal run budgets", async () => {
-    delete process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS;
+  it("uses the benchmark driver's canonical budget after a bounded startup phase", async () => {
+    delete process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS;
     delete process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS;
-    mockSuccessfulBenchmarkRun("{}\n");
+    spawnMock.mockImplementation((_command, args: string[]) => {
+      const child = Object.assign(new EventEmitter(), { pid: 123_456, kill: vi.fn() });
+      const outputIndex = args.indexOf("--output");
+      writeFileSync(args[outputIndex + 1] ?? "", "{}\n", "utf8");
+      queueMicrotask(() => {
+        child.emit("message", {
+          kind: "openclaw-cli-startup-bench-budget",
+          timeoutMs: 1_234,
+        });
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-budget-"));
 
     try {
-      for (const preset of ["startup", "real", "all"] as const) {
-        const outputPath = path.join(fixtureRoot, `${preset}.json`);
-        process.argv = [
-          process.execPath,
-          UPDATE_SCRIPT_PATH,
-          "--out",
-          outputPath,
-          "--preset",
-          preset,
-          "--runs",
-          "2",
-          "--warmup",
-          "1",
-          "--timeout-ms",
-          "100",
-        ];
-        spawnMock.mockClear();
-        setTimeoutSpy.mockClear();
-        await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
+      const outputPath = path.join(fixtureRoot, "startup.json");
+      setSuccessfulUpdateArgv(outputPath);
+      await import(pathToFileURL(UPDATE_SCRIPT_PATH).href);
 
-        expect(spawnMock).toHaveBeenCalledOnce();
-        const args = spawnMock.mock.calls[0]?.[1] as string[];
-        const options = spawnMock.mock.calls[0]?.[2];
-        const internalBudgetMs = countBenchmarkCases(preset) * (2 + 1) * (100 + 2 * 1_000);
-        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), internalBudgetMs + 5_000);
-        expect(options?.detached).toBe(process.platform !== "win32");
-        expect(options?.stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
-        expect(args.at(-1)).not.toBe(outputPath);
-        expect(path.dirname(args.at(-1) ?? "")).toBe(path.dirname(outputPath));
-        expect(readFileSync(outputPath, "utf8")).toBe("{}\n");
-        vi.resetModules();
-      }
+      expect(spawnMock).toHaveBeenCalledOnce();
+      const args = spawnMock.mock.calls[0]?.[1] as string[];
+      const options = spawnMock.mock.calls[0]?.[2];
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 6_234);
+      expect(options?.detached).toBe(process.platform !== "win32");
+      expect(options?.stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
+      expect(args.at(-1)).not.toBe(outputPath);
+      expect(path.dirname(args.at(-1) ?? "")).toBe(path.dirname(outputPath));
+      expect(readFileSync(outputPath, "utf8")).toBe("{}\n");
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
@@ -158,7 +141,7 @@ describe("test-update-cli-startup-bench", () => {
 
   it("settles after force kill even when the driver never emits close", async () => {
     process.env.VITEST = "true";
-    process.env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS = "0";
+    process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS = "0";
     process.env.OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS = "10";
     const fixtureRoot = mkdtempSync(path.join(process.cwd(), ".tmp-cli-startup-no-close-"));
     const outputPath = path.join(fixtureRoot, "cli-startup-bench.json");
@@ -316,7 +299,7 @@ describe("test-update-cli-startup-bench", () => {
           env: {
             ...process.env,
             VITEST: "true",
-            OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "0",
+            OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS: "0",
             OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS: "100",
           },
           killSignal: "SIGKILL",
@@ -378,7 +361,7 @@ describe("test-update-cli-startup-bench", () => {
           env: {
             ...process.env,
             VITEST: "true",
-            OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS: "0",
+            OPENCLAW_TEST_CLI_STARTUP_BENCH_STARTUP_TIMEOUT_MS: "0",
             OPENCLAW_TEST_CLI_STARTUP_BENCH_PROCESS_CLEANUP_GRACE_MS: "1500",
           },
           killSignal: "SIGKILL",
