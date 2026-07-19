@@ -4154,6 +4154,11 @@
       "translated": "Talk Provider सेटअप"
     },
     {
+      "id": "native.android.23b638094c34b916",
+      "source": "Microphone",
+      "translated": "माइक्रोफ़ोन"
+    },
+    {
       "id": "native.android.98a8bbb2b1f382e6",
       "source": "Audio Test",
       "translated": "ऑडियो टेस्ट"
@@ -4197,6 +4202,66 @@
       "id": "native.android.05bd460309ac6db6",
       "source": "Done",
       "translated": "हो गया"
+    },
+    {
+      "id": "native.android.8d9ecdfdd916b780",
+      "source": "Automatic",
+      "translated": "स्वचालित"
+    },
+    {
+      "id": "native.android.c1626a6700a570f6",
+      "source": "Preferred microphone unavailable; using automatic routing.",
+      "translated": "पसंदीदा माइक्रोफ़ोन उपलब्ध नहीं है; स्वचालित रूटिंग का उपयोग किया जा रहा है।"
+    },
+    {
+      "id": "native.android.820bc5d0ce571d8b",
+      "source": "Prioritizes connected Bluetooth microphones.",
+      "translated": "कनेक्ट किए गए Bluetooth माइक्रोफ़ोन को प्राथमिकता देता है।"
+    },
+    {
+      "id": "native.android.11e48038d5e8bff6",
+      "source": "Preferred microphone",
+      "translated": "पसंदीदा माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.android.eaa4d7563a46d307",
+      "source": "Unavailable",
+      "translated": "अनुपलब्ध"
+    },
+    {
+      "id": "native.android.9f5ebf17eb405ba8",
+      "source": "Next session",
+      "translated": "अगला सत्र"
+    },
+    {
+      "id": "native.android.8c4e91f53928efb2",
+      "source": "Built-in microphone",
+      "translated": "बिल्ट-इन माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.android.14b613cb6e2446b4",
+      "source": "Bluetooth microphone",
+      "translated": "Bluetooth माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.android.c885247b2d7ce271",
+      "source": "Bluetooth LE microphone",
+      "translated": "Bluetooth LE माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.android.b6a4e674c5fb441a",
+      "source": "Wired headset microphone",
+      "translated": "वायर्ड हेडसेट माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.android.9c8becb3b0fb5a90",
+      "source": "USB microphone",
+      "translated": "USB माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.android.ba46258fadec7a39",
+      "source": "External microphone",
+      "translated": "बाहरी माइक्रोफ़ोन"
     },
     {
       "id": "native.android.60cf67eb5ec46ea0",
@@ -6717,6 +6782,16 @@
       "id": "native.android.5d4f2992e2320c3e",
       "source": "Unmute",
       "translated": "अनम्यूट करें"
+    },
+    {
+      "id": "native.android.cb608d82c5b3352a",
+      "source": "Back camera",
+      "translated": "पिछला कैमरा"
+    },
+    {
+      "id": "native.android.e89a0e780eed2e1e",
+      "source": "Front camera",
+      "translated": "सामने का कैमरा"
     },
     {
       "id": "native.android.d7ffaa41c514ba38",
