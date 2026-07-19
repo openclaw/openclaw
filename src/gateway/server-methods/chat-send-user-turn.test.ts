@@ -123,7 +123,7 @@ describe("prepareChatSendUserTurn", () => {
     await expect(readInput()).resolves.toEqual(controller.baseInput);
   });
 
-  it("carries pre-staged media and device ownership without UI sender decoration", async () => {
+  it("carries authenticated UI sender identity with pre-staged media and device ownership", async () => {
     const { controller, readInput } = createUserTurnInputController();
     const prepared = prepareChatSendUserTurn({
       request: {
@@ -154,6 +154,13 @@ describe("prepareChatSendUserTurn", () => {
       }),
       client: {
         connId: "conn-1",
+        authenticatedUserId: "alice@example.com",
+        authenticatedUserProfile: {
+          profileId: "profile-alice",
+          displayName: "Alice",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
         connect: {
           device: { id: "device-1" },
           scopes: ["operator.admin"],
@@ -181,8 +188,10 @@ describe("prepareChatSendUserTurn", () => {
       MediaStaged: true,
       GatewayClientScopes: ["operator.admin"],
       GatewayClientCaps: ["tool-events"],
+      SenderId: "profile-alice",
+      SenderName: "Alice",
     });
-    expect(prepared.ctx).not.toHaveProperty("SenderId");
+    expect(prepared.ctx).not.toHaveProperty("SenderUsername");
     expect(prepared.queuedFollowupOwnerKey).toBe("device:device-1");
     await expect(readInput()).resolves.toEqual(controller.baseInput);
   });

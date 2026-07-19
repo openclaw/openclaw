@@ -674,10 +674,8 @@ export function buildInboundUserContextPrefix(
       ? normalizePromptMetadataString(ctx.ReplyToId)
       : undefined,
     conversation_label: isDirect ? undefined : normalizePromptMetadataString(ctx.ConversationLabel),
-    sender: shouldIncludeConversationInfo
-      ? Object.values(senderIdentity).some((value) => value !== undefined)
-        ? senderIdentity
-        : undefined
+    sender: Object.values(senderIdentity).some((value) => value !== undefined)
+      ? senderIdentity
       : undefined,
     timestamp: timestampStr,
     source_modality: resolveInboundSourceModality(ctx),

@@ -16,6 +16,7 @@ import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 type PreparedChatSendAttachments = Extract<
@@ -131,6 +132,7 @@ function buildChatSendMessageContext(params: {
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     params.originatingRoute;
+  const authenticatedSender = gatewayClientSenderFields(params.client).sender;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
   const ctx: MsgContext = {
@@ -167,13 +169,18 @@ function buildChatSendMessageContext(params: {
         },
     MessageSid: params.clientRunId,
     ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-    ...(!isOperatorUiClient(params.clientInfo)
+    ...(authenticatedSender
       ? {
-          SenderId: params.clientInfo?.id,
-          SenderName: params.clientInfo?.displayName,
-          SenderUsername: params.clientInfo?.displayName,
+          SenderId: authenticatedSender.id,
+          SenderName: authenticatedSender.name,
         }
-      : {}),
+      : !isOperatorUiClient(params.clientInfo)
+        ? {
+            SenderId: params.clientInfo?.id,
+            SenderName: params.clientInfo?.displayName,
+            SenderUsername: params.clientInfo?.displayName,
+          }
+        : {}),
     GatewayClientScopes: params.client?.connect?.scopes ?? [],
     GatewayClientCaps: params.client?.connect?.caps ?? [],
     GatewayRunToolBindings: params.toolBindings,

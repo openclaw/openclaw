@@ -552,6 +552,21 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
+  it("includes sender identity without message identifiers for direct webchat chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "webchat",
+      MessageSid: "short-id",
+      SenderId: "profile-alice",
+      SenderName: "Alice",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toEqual({ id: "profile-alice", name: "Alice" });
+    expect(conversationInfo["message_id"]).toBeUndefined();
+    expect(conversationInfo["chat_id"]).toBeUndefined();
+  });
+
   it("includes message identifiers for direct external-channel chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
