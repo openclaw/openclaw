@@ -38,33 +38,6 @@ export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
       delete_files INTEGER NOT NULL DEFAULT 1
     ) STRICT
   `);
-  const hasOperationId = database
-    .prepare("PRAGMA table_info(agent_deletion_journal)")
-    .all()
-    .some((column) => (column as { name?: unknown }).name === "operation_id");
-  if (!hasOperationId) {
-    database.exec(
-      "ALTER TABLE agent_deletion_journal ADD COLUMN operation_id TEXT NOT NULL DEFAULT ''",
-    );
-  }
-  const hasCleanupCompleted = database
-    .prepare("PRAGMA table_info(agent_deletion_journal)")
-    .all()
-    .some((column) => (column as { name?: unknown }).name === "cleanup_completed");
-  if (!hasCleanupCompleted) {
-    database.exec(
-      "ALTER TABLE agent_deletion_journal ADD COLUMN cleanup_completed INTEGER NOT NULL DEFAULT 0",
-    );
-  }
-  const hasDeleteFiles = database
-    .prepare("PRAGMA table_info(agent_deletion_journal)")
-    .all()
-    .some((column) => (column as { name?: unknown }).name === "delete_files");
-  if (!hasDeleteFiles) {
-    database.exec(
-      "ALTER TABLE agent_deletion_journal ADD COLUMN delete_files INTEGER NOT NULL DEFAULT 1",
-    );
-  }
 }
 
 function fromRow(row: {
