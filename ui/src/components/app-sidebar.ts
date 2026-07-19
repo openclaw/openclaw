@@ -21,7 +21,6 @@ import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
-import "./viewer-facepile.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -43,6 +42,7 @@ const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platfo
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 let lobsterPetModuleLoad: Promise<unknown> | null = null;
+let viewerFacepileModuleLoad: Promise<unknown> | null = null;
 
 function scheduleLobsterPetLoad() {
   if (lobsterPetModuleLoad || customElements.get("openclaw-lobster-pet")) {
@@ -55,6 +55,25 @@ function scheduleLobsterPetLoad() {
     // whole session; a deploy-pruned chunk stays off until reload, by design.
     lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
       lobsterPetModuleLoad = null;
+      window.addEventListener("online", () => start(), { once: true });
+    });
+  };
+  if ("requestIdleCallback" in window) {
+    requestIdleCallback(() => start(), { timeout: 3000 });
+  } else {
+    setTimeout(start, 1500);
+  }
+}
+
+function scheduleViewerFacepileLoad() {
+  if (viewerFacepileModuleLoad || customElements.get("openclaw-viewer-facepile")) {
+    return;
+  }
+  const start = () => {
+    // Viewer avatars are non-critical chrome, so their Lit and tooltip code
+    // upgrades after first paint instead of consuming the startup JS budget.
+    viewerFacepileModuleLoad ??= import("./viewer-facepile.ts").catch(() => {
+      viewerFacepileModuleLoad = null;
       window.addEventListener("online", () => start(), { once: true });
     });
   };
@@ -92,6 +111,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
     scheduleLobsterPetLoad();
+    scheduleViewerFacepileLoad();
   }
 
   override disconnectedCallback() {

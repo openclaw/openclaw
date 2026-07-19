@@ -37,7 +37,6 @@ import {
   resolveSidebarSessionSubtitle,
 } from "./session-row-subtitle.ts";
 import "./elapsed-time.ts";
-import "./viewer-facepile.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 

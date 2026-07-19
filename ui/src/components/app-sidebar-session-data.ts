@@ -46,7 +46,7 @@ import {
   type PresenceViewer,
   projectPresenceViewers,
   readPresenceEntries,
-} from "./viewer-facepile.ts";
+} from "./viewer-presence.ts";
 
 /** Gateway-backed session and external-catalog synchronization. */
 export abstract class AppSidebarSessionDataElement extends AppSidebarBase {

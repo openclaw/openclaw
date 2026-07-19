@@ -11,6 +11,8 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
+await import("../../components/viewer-facepile.ts");
+
 describe("AppSidebar update card wiring", () => {
   it("shows OpenClaw in the default sidebar entries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);

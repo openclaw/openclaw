@@ -253,7 +253,7 @@ export type SessionMessageSubscriberRegistry = {
   clear: () => void;
 };
 
-export type SessionMessageSubscription = (() => void) & { commit: () => void };
+type SessionMessageSubscription = (() => void) & { commit: () => void };
 
 type ProvisionalSubscriptionState = {
   active: boolean;
@@ -367,8 +367,6 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       if (!normalizedConnId || !normalizedSessionKey) {
         return undefined;
       }
-      const hadMessages =
-        sessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
       const hadApprovals =
         approvalSessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
       const recency = connToSessionRecency.get(normalizedConnId) ?? new Map<string, number>();
