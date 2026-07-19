@@ -14,6 +14,12 @@ type ConfigModelRefResolver = (params: {
   ref: TouchedModelRef;
 }) => Promise<string | undefined>;
 
+export type ConfigModelRefCheckResult = {
+  refsChecked: number;
+  refsTotal: number;
+  errors: string[];
+};
+
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
 }
@@ -41,11 +47,21 @@ function collectTouchedTextModelRefs(params: {
   config: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
 }): TouchedModelRef[] {
+  const defaultPrimaryPath = ["agents", "defaults", "model", "primary"];
+  const defaultPrimaryTouched = params.touchedPaths.some(
+    (touchedPath) =>
+      isPathPrefix(touchedPath, defaultPrimaryPath) ||
+      isPathPrefix(defaultPrimaryPath, touchedPath),
+  );
   return collectConfiguredModelRefs(params.config)
     .map(({ path, value }) => parseTextModelRef(path, value))
     .filter((ref): ref is TouchedModelRef => {
       if (!ref) {
         return false;
+      }
+      // Bare fallbacks inherit the global primary provider at runtime, including per-agent ones.
+      if (ref.fallback && defaultPrimaryTouched && !ref.value.includes("/")) {
+        return true;
       }
       const refPath = ref.path.split(".");
       return params.touchedPaths.some(
@@ -126,25 +142,46 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
   };
 }
 
-export async function validateTouchedTextModelRefs(params: {
+function formatModelRefError(ref: TouchedModelRef, error: string): string {
+  const detail = error.endsWith(".") ? error : `${error}.`;
+  return `Cannot set model reference "${ref.value}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`;
+}
+
+export async function checkTouchedTextModelRefs(params: {
   config: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
   resolveModelRef?: ConfigModelRefResolver;
-}): Promise<number> {
+  createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
+}): Promise<ConfigModelRefCheckResult> {
   const refs = collectTouchedTextModelRefs(params);
   if (refs.length === 0) {
-    return 0;
+    return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
-  const resolveModelRef = params.resolveModelRef ?? (await createRuntimeModelRefResolver());
+  let resolveModelRef = params.resolveModelRef;
+  if (!resolveModelRef) {
+    try {
+      resolveModelRef = await (params.createModelRefResolver ?? createRuntimeModelRefResolver)();
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      return {
+        refsChecked: 0,
+        refsTotal: refs.length,
+        errors: [`Unable to validate changed model references before writing: ${detail}`],
+      };
+    }
+  }
+  const errors: string[] = [];
   for (const ref of refs) {
-    const error = await resolveModelRef({ config: params.config, ref });
+    let error: string | undefined;
+    try {
+      error = await resolveModelRef({ config: params.config, ref });
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    }
     if (!error) {
       continue;
     }
-    const detail = error.endsWith(".") ? error : `${error}.`;
-    throw new Error(
-      `Cannot set model reference "${ref.value}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`,
-    );
+    errors.push(formatModelRefError(ref, error));
   }
-  return refs.length;
+  return { refsChecked: refs.length, refsTotal: refs.length, errors };
 }

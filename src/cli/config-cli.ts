@@ -73,7 +73,7 @@ import {
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import { validateTouchedTextModelRefs } from "./config-model-validation.js";
+import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type {
   ConfigSetDryRunError,
@@ -2233,13 +2233,11 @@ async function runConfigOperations(params: {
       allowExecInDryRun: Boolean(options.allowExec),
     });
     const errors: ConfigSetDryRunError[] = [];
-    const modelRefsChecked = await validateTouchedTextModelRefs({
+    const modelRefCheck = await checkTouchedTextModelRefs({
       config: nextConfig,
       touchedPaths: operations.map((operation) => operation.setPath),
-    }).catch((error: unknown) => {
-      errors.push({ kind: "model", message: String(error) });
-      return 1;
     });
+    errors.push(...modelRefCheck.errors.map((message) => ({ kind: "model" as const, message })));
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
       errors.push(
         ...policyIssueLines.map((message) => ({
@@ -2281,12 +2279,13 @@ async function runConfigOperations(params: {
           requiresFullSchemaValidation ||
           policyIssueLines.length > 0 ||
           pluginIntegrationProviderErrors.length > 0,
-        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefsChecked > 0,
+        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefCheck.refsTotal > 0,
         resolvabilityComplete:
-          (hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefsChecked > 0) &&
-          selectedDryRunRefs.skippedExecRefs.length === 0,
+          (hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefCheck.refsTotal > 0) &&
+          selectedDryRunRefs.skippedExecRefs.length === 0 &&
+          modelRefCheck.refsChecked === modelRefCheck.refsTotal,
       },
-      refsChecked: selectedDryRunRefs.refsToResolve.length + modelRefsChecked,
+      refsChecked: selectedDryRunRefs.refsToResolve.length + modelRefCheck.refsChecked,
       skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
       ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
     };
@@ -2338,10 +2337,14 @@ async function runConfigOperations(params: {
     );
   }
 
-  await validateTouchedTextModelRefs({
+  const modelRefCheck = await checkTouchedTextModelRefs({
     config: nextConfig,
     touchedPaths: operations.map((operation) => operation.setPath),
   });
+  const firstModelError = modelRefCheck.errors[0];
+  if (firstModelError) {
+    throw new Error(firstModelError);
+  }
 
   await replaceConfigFile({
     nextConfig,

@@ -29,7 +29,7 @@ const mockWriteConfigFile = vi.fn<
   ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
-const mockValidateTouchedTextModelRefs = vi.fn();
+const mockCheckTouchedTextModelRefs = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
@@ -64,7 +64,7 @@ vi.mock("../config/runtime-schema.js", () => ({
 }));
 
 vi.mock("./config-model-validation.js", () => ({
-  validateTouchedTextModelRefs: (...args: unknown[]) => mockValidateTouchedTextModelRefs(...args),
+  checkTouchedTextModelRefs: (...args: unknown[]) => mockCheckTouchedTextModelRefs(...args),
 }));
 
 vi.mock("../gateway/config-reload-plan.js", () => ({
@@ -503,7 +503,7 @@ describe("config cli", () => {
       throw new ExitError(code, errorMessages || undefined);
     });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
-    mockValidateTouchedTextModelRefs.mockResolvedValue(0);
+    mockCheckTouchedTextModelRefs.mockResolvedValue({ refsChecked: 0, refsTotal: 0, errors: [] });
   });
 
   describe("config set - issue #6070", () => {
@@ -685,7 +685,7 @@ describe("config cli", () => {
       expect(written.agents?.defaults?.models).toEqual({
         "google/gemini-3.1-pro-preview": { alias: "gemini" },
       });
-      expect(mockValidateTouchedTextModelRefs).toHaveBeenCalledWith({
+      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
         config: written,
         touchedPaths: [["agents", "defaults", "model", "primary"]],
       });
@@ -696,11 +696,13 @@ describe("config cli", () => {
         agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
       };
       setSnapshot(resolved, resolved);
-      mockValidateTouchedTextModelRefs.mockRejectedValueOnce(
-        new Error(
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [
           'Cannot set model reference "missing/nope" at agents.defaults.model.primary: Unknown model: missing/nope. Run openclaw models list to list available models.',
-        ),
-      );
+        ],
+      });
 
       await expect(
         runConfigCommand(["config", "set", "agents.defaults.model.primary", "missing/nope"]),
@@ -716,11 +718,13 @@ describe("config cli", () => {
         agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
       };
       setSnapshot(resolved, resolved);
-      mockValidateTouchedTextModelRefs.mockRejectedValueOnce(
-        new Error(
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [
           'Cannot set model reference "missing/nope" at agents.defaults.model.primary: Unknown model: missing/nope. Run openclaw models list to list available models.',
-        ),
-      );
+        ],
+      });
 
       await expect(
         runConfigCommand([
@@ -745,6 +749,38 @@ describe("config cli", () => {
             message: expect.stringContaining('Cannot set model reference "missing/nope"'),
           },
         ],
+      });
+    });
+
+    it("reports model resolver setup failures as incomplete dry-run JSON", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 0,
+        refsTotal: 1,
+        errors: ["Unable to validate changed model references before writing: catalog unavailable"],
+      });
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "agents.defaults.model.primary",
+          '"openai/gpt-5.4-mini"',
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as ConfigSetDryRunResult;
+      expect(payload).toMatchObject({
+        ok: false,
+        checks: { resolvability: true, resolvabilityComplete: false },
+        refsChecked: 0,
+        errors: [{ kind: "model", message: expect.stringContaining("catalog unavailable") }],
       });
     });
 
