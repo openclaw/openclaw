@@ -107,6 +107,62 @@ const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_KEYS = new Set([
   ...TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS,
 ]);
 
+/**
+ * Returns true when the position in `str` is inside matching Python-style
+ * quotes (single or double), indicating a string literal rather than
+ * code structure.  Real newlines reset quote state because Python string
+ * literals cannot span lines without explicit continuation.
+ */
+function isInsideStringLiteral(str: string, pos: number): boolean {
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = 0; i < pos; i++) {
+    const c = str[i];
+    if (c === "\n") {
+      inDouble = false;
+      inSingle = false;
+    } else if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+    }
+  }
+  return inDouble || inSingle;
+}
+
+/**
+ * Returns true when every double-quoted span in `str` that contains a
+ * Python keyword (def, class, if, for, while, with, try, except, import,
+ * from, return, yield, pass, break, continue, raise, assert, del, global,
+ * nonlocal) is treated as a code container rather than a string literal.
+ * This prevents the quote check from skipping repairs inside `python -c`
+ * and similar inline-code wrappers.
+ */
+function isInsideCodeContainer(str: string, pos: number): boolean {
+  // Walk backward from pos to find the opening double-quote and then
+  // check whether the text preceding it looks like a code launcher.
+  let i = pos;
+  while (i >= 0) {
+    if (str[i] === '"') {
+      // Check what comes before the opening quote.
+      const before = str.slice(Math.max(0, i - 16), i);
+      if (/(?:-\s*[ce]|python|node(?:\.exe)?)\s*$/i.test(before)) {
+        return true;
+      }
+      // Check the quoted content for Python keywords (sampled — the
+      // first 256 chars of the quoted region).
+      const start = i + 1;
+      const sample = str.slice(start, start + 256);
+      if (/\b(?:def|class)\s+\w/.test(sample)) {
+        return true;
+      }
+      break;
+    }
+    i--;
+  }
+  return false;
+}
+
 /** Fix double-escaped JSON strings in code-like tool call argument values. */
 function repairDoubleEscapedCodeStrings(args: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(args)) {
@@ -121,7 +177,20 @@ function repairDoubleEscapedCodeStrings(args: Record<string, unknown>): void {
           const prev = repaired;
           repaired = repaired.replace(
             TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE,
-            (_match, prefix, char) => `${prefix}${TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? char}`,
+            (_match, prefix, char, offset) => {
+              // Skip replacements inside Python string literals
+              // unless the quoted region is a code container
+              // (e.g. python -c "...").  Position of the escape
+              // char itself is offset + prefix.length.
+              const escapePos = offset + prefix.length;
+              if (
+                isInsideStringLiteral(repaired, escapePos) &&
+                !isInsideCodeContainer(repaired, escapePos)
+              ) {
+                return _match;
+              }
+              return `${prefix}${TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP[char] ?? char}`;
+            },
           );
           repaired = repaired.replace(
             /\\([nrt])(?=\s*\\([nrt]))/gs,

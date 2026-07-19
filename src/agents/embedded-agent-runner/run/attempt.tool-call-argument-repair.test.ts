@@ -796,4 +796,81 @@ describe("wrapStreamResultRepairDoubleEscapedCodeStrings", () => {
     expect(args?.command).not.toContain("\n");
     expect(args?.command).toBe("echo 'end:\\n' > /dev/null");
   });
+
+  it("preserves intentional literal \\n inside a Python string literal in content", async () => {
+    // A Python source file containing a string literal with an
+    // intentional \n (two literal chars backslash+n) at a colon
+    // position WITH indentation. This is NOT a double-escaped code
+    // block — the \n is inside matching quotes (a Python string).
+    // The repair must leave it byte-for-byte unchanged.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "write",
+              arguments: {
+                path: "demo.py",
+                content:
+                  'import sys\n\nclass Demo:\n    def run(self):\n        msg = "Usage:\\n    python demo.py --help"\n        print(msg)',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { content?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // Structural \n at class:def boundary is repaired
+    expect(args?.content).toContain("class Demo:\n    def run");
+    // Intentional \n inside the string literal is preserved
+    expect(args?.content).toContain('"Usage:\\n    python demo.py --help"');
+    // No real newline inside the string literal
+    expect(args?.content).not.toContain('"Usage:\n    python demo.py --help"');
+  });
+
+  it("preserves intentional literal \\n inside a string in exec.command", async () => {
+    // An exec command with an intentional literal \n inside shell
+    // quotes — correctly JSON-encoded as \\n, producing literal
+    // backslash+n after parse. The \n is after a colon and has
+    // indentation, but it's inside matching double quotes. The
+    // repair must leave it byte-for-byte unchanged.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "exec",
+              arguments: {
+                command: 'printf "Usage:\\n    %s [opts]\\n" "$0" > /tmp/help.txt',
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { command?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // The literal \n inside the printf format string is intentional
+    // and must be preserved byte-for-byte.
+    expect(args?.command).toContain("\\n");
+    // No real newline introduced into the format string
+    expect(args?.command).toBe('printf "Usage:\\n    %s [opts]\\n" "$0" > /tmp/help.txt');
+  });
 });
