@@ -1,4 +1,5 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 
 export type CustodianEventNudge = {
   severity: 1 | 2 | 3;
@@ -6,6 +7,37 @@ export type CustodianEventNudge = {
   channelLabel?: string;
   message: string;
 };
+
+export function reconcileCustodianEventNudge(
+  current: CustodianEventNudge | null,
+  pending: CustodianEventNudge | null,
+  event: Pick<GatewayEventFrame, "event" | "payload">,
+): [CustodianEventNudge | null, CustodianEventNudge | null] {
+  if (event.event !== "health") {
+    return [current, pending];
+  }
+  const next = classifyCustodianEventNudge(event);
+  if (!pending) {
+    return [next, null];
+  }
+  const sameIncident =
+    next !== null && pending.severity === next.severity && pending.message === next.message;
+  return sameIncident ? [current, pending] : [next, null];
+}
+
+export function eventNudgeText(nudge: CustodianEventNudge): string {
+  if (nudge.kind === "config-reload") {
+    return t("custodian.nudge.configReload");
+  }
+  const channel = nudge.channelLabel ?? t("custodian.nudge.channelFallback");
+  if (nudge.kind === "channel-auth") {
+    return t("custodian.nudge.channelAuth", { channel });
+  }
+  if (nudge.kind === "channel-disconnected") {
+    return t("custodian.nudge.channelDisconnected", { channel });
+  }
+  return t("custodian.nudge.channelDegraded", { channel });
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -164,7 +196,7 @@ function classifyHealth(payload: unknown): CustodianEventNudge | null {
 }
 
 /** Only Gateway health failures produce presence nudges; success/info events stay silent. */
-export function classifyCustodianEventNudge(
+function classifyCustodianEventNudge(
   event: Pick<GatewayEventFrame, "event" | "payload">,
 ): CustodianEventNudge | null {
   return event.event === "health" ? classifyHealth(event.payload) : null;

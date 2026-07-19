@@ -24,7 +24,7 @@ import "../../styles/custodian.css";
 import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
-import { classifyCustodianEventNudge, type CustodianEventNudge } from "./event-nudge.ts";
+import * as eventNudgeState from "./event-nudge.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 import {
   createCustodianSessionId,
@@ -53,6 +53,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private input = "";
   @state() private sending = false;
   @state() private sensitive = false;
+  @state() private questionReplyUncertain = false;
   @state() private error: string | null = null;
   @state() private dismissedQuestions = new Set<string>();
   @state() private answeredQuestions = new Set<string>();
@@ -65,7 +66,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private historyLoading = false;
   @state() private historyLoadingMore = false;
   @state() private historyError: string | null = null;
-  @state() private eventNudge: CustodianEventNudge | null = null;
+  @state() private eventNudge: eventNudgeState.CustodianEventNudge | null = null;
 
   private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
@@ -78,6 +79,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   private earlierBoundaryAfterId: number | null = null;
   private lastHelloDeviceToken = "";
   private eventNudgeClosed = false;
+  private eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
   private abandonedTurnOutcomeUnknown = false;
   private historyLoaded = false;
   private readonly subscriptions = new SubscriptionsController(this).watch(
@@ -91,10 +93,12 @@ export class CustodianPage extends OpenClawLightDomElement {
         if (this.onboarding || this.newAgentIntent || this.eventNudgeClosed) {
           return;
         }
-        const next = classifyCustodianEventNudge(event);
-        if (next && (!this.eventNudge || next.severity > this.eventNudge.severity)) {
-          this.eventNudge = next;
-        }
+        [this.eventNudge, this.eventNudgePending] =
+          eventNudgeState.reconcileCustodianEventNudge(
+            this.eventNudge,
+            this.eventNudgePending,
+            event,
+          );
       }),
   );
 
@@ -182,6 +186,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.retryParams = null;
     this.input = "";
     this.sensitive = false;
+    this.questionReplyUncertain = false;
     this.error = null;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.startSession(client, variant, false);
@@ -233,6 +238,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.chatAvailable = false;
     if (variantChanged || ownershipChanged) {
       this.eventNudge = null;
+      this.eventNudgePending = null;
       // A different operator or mode must not inherit the previous context's
       // abandoned-turn warning; same-ownership paths below preserve it.
       this.abandonedTurnOutcomeUnknown = false;
@@ -329,6 +335,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.error = null;
     this.input = "";
     this.sensitive = false;
+    this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
   }
 
@@ -412,7 +419,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   private async requestReply(
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const epoch = ++this.requestEpoch;
     this.sending = true;
     this.error = null;
@@ -422,7 +429,7 @@ export class CustodianPage extends OpenClawLightDomElement {
         timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
       });
       if (epoch !== this.requestEpoch || client !== this.activeClient) {
-        return;
+        return false;
       }
       this.sessionId = result.sessionId;
       this.sensitive = result.sensitive === true;
@@ -433,7 +440,7 @@ export class CustodianPage extends OpenClawLightDomElement {
         if (result.agentId) {
           const roster = await this.context.agents.refreshList();
           if (epoch !== this.requestEpoch || client !== this.activeClient) {
-            return;
+            return false;
           }
           sessionKey = buildAgentMainSessionKey({
             agentId: result.agentId,
@@ -453,6 +460,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       } else if (result.action === "exit") {
         this.exitSetup();
       }
+      return true;
     } catch (error) {
       if (epoch === this.requestEpoch && client === this.activeClient) {
         this.error = custodianErrorMessage(error);
@@ -462,6 +470,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       if (params.message !== undefined && this.retryParams === params) {
         this.retryParams = null;
       }
+      return false;
     } finally {
       if (epoch === this.requestEpoch) {
         this.sending = false;
@@ -469,13 +478,24 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
-  private send(text = this.input, display?: string): void {
+  private async send(
+    text = this.input,
+    display?: string,
+    questionReply = this.hasUnresolvedQuestion(),
+  ): Promise<boolean> {
     // Trim decides emptiness only; sensitive values (credentials) may carry
     // meaningful whitespace and must reach the agent exactly as entered.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
+    const sessionVariant = this.sessionVariant;
+    const sessionOwnershipKey = this.sessionOwnershipKey;
+    if (questionReply) {
+      // A failed structured reply may still have reached the hosted wizard.
+      // Block unrelated nudges until a new wizard session makes the outcome known.
+      this.questionReplyUncertain = true;
+    }
     if (!message.trim() || !client || !this.chatAvailable || this.sending) {
-      return;
+      return false;
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
     // A new operator turn supersedes any abandoned-turn unknown-outcome warning.
@@ -492,21 +512,34 @@ export class CustodianPage extends OpenClawLightDomElement {
       },
     ];
     this.input = "";
-    void this.requestReply(client, {
+    const sent = await this.requestReply(client, {
       sessionId: this.sessionId,
       ...this.welcomeVariant(),
       message,
     });
+    if (
+      questionReply &&
+      this.sessionVariant === sessionVariant &&
+      this.sessionOwnershipKey === sessionOwnershipKey
+    ) {
+      this.questionReplyUncertain = !sent;
+    }
+    return sent;
   }
 
-  private sendEventNudge(): void {
+  private async sendEventNudge(): Promise<void> {
     const nudge = this.eventNudge;
-    if (!nudge) {
+    if (!nudge || this.sensitive || this.hasUnresolvedQuestion()) {
       return;
     }
     this.eventNudge = null;
-    this.eventNudgeClosed = true;
-    this.send(nudge.message);
+    this.eventNudgePending = nudge;
+    const sent = await this.send(nudge.message);
+    if (this.eventNudgePending === nudge) {
+      this.eventNudgePending = null;
+      this.eventNudgeClosed = sent;
+      this.eventNudge = sent ? null : nudge;
+    }
   }
 
   private dismissEventNudge(): void {
@@ -514,27 +547,15 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.eventNudgeClosed = true;
   }
 
-  private eventNudgeText(nudge: CustodianEventNudge): string {
-    if (nudge.kind === "config-reload") {
-      return t("custodian.nudge.configReload");
-    }
-    const channel = nudge.channelLabel ?? t("custodian.nudge.channelFallback");
-    if (nudge.kind === "channel-auth") {
-      return t("custodian.nudge.channelAuth", { channel });
-    }
-    if (nudge.kind === "channel-disconnected") {
-      return t("custodian.nudge.channelDisconnected", { channel });
-    }
-    return t("custodian.nudge.channelDegraded", { channel });
-  }
-
   private dismissQuestion(message: CustodianMessage): void {
-    const questionId = message.question?.id;
-    if (!questionId) {
+    const question = message.question;
+    if (!question) {
       return;
     }
-    this.dismissedQuestions = new Set(this.dismissedQuestions).add(`${message.id}:${questionId}`);
-    this.send(t("optionCard.skip"));
+    this.dismissedQuestions = new Set(this.dismissedQuestions).add(`${message.id}:${question.id}`);
+    // Closed hosted-wizard selects accept the canonical cancel token; open
+    // "other" prompts retain the visible skip label as their free-form reply.
+    void this.send(question.isOther ? t("optionCard.skip") : "cancel", t("optionCard.skip"), true);
   }
 
   private answerQuestion(message: CustodianMessage, label: string): void {
@@ -546,7 +567,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${question.id}`);
     // The transcript shows the friendly label; the engine receives the reply
     // text it actually parses (wizard answers, canonical commands).
-    this.send(option?.reply ?? label, label);
+    void this.send(option?.reply ?? label, label, true);
   }
 
   private retireQuestions(): void {
@@ -557,6 +578,19 @@ export class CustodianPage extends OpenClawLightDomElement {
       }
     }
     this.answeredQuestions = answered;
+  }
+
+  private hasUnresolvedQuestion(): boolean {
+    if (this.questionReplyUncertain) {
+      return true;
+    }
+    return this.messages.some((message) => {
+      if (!message.question) {
+        return false;
+      }
+      const key = `${message.id}:${message.question.id}`;
+      return !this.dismissedQuestions.has(key) && !this.answeredQuestions.has(key);
+    });
   }
 
   private exitSetup(): void {
@@ -582,7 +616,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     event.preventDefault();
-    this.send();
+    void this.send();
   }
 
   override render() {
@@ -621,10 +655,14 @@ export class CustodianPage extends OpenClawLightDomElement {
                 <button
                   class="custodian__nudge-action"
                   type="button"
-                  ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
-                  @click=${() => this.sendEventNudge()}
+                  ?disabled=${!this.activeClient ||
+                  !this.chatAvailable ||
+                  this.sending ||
+                  this.sensitive ||
+                  this.hasUnresolvedQuestion()}
+                  @click=${() => void this.sendEventNudge()}
                 >
-                  ${this.eventNudgeText(this.eventNudge)}
+                  ${eventNudgeState.eventNudgeText(this.eventNudge)}
                 </button>
                 <button
                   class="custodian__nudge-dismiss"
@@ -750,7 +788,7 @@ export class CustodianPage extends OpenClawLightDomElement {
                   !this.activeClient ||
                   !this.chatAvailable ||
                   this.sending}
-                  @click=${() => this.send()}
+                  @click=${() => void this.send()}
                 >
                   ${icons.arrowUp}
                   <span class="agent-chat__control-label">${t("custodian.send")}</span>
