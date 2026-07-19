@@ -459,12 +459,28 @@ export type CodexDynamicToolCallParams = {
 
 export type CodexDynamicToolCallResponse = {
   asyncStarted?: boolean;
+  /** Non-enumerable phase timing kept off the wire; read at the transport write boundary only. */
+  bridgeTiming?: CodexDynamicToolBridgeTiming;
   contentItems: CodexDynamicToolCallOutputContentItem[];
   diagnosticTerminalReason?: CodexDynamicToolDiagnosticTerminalReason;
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;
   success: boolean;
   terminate?: boolean;
+};
+
+/**
+ * Phase timestamps (epoch ms) spanning the OpenClaw side of one Codex dynamic
+ * tool round trip: the `item/tool/call` request arriving from Codex, the
+ * OpenClaw tool execution window, and (attached separately at the transport
+ * write boundary) the response being sent back. Used to distinguish tool
+ * execution time from bridge/transport overhead; never serialized to Codex.
+ */
+export type CodexDynamicToolBridgeTiming = {
+  toolName: string;
+  requestReceivedAt: number;
+  toolExecuteStartAt: number;
+  toolExecuteEndAt: number;
 };
 
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";

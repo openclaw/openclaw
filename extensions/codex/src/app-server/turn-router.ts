@@ -26,6 +26,7 @@ export type CodexThreadRouteScope = {
 type CodexThreadRequestHandler = (
   request: CodexAppServerServerRequest,
   scope: CodexThreadRouteScope,
+  receivedAtMs: number,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 type CodexThreadNotificationHandler = (
   notification: CodexServerNotification,
@@ -354,6 +355,9 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   }
 
   private async routeRequest(request: CodexAppServerServerRequest): Promise<JsonValue | undefined> {
+    // Captured before any routing/activation waits below so downstream phase
+    // timing can separate genuine queueing delay from tool execution time.
+    const receivedAtMs = Date.now();
     if (this.disposed) {
       return undefined;
     }
@@ -396,10 +400,14 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       return undefined;
     }
     try {
-      const result = await handler(request, {
-        threadId: scope.threadId,
-        ...(scope.turnId ? { turnId: scope.turnId } : {}),
-      });
+      const result = await handler(
+        request,
+        {
+          threadId: scope.threadId,
+          ...(scope.turnId ? { turnId: scope.turnId } : {}),
+        },
+        receivedAtMs,
+      );
       return route.released ? undefined : result;
     } catch (error) {
       if (route.released) {

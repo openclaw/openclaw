@@ -28,6 +28,7 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 import {
   isJsonObject,
+  type CodexDynamicToolBridgeTiming,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
   type CodexDynamicToolDiagnosticTerminalReason,
@@ -325,6 +326,23 @@ export function toCodexDynamicToolProtocolResponse(
     contentItems: response.contentItems,
     success: response.success,
   };
+}
+
+/**
+ * Attaches non-enumerable bridge phase timing to a protocol response so it
+ * survives the return path to the app-server transport write boundary
+ * without ever reaching Codex (JSON.stringify skips non-enumerable props).
+ */
+export function withDynamicToolBridgeTiming<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  timing: CodexDynamicToolBridgeTiming,
+): T {
+  Object.defineProperty(response, "bridgeTiming", {
+    configurable: true,
+    enumerable: false,
+    value: timing,
+  });
+  return response;
 }
 
 /** Adds async-started progress details when a tool result continues out of band. */

@@ -12,6 +12,7 @@ import {
   shouldReleaseTurnAfterTerminalDynamicTool,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
+  withDynamicToolBridgeTiming,
 } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolCallResponse } from "./protocol.js";
 
@@ -969,5 +970,33 @@ describe("dynamic tool execution helpers", () => {
         success: true,
       }),
     ).toBe(true);
+  });
+
+  it("attaches bridge phase timing as a non-enumerable property that survives JSON.stringify exclusion", () => {
+    const response: CodexDynamicToolCallResponse = {
+      contentItems: [{ type: "inputText", text: "ok" }],
+      success: true,
+    };
+
+    const withTiming = withDynamicToolBridgeTiming(response, {
+      toolName: "memory_search",
+      requestReceivedAt: 1_000,
+      toolExecuteStartAt: 1_010,
+      toolExecuteEndAt: 1_090,
+    });
+
+    expect(withTiming).toBe(response);
+    expect(withTiming.bridgeTiming).toEqual({
+      toolName: "memory_search",
+      requestReceivedAt: 1_000,
+      toolExecuteStartAt: 1_010,
+      toolExecuteEndAt: 1_090,
+    });
+    expect(Object.keys(withTiming)).not.toContain("bridgeTiming");
+    expect(JSON.stringify(withTiming)).not.toContain("bridgeTiming");
+    expect(JSON.parse(JSON.stringify(withTiming))).toEqual({
+      contentItems: [{ type: "inputText", text: "ok" }],
+      success: true,
+    });
   });
 });
