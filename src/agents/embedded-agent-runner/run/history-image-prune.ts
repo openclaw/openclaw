@@ -122,12 +122,10 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
       const typed = block as { type?: unknown; text?: unknown } | null | undefined;
       if (typed?.type === "text" && typeof typed.text === "string") {
         const text = pruneHistoryMediaReferenceText(typed.text);
-        return text === typed.text
-          ? block
-          : ({ ...block, text } as (typeof message.content)[number]);
+        return text === typed.text ? block : ({ ...block, text } as (typeof content)[number]);
       }
       return typed?.type === "image"
-        ? ({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER } as (typeof message.content)[number])
+        ? ({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER } as (typeof content)[number])
         : block;
     });
     if (lateMediaText || nextContent.some((block, index) => block !== content[index])) {
