@@ -44,6 +44,15 @@ function isSystemCaWarmupMessage(value: unknown): value is SystemCaWarmupMessage
     : message.ok === false && typeof message.error === "string";
 }
 
+function isWorkerPermissionDenied(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ERR_ACCESS_DENIED"
+  );
+}
+
 /** Warm Node's effective default CA set without blocking the gateway event loop on macOS. */
 export async function warmMacOSSystemCaOffMainThread(
   options: SystemCaWarmupOptions = {},
@@ -57,9 +66,22 @@ export async function warmMacOSSystemCaOffMainThread(
     return;
   }
 
-  const worker = (
-    options.createWorker ?? ((source, workerOptions) => new Worker(source, workerOptions))
-  )(SYSTEM_CA_WORKER_SOURCE, { eval: true });
+  let worker: SystemCaWarmupWorker;
+  try {
+    worker = (
+      options.createWorker ?? ((source, workerOptions) => new Worker(source, workerOptions))
+    )(SYSTEM_CA_WORKER_SOURCE, { eval: true });
+  } catch (error) {
+    // Node's permission model can deny Worker construction. Fall back to Node's lazy CA
+    // loading instead of turning an optional event-loop warmup into a startup requirement.
+    if (!isWorkerPermissionDenied(error)) {
+      throw error;
+    }
+    options.log?.warn(
+      "macOS CA warmup skipped because Node denied worker-thread permission; trust settings will load lazily",
+    );
+    return;
+  }
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;

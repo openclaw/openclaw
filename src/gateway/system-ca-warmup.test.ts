@@ -66,6 +66,26 @@ describe("warmMacOSSystemCaOffMainThread", () => {
     await warmup;
   });
 
+  it("falls back to lazy CA loading when Node denies worker-thread permission", async () => {
+    const permissionError = Object.assign(new Error("worker permission denied"), {
+      code: "ERR_ACCESS_DENIED",
+    });
+    const log = { warn: vi.fn() };
+
+    await warmMacOSSystemCaOffMainThread({
+      platform: "darwin",
+      env: { NODE_USE_SYSTEM_CA: "0" },
+      log,
+      createWorker: vi.fn(() => {
+        throw permissionError;
+      }),
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "macOS CA warmup skipped because Node denied worker-thread permission; trust settings will load lazily",
+    );
+  });
+
   it("fails closed when the worker cannot populate the cache", async () => {
     const worker = new FakeWorker();
     const warmup = warmMacOSSystemCaOffMainThread({
