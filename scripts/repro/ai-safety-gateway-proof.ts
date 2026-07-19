@@ -196,7 +196,7 @@ async function main(): Promise<void> {
             sequenceMatchesGateway: persisted.sequence === event.sequence,
             type: persisted.event_type,
             severity: persisted.severity,
-            trusted: JSON.parse(persisted.meta_json).trusted === false,
+            trustedStoredValue: JSON.parse(persisted.meta_json).trusted,
           },
           redaction: {
             statePath: "[REDACTED_TEMP_STATE]",
