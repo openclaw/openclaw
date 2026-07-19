@@ -41,10 +41,12 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - Always launch with `background:true`.
 - Codex and OpenCode: use `pty:true`.
 - Claude Code: no PTY; use `claude --permission-mode bypassPermissions --print`.
-- Capture a real notification route before spawning.
-- Worker must send completion/failure via `openclaw message send`.
-- Do not rely on heartbeat, system events, or notify-on-exit.
+- Capture a real notification route before spawning and keep it in the parent context.
+- Parent must send exactly one completion/failure notification with the `message` tool after the worker reaches a terminal state.
+- Never put the notification route or Gateway credentials in the worker prompt or environment.
+- Do not rely on worker-originated messages, heartbeat, system events, or notify-on-exit.
 - Monitor with `process`; do not kill slow workers without cause.
+- Keep the parent turn active until the worker finishes and the notification attempt completes.
 - If user asked for a specific agent, use that agent.
 - If worker fails/hangs, respawn or ask; do not silently hand-code instead.
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
@@ -84,25 +86,35 @@ Immediately before the final push or PR for newly authored work, run `git fetch 
 
 For trusted refs, the launcher must create and verify the worktree before starting the editing worker; do not delegate worktree creation to that worker. The approved untrusted-PR workflow must instead own checkout and worktree materialization inside its sandbox. Never start a worker in `~/Projects/openclaw`. Read-only tasks and non-project scratch work do not require the Git preparation block.
 
-## Notification block
+## Completion handoff
 
-Append this shape to every worker prompt with real values:
+Keep this route only in the parent context:
 
 ```text
-Notification route:
+Parent route:
 - channel: <notifyChannel>
 - target: <notifyTarget>
-- account: <notifyAccount or omit>
-- reply_to: <notifyReplyTo or omit>
-- thread_id: <notifyThreadId or omit>
-
-When finished, send exactly one completion or failure message using:
-openclaw message send --channel <channel> --target '<target>' --message '<brief result>'
-Add --account, --reply-to, or --thread-id only when present above.
-Do not use openclaw system event or heartbeat.
+- accountId: <notifyAccount or omit>
+- replyTo: <notifyReplyTo or omit>
+- threadId: <notifyThreadId or omit>
 ```
 
-If no trustworthy route exists, say completion auto-notify is unavailable.
+Append this block to every worker prompt:
+
+```text
+Completion handoff:
+When finished, end your final response with a concise completion or failure summary for the parent.
+Do not send messages, run `openclaw message send`, emit system events, or use heartbeat.
+```
+
+After launch:
+
+1. Monitor the worker with `process` until it reaches a terminal state. Do not return from the parent turn while it is running.
+2. Read the result file. If the worker failed without a usable result, construct a concise failure summary from its status and final log output.
+3. Use the parent `message` tool with `action: "send"`, the captured `channel`, `target`, and summary as `message`. Add `accountId`, `replyTo`, or `threadId` only when present in the captured route.
+4. Send once for the overall task after the final attempt, not once per retry. If delivery fails, report that failure without exposing credentials or asking the worker to retry delivery.
+
+If no trustworthy route exists or the parent `message` tool cannot send to it, say completion auto-notify is unavailable before spawning.
 
 ## Launch forms
 
@@ -110,41 +122,43 @@ Write the worker prompt to a temp file first. This avoids shell quoting bugs whe
 
 ```bash
 PROMPT=$(mktemp -t openclaw-worker-prompt.XXXXXX)
+RESULT=$(mktemp -t openclaw-worker-result.XXXXXX)
 cat >"$PROMPT" <<'EOF'
 Task.
 <mandatory Git preparation block>
-<notification block>
+<completion handoff block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
+printf 'result file: %s\n' "$RESULT"
 ```
 
-Use `$PROMPT` when launching from the same shell/session. If using a separate tool call, substitute the printed path. The launch forms below are for trusted checkouts only; untrusted contributor refs require the repository's approved sandbox/review workflow.
+Use `$PROMPT` and `$RESULT` when launching from the same shell/session. If using a separate tool call, substitute the printed paths. The launch forms below are for trusted checkouts only; untrusted contributor refs require the repository's approved sandbox/review workflow.
 
 Codex:
 
 ```bash
-bash pty:true background:true workdir:/path/isolated-worktree command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:/path/isolated-worktree command:"codex exec --output-last-message \"$RESULT\" - < \"$PROMPT\""
 ```
 
 Claude Code:
 
 ```bash
-bash background:true workdir:/path/isolated-worktree command:"claude --permission-mode bypassPermissions --print < \"$PROMPT\""
+bash background:true workdir:/path/isolated-worktree command:"set -o pipefail; claude --permission-mode bypassPermissions --print < \"$PROMPT\" | tee \"$RESULT\""
 ```
 
 OpenCode:
 
 ```bash
-bash pty:true background:true workdir:/path/isolated-worktree command:"opencode run < \"$PROMPT\""
+bash pty:true background:true workdir:/path/isolated-worktree command:"set -o pipefail; opencode run < \"$PROMPT\" | tee \"$RESULT\""
 ```
 
 ## Long issue-to-PR work
 
 1. Create/reuse a GitHub issue as durable spec.
-2. Include issue URL, repo, canonical remote/default branch, target base branch/SHA, isolated worktree, working branch, expected PR, proof, and notification route.
-3. Include the mandatory Git preparation block, then tell the worker to implement, test, run review until no accepted actionable findings, and open the PR.
-4. Return issue URL and `sessionId` immediately.
-5. Monitor with `process`; cancel through Task Registry if mirrored there.
+2. Include issue URL, repo, canonical remote/default branch, target base branch/SHA, isolated worktree, working branch, expected PR, and proof. Keep the notification route in the parent context.
+3. Include the mandatory Git preparation and completion handoff blocks, then tell the worker to implement, test, run review until no accepted actionable findings, and open the PR.
+4. Send a start status with the issue URL and `sessionId`, then keep the parent turn active.
+5. Monitor with `process`, send the parent-owned terminal notification, and cancel through Task Registry if mirrored there.
 
 ## Scratch Codex
 
@@ -154,12 +168,14 @@ Codex needs a trusted git repo. This throwaway scaffold is not project work and 
 SCRATCH=$(mktemp -d)
 git -C "$SCRATCH" init
 PROMPT=$(mktemp -t openclaw-worker-prompt.XXXXXX)
+RESULT=$(mktemp -t openclaw-worker-result.XXXXXX)
 cat >"$PROMPT" <<'EOF'
 Build X.
-<notification block>
+<completion handoff block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
-bash pty:true background:true workdir:$SCRATCH command:"codex exec - < \"$PROMPT\""
+printf 'result file: %s\n' "$RESULT"
+bash pty:true background:true workdir:$SCRATCH command:"codex exec --output-last-message \"$RESULT\" - < \"$PROMPT\""
 ```
 
 ## Process actions
@@ -175,5 +191,6 @@ bash pty:true background:true workdir:$SCRATCH command:"codex exec - < \"$PROMPT
 ## Status to user
 
 - Say what started, where, and `sessionId`.
+- Keep monitoring after the start status; do not treat it as the terminal reply.
 - Update only on milestone, worker question, error, user action needed, or finish.
 - If killed, say why.
