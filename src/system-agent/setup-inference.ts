@@ -2757,14 +2757,14 @@ export async function verifySetupInferenceConfig(params: {
       if (params.authProfiles && params.authProfiles.length > 0) {
         try {
           const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
-          const store = loadStore(plan.agentDir, {
+          const { profiles } = loadStore(plan.agentDir, {
             readOnly: true,
             allowKeychainPrompt: false,
             config: plan.config,
             externalCliProviderIds: [plan.provider],
           });
           authProfiles = params.authProfiles.map((profile) => {
-            const credential = store.profiles[profile.profileId];
+            const credential = profiles[profile.profileId];
             if (!credential) {
               throw new Error("staged profile missing after verification");
             }

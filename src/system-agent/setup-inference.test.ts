@@ -5395,8 +5395,8 @@ describe("verifySetupInference", () => {
         });
         await updateAuthProfileStoreWithLock({
           agentDir: params.agentDir!,
-          updater: (store) => {
-            store.profiles[profileId] = {
+          updater: ({ profiles }) => {
+            profiles[profileId] = {
               type: "oauth",
               provider: "openai",
               access: "sample",
