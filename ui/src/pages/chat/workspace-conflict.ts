@@ -13,7 +13,7 @@ export type WorkspaceResultConflict = {
 function isSafeWorkspaceConflictPath(entryPath: string): boolean {
   // Copied commands must not preserve terminal controls: bracketed-paste terminators
   // can turn a displayed filename into executed shell input.
-  const hasTerminalControl = [...entryPath].some((character) => {
+  const hasTerminalControl = Array.from(entryPath).some((character) => {
     const codePoint = character.codePointAt(0);
     return (
       codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
