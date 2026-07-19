@@ -115,7 +115,17 @@ async function readModelRunImageFileSafely(
       );
     }
     budget.remaining -= stat.size;
-    return await handle.readFile();
+    // Read at most the validated size through the already-opened descriptor
+    // so same-inode growth after stat() cannot bypass the per-file and
+    // aggregate budgets.
+    const buf = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < stat.size) {
+      const { bytesRead } = await handle.read(buf, offset, stat.size - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    return buf.subarray(0, offset);
   } finally {
     await handle.close();
   }
