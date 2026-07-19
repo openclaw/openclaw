@@ -81,7 +81,9 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promi
     } catch (error) {
       lastError = error;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw lastError;
 }
