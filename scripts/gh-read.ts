@@ -24,6 +24,8 @@ const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
 // Use the measured script-family budget for ordinary broad reads. Explicit CLI
 // watch/follow modes keep their unbounded default unless COMMAND_TIMEOUT_ENV is set.
 const DEFAULT_GH_COMMAND_TIMEOUT_MS = 120_000;
+const GITHUB_CLI_TRUE_BOOLEAN_VALUES = new Set(["1", "t", "T", "true", "TRUE", "True"]);
+const GITHUB_CLI_FALSE_BOOLEAN_VALUES = new Set(["0", "f", "F", "false", "FALSE", "False"]);
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
 const GITHUB_APP_PRIVATE_KEY_MAX_BYTES = 64 * 1024;
@@ -126,6 +128,32 @@ export function resolveGitHubFetchTimeoutMs(raw = process.env.OPENCLAW_GH_READ_F
   });
 }
 
+function isEnabledGitHubBooleanFlag(ghArgs: readonly string[], flag: string): boolean {
+  let enabled = false;
+  const valuePrefix = `${flag}=`;
+  for (const arg of ghArgs) {
+    if (arg === flag) {
+      enabled = true;
+      continue;
+    }
+    if (!arg.startsWith(valuePrefix)) {
+      continue;
+    }
+
+    const value = arg.slice(valuePrefix.length);
+    if (GITHUB_CLI_TRUE_BOOLEAN_VALUES.has(value)) {
+      enabled = true;
+    } else if (GITHUB_CLI_FALSE_BOOLEAN_VALUES.has(value)) {
+      enabled = false;
+    } else {
+      // GitHub CLI rejects values outside Go's strconv.ParseBool grammar, so
+      // an invalid command cannot enter a long-lived watch/follow operation.
+      return false;
+    }
+  }
+  return enabled;
+}
+
 function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
   const commandPath: string[] = [];
   for (let index = 0; index < ghArgs.length && commandPath.length < 2; index += 1) {
@@ -161,13 +189,8 @@ function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
   // GitHub CLI also exposes long-lived behavior through explicit watch/follow
   // flags (for example `pr checks --watch` and `agent-task view --follow`).
   if (
-    ghArgs.some(
-      (arg) =>
-        arg === "--watch" ||
-        arg === "--watch=true" ||
-        arg === "--follow" ||
-        arg === "--follow=true",
-    )
+    isEnabledGitHubBooleanFlag(ghArgs, "--watch") ||
+    isEnabledGitHubBooleanFlag(ghArgs, "--follow")
   ) {
     return true;
   }
@@ -177,7 +200,7 @@ function isLongLivedGitHubCommand(ghArgs: readonly string[]): boolean {
   return (
     commandPath[0] === "codespace" &&
     commandPath[1] === "logs" &&
-    ghArgs.some((arg) => arg === "-f" || arg === "-f=true")
+    isEnabledGitHubBooleanFlag(ghArgs, "-f")
   );
 }
 

@@ -107,8 +107,24 @@ describe("gh-read helpers", () => {
       mode: "pull request check watch mode",
     },
     {
+      args: ["pr", "checks", "111328", "--watch=1"],
+      mode: "numeric pull request check watch mode",
+    },
+    {
+      args: ["pr", "checks", "111328", "--watch=True"],
+      mode: "mixed-case pull request check watch mode",
+    },
+    {
+      args: ["pr", "checks", "111328", "--watch=false", "--watch=TRUE"],
+      mode: "final enabled pull request check watch mode",
+    },
+    {
       args: ["agent-task", "view", "111328", "--follow"],
       mode: "agent task follow mode",
+    },
+    {
+      args: ["agent-task", "view", "111328", "--follow=T"],
+      mode: "uppercase agent task follow mode",
     },
     {
       args: ["codespace", "logs", "-f"],
@@ -127,12 +143,20 @@ describe("gh-read helpers", () => {
       mode: "codespace log true-valued short follow mode",
     },
     {
+      args: ["codespace", "logs", "-f=1"],
+      mode: "codespace log numeric short follow mode",
+    },
+    {
       args: ["cs", "logs", "-f"],
       mode: "codespace alias log short follow mode",
     },
     {
       args: ["cs", "-c", "example", "logs", "-f=true"],
       mode: "codespace alias selected log true-valued short follow mode",
+    },
+    {
+      args: ["cs", "-c", "example", "logs", "-f=TRUE"],
+      mode: "codespace alias selected log uppercase short follow mode",
     },
   ])("preserves the unbounded default for $mode", ({ args }) => {
     const received = { args: [] as string[], command: "", timeout: 120_000 as number | undefined };
@@ -152,6 +176,33 @@ describe("gh-read helpers", () => {
       command: "gh",
       timeout: undefined,
     });
+  });
+
+  it.each([
+    {
+      args: ["pr", "checks", "111328", "--watch=1", "--watch=false"],
+      mode: "finally disabled pull request check watch mode",
+    },
+    {
+      args: ["agent-task", "view", "111328", "--follow=True", "--follow=0"],
+      mode: "finally disabled agent task follow mode",
+    },
+    {
+      args: ["cs", "logs", "-f=TRUE", "-f=false"],
+      mode: "finally disabled codespace alias log follow mode",
+    },
+  ])("uses the ordinary timeout for $mode", ({ args }) => {
+    const received = { timeout: undefined as number | undefined };
+    const spawnSyncImpl = vi.fn(
+      (_command: string, _childArgs: string[], options: { timeout?: number }) => {
+        received.timeout = options.timeout;
+        return { status: 0 };
+      },
+    );
+
+    expect(runGitHubCli(args, "test-fixture-credential", { spawnSyncImpl })).toBe(0);
+    expect(spawnSyncImpl).toHaveBeenCalledOnce();
+    expect(received.timeout).toBe(120_000);
   });
 
   it("rejects invalid operator-selected GitHub CLI timeouts", () => {
