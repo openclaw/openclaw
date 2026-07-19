@@ -36,3 +36,16 @@ export type ClawRemovePlan = {
   actions: ClawRemovePlanAction[];
   blockers: Array<{ code: string; message: string }>;
 };
+
+export type RemovedCronJob = {
+  manifestId: string;
+  schedulerJobId?: string;
+  action: "removed" | "error";
+  message?: string;
+};
+
+export type RemovedMcpServer = {
+  name: string;
+  action: "removed" | "missing" | "released" | "error";
+  message?: string;
+};
