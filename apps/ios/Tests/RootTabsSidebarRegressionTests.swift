@@ -42,23 +42,36 @@ struct RootTabsSidebarRegressionTests {
         #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
     }
 
-    @Test func `drawer dimming layer does not steal sidebar touches`() throws {
+    @Test func `push reveal keeps sidebar behind an interactive dismissal card`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let drawerContent = try Self.extract(
             source,
             from: "private func sidebarDrawerContent(",
             to: "private var sidebarDetailShell: some View")
 
-        #expect(drawerContent.contains("HStack(spacing: 0)"))
-        #expect(drawerContent.contains("Color.clear"))
-        #expect(drawerContent.contains(".frame(width: sidebarWidth)"))
-        #expect(drawerContent.contains(".allowsHitTesting(false)"))
-        #expect(drawerContent.contains("Color.black.opacity(0.35)"))
-        #expect(drawerContent.contains(".ignoresSafeArea()"))
+        let sidebarLayer = try Self.extract(
+            drawerContent,
+            from: "private func sidebarDrawerLayer(",
+            to: "private func sidebarDrawerContentCard(")
+        let contentCardStart = try #require(
+            drawerContent.range(of: "private func sidebarDrawerContentCard("))
+        let contentCard = String(drawerContent[contentCardStart.lowerBound...])
+
+        #expect(drawerContent.contains("ZStack(alignment: .leading)"))
+        #expect(drawerContent.contains("self.sidebarDrawerLayer"))
+        #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
+        #expect(drawerContent.contains(".background(OpenClawSidebarPalette.background)"))
+        #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
+        #expect(!sidebarLayer.contains(".clipShape"))
+        #expect(!sidebarLayer.contains(".shadow"))
         #expect(drawerContent.contains("self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)"))
-        #expect(drawerContent.contains(".ignoresSafeArea(.container, edges: .vertical)"))
-        #expect(drawerContent.contains(".zIndex(0)"))
-        #expect(drawerContent.contains(".zIndex(1)"))
+        #expect(sidebarLayer.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(contentCard.contains(".allowsHitTesting(!self.isSidebarVisible)"))
+        #expect(contentCard.contains("if self.isSidebarVisible, !self.reduceMotion"))
+        #expect(contentCard.contains("self.hideSidebar()"))
+        #expect(contentCard.contains("isEnabled: self.isSidebarVisible && !self.reduceMotion"))
+        #expect(contentCard.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
+        #expect(contentCard.contains(".offset(x: Self.sidebarContentOffset("))
     }
 
     @Test func `sidebar selection resets embedded settings navigation path`() throws {

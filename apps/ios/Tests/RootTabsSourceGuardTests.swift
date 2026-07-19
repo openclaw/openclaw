@@ -49,14 +49,14 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("safeAreaInset(edge: .top"))
         #expect(!source.contains("thinMaterial, in: Circle"))
         #expect(!source.contains("sidebarRevealInset"))
-        #expect(source.contains("Color.black.opacity(0.35)"))
         #expect(source.contains(".background(OpenClawSidebarPalette.background)"))
+        #expect(!source.contains("Color.black.opacity(0.35)"))
         #expect(!source.contains("sidebarRevealCornerButton"))
         #expect(!source.contains("shouldShowSidebarRevealOverlay"))
         #expect(!source.contains("shouldShowOverviewHeaderSidebarReveal"))
     }
 
-    @Test func `i pad split uses sliding sidebar while portrait keeps drawer overlay`() throws {
+    @Test func `i pad split stays integrated while compact drawer uses push reveal`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let splitContent = try Self.extract(
             source,
@@ -79,12 +79,19 @@ struct RootTabsSourceGuardTests {
         #expect(!splitContent.contains("NavigationSplitView"))
         #expect(!splitContent.contains("self.collapsedSidebarRail"))
         #expect(!source.contains("Self.sidebarCollapsedRailWidth"))
-        #expect(drawerContent.contains("ZStack(alignment: .topLeading)"))
-        #expect(drawerContent.contains("Color.black.opacity(0.35)"))
-        #expect(drawerContent.contains(".gesture(self.sidebarDismissGesture)"))
-        #expect(drawerContent.contains(".clipShape(self.sidebarDrawerShape)"))
-        #expect(drawerContent.contains(".ignoresSafeArea()"))
+        #expect(drawerContent.contains("ZStack(alignment: .leading)"))
+        #expect(drawerContent.contains("self.sidebarDrawerLayer"))
+        #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
+        #expect(drawerContent.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
+        #expect(drawerContent.contains(".allowsHitTesting(!self.isSidebarVisible)"))
+        #expect(drawerContent.contains(".clipShape(RoundedRectangle("))
+        #expect(drawerContent.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
+        #expect(drawerContent.contains(".offset(x: Self.sidebarContentOffset("))
+        #expect(drawerContent.contains(".shadow("))
         #expect(drawerContent.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
+        #expect(!drawerContent.contains("UnevenRoundedRectangle"))
+        #expect(!drawerContent.contains("sidebarDrawerShape"))
         #expect(!drawerContent.contains("NavigationSplitView"))
     }
 
@@ -139,7 +146,8 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("private var footer: some View"))
         #expect(source.contains("TextField(\"\", text: self.$searchText)"))
         #expect(source.contains("commandSessionActions("))
-        #expect(source.contains("1 / UIScreen.main.scale"))
+        #expect(source.contains("1 / self.displayScale"))
+        #expect(!source.contains("UIScreen.main.scale"))
         #expect(navigationSource.contains("static let sidebarDestinations"))
         #expect(!navigationSource.contains("SidebarGroup"))
         #expect(!navigationSource.contains("title: \"AGENT\""))

@@ -4,6 +4,7 @@ import SwiftUI
 struct RootSidebar: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
     @State private var searchText = ""
 
@@ -465,7 +466,7 @@ struct RootSidebar: View {
     private var separator: some View {
         Rectangle()
             .fill(OpenClawSidebarPalette.hairline)
-            .frame(height: 1 / UIScreen.main.scale)
+            .frame(height: 1 / self.displayScale)
     }
 
     private var gatewayName: String {

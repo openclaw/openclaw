@@ -5,7 +5,7 @@ OpenClaw follows the native iOS 26 design language while keeping an iOS 18 deplo
 ## Principles
 
 - Prefer `NavigationStack`, `List`, `Form`, toolbars, sheets, and system controls. They adopt the current platform appearance automatically.
-- Root navigation uses one black sidebar on every idiom: persistent in wide landscape and a leading drawer on phones, portrait, and narrow layouts.
+- Root navigation uses one black sidebar on every idiom: persistent in wide landscape and a push-reveal layer behind the content on phones, portrait, and narrow layouts.
 - Reserve Liquid Glass for navigation and interactive controls. Do not apply glass to every card, row, or status surface.
 - Keep content hierarchy clear with typography, spacing, and grouping before adding backgrounds.
 - Use semantic colors. Red means destructive or stopped; orange means attention; green means healthy. Neutral actions use the app accent.
@@ -21,7 +21,7 @@ Apple references: [Adopting Liquid Glass](https://developer.apple.com/documentat
 - `pagePadding`: standard page gutter
 - `cardRadius`: content group radius
 - `controlRadius`: inset control radius
-- `drawerRadius`: trailing corner radius for the compact sidebar drawer
+- `drawerRadius`: all-corner radius for compact content while the sidebar is revealed
 - `compactControlSize`: compact circular control size
 - `bottomScrollInset`: clearance above persistent navigation
 

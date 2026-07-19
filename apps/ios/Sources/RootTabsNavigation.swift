@@ -123,6 +123,16 @@ extension RootTabs {
         return min(self.sidebarSplitMaximumWidth, max(self.sidebarSplitIdealWidth, containerWidth * 0.25))
     }
 
+    static func sidebarContentOffset(
+        sidebarWidth: CGFloat,
+        isVisible: Bool,
+        dragOffset: CGFloat,
+        reduceMotion: Bool) -> CGFloat
+    {
+        guard isVisible, !reduceMotion else { return 0 }
+        return max(0, sidebarWidth + min(0, dragOffset))
+    }
+
     static func shouldShowSidebarRevealControl(isSidebarVisible: Bool) -> Bool {
         !isSidebarVisible
     }

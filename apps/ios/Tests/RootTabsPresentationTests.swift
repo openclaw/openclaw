@@ -582,6 +582,34 @@ struct RootTabsPresentationTests {
         #expect(width <= RootTabs.sidebarDrawerMaximumWidth)
     }
 
+    @Test func `drawer content follows reveal and dismiss drag`() {
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 0,
+            reduceMotion: false) == 0)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: 0,
+            reduceMotion: false) == 340)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: -120,
+            reduceMotion: false) == 220)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: -400,
+            reduceMotion: false) == 0)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: true,
+            dragOffset: 40,
+            reduceMotion: true) == 0)
+    }
+
     @Test func `narrow landscape keeps drawer sidebar`() {
         let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 900, height: 600))
 

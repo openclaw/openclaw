@@ -265,7 +265,7 @@ struct SwiftUIRenderSmokeTests {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = RootTabs()
+            let root = RootTabs(initialSidebarVisibility: scenario.sidebarVisible)
                 .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
@@ -571,22 +571,32 @@ struct SwiftUIRenderSmokeTests {
                 idiom: .phone,
                 size: CGSize(width: 393, height: 852),
                 horizontalSizeClass: .compact,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: false),
+            RootTabsShellScenario(
+                idiom: .phone,
+                size: CGSize(width: 393, height: 852),
+                horizontalSizeClass: .compact,
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
             RootTabsShellScenario(
                 idiom: .phone,
                 size: CGSize(width: 852, height: 393),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .compact),
+                verticalSizeClass: .compact,
+                sidebarVisible: false),
             RootTabsShellScenario(
                 idiom: .pad,
                 size: CGSize(width: 1024, height: 1366),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
             RootTabsShellScenario(
                 idiom: .pad,
                 size: CGSize(width: 1366, height: 1024),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
         ]
     }
 
@@ -595,6 +605,7 @@ struct SwiftUIRenderSmokeTests {
         let size: CGSize
         let horizontalSizeClass: UserInterfaceSizeClass
         let verticalSizeClass: UserInterfaceSizeClass
+        let sidebarVisible: Bool
     }
 }
 

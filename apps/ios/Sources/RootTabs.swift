@@ -8,6 +8,7 @@ struct RootTabs: View {
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
@@ -30,7 +31,7 @@ struct RootTabs: View {
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
-    @State private var sidebarDrawerDragOffset: CGFloat = 0
+    @State private var sidebarContentDragOffset: CGFloat = 0
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var presentedSheet: PresentedSheet?
@@ -170,38 +171,65 @@ struct RootTabs: View {
         sidebarWidth: CGFloat,
         safeAreaInsets: EdgeInsets) -> some View
     {
-        ZStack(alignment: .topLeading) {
+        ZStack(alignment: .leading) {
+            // Occluded layers stay out of the accessibility tree: closed = content
+            // only, open = sidebar only (the card is not interactive while open).
+            self.sidebarDrawerLayer(sidebarWidth: sidebarWidth, safeAreaInsets: safeAreaInsets)
+                .opacity(self.reduceMotion && !self.isSidebarVisible ? 0 : 1)
+                .accessibilityHidden(!self.isSidebarVisible)
+
+            self.sidebarDrawerContentCard(sidebarWidth: sidebarWidth)
+                .opacity(self.reduceMotion && self.isSidebarVisible ? 0 : 1)
+                .accessibilityHidden(self.isSidebarVisible)
+                .zIndex(1)
+        }
+        // Fills the region right of the sidebar while the card is mid-slide/drag.
+        .background(OpenClawSidebarPalette.background)
+    }
+
+    private func sidebarDrawerLayer(
+        sidebarWidth: CGFloat,
+        safeAreaInsets: EdgeInsets) -> some View
+    {
+        self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)
+            .frame(width: sidebarWidth, alignment: .topLeading)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            .background(OpenClawSidebarPalette.background)
+            .ignoresSafeArea(.container, edges: .vertical)
+    }
+
+    private func sidebarDrawerContentCard(sidebarWidth: CGFloat) -> some View {
+        let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
+        return ZStack {
             self.sidebarDetailNavigationShell
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(!self.isSidebarVisible)
 
-            if self.isSidebarVisible {
-                HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: sidebarWidth)
-                        .allowsHitTesting(false)
-                    Color.black.opacity(0.35)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            self.hideSidebar()
-                        }
-                }
-                .ignoresSafeArea()
-                .transition(.opacity)
-                .zIndex(0)
-
-                self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)
-                    .frame(width: sidebarWidth, alignment: .topLeading)
-                    .frame(maxHeight: .infinity, alignment: .topLeading)
-                    .clipShape(self.sidebarDrawerShape)
-                    .contentShape(self.sidebarDrawerShape)
-                    .offset(x: min(0, self.sidebarDrawerDragOffset))
-                    .gesture(self.sidebarDismissGesture)
-                    .shadow(color: .black.opacity(0.26), radius: 18, x: 8, y: 0)
-                    .transition(self.sidebarTransition)
-                    .zIndex(1)
-                    .ignoresSafeArea(.container, edges: .vertical)
+            if self.isSidebarVisible, !self.reduceMotion {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        self.hideSidebar()
+                    }
             }
         }
+        .contentShape(Rectangle())
+        .gesture(
+            self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
+            isEnabled: self.isSidebarVisible && !self.reduceMotion)
+        .clipShape(RoundedRectangle(
+            cornerRadius: OpenClawProMetric.drawerRadius * progress,
+            style: .continuous))
+        .shadow(
+            color: .black.opacity(0.28 * progress),
+            radius: 20 * progress,
+            x: -4 * progress,
+            y: 0)
+        .offset(x: Self.sidebarContentOffset(
+            sidebarWidth: sidebarWidth,
+            isVisible: self.isSidebarVisible,
+            dragOffset: self.sidebarContentDragOffset,
+            reduceMotion: self.reduceMotion))
     }
 
     private var sidebarDetailShell: some View {
@@ -209,6 +237,9 @@ struct RootTabs: View {
             .id(self.sidebarDetailShellID)
     }
 
+    /// RootSidebar owns its dark surface; this wrapper only restores vertical
+    /// insets. Drawer mode goes full-bleed (ignoresSafeArea) so the captured
+    /// insets are re-applied manually; split mode keeps system safe areas.
     private func sidebarColumn(drawerSafeAreaInsets: EdgeInsets? = nil) -> some View {
         RootSidebar(
             model: self.sidebarModel,
@@ -217,18 +248,19 @@ struct RootTabs: View {
             selectDestination: self.selectSidebarDestination,
             selectSettingsRoute: self.selectSettingsRoute,
             hideSidebar: self.hideSidebar)
+            .padding(.top, drawerSafeAreaInsets.map { $0.top + 8 } ?? 0)
+            .padding(.bottom, drawerSafeAreaInsets.map { $0.bottom + 8 } ?? 0)
             .safeAreaPadding(.top, drawerSafeAreaInsets == nil ? 8 : 0)
             .safeAreaPadding(.bottom, drawerSafeAreaInsets == nil ? 8 : 0)
-            .padding(.top, (drawerSafeAreaInsets?.top ?? 0) + (drawerSafeAreaInsets == nil ? 0 : 8))
-            .padding(.bottom, (drawerSafeAreaInsets?.bottom ?? 0) + (drawerSafeAreaInsets == nil ? 0 : 8))
+            // Paints the wrapper's inset strips; RootSidebar's own background
+            // stops at its bounds.
             .background(OpenClawSidebarPalette.background)
-            .environment(\.colorScheme, .dark)
     }
 
     private var sidebarVerticalSeparator: some View {
         Rectangle()
             .fill(OpenClawSidebarPalette.hairline)
-            .frame(width: 1 / UIScreen.main.scale)
+            .frame(width: 1 / self.displayScale)
     }
 
     @ViewBuilder
@@ -421,25 +453,25 @@ struct RootTabs: View {
         self.reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity)
     }
 
-    private var sidebarDrawerShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            topLeadingRadius: 0,
-            bottomLeadingRadius: 0,
-            bottomTrailingRadius: OpenClawProMetric.drawerRadius,
-            topTrailingRadius: OpenClawProMetric.drawerRadius,
-            style: .continuous)
+    private func sidebarContentRevealProgress(sidebarWidth: CGFloat) -> CGFloat {
+        guard sidebarWidth > 0 else { return 0 }
+        return Self.sidebarContentOffset(
+            sidebarWidth: sidebarWidth,
+            isVisible: self.isSidebarVisible,
+            dragOffset: self.sidebarContentDragOffset,
+            reduceMotion: self.reduceMotion) / sidebarWidth
     }
 
-    private var sidebarDismissGesture: some Gesture {
+    private func sidebarContentDismissGesture(sidebarWidth: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
-                self.sidebarDrawerDragOffset = min(0, value.translation.width)
+                self.sidebarContentDragOffset = max(-sidebarWidth, min(0, value.translation.width))
             }
             .onEnded { value in
                 let shouldDismiss = value.translation.width < -80 ||
                     value.predictedEndTranslation.width < -160
                 withAnimation(self.sidebarAnimation) {
-                    self.sidebarDrawerDragOffset = 0
+                    self.sidebarContentDragOffset = 0
                     if shouldDismiss {
                         self.sidebarVisibilityUserOverridden = true
                         self.setSidebarVisible(false)
@@ -982,6 +1014,7 @@ extension RootTabs {
     }
 
     private func setSidebarVisible(_ isVisible: Bool) {
+        self.sidebarContentDragOffset = 0
         self.isSidebarVisible = isVisible
     }
 
