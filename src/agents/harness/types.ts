@@ -131,7 +131,6 @@ export type AgentHarnessResetParams = {
 export type AgentHarnessSessionForkFailureCode =
   | "steer-message"
   | "in-progress-turn"
-  | "first-message"
   | "drift-mismatch"
   | "upstream-unavailable";
 

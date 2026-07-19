@@ -35,16 +35,20 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     });
   });
 
-  it("rejects a cut at the first turn instead of copying the whole thread", () => {
+  it("cuts before the first turn with an empty retained baseline", () => {
     const result = resolveCodexUpstreamForkBoundaryFromTurns({
       turns: [turn("turn-1", [user("one")])],
       userMessageOrdinal: 0,
       localPrefixTexts: ["one"],
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe("first-message");
-    }
+    expect(result).toEqual({
+      ok: true,
+      boundary: {
+        beforeTurnId: "turn-1",
+        targetTurnId: "turn-1",
+        retainedMarker: { turnId: null, userMessageCount: 0 },
+      },
+    });
   });
 
   it("rejects a selected steer message", () => {

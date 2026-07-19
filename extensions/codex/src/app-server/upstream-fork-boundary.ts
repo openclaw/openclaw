@@ -5,16 +5,16 @@ import type { CodexThreadItem, CodexTurn } from "./protocol.js";
 export type CodexUpstreamForkBoundaryFailureCode =
   | "steer-message"
   | "in-progress-turn"
-  | "first-message"
   | "drift-mismatch"
   | "upstream-unavailable";
 
 export type CodexUpstreamForkBoundary = {
   beforeTurnId: string;
   targetTurnId: string;
-  /** Baseline for the forked thread: the last retained turn, so the upstream
-   * monitor does not replay retained history as fresh external activity. */
-  retainedMarker: { turnId: string; userMessageCount: number };
+  /** Baseline for the forked thread: the last retained turn (null when the cut is
+   * before the first turn), so the upstream monitor does not replay retained
+   * history as fresh external activity. */
+  retainedMarker: { turnId: string | null; userMessageCount: number };
 };
 
 export type CodexUpstreamForkBoundaryResult =
@@ -179,31 +179,22 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
         );
       }
-      if (turnIndex === 0) {
-        // A cut before the first turn would need a whole-thread upstream copy while the
-        // local mirror keeps an empty prefix — divergent histories. Fail closed; a fresh
-        // session covers the "start over" intent.
-        return failure(
-          "first-message",
-          "Forking before the first message of a Codex session is not supported. Start a new session instead.",
-        );
-      }
-      const retained = params.turns[turnIndex - 1];
-      if (!retained) {
-        return failure(
-          "drift-mismatch",
-          "The message could not be matched to the Codex thread. Refresh the session and try again.",
-        );
-      }
+      // beforeTurnId at the first turn yields a valid empty-history fork upstream
+      // (codex-rs thread_fork_inner has no minimum-turn guard), matching the empty
+      // local mirror prefix.
+      const retained = turnIndex > 0 ? params.turns[turnIndex - 1] : undefined;
       return {
         ok: true,
         boundary: {
           beforeTurnId: turn.id,
           targetTurnId: turn.id,
-          retainedMarker: {
-            turnId: retained.id,
-            userMessageCount: retained.items.filter((item) => item.type === "userMessage").length,
-          },
+          retainedMarker: retained
+            ? {
+                turnId: retained.id,
+                userMessageCount: retained.items.filter((item) => item.type === "userMessage")
+                  .length,
+              }
+            : { turnId: null, userMessageCount: 0 },
         },
       };
     }
