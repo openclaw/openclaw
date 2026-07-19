@@ -759,6 +759,8 @@ export async function runPluginInstallCommand(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
     acknowledgeClawHubRisk?: boolean;
+    expectedIntegrity?: string;
+    expectedPluginId?: string;
     force?: boolean;
     link?: boolean;
     pin?: boolean;
@@ -1223,6 +1225,8 @@ export async function runPluginInstallCommand(params: {
       }),
       mode: installMode,
       spec: raw,
+      ...(opts.expectedIntegrity ? { expectedIntegrity: opts.expectedIntegrity } : {}),
+      ...(opts.expectedPluginId ? { expectedPluginId: opts.expectedPluginId } : {}),
       extensionsDir,
       logger: createPluginInstallLogger(runtime),
     });

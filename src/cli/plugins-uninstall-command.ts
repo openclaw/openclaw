@@ -147,6 +147,15 @@ export async function runPluginUninstallCommand(
   );
   runtime.log(`Will remove: ${preview.length > 0 ? preview.join(", ") : "(nothing)"}`);
 
+  const { collectClawPluginUninstallWarnings } =
+    await import("../plugins/uninstall-claw-references.js");
+  for (const warning of collectClawPluginUninstallWarnings({
+    pluginId,
+    installRecord: cfg.plugins?.installs?.[pluginId],
+  })) {
+    runtime.log(theme.warn(warning));
+  }
+
   const nextConfig = withoutPluginInstallRecords(plan.config);
 
   if (opts.dryRun) {
