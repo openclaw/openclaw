@@ -10,11 +10,7 @@ const mocks = vi.hoisted(() => ({
   active: false,
   capability: false,
   external: false,
-  archive: vi.fn(),
-  attach: vi.fn(),
   upstreamFork: vi.fn(),
-  upstreamUpsert: vi.fn(),
-  upstreamDelete: vi.fn(),
   queueClear: vi.fn(),
 }));
 
@@ -52,8 +48,6 @@ vi.mock("../../sessions/session-upstream-links.js", () => ({
           upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
         }
       : undefined,
-  upsertSessionUpstreamLink: mocks.upstreamUpsert,
-  deleteSessionUpstreamLink: mocks.upstreamDelete,
 }));
 
 vi.mock("./session-active-runs.js", () => {
@@ -64,10 +58,8 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionEntries,
-  loadSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
 import { sessionsHandlers } from "./sessions.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -77,11 +69,7 @@ beforeEach(async () => {
   mocks.active = false;
   mocks.capability = false;
   mocks.external = false;
-  mocks.archive.mockReset().mockResolvedValue(undefined);
-  mocks.attach.mockReset();
   mocks.upstreamFork.mockReset();
-  mocks.upstreamUpsert.mockReset().mockReturnValue(true);
-  mocks.upstreamDelete.mockReset();
   mocks.queueClear.mockReset();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
   await upsertSessionEntry(
@@ -286,57 +274,33 @@ describe("session message-cut methods", () => {
     },
   );
 
-  it("forks an upstream-linked session and binds the local mirror", async () => {
+  it("delegates complete upstream fork materialization to the harness", async () => {
     mocks.external = true;
     mocks.capability = true;
     mocks.upstreamFork.mockResolvedValue({
-      status: "forked",
-      upstream: {
-        threadId: "thread-forked",
-        ref: { connectionFingerprint: "fingerprint", threadId: "thread-forked" },
-        marker: { turnId: null, userMessageCount: 0 },
-      },
-      archive: mocks.archive,
-      attach: mocks.attach,
+      status: "created",
+      key: "agent:main:dashboard:forked",
+      editorText: "edit me",
     });
 
     const respond = await invoke("sessions.fork", "user-entry");
-    const result = respond.mock.calls[0]?.[1] as { sessionKey?: string } | undefined;
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ editorText: "edit me", sessionKey: expect.any(String) }),
+      { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" },
       undefined,
     );
     expect(mocks.upstreamFork).toHaveBeenCalledWith(
       expect.objectContaining({
         source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
+        targetKey: expect.stringMatching(/^agent:main:dashboard:/),
         upstream: expect.objectContaining({
+          catalogId: "codex",
+          hostId: "gateway:local",
           kind: "codex-app-server",
           threadId: "thread-source",
         }),
       }),
     );
-    const forkedEntry = loadSessionEntry({ agentId: "main", sessionKey: result?.sessionKey ?? "" });
-    expect(forkedEntry?.sessionId).toBeTruthy();
-    expect(
-      await readVisibleSessionTranscriptMessageEntries({
-        agentId: "main",
-        sessionId: forkedEntry?.sessionId ?? "",
-        sessionKey: result?.sessionKey ?? "",
-      }),
-    ).toEqual([]);
-    expect(mocks.upstreamUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        marker: { turnId: null, userMessageCount: 0 },
-        sessionKey: result?.sessionKey,
-        threadId: "thread-forked",
-      }),
-    );
-    expect(mocks.attach).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionId: forkedEntry?.sessionId,
-      sessionKey: result?.sessionKey,
-    });
   });
 
   it("does not mutate the local session when the upstream fork fails", async () => {
@@ -359,97 +323,6 @@ describe("session message-cut methods", () => {
         details: { reason: "upstream-unavailable" },
       }),
     );
-    expect(mocks.upstreamUpsert).not.toHaveBeenCalled();
-    expect(mocks.attach).not.toHaveBeenCalled();
-    expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
-  });
-
-  it("archives an upstream fork when the local mirror fork fails", async () => {
-    mocks.external = true;
-    mocks.capability = true;
-    mocks.upstreamFork.mockResolvedValue({
-      status: "forked",
-      upstream: {
-        threadId: "thread-orphan",
-        ref: { connectionFingerprint: "fingerprint", threadId: "thread-orphan" },
-        marker: { turnId: null, userMessageCount: 0 },
-      },
-      archive: mocks.archive,
-      attach: mocks.attach,
-    });
-
-    const respond = await invoke("sessions.fork", "missing");
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "message entry not found: missing" }),
-    );
-    expect(mocks.archive).toHaveBeenCalledOnce();
-    expect(mocks.upstreamUpsert).not.toHaveBeenCalled();
-    expect(mocks.attach).not.toHaveBeenCalled();
-  });
-
-  it("rolls back the local mirror when binding attachment fails", async () => {
-    mocks.external = true;
-    mocks.capability = true;
-    mocks.attach.mockRejectedValue(new Error("binding conflict"));
-    mocks.upstreamFork.mockResolvedValue({
-      status: "forked",
-      upstream: {
-        threadId: "thread-orphan",
-        ref: { connectionFingerprint: "fingerprint", threadId: "thread-orphan" },
-        marker: { turnId: null, userMessageCount: 0 },
-      },
-      archive: mocks.archive,
-      attach: mocks.attach,
-    });
-    const entryCount = listSessionEntries({ agentId: "main" }).length;
-
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: expect.stringContaining("could not be attached"),
-      }),
-    );
-    expect(mocks.archive).toHaveBeenCalledOnce();
-    expect(mocks.upstreamUpsert).toHaveBeenCalledOnce();
-    expect(mocks.upstreamDelete).toHaveBeenCalledOnce();
-    expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
-  });
-
-  it("rolls back both forks when the upstream link cannot be persisted", async () => {
-    mocks.external = true;
-    mocks.capability = true;
-    mocks.upstreamUpsert.mockReturnValue(false);
-    mocks.upstreamFork.mockResolvedValue({
-      status: "forked",
-      upstream: {
-        threadId: "thread-orphan",
-        ref: { connectionFingerprint: "fingerprint", threadId: "thread-orphan" },
-        marker: { turnId: null, userMessageCount: 0 },
-      },
-      archive: mocks.archive,
-      attach: mocks.attach,
-    });
-    const entryCount = listSessionEntries({ agentId: "main" }).length;
-
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: expect.stringContaining("could not be linked"),
-      }),
-    );
-    expect(mocks.archive).toHaveBeenCalledOnce();
-    expect(mocks.attach).not.toHaveBeenCalled();
     expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
   });
 
@@ -475,7 +348,6 @@ describe("session message-cut methods", () => {
           message: `boundary failed: ${reason}`,
         }),
       );
-      expect(mocks.upstreamUpsert).not.toHaveBeenCalled();
     },
   );
 

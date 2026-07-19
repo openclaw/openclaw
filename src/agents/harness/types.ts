@@ -135,6 +135,7 @@ export type AgentHarnessSessionForkFailureCode =
   | "upstream-unavailable";
 
 export type AgentHarnessSessionForkParams = {
+  targetKey: string;
   source: {
     agentId: string;
     sessionId: string;
@@ -143,6 +144,8 @@ export type AgentHarnessSessionForkParams = {
     entryId: string;
   };
   upstream: {
+    catalogId: string;
+    hostId: string;
     kind: import("../../plugins/session-catalog.js").SessionUpstreamKind;
     threadId: string;
     ref: import("../../plugins/session-catalog.js").SessionUpstreamJsonValue;
@@ -151,14 +154,9 @@ export type AgentHarnessSessionForkParams = {
 
 export type AgentHarnessSessionForkResult =
   | {
-      status: "forked";
-      upstream: {
-        threadId: string;
-        ref: import("../../plugins/session-catalog.js").SessionUpstreamJsonValue;
-        marker: import("../../plugins/session-catalog.js").SessionUpstreamJsonValue;
-      };
-      attach(params: { agentId: string; sessionId: string; sessionKey: string }): Promise<void>;
-      archive(): Promise<void>;
+      status: "created";
+      key: string;
+      editorText?: string;
     }
   | {
       status: "failed";

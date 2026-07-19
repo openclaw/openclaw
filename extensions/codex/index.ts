@@ -153,6 +153,7 @@ export default definePluginEntry({
         sessionCatalogControl,
         resolveConfig: resolveCurrentConfig,
         resolvePluginConfig: resolveCurrentPluginConfig,
+        runtime: api.runtime,
       }),
     );
     api.registerMediaUnderstandingProvider(

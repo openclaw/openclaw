@@ -11,7 +11,6 @@ import type {
   SessionCatalogHost,
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config.js";
@@ -34,12 +33,12 @@ import {
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import { createImportedCodexSession } from "./app-server/session-history-import.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
-import { importCodexThreadHistoryToTranscript } from "./app-server/transcript-mirror.js";
 import { codexControlRequest } from "./command-rpc.js";
 import {
   adoptedSourceKey,
@@ -888,17 +887,17 @@ async function createOrReuseAdoptedSession(params: {
   let createdBindingIdentity: ReturnType<typeof sessionBindingIdentity> | undefined;
   let createdPendingBinding: CodexAppServerPendingSupervisionBranch | undefined;
   try {
-    const label = params.sourceThread.name?.trim() || undefined;
     const spawnedCwd = params.sourceThread.cwd?.trim() || undefined;
     const pendingLastTurnId = codexLastTerminalTurnId(params.sourceThread, boundCatalogSessionId);
     const marker: CodexSupervisionMarker = { sourceThreadId: params.sourceThread.id };
-    const created = await params.api.runtime.agent.session.createSessionEntry({
-      cfg: params.config,
+    const created = await createImportedCodexSession({
+      runtime: params.api.runtime,
+      config: params.config,
       key: adoptionSessionKey(params.sourceThread.id),
       agentId: resolveDefaultAgentId(params.config),
+      thread: params.sourceThread,
+      throughTurnId: pendingLastTurnId ?? null,
       recoverMatchingInitialEntry: true,
-      ...(label ? { label } : {}),
-      ...(spawnedCwd ? { spawnedCwd } : {}),
       initialEntry: {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
@@ -912,26 +911,10 @@ async function createOrReuseAdoptedSession(params: {
           },
         },
       },
-      afterCreate: async (entry) => {
+      afterImport: async (entry) => {
         createdBindingIdentity = sessionBindingIdentity({
           sessionId: entry.sessionId,
           sessionKey: entry.key,
-          config: params.config,
-        });
-        // Post-flip the mirror targets SQLite rows; resolve the agent's store
-        // path instead of trusting the legacy sessionFile locator marker.
-        const storePath = resolveStorePath(params.config.session?.store, {
-          agentId: entry.agentId,
-        });
-        await importCodexThreadHistoryToTranscript({
-          thread: params.sourceThread,
-          throughTurnId: pendingLastTurnId ?? null,
-          storePath,
-          sessionId: entry.sessionId,
-          sessionKey: entry.key,
-          agentId: entry.agentId,
-          ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
-          modelProvider: params.sourceThread.modelProvider,
           config: params.config,
         });
         createdPendingBinding = {

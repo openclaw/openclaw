@@ -10,7 +10,6 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
-  deleteSessionEntryLifecycle,
   forkSessionAtMessage,
   listSessionBranches,
   rewindSessionToMessage,
@@ -24,9 +23,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
-  deleteSessionUpstreamLink,
   readSessionUpstreamLink,
-  upsertSessionUpstreamLink,
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
 import {
@@ -325,6 +322,7 @@ async function mutateSessionAtMessage(
       const upstreamFork =
         upstreamLink && upstreamForkHarness
           ? await upstreamForkHarness.fork({
+              targetKey,
               source: {
                 agentId: current.target.agentId,
                 sessionId: current.entry.sessionId,
@@ -333,6 +331,8 @@ async function mutateSessionAtMessage(
                 entryId,
               },
               upstream: {
+                catalogId: upstreamLink.catalogId,
+                hostId: upstreamLink.hostId,
                 kind: upstreamLink.upstreamKind,
                 threadId: upstreamLink.threadId,
                 ref: upstreamLink.upstreamRef,
@@ -351,6 +351,28 @@ async function mutateSessionAtMessage(
             { details: { reason: upstreamFork.code } },
           ),
         );
+        return;
+      }
+      if (upstreamFork?.status === "created") {
+        // Canonical fork lineage stays upstream. Linked sessions intentionally do not enter
+        // the local branch graph; branch listing/switching remains rejected for them above.
+        respond(
+          true,
+          {
+            sessionKey: upstreamFork.key,
+            ...(upstreamFork.editorText !== undefined
+              ? { editorText: upstreamFork.editorText }
+              : {}),
+          },
+          undefined,
+        );
+        emitSessionsChanged(context, {
+          sessionKey: upstreamFork.key,
+          ...(upstreamFork.key === "global" && requestedAgent.agentId
+            ? { agentId: requestedAgent.agentId }
+            : {}),
+          reason: "fork",
+        });
         return;
       }
       let result: SessionMessageCutMutationResult | SessionBranchSwitchMutationResult;
@@ -380,9 +402,6 @@ async function mutateSessionAtMessage(
                 storePath: current.storePath,
               }));
       } catch {
-        if (upstreamFork?.status === "forked") {
-          await upstreamFork.archive().catch(() => undefined);
-        }
         respond(
           false,
           undefined,
@@ -391,71 +410,8 @@ async function mutateSessionAtMessage(
         return;
       }
       if (result.status !== "created") {
-        if (upstreamFork?.status === "forked") {
-          // The upstream fork commits before SQLite by contract; archive it if the local mirror
-          // cannot commit so a failed OpenClaw action does not leave an unmanaged Codex thread.
-          await upstreamFork.archive().catch(() => undefined);
-        }
         respondMessageCutError(result, action, entryId, respond);
         return;
-      }
-      if (upstreamLink && upstreamFork?.status === "forked") {
-        // Link BEFORE attach: a crash between the two leaves the session marked
-        // upstream-owned with no binding (rewind/switch stay rejected), never a
-        // bound session the local mutation path could silently diverge.
-        const linked = upsertSessionUpstreamLink({
-          sessionKey: result.key,
-          agentId: current.target.agentId,
-          catalogId: upstreamLink.catalogId,
-          hostId: upstreamLink.hostId,
-          threadId: upstreamFork.upstream.threadId,
-          upstreamKind: upstreamLink.upstreamKind,
-          upstreamRef: upstreamFork.upstream.ref,
-          marker: upstreamFork.upstream.marker,
-        });
-        if (!linked) {
-          await abandonForkedSession(
-            "The Codex fork could not be linked to the new session. Refresh sessions and try again.",
-          );
-          return;
-        }
-        try {
-          await upstreamFork.attach({
-            agentId: current.target.agentId,
-            sessionId: result.entry.sessionId,
-            sessionKey: result.key,
-          });
-        } catch {
-          deleteSessionUpstreamLink(result.key, current.target.agentId);
-          await abandonForkedSession(
-            "The Codex fork was created but could not be attached. Refresh sessions and try again.",
-          );
-          return;
-        }
-      }
-
-      async function abandonForkedSession(message: string): Promise<void> {
-        if (upstreamFork?.status === "forked") {
-          await upstreamFork.archive().catch(() => undefined);
-        }
-        if (result.status === "created") {
-          await deleteSessionEntryLifecycle({
-            agentId: current.target.agentId,
-            archiveTranscript: true,
-            expectedEntry: result.entry,
-            expectedSessionId: result.entry.sessionId,
-            expectedUpdatedAt: result.entry.updatedAt,
-            storePath: current.storePath,
-            target: { canonicalKey: result.key, storeKeys: [result.key] },
-          }).catch(() => undefined);
-        }
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, message, {
-            details: { reason: "upstream-unavailable" },
-          }),
-        );
       }
       if (action !== "fork") {
         clearSessionQueues(lifecycleIdentities);

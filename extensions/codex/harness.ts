@@ -8,6 +8,7 @@ import type {
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
 
@@ -51,6 +52,7 @@ export function createCodexAppServerAgentHarness(options: {
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
   resolveConfig?: () => OpenClawConfig | undefined;
+  runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
   sessionCatalogControl?: CodexSessionCatalogControl;
 }): AgentHarness {
@@ -62,6 +64,7 @@ export function createCodexAppServerAgentHarness(options: {
     ),
   );
   const sessionCatalogControl = options.sessionCatalogControl;
+  const sessionRuntime = options.runtime;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -72,7 +75,7 @@ export function createCodexAppServerAgentHarness(options: {
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
-    ...(sessionCatalogControl
+    ...(sessionCatalogControl && sessionRuntime
       ? {
           sessionFork: {
             upstreamKinds: ["codex-app-server"] as const,
@@ -82,7 +85,9 @@ export function createCodexAppServerAgentHarness(options: {
               return await forkCodexUpstreamSession(params, {
                 bindingStore: options.bindingStore,
                 control: sessionCatalogControl,
+                harnessRuntimeId,
                 resolveConfig: options.resolveConfig,
+                runtime: sessionRuntime,
               });
             },
           },

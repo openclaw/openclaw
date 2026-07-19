@@ -3,11 +3,18 @@ import type {
   AgentHarnessSessionForkResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  deleteSessionUpstreamLink,
+  upsertSessionUpstreamLink,
+} from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
+import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
-import type { CodexThreadForkResponse } from "./protocol.js";
+import type { CodexThread, CodexThreadForkResponse } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
+import { createImportedCodexSession } from "./session-history-import.js";
 import {
   listCodexUpstreamTurns,
   precheckCodexUpstreamForkBoundary,
@@ -23,16 +30,35 @@ function readConnectionFingerprint(ref: unknown): string | undefined {
     : undefined;
 }
 
+function normalizeTurnId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export async function forkCodexUpstreamSession(
   params: AgentHarnessSessionForkParams,
   options: {
     bindingStore: CodexAppServerBindingStore;
     control: CodexSessionCatalogControl;
+    harnessRuntimeId: string;
     resolveConfig?: () => OpenClawConfig | undefined;
+    runtime: PluginRuntime;
   },
 ): Promise<AgentHarnessSessionForkResult> {
   try {
     return await options.control.withPinnedConnection(async (control) => {
+      let linked = false;
+      let bindingIdentity: ReturnType<typeof sessionBindingIdentity> | undefined;
+      const compensateFork = async (forkedThreadId: string) => {
+        if (bindingIdentity) {
+          await options.bindingStore
+            .mutate(bindingIdentity, { kind: "clear", threadId: forkedThreadId })
+            .catch(() => undefined);
+        }
+        if (linked) {
+          deleteSessionUpstreamLink(params.targetKey, params.source.agentId);
+        }
+        await control.archiveThread(forkedThreadId).catch(() => undefined);
+      };
       const sourceFingerprint = readConnectionFingerprint(params.upstream.ref);
       if (
         params.upstream.kind !== "codex-app-server" ||
@@ -92,53 +118,95 @@ export async function forkCodexUpstreamSession(
       if (threadId === params.upstream.threadId) {
         throw new Error("Codex thread/fork response reused the source thread id");
       }
-      const connectionFingerprint = control.connectionFingerprint;
-      if (!connectionFingerprint) {
-        throw new Error("Codex fork connection did not include a fingerprint");
-      }
-      let attachedIdentity: ReturnType<typeof sessionBindingIdentity> | undefined;
-      return {
-        status: "forked",
-        upstream: {
-          threadId,
-          ref: { connectionFingerprint, threadId },
-          // Baseline at the last retained turn: a null marker would replay the fork's
-          // retained history as fresh external activity on the first monitor tick.
-          marker: resolved.boundary.retainedMarker,
-        },
-        attach: async (target) => {
-          attachedIdentity = sessionBindingIdentity({
-            ...target,
-            config: options.resolveConfig?.(),
-          });
-          const attached = await options.bindingStore.mutate(attachedIdentity, {
-            kind: "set",
-            binding: {
+      const forkedThreadId = threadId;
+      try {
+        const connectionFingerprint = control.connectionFingerprint;
+        if (!connectionFingerprint) {
+          throw new Error("Codex fork connection did not include a fingerprint");
+        }
+        const forkedTurns = await listCodexUpstreamTurns(control, threadId);
+        const expectedLastTurnId = resolved.boundary.retainedMarker.turnId;
+        const actualLastTurnId = forkedTurns.at(-1)?.id ?? null;
+        // Boundary resolution already verified the source prefix; this read-back tail identity
+        // detects app-server versions that ignored the exclusive beforeTurnId cut.
+        if (actualLastTurnId !== expectedLastTurnId) {
+          await compensateFork(forkedThreadId);
+          return {
+            status: "failed",
+            code: "upstream-unavailable",
+            message:
+              "This Codex version does not support message-level forks. Update Codex, reconnect, and try again.",
+          };
+        }
+        const forkedThread: CodexThread = { ...response.thread, turns: forkedTurns };
+        const throughTurnId = codexLastTerminalTurnId(forkedThread, normalizeTurnId) ?? null;
+        const marker = codexUpstreamBaseline(forkedThread, normalizeTurnId);
+        const config = options.resolveConfig?.() ?? {};
+        const created = await createImportedCodexSession({
+          runtime: options.runtime,
+          config,
+          key: params.targetKey,
+          agentId: params.source.agentId,
+          thread: forkedThread,
+          throughTurnId,
+          initialEntry: {
+            agentHarnessId: options.harnessRuntimeId,
+            modelSelectionLocked: true,
+          },
+          afterImport: async (entry) => {
+            bindingIdentity = sessionBindingIdentity({
+              agentId: entry.agentId,
+              sessionId: entry.sessionId,
+              sessionKey: entry.key,
+              config,
+            });
+            // Link BEFORE bind: a crash cannot expose a bound session to local-only
+            // rewind/switch while its canonical upstream ownership is missing.
+            linked = upsertSessionUpstreamLink({
+              sessionKey: entry.key,
+              agentId: entry.agentId,
+              catalogId: params.upstream.catalogId,
+              hostId: params.upstream.hostId,
               threadId,
-              cwd: response.thread.cwd ?? "",
-              model: response.model,
-              modelProvider: response.modelProvider ?? undefined,
-              historyCoveredThrough: new Date().toISOString(),
-            },
-          });
-          if (!attached) {
-            throw new Error("Codex session binding changed before the fork could be attached");
-          }
-        },
-        archive: async () => {
-          if (attachedIdentity) {
-            await options.bindingStore
-              .mutate(attachedIdentity, { kind: "clear", threadId })
-              .catch(() => undefined);
-          }
-          await options.control.withPinnedConnection(async (archiveControl) => {
-            if (archiveControl.connectionFingerprint !== connectionFingerprint) {
-              throw new Error("Codex connection changed before orphan cleanup");
+              upstreamKind: params.upstream.kind,
+              upstreamRef: { connectionFingerprint, threadId },
+              marker,
+            });
+            if (!linked) {
+              throw new Error("Codex fork link could not be persisted");
             }
-            await archiveControl.archiveThread(threadId);
-          });
-        },
-      };
+            const attached = await options.bindingStore.mutate(bindingIdentity, {
+              kind: "set",
+              binding: {
+                threadId,
+                cwd: forkedThread.cwd ?? "",
+                model: response.model,
+                modelProvider: response.modelProvider ?? undefined,
+                historyCoveredThrough: new Date().toISOString(),
+              },
+            });
+            if (!attached) {
+              throw new Error("Codex session binding changed before the fork could be attached");
+            }
+            return { pluginExtensions: entry.entry.pluginExtensions };
+          },
+        });
+        return {
+          status: "created",
+          key: created.key,
+          ...(resolved.editorText !== undefined ? { editorText: resolved.editorText } : {}),
+        };
+      } catch {
+        // thread/fork commits before local materialization. The guarded session initializer
+        // rolls back its row/transcript; this capability clears link/binding and archives the orphan.
+        await compensateFork(forkedThreadId);
+        return {
+          status: "failed",
+          code: "upstream-unavailable",
+          message:
+            "The Codex fork could not be verified or imported into a new session. Refresh sessions and try again.",
+        };
+      }
     });
   } catch {
     return {

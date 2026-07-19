@@ -18,7 +18,7 @@ export type CodexUpstreamForkBoundary = {
 };
 
 export type CodexUpstreamForkBoundaryResult =
-  | { ok: true; boundary: CodexUpstreamForkBoundary }
+  | { ok: true; boundary: CodexUpstreamForkBoundary; editorText?: string }
   | { ok: false; code: CodexUpstreamForkBoundaryFailureCode; message: string };
 
 const TURN_PAGE_LIMIT = 100;
@@ -199,8 +199,9 @@ export function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           retainedMarker: retained
             ? {
                 turnId: retained.id,
-                userMessageCount: retained.items.filter((item) => item.type === "userMessage")
-                  .length,
+                userMessageCount: retained.items.filter(
+                  (retainedItem) => retainedItem.type === "userMessage",
+                ).length,
               }
             : { turnId: null, userMessageCount: 0 },
         },
@@ -280,11 +281,14 @@ export async function resolveCodexUpstreamForkBoundary(params: {
       .slice(0, userMessageOrdinal + 1)
       .map((entry) => localMessageText(entry.message.content));
     const turns = await listCodexUpstreamTurns(params.control, params.threadId);
-    return resolveCodexUpstreamForkBoundaryFromTurns({
+    const resolved = resolveCodexUpstreamForkBoundaryFromTurns({
       turns,
       userMessageOrdinal,
       localPrefixTexts,
     });
+    return resolved.ok
+      ? { ...resolved, editorText: localPrefixTexts[userMessageOrdinal] }
+      : resolved;
   } catch {
     return failure(
       "upstream-unavailable",
