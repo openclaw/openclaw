@@ -7,7 +7,7 @@ import {
 } from "./bash-tools.exec-output.js";
 
 describe("appendExecTimeoutRetryGuidance", () => {
-  it.each(["overall-timeout", "no-output-timeout"])(
+  it.each(["overall-timeout", "no-output-timeout"] as const)(
     "warns that %s may already have produced side effects",
     (exitReason) => {
       const text = appendExecTimeoutRetryGuidance("Command timed out.", exitReason);
