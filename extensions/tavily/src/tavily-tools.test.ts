@@ -179,8 +179,8 @@ describe("tavily tools", () => {
       max_results: 5,
       include_answer: true,
       time_range: "week",
-      include_domains: ["docs.openclaw.ai", "", "openclaw.ai"],
-      exclude_domains: ["bad.example", ""],
+      include_domains: [" docs.openclaw.ai ", "   ", "openclaw.ai"],
+      exclude_domains: [" bad.example ", ""],
     });
 
     expect(runTavilySearch).toHaveBeenCalledWith({
@@ -313,7 +313,7 @@ describe("tavily tools", () => {
     await expect(
       searchTool.execute("call-2", {
         query: "simple",
-        include_domains: [""],
+        include_domains: ["   "],
         exclude_domains: [],
       }),
     ).resolves.toEqual({
