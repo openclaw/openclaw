@@ -52,6 +52,8 @@ describe("AppSidebar viewer presence", () => {
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main", "agent:main:work"]),
     );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
 
     gatewayHarness.publishEvent("presence", {
       presence: [
@@ -75,7 +77,7 @@ describe("AppSidebar viewer presence", () => {
           user: { id: "bob", email: "bob@example.test" },
           watchedSessions: ["agent:main:work"],
         },
-        ...["carol", "dave", "erin"].map((id) => ({
+        ...["carol", "dave", "erin", "frank"].map((id) => ({
           instanceId: `${id}-1`,
           user: { id, name: id[0]?.toUpperCase() + id.slice(1) },
           watchedSessions: ["agent:main:work"],
@@ -104,28 +106,63 @@ describe("AppSidebar viewer presence", () => {
       (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
       (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
     ]);
+    await Promise.all(
+      [...sidebar.querySelectorAll<HTMLElement>("openclaw-viewer-avatar")].map(
+        (avatar) => (avatar as HTMLElement & { updateComplete?: Promise<unknown> }).updateComplete,
+      ),
+    );
 
     expect(
       sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
-    ).toBe("5");
+    ).toBe("6");
     expect(
       [...(sessionFacepile?.querySelectorAll<HTMLElement>("[data-viewer-id]") ?? [])].map(
         (avatar) => avatar.dataset.viewerId,
       ),
     ).toEqual(["alice", "bob", "carol"]);
-    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+2");
+    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
     expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
     expect(
       [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
         (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
       ),
-    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin"]);
+    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
     expect(
       footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
-    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
+    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).toBeNull();
     expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
+
+    const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
+    expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
+      "Self User",
+    );
+    expect(identityChip?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
+    identityChip?.click();
+    expect(onNavigate).toHaveBeenCalledWith("profile", {
+      hash: "#settings-profile-identity",
+    });
+  });
+
+  it("leaves the footer identity chip absent for an unidentified connection", async () => {
+    const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+
+    gatewayHarness.publishEvent("presence", {
+      presence: [
+        { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
+        { instanceId: "alice", user: { id: "alice", name: "Alice" } },
+      ],
+    });
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-footer-bar__identity")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-footer-bar")?.textContent).not.toContain("Sign in");
   });
 });
 

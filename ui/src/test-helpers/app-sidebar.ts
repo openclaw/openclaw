@@ -36,7 +36,7 @@ export type SidebarLifecycleState = HTMLElement & {
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
-  onNavigate: (routeId: string, options?: { search?: string }) => void;
+  onNavigate: (routeId: string, options?: { search?: string; hash?: string }) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;

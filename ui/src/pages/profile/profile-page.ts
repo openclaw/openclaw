@@ -1,7 +1,12 @@
-import "../../styles/config-quick.css";
 import { consume } from "@lit/context";
 import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";
+import type {
+  UserProfile,
+  UsersListResult,
+  UsersSetAvatarResult,
+  UsersSetDisplayNameResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -10,7 +15,8 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadLocalUserIdentity, saveLocalUserIdentity } from "../../app/settings.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
+import { userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
@@ -28,12 +34,14 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import {
   decideUsageRefresh,
   USAGE_PAYLOAD_TTL_MS,
   type UsageRefreshReason,
 } from "../usage/refresh-policy.ts";
 import "../../styles/profile.css";
+import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 import {
   buildHeatmap,
@@ -96,6 +104,15 @@ function toErrorMessage(error: unknown): string {
   return typeof error === "string" ? error : "request failed";
 }
 
+function toIdentityErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return typeof error === "string" && error.trim()
+    ? error
+    : t("profilePage.identity.profileUnavailable");
+}
+
 export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
@@ -104,11 +121,17 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private error: string | null = null;
   @state() private costSummary: CostUsageSummary | null = null;
   @state() private sessionsResult: SessionsUsageResult | null = null;
-  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
+  @state() private selfUser: AuthenticatedUser | null = null;
+  @state() private ownProfile: UserProfile | null = null;
+  @state() private displayName = "";
+  @state() private identityLoading = false;
+  @state() private identityBusy: "display-name" | "avatar" | null = null;
+  @state() private identityError: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private requestId = 0;
+  private identityRequestId = 0;
   private refreshTimer: number | null = null;
   private lastProfileLoadedAtMs: number | null = null;
   private pendingAutomaticProfileRefresh = false;
@@ -141,6 +164,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     document.removeEventListener("visibilitychange", this.handlePageActivation);
     globalThis.removeEventListener("focus", this.handlePageActivation);
     this.requestId += 1;
+    this.identityRequestId += 1;
     this.clearRefreshTimer();
     this.pendingAutomaticProfileRefresh = false;
     this.profileReloadPending = false;
@@ -152,8 +176,11 @@ export class ProfilePage extends OpenClawLightDomElement {
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
     const becameConnected = snapshot.connected && !this.connected;
+    const nextSelfUser = snapshot.connected ? (snapshot.selfUser ?? null) : null;
+    const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
     this.client = snapshot.client;
     this.connected = snapshot.connected;
+    this.selfUser = nextSelfUser;
     if (clientChanged) {
       // Never keep one gateway's stats on screen while another gateway loads
       // (or fails to load); the render branches key off costSummary presence.
@@ -167,12 +194,23 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.sessionsResult = null;
       this.error = null;
     }
+    if (clientChanged || selfProfileChanged) {
+      this.identityRequestId += 1;
+      this.ownProfile = null;
+      this.displayName = "";
+      this.identityLoading = false;
+      this.identityBusy = null;
+      this.identityError = null;
+    }
     if (!snapshot.connected || !snapshot.client) {
       this.profileReloadPending ||= this.loading;
       this.requestId += 1;
       this.clearRefreshTimer();
       this.loading = false;
       return;
+    }
+    if (nextSelfUser && (clientChanged || selfProfileChanged)) {
+      void this.loadIdentity(nextSelfUser.id);
     }
     void this.context.agents.ensureList().then((list) => {
       if (list) {
@@ -294,24 +332,182 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.requestProfileRefresh("focus");
   }
 
-  private setLocalUserAvatar(avatar: string | null) {
-    const identity = saveLocalUserIdentity({ ...loadLocalUserIdentity(), avatar });
-    this.userAvatar = identity.avatar;
+  private resolveOwnProfile(profiles: readonly UserProfile[], profileId: string) {
+    const direct = profiles.find((profile) => profile.id === profileId) ?? null;
+    if (!direct?.mergedInto) {
+      return direct;
+    }
+    return profiles.find((profile) => profile.id === direct.mergedInto) ?? direct;
+  }
+
+  private async loadIdentity(profileId: string) {
+    const client = this.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    const requestId = ++this.identityRequestId;
+    const currentProfile = this.ownProfile;
+    const displayNameDraft = this.displayName;
+    const hasUnsavedDisplayName =
+      currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
+    this.identityLoading = true;
+    this.identityError = null;
+    try {
+      const result = await client.request<UsersListResult>("users.list", {});
+      if (requestId !== this.identityRequestId) {
+        return;
+      }
+      const profile = this.resolveOwnProfile(result.profiles, profileId);
+      if (!profile) {
+        throw new Error(t("profilePage.identity.profileUnavailable"));
+      }
+      this.ownProfile = profile;
+      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
+    } catch (error) {
+      if (requestId === this.identityRequestId) {
+        this.identityError = toIdentityErrorMessage(error);
+      }
+    } finally {
+      if (requestId === this.identityRequestId) {
+        this.identityLoading = false;
+      }
+    }
+  }
+
+  private applyOwnProfile(profile: UserProfile) {
+    this.ownProfile = profile;
+    this.displayName = profile.displayName ?? "";
+  }
+
+  private async saveDisplayName() {
+    const client = this.client;
+    const profile = this.ownProfile;
+    if (!client || !profile || this.identityBusy || this.identityLoading) {
+      return;
+    }
+    this.identityBusy = "display-name";
+    this.identityError = null;
+    const identityRequestId = this.identityRequestId;
+    try {
+      const displayName = this.displayName.trim() || null;
+      const result = await client.request<UsersSetDisplayNameResult>("users.setDisplayName", {
+        profileId: profile.id,
+        displayName,
+      });
+      if (client !== this.client || identityRequestId !== this.identityRequestId) {
+        return;
+      }
+      this.applyOwnProfile(result.profile);
+      this.context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
+    } catch (error) {
+      if (client === this.client && identityRequestId === this.identityRequestId) {
+        this.identityError = toIdentityErrorMessage(error);
+      }
+    } finally {
+      if (identityRequestId === this.identityRequestId && this.identityBusy === "display-name") {
+        this.identityBusy = null;
+      }
+    }
+  }
+
+  private async saveAvatar(file: File) {
+    const client = this.client;
+    const profile = this.ownProfile;
+    if (!client || !profile || this.identityBusy || this.identityLoading) {
+      return;
+    }
+    this.identityBusy = "avatar";
+    this.identityError = null;
+    const identityRequestId = this.identityRequestId;
+    const displayNameDraft = this.displayName;
+    const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
+    try {
+      const avatar = await processProfileAvatar(file);
+      if (client !== this.client || identityRequestId !== this.identityRequestId) {
+        return;
+      }
+      const result = await client.request<UsersSetAvatarResult>("users.setAvatar", {
+        profileId: profile.id,
+        mime: avatar.mime,
+        avatarBase64: avatar.avatarBase64,
+      });
+      if (client !== this.client || identityRequestId !== this.identityRequestId) {
+        return;
+      }
+      this.ownProfile = result.profile;
+      this.displayName = hasUnsavedDisplayName
+        ? displayNameDraft
+        : (result.profile.displayName ?? "");
+      const avatarUrl = userProfileAvatarUrl(
+        this.context.gateway.connection.gatewayUrl,
+        result.profile.id,
+        result.profile.updatedAt,
+      );
+      if (avatarUrl) {
+        this.context.gateway.updateSelfUser?.({ avatarUrl });
+      }
+    } catch (error) {
+      if (client === this.client && identityRequestId === this.identityRequestId) {
+        this.identityError =
+          error instanceof ProfileAvatarError
+            ? t(
+                error.code === "too-large"
+                  ? "profilePage.identity.avatarErrors.tooLarge"
+                  : error.code === "source-too-large"
+                    ? "profilePage.identity.avatarErrors.sourceTooLarge"
+                    : "profilePage.identity.avatarErrors.invalid",
+              )
+            : toIdentityErrorMessage(error);
+      }
+    } finally {
+      if (identityRequestId === this.identityRequestId && this.identityBusy === "avatar") {
+        this.identityBusy = null;
+      }
+    }
   }
 
   private renderIdentity() {
-    const assistantIdentity = this.context.config.current.assistantIdentity;
+    if (!this.selfUser) {
+      return nothing;
+    }
+    if (!this.ownProfile) {
+      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
+        ${renderSettingsSection(
+          { title: t("profilePage.identity.title") },
+          renderSettingsEmpty(
+            this.identityLoading
+              ? t("profilePage.identity.loading")
+              : (this.identityError ?? t("profilePage.identity.profileUnavailable")),
+          ),
+        )}
+      </div>`;
+    }
+    const avatarUrl = this.ownProfile.hasAvatar
+      ? userProfileAvatarUrl(
+          this.context.gateway.connection.gatewayUrl,
+          this.ownProfile.id,
+          this.ownProfile.updatedAt,
+        )
+      : null;
     return renderIdentitySection({
-      userAvatar: this.userAvatar,
-      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
-      assistantName: assistantIdentity.name,
-      assistantAvatar: assistantIdentity.avatar,
-      assistantAvatarUrl: assistantIdentity.avatar,
-      assistantAvatarSource: assistantIdentity.avatarSource,
-      assistantAvatarStatus: assistantIdentity.avatarStatus,
-      assistantAvatarReason: assistantIdentity.avatarReason,
-      basePath: this.context.basePath,
+      profile: this.ownProfile,
+      avatarUrl,
+      displayName: this.displayName,
+      busy: this.identityLoading ? "loading" : this.identityBusy,
+      error: this.identityError,
+      onDisplayNameInput: (value) => {
+        this.displayName = value;
+      },
+      onSaveDisplayName: () => void this.saveDisplayName(),
+      onAvatarSelect: (file) => void this.saveAvatar(file),
     });
+  }
+
+  private refreshManually() {
+    this.requestProfileRefresh("manual");
+    if (this.selfUser && !this.identityBusy) {
+      void this.loadIdentity(this.selfUser.id);
+    }
   }
 
   private featuredAgent() {
@@ -568,11 +764,15 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!this.connected || !this.client) {
       return renderSettingsPage(renderSettingsGroup(renderSettingsEmpty(t("profilePage.offline"))));
     }
+    const renderIdentityAwareState = (content: unknown) =>
+      renderSettingsPage(this.selfUser ? html`${this.renderIdentity()} ${content}` : content);
     if (this.loading && !this.costSummary) {
-      return renderSettingsPage(renderSettingsGroup(renderSettingsEmpty(t("profilePage.loading"))));
+      return renderIdentityAwareState(
+        renderSettingsGroup(renderSettingsEmpty(t("profilePage.loading"))),
+      );
     }
     if (this.error && !this.costSummary) {
-      return renderSettingsPage(
+      return renderIdentityAwareState(
         renderSettingsGroup(renderSettingsEmpty(this.error), { danger: true }),
       );
     }
@@ -602,7 +802,7 @@ export class ProfilePage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
         </div>
-        <button class="btn profile-refresh" @click=${() => this.requestProfileRefresh("manual")}>
+        <button class="btn profile-refresh" @click=${() => this.refreshManually()}>
           ${this.loading ? t("common.refreshing") : t("common.refresh")}
         </button>
       </section>
