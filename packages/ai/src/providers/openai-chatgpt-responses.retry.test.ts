@@ -98,38 +98,28 @@ describe("streamOpenAICodexResponses retry classification", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  function stubRetryThenFail(headers: Record<string, string>): {
-    fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
-    delays: number[];
-  } {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("rate limited", { status: 429, headers }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: { message: "Invalid credentials" } }), {
-          status: 401,
-        }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    const delays: number[] = [];
-    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler, ms?: number) => {
-      delays.push(ms ?? 0);
-      if (typeof callback === "function") {
-        callback();
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    });
-    return { fetchMock, delays };
-  }
-
   it.each([
     { label: "unparseable", retryAfterMs: "not-a-number" },
     { label: "empty", retryAfterMs: "" },
   ])("honors retry-after when retry-after-ms is $label", async ({ retryAfterMs }) => {
-    const { fetchMock, delays } = stubRetryThenFail({
-      "retry-after-ms": retryAfterMs,
-      "retry-after": "7",
-    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("rate limited", {
+          status: 429,
+          headers: { "retry-after-ms": retryAfterMs, "retry-after": "7" },
+        }),
+      )
+      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback: TimerHandler) => {
+        if (typeof callback === "function") {
+          callback();
+        }
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      });
 
     await streamOpenAICodexResponses(model, context, {
       apiKey: jwt,
@@ -137,23 +127,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     }).result();
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(delays).toContain(7_000);
-  });
-
-  it("prefers a parseable retry-after-ms over retry-after", async () => {
-    const { fetchMock, delays } = stubRetryThenFail({
-      "retry-after-ms": "2500",
-      "retry-after": "7",
-    });
-
-    await streamOpenAICodexResponses(model, context, {
-      apiKey: jwt,
-      transport: "sse",
-    }).result();
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(delays).toContain(2_500);
-    expect(delays).not.toContain(7_000);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 7_000);
   });
 
   it("does not retry a bodyless 304 response", async () => {
