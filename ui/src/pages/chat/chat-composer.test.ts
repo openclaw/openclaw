@@ -11,7 +11,11 @@ import { renderChatComposer, resetChatComposerState } from "./components/chat-co
 const discoverRealtimeTalkInputsMock = vi.hoisted(() => vi.fn());
 const openRealtimeTalkInputMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./realtime-talk-input.ts", () => ({
+// Keep every real export present: shared-registry workers (isolate:false) can
+// evaluate sibling modules (e.g. chat-realtime's camera discovery) against this
+// factory, and a missing binding breaks unrelated files in the same worker.
+vi.mock("./realtime-talk-input.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./realtime-talk-input.ts")>()),
   discoverRealtimeTalkInputs: discoverRealtimeTalkInputsMock,
   openRealtimeTalkInput: openRealtimeTalkInputMock,
   describeRealtimeTalkInputError: () => "Microphone access failed.",
