@@ -50,7 +50,7 @@ export function createTavilyExtractTool(api: OpenClawPluginApi, ctx?: TavilyTool
     parameters: TavilyExtractToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const urls = Array.isArray(rawParams.urls)
-        ? (rawParams.urls as string[]).filter(Boolean)
+        ? rawParams.urls.map((url) => (typeof url === "string" ? url.trim() : "")).filter(Boolean)
         : [];
       if (urls.length === 0) {
         throw new Error("tavily_extract requires at least one URL.");

@@ -351,6 +351,28 @@ describe("tavily tools", () => {
     expect(runTavilyExtract).not.toHaveBeenCalled();
   });
 
+  it("rejects blank extract URLs before Tavily calls and trims valid URLs", async () => {
+    const tool = createTavilyExtractTool(fakeApi());
+
+    await expect(
+      tool.execute("extract-call", {
+        urls: ["   "],
+      }),
+    ).rejects.toThrow("tavily_extract requires at least one URL.");
+
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+
+    await tool.execute("extract-call", {
+      urls: [" https://example.com/article "],
+    });
+
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.urls).toEqual(["https://example.com/article"]);
+  });
+
   it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
     const searchTool = createTavilySearchTool(fakeApi());
     await expect(
