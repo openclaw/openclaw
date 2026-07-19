@@ -306,7 +306,7 @@ struct OpenClawSidebarRevealButton: View {
     }
 }
 
-struct OpenClawSidebarHeaderTrailingSlot: View {
+struct OpenClawSidebarHeaderLeadingSlot: View {
     let action: OpenClawSidebarHeaderAction
 
     var body: some View {

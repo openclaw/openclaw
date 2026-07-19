@@ -311,7 +311,9 @@ struct CommandCenterTab: View {
             subtitleFont: OpenClawType.caption,
             subtitleLineLimit: 1)
         {
-            if Self.shouldShowHeaderMark(
+            if let headerSidebarAction {
+                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+            } else if Self.shouldShowHeaderMark(
                 hasLeadingAction: self.headerSidebarAction != nil,
                 showsHeaderMark: self.showsHeaderMark)
             {
@@ -329,9 +331,6 @@ struct CommandCenterTab: View {
                 .openClawGlassButton()
                 .accessibilityLabel("Gateway settings")
                 .accessibilityHint("Opens gateway settings")
-                if let headerSidebarAction {
-                    OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
-                }
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -999,11 +998,11 @@ struct CommandSessionsScreen: View {
             titleFont: OpenClawType.title2,
             subtitleFont: OpenClawType.captionMedium)
         {
-            EmptyView()
-        } accessory: {
             if let headerSidebarAction {
-                OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
+                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
             }
+        } accessory: {
+            EmptyView()
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }

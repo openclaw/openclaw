@@ -37,14 +37,11 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                             titleFont: self.isCompactHeight ? OpenClawType.headline : OpenClawType.title2SemiBold,
                             subtitleLineLimit: self.isCompactHeight ? 1 : 2)
                         {
-                            EmptyView()
-                        } accessory: {
-                            HStack(spacing: 10) {
-                                self.gatewayPill
-                                if let headerSidebarAction {
-                                    OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
-                                }
+                            if let headerSidebarAction {
+                                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                             }
+                        } accessory: {
+                            self.gatewayPill
                         }
                         .padding(.horizontal, OpenClawProMetric.pagePadding)
                     }
@@ -68,7 +65,7 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                 }
             }
             if self.usesNativeNavigationChrome, let headerSidebarAction {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     OpenClawSidebarRevealButton(action: headerSidebarAction)
                 }
             }

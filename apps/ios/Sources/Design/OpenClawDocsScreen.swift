@@ -46,7 +46,7 @@ struct OpenClawDocsScreen: View {
                 }
             }
             if self.usesNativeNavigationChrome, let headerSidebarAction {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     OpenClawSidebarRevealButton(action: headerSidebarAction)
                 }
             }
@@ -61,14 +61,14 @@ struct OpenClawDocsScreen: View {
                 titleFont: OpenClawType.headline,
                 subtitleFont: OpenClawType.caption)
             {
-                ProIconBadge(systemName: "book", color: OpenClawBrand.accent)
-            } accessory: {
                 HStack(spacing: 10) {
-                    self.gatewayPill
                     if let headerSidebarAction {
-                        OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
+                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                     }
+                    ProIconBadge(systemName: "book", color: OpenClawBrand.accent)
                 }
+            } accessory: {
+                self.gatewayPill
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)

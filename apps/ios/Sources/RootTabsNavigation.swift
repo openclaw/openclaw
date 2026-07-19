@@ -130,8 +130,12 @@ extension RootTabs {
         dragOffset: CGFloat,
         reduceMotion: Bool) -> CGFloat
     {
-        guard isVisible, !reduceMotion else { return 0 }
-        return max(0, sidebarWidth + min(0, dragOffset))
+        guard !reduceMotion else { return 0 }
+        if isVisible {
+            return max(0, sidebarWidth + min(0, dragOffset))
+        }
+        // Closed: a positive drag is the interactive edge-open follow.
+        return max(0, min(sidebarWidth, dragOffset))
     }
 
     static func shouldShowSidebarRevealControl(isSidebarVisible: Bool) -> Bool {

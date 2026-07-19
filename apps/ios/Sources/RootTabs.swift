@@ -178,13 +178,17 @@ struct RootTabs: View {
                 .opacity(self.reduceMotion && !self.isSidebarVisible ? 0 : 1)
                 .accessibilityHidden(!self.isSidebarVisible)
 
+            // Keep the full-height surface outside NavigationStack so it can
+            // cover the sidebar in safe areas without changing content insets.
+            self.sidebarDrawerContentSurface(sidebarWidth: sidebarWidth)
+                .opacity(self.reduceMotion && self.isSidebarVisible ? 0 : 1)
+                .accessibilityHidden(true)
+
             self.sidebarDrawerContentCard(sidebarWidth: sidebarWidth)
                 .opacity(self.reduceMotion && self.isSidebarVisible ? 0 : 1)
                 .accessibilityHidden(self.isSidebarVisible)
                 .zIndex(1)
         }
-        // Fills the region right of the sidebar while the card is mid-slide/drag.
-        .background(OpenClawSidebarPalette.background)
     }
 
     private func sidebarDrawerLayer(
@@ -196,6 +200,30 @@ struct RootTabs: View {
             .frame(maxHeight: .infinity, alignment: .topLeading)
             .background(OpenClawSidebarPalette.background)
             .ignoresSafeArea(.container, edges: .vertical)
+    }
+
+    private func sidebarDrawerContentSurface(sidebarWidth: CGFloat) -> some View {
+        let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
+        return RoundedRectangle(
+            cornerRadius: OpenClawProMetric.drawerRadius * progress,
+            style: .continuous)
+            .fill(Color(uiColor: .systemGroupedBackground))
+            .overlay(
+                RoundedRectangle(
+                    cornerRadius: OpenClawProMetric.drawerRadius * progress,
+                    style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12 * progress), lineWidth: 1))
+            .shadow(
+                color: .black.opacity(0.28 * progress),
+                radius: 20 * progress,
+                x: -4 * progress,
+                y: 0)
+            .ignoresSafeArea(.container, edges: .vertical)
+            .offset(x: Self.sidebarContentOffset(
+                sidebarWidth: sidebarWidth,
+                isVisible: self.isSidebarVisible,
+                dragOffset: self.sidebarContentDragOffset,
+                reduceMotion: self.reduceMotion))
     }
 
     private func sidebarDrawerContentCard(sidebarWidth: CGFloat) -> some View {
@@ -212,10 +240,21 @@ struct RootTabs: View {
                         self.hideSidebar()
                     }
             }
+
+            // Edge-open is chat-root only: pushed screens own the system
+            // back-swipe on this edge, and other destinations push internally.
+            if !self.isSidebarVisible, !self.reduceMotion,
+               self.selectedSidebarDestination == .chat, self.sidebarNavigationPath.isEmpty
+            {
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: 24)
+                        .contentShape(Rectangle())
+                        .gesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
+                    Spacer(minLength: 0)
+                }
+            }
         }
-        // Uniform card surface: destinations that do not paint vertical safe
-        // areas would otherwise show the container black as bands.
-        .background(OpenClawProBackground().ignoresSafeArea())
         .contentShape(Rectangle())
         .gesture(
             self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
@@ -223,17 +262,6 @@ struct RootTabs: View {
         .clipShape(RoundedRectangle(
             cornerRadius: OpenClawProMetric.drawerRadius * progress,
             style: .continuous))
-        // Defines the card edge against the black sidebar when content is dark.
-        .overlay(
-            RoundedRectangle(
-                cornerRadius: OpenClawProMetric.drawerRadius * progress,
-                style: .continuous)
-                .strokeBorder(Color.white.opacity(0.12 * progress), lineWidth: 1))
-        .shadow(
-            color: .black.opacity(0.28 * progress),
-            radius: 20 * progress,
-            x: -4 * progress,
-            y: 0)
         .offset(x: Self.sidebarContentOffset(
             sidebarWidth: sidebarWidth,
             isVisible: self.isSidebarVisible,
@@ -484,6 +512,24 @@ struct RootTabs: View {
                     if shouldDismiss {
                         self.sidebarVisibilityUserOverridden = true
                         self.setSidebarVisible(false)
+                    }
+                }
+            }
+    }
+
+    private func sidebarEdgeOpenGesture(sidebarWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                self.sidebarContentDragOffset = max(0, min(sidebarWidth, value.translation.width))
+            }
+            .onEnded { value in
+                let shouldOpen = value.translation.width > 80 ||
+                    value.predictedEndTranslation.width > 160
+                withAnimation(self.sidebarAnimation) {
+                    self.sidebarContentDragOffset = 0
+                    if shouldOpen {
+                        self.sidebarVisibilityUserOverridden = true
+                        self.setSidebarVisible(true)
                     }
                 }
             }

@@ -28,7 +28,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("Show Sidebar"))
         #expect(source.contains("shouldShowSidebarRevealInDestinationHeader"))
         #expect(source.contains("layoutMode: self.isSidebarDrawerLayout ? .drawer : .split"))
-        #expect(componentSource.contains("OpenClawSidebarHeaderTrailingSlot"))
+        #expect(componentSource.contains("OpenClawSidebarHeaderLeadingSlot"))
         #expect(componentSource.contains(".frame(width: 44, height: 44, alignment: .center)"))
         #expect(componentSource.contains(".frame(width: 44, height: 44)"))
         #expect(source.contains(".safeAreaPadding(.top, 8)"))
@@ -81,6 +81,7 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("Self.sidebarCollapsedRailWidth"))
         #expect(drawerContent.contains("ZStack(alignment: .leading)"))
         #expect(drawerContent.contains("self.sidebarDrawerLayer"))
+        #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
         #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
         #expect(drawerContent.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
         #expect(drawerContent.contains(".allowsHitTesting(!self.isSidebarVisible)"))
@@ -88,6 +89,7 @@ struct RootTabsSourceGuardTests {
         #expect(drawerContent.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
         #expect(drawerContent.contains(".offset(x: Self.sidebarContentOffset("))
         #expect(drawerContent.contains(".shadow("))
+        #expect(drawerContent.contains(".fill(Color(uiColor: .systemGroupedBackground))"))
         #expect(drawerContent.contains(".ignoresSafeArea(.container, edges: .vertical)"))
         #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
         #expect(!drawerContent.contains("UnevenRoundedRectangle"))
@@ -240,8 +242,8 @@ struct RootTabsSourceGuardTests {
         #expect(destinationsSource.contains("self.directHeader(\n                        for: .usage"))
         #expect(destinationsSource.contains("self.directHeader(\n                        for: .cron"))
         #expect(destinationsSource.contains("self.directRoute == route ? self.headerSidebarAction : nil"))
-        #expect(nodesSource.contains("OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)"))
-        #expect(dreamingSource.contains("OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)"))
+        #expect(nodesSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
+        #expect(dreamingSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
     }
 
     @Test func `iOS 26 chrome uses native glass while content cards stay quiet`() throws {
@@ -690,7 +692,7 @@ extension RootTabsSourceGuardTests {
         let projectSource = try String(contentsOf: Self.xcodeProjectSourceURL(), encoding: .utf8)
 
         #expect(chromeSource.contains("struct IPadSidebarScreenChrome<Content: View>: View"))
-        #expect(chromeSource.contains("OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)"))
+        #expect(chromeSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
         #expect(chromeSource.contains("OpenClawGatewayCompactPill()"))
         #expect(!taskSource.contains("struct IPadSidebarScreenChrome"))
         #expect(projectSource.contains("IPadSidebarScreenChrome.swift in Sources"))

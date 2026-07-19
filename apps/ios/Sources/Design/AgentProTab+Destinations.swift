@@ -55,8 +55,8 @@ extension AgentProTab {
                 self.gatewayToolbarButton
             }
             if let headerSidebarAction {
-                ToolbarItem(placement: .topBarTrailing) {
-                    OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                 }
             }
         }
@@ -187,9 +187,9 @@ extension AgentProTab {
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {
-                EmptyView()
+                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
             } accessory: {
-                OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
+                EmptyView()
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
         }

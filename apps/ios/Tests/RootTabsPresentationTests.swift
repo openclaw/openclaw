@@ -626,6 +626,23 @@ struct RootTabsPresentationTests {
             isVisible: true,
             dragOffset: 40,
             reduceMotion: true) == 0)
+
+        // Closed + positive drag = interactive edge-open follow, clamped to width.
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 120,
+            reduceMotion: false) == 120)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 500,
+            reduceMotion: false) == 340)
+        #expect(RootTabs.sidebarContentOffset(
+            sidebarWidth: 340,
+            isVisible: false,
+            dragOffset: 120,
+            reduceMotion: true) == 0)
     }
 
     @Test func `narrow landscape keeps drawer sidebar`() {

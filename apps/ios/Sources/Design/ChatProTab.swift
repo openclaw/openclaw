@@ -137,6 +137,11 @@ struct ChatProTab: View {
             .navigationTitle(self.showsAgentBadge ? "" : self.headerDisplayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if let headerSidebarAction {
+                    ToolbarItem(placement: .topBarLeading) {
+                        OpenClawSidebarRevealButton(action: headerSidebarAction)
+                    }
+                }
                 if self.showsAgentBadge {
                     if #available(iOS 26.0, *) {
                         ToolbarItem(placement: .topBarLeading) {
@@ -155,11 +160,6 @@ struct ChatProTab: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     self.chatActionsMenu
-                }
-                if let headerSidebarAction {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        OpenClawSidebarRevealButton(action: headerSidebarAction)
-                    }
                 }
             }
             .sheet(item: self.$transcriptShareItem) { item in

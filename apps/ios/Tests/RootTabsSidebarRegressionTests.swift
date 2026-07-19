@@ -52,6 +52,10 @@ struct RootTabsSidebarRegressionTests {
         let sidebarLayer = try Self.extract(
             drawerContent,
             from: "private func sidebarDrawerLayer(",
+            to: "private func sidebarDrawerContentSurface(")
+        let contentSurface = try Self.extract(
+            drawerContent,
+            from: "private func sidebarDrawerContentSurface(",
             to: "private func sidebarDrawerContentCard(")
         let contentCardStart = try #require(
             drawerContent.range(of: "private func sidebarDrawerContentCard("))
@@ -59,6 +63,7 @@ struct RootTabsSidebarRegressionTests {
 
         #expect(drawerContent.contains("ZStack(alignment: .leading)"))
         #expect(drawerContent.contains("self.sidebarDrawerLayer"))
+        #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
         #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
         #expect(drawerContent.contains(".background(OpenClawSidebarPalette.background)"))
         #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
@@ -66,12 +71,18 @@ struct RootTabsSidebarRegressionTests {
         #expect(!sidebarLayer.contains(".shadow"))
         #expect(drawerContent.contains("self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)"))
         #expect(sidebarLayer.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(contentSurface.contains(".fill(Color(uiColor: .systemGroupedBackground))"))
+        #expect(contentSurface.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(contentSurface.contains(".shadow("))
+        #expect(contentSurface.contains(".offset(x: Self.sidebarContentOffset("))
         #expect(contentCard.contains(".allowsHitTesting(!self.isSidebarVisible)"))
         #expect(contentCard.contains("if self.isSidebarVisible, !self.reduceMotion"))
         #expect(contentCard.contains("self.hideSidebar()"))
         #expect(contentCard.contains("isEnabled: self.isSidebarVisible && !self.reduceMotion"))
         #expect(contentCard.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
         #expect(contentCard.contains(".offset(x: Self.sidebarContentOffset("))
+        #expect(!contentCard.contains("OpenClawProBackground()"))
+        #expect(!contentCard.contains(".shadow("))
     }
 
     @Test func `sidebar selection resets embedded settings navigation path`() throws {

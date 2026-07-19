@@ -36,7 +36,7 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 - `OpenClawAdaptiveHeaderRow`: responsive destination heading
 - `OpenClawGlassControlGroup`: performance and morphing boundary for nearby glass controls
 - `OpenClawSidebarPalette`: fixed black-sidebar colors that remain dark in every app appearance
-- `OpenClawSidebarRevealButton`, `OpenClawSidebarHeaderTrailingSlot`: shared trailing toolbar affordance
+- `OpenClawSidebarRevealButton`, `OpenClawSidebarHeaderLeadingSlot`: shared leading toolbar affordance
 - `openClawGlassButton(prominent:tint:)`: iOS 26 glass button with an iOS 18 bordered fallback
 
 ## Liquid Glass rules

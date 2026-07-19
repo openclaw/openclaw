@@ -290,8 +290,8 @@ extension SettingsProTab {
                     }
                 }
                 if let headerSidebarAction {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
+                    ToolbarItem(placement: .topBarLeading) {
+                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                     }
                 }
             }

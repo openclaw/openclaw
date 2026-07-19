@@ -12,7 +12,9 @@ extension AgentProTab {
                 subtitleFont: OpenClawType.subheadMedium,
                 subtitleLineLimit: 1)
             {
-                EmptyView()
+                if let headerSidebarAction {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+                }
             } accessory: {
                 OpenClawGlassControlGroup {
                     HStack(spacing: 10) {
@@ -25,9 +27,6 @@ extension AgentProTab {
                                     self.agentSearchPresented.toggle()
                                 }
                             })
-                        if let headerSidebarAction {
-                            OpenClawSidebarHeaderTrailingSlot(action: headerSidebarAction)
-                        }
                     }
                 }
                 .padding(.top, 2)
