@@ -8,11 +8,11 @@ import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-ha
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import type { CodexDynamicToolBridgeTiming } from "./dynamic-tool-execution.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
   type CodexAppServerRequestResult,
-  type CodexDynamicToolBridgeTiming,
   type CodexInitializeParams,
   type CodexInitializeResponse,
   isRpcResponse,

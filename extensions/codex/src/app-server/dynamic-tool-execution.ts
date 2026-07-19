@@ -28,12 +28,25 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 import {
   isJsonObject,
-  type CodexDynamicToolBridgeTiming,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
   type CodexDynamicToolDiagnosticTerminalReason,
   type JsonValue,
 } from "./protocol.js";
+
+/**
+ * Phase timestamps (epoch ms) spanning the OpenClaw side of one Codex dynamic
+ * tool round trip: the `item/tool/call` request arriving from Codex, the
+ * OpenClaw tool execution window, and (attached separately at the transport
+ * write boundary) the response being sent back. Used to distinguish tool
+ * execution time from bridge/transport overhead; never serialized to Codex.
+ */
+export type CodexDynamicToolBridgeTiming = {
+  toolName: string;
+  requestReceivedAt: number;
+  toolExecuteStartAt: number;
+  toolExecuteEndAt: number;
+};
 
 /** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;

@@ -6,8 +6,10 @@ import {
   isCodexAppServerApprovalRequest,
   isCodexAppServerIndeterminateTransportError,
 } from "./client.js";
-import { withDynamicToolBridgeTiming } from "./dynamic-tool-execution.js";
-import type { CodexDynamicToolBridgeTiming } from "./protocol.js";
+import {
+  type CodexDynamicToolBridgeTiming,
+  withDynamicToolBridgeTiming,
+} from "./dynamic-tool-execution.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";

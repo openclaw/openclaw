@@ -993,8 +993,12 @@ describe("dynamic tool execution helpers", () => {
       toolExecuteEndAt: 1_090,
     });
     expect(Object.keys(withTiming)).not.toContain("bridgeTiming");
-    expect(JSON.stringify(withTiming)).not.toContain("bridgeTiming");
-    expect(JSON.parse(JSON.stringify(withTiming))).toEqual({
+    const serialized = JSON.stringify(withTiming);
+    expect(serialized).not.toContain("bridgeTiming");
+    // Round-trips through the real JSON.stringify boundary the wire actually
+    // uses (structuredClone would drop bridgeTiming too, but via a different
+    // mechanism than the one this test is verifying).
+    expect(JSON.parse(serialized)).toEqual({
       contentItems: [{ type: "inputText", text: "ok" }],
       success: true,
     });
