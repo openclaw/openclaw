@@ -206,6 +206,7 @@ import { exportChatMarkdown } from "./export.ts";
 import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
+  replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -2293,6 +2294,9 @@ class ChatPane extends OpenClawLightDomElement {
     state.client = snapshot.client;
     state.connected = snapshot.connected;
     state.connectionEpoch = this.connectionGeneration;
+    if (state.connected && state.pendingAbort) {
+      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+    }
     state.hello = snapshot.hello;
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&

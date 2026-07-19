@@ -95,14 +95,16 @@ type ChatAbortRunState = SessionScopeHost & {
   chatError?: string | null;
 };
 
+export type PendingChatAbort = {
+  runId: string | null;
+  sessionKey: string;
+  agentId?: string;
+  clearQueued?: true;
+};
+
 type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
-    pendingAbort?: {
-      runId?: string | null;
-      sessionKey: string;
-      agentId?: string;
-      clearQueued?: boolean;
-    } | null;
+    pendingAbort?: PendingChatAbort | null;
     sessionsResult?: SessionsListResult | null;
   };
 
@@ -148,37 +150,72 @@ function queuedSessionAbortParams(sessionKey: string): { clearQueued?: true } {
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
-async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
-  if (!state.client || !state.connected) {
-    return false;
-  }
-  const runId = state.chatRunId;
+async function requestChatAbort(
+  client: GatewayBrowserClient,
+  intent: PendingChatAbort,
+): Promise<{ ok: true } | { ok: false; error: unknown }> {
   try {
-    const agentScope = scopedAgentParamsForSession(state, state.sessionKey);
-    if (runId) {
-      await state.client.request("chat.abort", {
-        sessionKey: state.sessionKey,
-        ...agentScope,
-        runId,
+    if (intent.runId) {
+      await client.request("chat.abort", {
+        sessionKey: intent.sessionKey,
+        ...(intent.agentId ? { agentId: intent.agentId } : {}),
+        runId: intent.runId,
       });
     } else {
       // A channel reply can be active without a browser-local chat run ID.
       // Session abort resolves the selected persisted session's exact run.
-      await state.client.request("sessions.abort", {
-        key: state.sessionKey,
-        ...agentScope,
-        ...queuedSessionAbortParams(state.sessionKey),
+      await client.request("sessions.abort", {
+        key: intent.sessionKey,
+        ...(intent.agentId ? { agentId: intent.agentId } : {}),
+        ...(intent.clearQueued ? { clearQueued: true } : {}),
       });
     }
-    return true;
+    return { ok: true };
   } catch (err) {
-    setChatError(state, formatConnectError(err));
-    return false;
+    return { ok: false, error: err };
   }
 }
 
+function currentChatAbortIntent(state: ChatAbortRunState): PendingChatAbort {
+  const runId = state.chatRunId ?? null;
+  return {
+    runId,
+    sessionKey: state.sessionKey,
+    ...scopedAgentParamsForSession(state, state.sessionKey),
+    ...(runId ? {} : queuedSessionAbortParams(state.sessionKey)),
+  };
+}
+
+async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const result = await requestChatAbort(state.client, currentChatAbortIntent(state));
+  if (!result.ok) {
+    setChatError(state, formatConnectError(result.error));
+  }
+  return result.ok;
+}
+
+export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boolean> {
+  const intent = host.pendingAbort;
+  const client = host.client;
+  if (!intent || !client || !host.connected) {
+    return false;
+  }
+  // Consume before sending so repeated connected snapshots cannot duplicate
+  // the request. A rejected request may have reached the Gateway before its
+  // ACK was lost; retrying a session-wide abort could stop newer work.
+  host.pendingAbort = null;
+  const result = await requestChatAbort(client, intent);
+  if (result.ok) {
+    return true;
+  }
+  setChatError(host, formatConnectError(result.error));
+  return false;
+}
+
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
-  const activeRunId = host.chatRunId;
   const queueAbort = !host.connected && hasAbortableSessionRun(host);
   if (!host.connected && !queueAbort) {
     return;
@@ -188,12 +225,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     resetChatInputHistoryNavigation(host);
   }
   if (queueAbort) {
-    host.pendingAbort = {
-      runId: activeRunId,
-      sessionKey: host.sessionKey,
-      ...scopedAgentParamsForSession(host, host.sessionKey),
-      ...(activeRunId ? {} : queuedSessionAbortParams(host.sessionKey)),
-    };
+    host.pendingAbort = currentChatAbortIntent(host);
     return;
   }
   await abortChatRun(host);

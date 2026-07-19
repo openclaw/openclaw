@@ -1,5 +1,6 @@
 // Control UI tests cover run lifecycle behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
@@ -9,6 +10,7 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
   reconcileStaleChatRunAfterSessionStatePublication,
+  replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 
 type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0];
@@ -35,6 +37,91 @@ describe("hasAbortableSessionRun", () => {
         ]),
       }),
     ).toBe(true);
+  });
+});
+
+type AbortHost = Parameters<typeof replayPendingChatAbort>[0];
+
+function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
+  return {
+    client: null,
+    connected: true,
+    sessionKey: "agent:main",
+    chatRunId: null,
+    chatLoading: false,
+    chatMessage: "",
+    chatMessages: [],
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    ...over,
+  };
+}
+
+describe("replayPendingChatAbort", () => {
+  it("dispatches a queued channel-session stop through sessions.abort", async () => {
+    let host!: AbortHost;
+    const request = vi.fn(async () => {
+      expect(host.pendingAbort).toBeNull();
+      return { abortedRunId: null, status: "aborted" };
+    });
+    const sessionKey = "agent:main:telegram:direct:queued-user";
+    host = makeAbortHost({
+      client: { request } as unknown as GatewayBrowserClient,
+      pendingAbort: { runId: null, sessionKey, clearQueued: true },
+    });
+
+    await expect(replayPendingChatAbort(host)).resolves.toBe(true);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: sessionKey,
+      clearQueued: true,
+    });
+    expect(host.pendingAbort).toBeNull();
+  });
+
+  it("dispatches a queued exact browser run stop through chat.abort", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeAbortHost({
+      client: { request } as unknown as GatewayBrowserClient,
+      pendingAbort: {
+        runId: "run-main",
+        sessionKey: "global",
+        agentId: "work",
+      },
+    });
+
+    await expect(replayPendingChatAbort(host)).resolves.toBe(true);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "global",
+      agentId: "work",
+      runId: "run-main",
+    });
+    expect(host.pendingAbort).toBeNull();
+  });
+
+  it("consumes an ambiguously failed session stop without retrying it", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("gateway closed before acknowledgement");
+    });
+    const host = makeAbortHost({
+      client: { request } as unknown as GatewayBrowserClient,
+      pendingAbort: {
+        runId: null,
+        sessionKey: "agent:main:telegram:direct:queued-user",
+        clearQueued: true,
+      },
+    });
+
+    await expect(replayPendingChatAbort(host)).resolves.toBe(false);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(host.pendingAbort).toBeNull();
+    expect(host.chatError).toBe("gateway closed before acknowledgement");
+    expect(host.lastError).toBe("gateway closed before acknowledgement");
   });
 });
 
