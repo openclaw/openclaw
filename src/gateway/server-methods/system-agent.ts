@@ -27,7 +27,11 @@ import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { formatSystemAgentStartupMessage } from "../../system-agent/overview.js";
-import { appendTranscriptTurn, readTranscriptTail } from "../../system-agent/transcript-store.js";
+import {
+  appendTranscriptReset,
+  appendTranscriptTurn,
+  readTranscriptTail,
+} from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
@@ -516,10 +520,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           // model context clean; only ordinary fresh sessions receive its tail.
           if (!params.reset) {
             engine.seedHistory(
-              readTranscriptTail(SYSTEM_AGENT_SEED_HISTORY_LIMIT).map(({ role, text }) => ({
-                role,
-                text,
-              })),
+              readTranscriptTail(SYSTEM_AGENT_SEED_HISTORY_LIMIT, { afterLastReset: true }).map(
+                ({ role, text }) => ({ role, text }),
+              ),
             );
           }
           const welcomeHistoryStart = engine.historyLength();
@@ -543,6 +546,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             }
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
+          }
+          if (params.reset) {
+            appendTranscriptReset();
           }
           persistEngineHistory(engine, welcomeHistoryStart);
           await evictOldestSession(sessions, context);

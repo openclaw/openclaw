@@ -41,6 +41,7 @@ const setupSharedMocks = vi.hoisted(() => ({
   writeWizardConfigFile: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
+  appendTranscriptReset: vi.fn(),
   appendTranscriptTurn: vi.fn(),
   readTranscriptTail: vi.fn<
     (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
@@ -63,6 +64,7 @@ vi.mock("../../wizard/setup.shared.js", () => ({
   writeWizardConfigFile: setupSharedMocks.writeWizardConfigFile,
 }));
 vi.mock("../../system-agent/transcript-store.js", () => ({
+  appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
   appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
   readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
 }));
@@ -180,6 +182,7 @@ beforeEach(async () => {
   });
   setupSharedMocks.writeWizardConfigFile.mockImplementation(async (config) => config);
   transcriptStoreMocks.appendTranscriptTurn.mockReset();
+  transcriptStoreMocks.appendTranscriptReset.mockReset();
   transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
 });
 
@@ -658,7 +661,9 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(new Map()), { sessionId: "fresh" });
 
     expect(call.ok).toBe(true);
-    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenCalledWith(30);
+    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenCalledWith(30, {
+      afterLastReset: true,
+    });
     expect(seedHistory).toHaveBeenCalledWith([
       { role: "user", text: "Earlier question" },
       { role: "assistant", text: "Earlier answer" },
@@ -1002,10 +1007,7 @@ describe("openclaw.chat", () => {
 
   it("resets a session on request", async () => {
     stubEngineOverview();
-    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
-      { role: "user", text: "Earlier question", at: 1 },
-      { role: "assistant", text: "Earlier answer", at: 2 },
-    ]);
+    transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);
     const engine = makeVerifiedEngine();
     const handle = vi.spyOn(engine, "handle");
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
@@ -1030,12 +1032,20 @@ describe("openclaw.chat", () => {
     expect(sessions.get("s1")?.engine).not.toBe(engine);
     expect(calls[0]?.ok).toBe(true);
     expect(seedHistory).not.toHaveBeenCalled();
+    expect(transcriptStoreMocks.appendTranscriptReset).toHaveBeenCalledOnce();
 
+    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
+      { role: "user", text: "After reset", at: 3 },
+      { role: "assistant", text: "Fresh answer", at: 4 },
+    ]);
     const fresh = await callChat(context, { sessionId: "fresh-after-reset" });
     expect(fresh.ok).toBe(true);
     expect(seedHistory).toHaveBeenCalledWith([
-      { role: "user", text: "Earlier question" },
-      { role: "assistant", text: "Earlier answer" },
+      { role: "user", text: "After reset" },
+      { role: "assistant", text: "Fresh answer" },
     ]);
+    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenLastCalledWith(30, {
+      afterLastReset: true,
+    });
   });
 });

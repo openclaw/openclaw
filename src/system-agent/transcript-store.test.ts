@@ -41,4 +41,47 @@ describe("system-agent transcript store", () => {
       expect(turns.at(-1)?.text).toBe(`turn-${SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES}`);
     });
   });
+
+  it("hides reset markers and seeds only turns after a marker within the tail window", async () => {
+    await withTempDir({ prefix: "openclaw-system-agent-transcript-reset-" }, async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      appendTranscriptTurn({ role: "user", text: "before reset", at: 1 }, { env });
+      appendTranscriptTurn({ role: "assistant", text: "old answer", at: 2 }, { env });
+      appendTranscriptTurn({ role: "reset", text: "", at: 3 }, { env });
+      appendTranscriptTurn({ role: "user", text: "after reset", at: 4 }, { env });
+      appendTranscriptTurn({ role: "assistant", text: "new answer", at: 5 }, { env });
+      closeOpenClawStateDatabase();
+
+      expect(readTranscriptTail(10, { env })).toEqual([
+        { role: "user", text: "before reset", at: 1 },
+        { role: "assistant", text: "old answer", at: 2 },
+        { role: "user", text: "after reset", at: 4 },
+        { role: "assistant", text: "new answer", at: 5 },
+      ]);
+      expect(readTranscriptTail(10, { afterLastReset: true, env })).toEqual([
+        { role: "user", text: "after reset", at: 4 },
+        { role: "assistant", text: "new answer", at: 5 },
+      ]);
+    });
+  });
+
+  it("does not let a reset marker older than the requested tail truncate newer turns", async () => {
+    await withTempDir(
+      { prefix: "openclaw-system-agent-transcript-old-reset-" },
+      async (stateDir) => {
+        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        appendTranscriptTurn({ role: "user", text: "before reset", at: 1 }, { env });
+        appendTranscriptTurn({ role: "reset", text: "", at: 2 }, { env });
+        appendTranscriptTurn({ role: "user", text: "newer one", at: 3 }, { env });
+        appendTranscriptTurn({ role: "assistant", text: "newer two", at: 4 }, { env });
+        appendTranscriptTurn({ role: "user", text: "newer three", at: 5 }, { env });
+        closeOpenClawStateDatabase();
+
+        expect(readTranscriptTail(2, { afterLastReset: true, env })).toEqual([
+          { role: "assistant", text: "newer two", at: 4 },
+          { role: "user", text: "newer three", at: 5 },
+        ]);
+      },
+    );
+  });
 });
