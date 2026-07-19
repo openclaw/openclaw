@@ -982,11 +982,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ...store.starting.keys(),
       ...store.tasks.keys(),
     ]);
-    if (!accountId && lifecycleIds.size === 0) {
+    // A completed hot-reload stop can leave only restartPending as the handoff
+    // marker until the paired start runs; manual stops must still be able to
+    // cancel that queued restart.
+    const hasRestartPendingRuntime = Array.from(store.runtimes.values()).some(
+      (snapshot) => snapshot.restartPending === true,
+    );
+    if (!accountId && lifecycleIds.size === 0 && !hasRestartPendingRuntime) {
       return;
     }
     // Fast path: nothing running and no explicit plugin shutdown hook to run.
-    if (!plugin?.gateway?.stopAccount && lifecycleIds.size === 0) {
+    if (!plugin?.gateway?.stopAccount && lifecycleIds.size === 0 && !hasRestartPendingRuntime) {
       return;
     }
     const cfg = getRuntimeConfig();
@@ -1003,8 +1009,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       Array.from(knownIds.values()).map(async (id) => {
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
+        const runtimeSnapshot = store.runtimes.get(id);
         const hadLiveState = Boolean(
-          abort || task || store.starting.has(id) || store.runtimes.get(id)?.running,
+          abort ||
+          task ||
+          store.starting.has(id) ||
+          runtimeSnapshot?.running ||
+          runtimeSnapshot?.restartPending,
         );
         if (!hadLiveState && !plugin?.gateway?.stopAccount) {
           return;
