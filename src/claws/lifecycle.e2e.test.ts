@@ -345,7 +345,7 @@ describe("claws lifecycle cli e2e", () => {
     });
   });
 
-  it("blocks mutation when declared components need later lifecycle slices", async () => {
+  it("records partial state when the cron gateway is unavailable", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-claws-deferred-components-"));
     const deferredManifestPath = join(root, "deferred.claw.json");
     await writeFile(
@@ -392,8 +392,10 @@ describe("claws lifecycle cli e2e", () => {
     expect(result.code).toBe(1);
     expect(parseJson(result.stdout)).toMatchObject({
       schemaVersion: "openclaw.clawAddResult.v1",
-      status: "failed",
-      error: { code: "unsupported_components" },
+      status: "partial",
+      configCommitted: true,
+      error: { code: "cron_install_failed" },
+      installRecord: { status: "config_committed" },
     });
   });
 
