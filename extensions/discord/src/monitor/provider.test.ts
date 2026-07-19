@@ -210,20 +210,6 @@ describe("monitorDiscordProvider", () => {
     return reconcileParams.healthProbe;
   };
 
-  const getMonitorLifecycleParams = (): {
-    gatewayReadyTimeoutMs?: number;
-    gatewayRuntimeReadyTimeoutMs?: number;
-  } => {
-    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    const params = firstMockArg(monitorLifecycleMock, "Discord lifecycle monitor") as
-      | { gatewayReadyTimeoutMs?: number; gatewayRuntimeReadyTimeoutMs?: number }
-      | undefined;
-    if (!params) {
-      throw new Error("expected lifecycle monitor params");
-    }
-    return params;
-  };
-
   beforeAll(async () => {
     vi.doMock("openclaw/plugin-sdk/plugin-runtime", () => ({
       getPluginCommandSpecs: getPluginCommandSpecsMock,
@@ -440,30 +426,6 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes configured gateway READY timeouts to the lifecycle monitor", async () => {
-    resolveDiscordAccountMock.mockReturnValueOnce({
-      accountId: "default",
-      token: "cfg-token",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-        gatewayReadyTimeoutMs: 90_000,
-        gatewayRuntimeReadyTimeoutMs: 120_000,
-      },
-    });
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    const lifecycleParams = getMonitorLifecycleParams();
-    expect(lifecycleParams.gatewayReadyTimeoutMs).toBe(90_000);
-    expect(lifecycleParams.gatewayRuntimeReadyTimeoutMs).toBe(120_000);
   });
 
   it("does not load the Discord voice runtime when voice is disabled", async () => {

@@ -37,13 +37,6 @@ describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
         reactionApi,
         removeAckAfterReply: true,
       }),
-      cfg: {
-        messages: {
-          statusReactions: {
-            timing: { errorHoldMs: 0 },
-          },
-        },
-      },
       runtime,
       suppressFailureFallback: true,
     });

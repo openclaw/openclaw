@@ -121,7 +121,6 @@ describe("ClickClack account resolution", () => {
       replyMode: "agent",
       systemPrompt: undefined,
       token: "test-token-placeholder",
-      timeoutSeconds: undefined,
       toolsAllow: undefined,
       workspace: "wsp_1",
     });
@@ -222,7 +221,6 @@ describe("ClickClack account resolution", () => {
       replyMode: "model",
       systemPrompt: undefined,
       token: "token-oversized",
-      timeoutSeconds: undefined,
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });

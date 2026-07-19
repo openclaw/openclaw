@@ -341,7 +341,7 @@ describe("buildGatewayCronService", () => {
     const cfg = createCronConfig("server-cron-trigger-tool-cap");
     cfg.cron = {
       ...cfg.cron,
-      triggers: { enabled: true, minIntervalMs: 30_000 },
+      triggers: { enabled: true },
     };
     loadConfigMock.mockReturnValue(cfg);
     const state = buildGatewayCronService({

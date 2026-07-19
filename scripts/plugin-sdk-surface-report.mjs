@@ -290,7 +290,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // channel-outbound and its two compatibility barrels.
       // Net +1: public session catalog locator types after the protocol cleanup harvest.
       // +2: lifecycle-owned prepared model catalog sync and async readers.
-      8192,
+      // Harvest: retired tuning-knob config types -10.
+      8182,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

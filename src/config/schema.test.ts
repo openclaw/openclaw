@@ -950,24 +950,6 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
-  it("accepts WhatsApp Web Baileys socket timing in the runtime zod schema", () => {
-    const parsed = OpenClawSchema.parse({
-      web: {
-        whatsapp: {
-          keepAliveIntervalMs: 15_000,
-          connectTimeoutMs: 60_000,
-          defaultQueryTimeoutMs: 90_000,
-        },
-      },
-    });
-
-    expect(parsed.web?.whatsapp).toEqual({
-      keepAliveIntervalMs: 15_000,
-      connectTimeoutMs: 60_000,
-      defaultQueryTimeoutMs: 90_000,
-    });
-  });
-
   it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {
@@ -1081,7 +1063,7 @@ describe("config schema", () => {
 
   it("includes reload metadata when a resolver is provided", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
-      if (path === "gateway.channelHealthCheckMinutes") {
+      if (path === "gateway.auth.mode") {
         return { kind: "hot" };
       }
       if (path.startsWith("gateway")) {
@@ -1091,13 +1073,12 @@ describe("config schema", () => {
     });
 
     expect(lookup?.reloadKind).toBe("restart");
-    expect(
-      lookup?.children.find((child) => child.path === "gateway.handshakeTimeoutMs")?.reloadKind,
-    ).toBe("restart");
-    expect(
-      lookup?.children.find((child) => child.path === "gateway.channelHealthCheckMinutes")
-        ?.reloadKind,
-    ).toBe("hot");
+    expect(lookup?.children.find((child) => child.path === "gateway.port")?.reloadKind).toBe(
+      "restart",
+    );
+    expect(lookup?.children.find((child) => child.path === "gateway.auth")?.reloadKind).toBe(
+      "restart",
+    );
   });
 
   it("returns a shallow lookup schema without nested composition keywords", () => {
