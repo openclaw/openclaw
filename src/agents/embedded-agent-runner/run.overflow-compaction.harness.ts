@@ -909,7 +909,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
       mockedEnsureAuthProfileStoreWithoutExternalProfiles,
     getApiKeyForModel: mockedGetApiKeyForModel,
     hasUsableCustomProviderApiKey: mockedHasUsableCustomProviderApiKey,
-    providerHasPluginSyntheticAuthHook: () => false,
+    createRuntimeProviderAuthLookup: vi.fn(() => ({
+      envApiKey: { skipSetupProviderFallback: true },
+      syntheticAuthProviderRefs: [],
+      syntheticAuthProviderRefsComplete: true,
+    })),
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
     resolveAuthProfileOrderWithMetadata: mockedResolveAuthProfileOrderWithMetadata,
     resolveProviderEntryApiKeyProfileReference: mockedResolveProviderEntryApiKeyProfileReference,

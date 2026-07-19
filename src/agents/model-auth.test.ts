@@ -1540,6 +1540,68 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
+  // Gateway callers pass a prepared RuntimeProviderAuthLookup instead of a
+  // public eligibility helper. Matching refs keep synthetic auth; other refs
+  // (or an incomplete prepared lookup) stay on env/config resolution.
+  it("scopes gateway plugin synthetic auth through prepared runtimeLookup refs", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "native-cli/demo-model",
+          },
+        },
+      },
+    };
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "native-cli",
+      cfg,
+      store: { version: 1, profiles: {} },
+      allowAuthProfileFallback: false,
+      allowPluginSyntheticAuth: true,
+      runtimeLookup: {
+        envApiKey: { skipSetupProviderFallback: true },
+        syntheticAuthProviderRefs: ["native-cli"],
+        syntheticAuthProviderRefsComplete: true,
+      },
+    });
+    expect(resolved).toEqual({
+      apiKey: "native-cli-access-token",
+      source: "Native CLI auth",
+      mode: "oauth",
+    });
+
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "native-cli",
+        cfg,
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: {
+          envApiKey: { skipSetupProviderFallback: true },
+          syntheticAuthProviderRefs: ["anthropic-vertex"],
+          syntheticAuthProviderRefsComplete: true,
+        },
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "native-cli",
+        cfg,
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: {
+          envApiKey: { skipSetupProviderFallback: true },
+          syntheticAuthProviderRefsComplete: false,
+        },
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+  });
+
   it("reuses the loaded auth profile store after deferring an explicit synthetic profile", async () => {
     const auth = await resolveApiKeyForProvider({
       provider: "custom-auth",
