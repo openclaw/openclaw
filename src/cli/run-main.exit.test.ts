@@ -2970,7 +2970,7 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("carries canonical local TLS fingerprint and handshake timeout through bare root", async () => {
+  it("carries the canonical local TLS fingerprint through bare root", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: true,
@@ -2978,7 +2978,6 @@ describe("runCli exit behavior", () => {
         gateway: {
           mode: "local",
           tls: { enabled: true },
-          handshakeTimeoutMs: 30_000,
           auth: { mode: "token", token: "configured-token" },
         },
       },
@@ -2997,7 +2996,6 @@ describe("runCli exit behavior", () => {
       url: "wss://127.0.0.1:18789",
       token: "configured-token",
       tlsFingerprint: "sha256:local-self-signed-fingerprint",
-      preauthHandshakeTimeoutMs: 30_000,
     });
     expect(launchTuiCliMock).toHaveBeenCalledWith(
       { deliver: false, tlsFingerprint: "sha256:local-self-signed-fingerprint" },

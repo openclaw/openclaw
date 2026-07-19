@@ -231,7 +231,7 @@ describe("memory watcher config", () => {
         provider: "openai",
         model: "mock-embed",
         store: { vector: { enabled: false } },
-        sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+        sync: { watch: true, onSessionStart: false, onSearch: false },
         query: { minScore: 0, hybrid: { enabled: false } },
         extraPaths: [extraDir],
         ...overrides,

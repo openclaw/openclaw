@@ -174,7 +174,6 @@ export function resolveClickClackAccount(params: {
     replyMode: merged.replyMode === "model" ? "model" : "agent",
     model: normalizeOptionalString(merged.model),
     systemPrompt: normalizeOptionalString(merged.systemPrompt),
-    timeoutSeconds: merged.timeoutSeconds,
     toolsAllow: merged.toolsAllow,
     defaultTo: merged.defaultTo?.trim() || "channel:general",
     allowFrom: merged.allowFrom ?? ["*"],

@@ -267,9 +267,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
-              restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(
-                config.gateway?.reload?.deferralTimeoutMs,
-              ),
+              restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
               ...(handoffChannel ? { channel: handoffChannel } : {}),
               restartDelayMs: managedRestartDelayMs,
               meta: sentinelMeta,

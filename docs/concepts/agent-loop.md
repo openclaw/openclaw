@@ -27,7 +27,7 @@ execution, streaming, persistence.
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
 
-Transcript writes are additionally protected by a session write lock on the session file. The lock is process-aware and file-based, so it catches writers that bypass the in-process queue or come from another process. Writers wait up to `session.writeLock.acquireTimeoutMs` (default `60000` ms; env override `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`) before reporting the session as busy.
+Transcript writes are additionally protected by a session write lock on the session file. The lock is process-aware and file-based, so it catches writers that bypass the in-process queue or come from another process. Writers wait up to 60 seconds by default (env override `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`) before reporting the session as busy.
 
 Session write locks are non-reentrant by default. A helper that intentionally nests acquisition of the same lock while preserving one logical writer must opt in with `allowReentrant: true`.
 
@@ -138,13 +138,13 @@ Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on
 
 ### Stuck session diagnostics
 
-With diagnostics enabled, `diagnostics.stuckSessionWarnMs` (default `120000` ms) classifies long `processing` sessions with no observed reply, tool, status, block, or ACP progress:
+With diagnostics enabled, a built-in two-minute threshold classifies long `processing` sessions with no observed reply, tool, status, block, or ACP progress:
 
-- Active embedded runs, model calls, and tool calls report as `session.long_running`. Owned silent model calls stay `session.long_running` until `diagnostics.stuckSessionAbortMs` so slow or non-streaming providers are not flagged as stalled too early.
+- Active embedded runs, model calls, and tool calls report as `session.long_running`. Owned silent model calls stay `session.long_running` until the abort threshold so slow or non-streaming providers are not flagged as stalled too early.
 - Active work with no recent progress reports as `session.stalled`. Owned model calls switch to `session.stalled` at or after the abort threshold; ownerless stale model/tool activity is not hidden as long-running.
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
-`diagnostics.stuckSessionAbortMs` defaults to at least 5 minutes and 3x the warn threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
 
 ## Where things can end early
 

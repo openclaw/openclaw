@@ -91,5 +91,4 @@ export type McpConfig = {
    *
    * Defaults to 10 minutes. Set to 0 to disable idle eviction.
    */
-  sessionIdleTtlMs?: number;
 };
