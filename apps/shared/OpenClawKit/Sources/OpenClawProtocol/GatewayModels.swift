@@ -546,6 +546,24 @@ public struct BoardWidgetMcpAppContent: Codable, Sendable {
     }
 }
 
+public struct BoardCanvasDocumentSource: Codable, Sendable {
+    public let kind: String
+    public let docid: String
+
+    public init(
+        kind: String,
+        docid: String)
+    {
+        self.kind = kind
+        self.docid = docid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case docid = "docId"
+    }
+}
+
 public struct BoardGetParams: Codable, Sendable {
     public let sessionkey: String
 
@@ -582,7 +600,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
     public let sessionkey: String
     public let name: String
     public let title: String?
-    public let content: BoardWidgetContent
+    public let content: BoardWidgetPutContent
     public let placement: [String: AnyCodable]?
     public let declared: [String: AnyCodable]?
 
@@ -590,7 +608,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         sessionkey: String,
         name: String,
         title: String? = nil,
-        content: BoardWidgetContent,
+        content: BoardWidgetPutContent,
         placement: [String: AnyCodable]? = nil,
         declared: [String: AnyCodable]? = nil)
     {
@@ -15554,6 +15572,40 @@ public enum BoardWidgetContent: Codable, Sendable {
         switch self {
         case .html(let value): try value.encode(to: encoder)
         case .mcpApp(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum BoardWidgetPutContent: Codable, Sendable {
+    case html(BoardWidgetHtmlContent)
+    case mcpApp(BoardWidgetMcpAppContent)
+    case canvasDoc(BoardCanvasDocumentSource)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "html": self = try .html(BoardWidgetHtmlContent(from: decoder))
+        case "mcp-app": self = try .mcpApp(BoardWidgetMcpAppContent(from: decoder))
+        case "canvas-doc": self = try .canvasDoc(BoardCanvasDocumentSource(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown BoardWidgetPutContent discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .html(let value): try value.encode(to: encoder)
+        case .mcpApp(let value): try value.encode(to: encoder)
+        case .canvasDoc(let value): try value.encode(to: encoder)
         }
     }
 }

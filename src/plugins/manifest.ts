@@ -36,6 +36,10 @@ const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
 const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
 const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
 
+export function isCoreReservedPluginId(id: string): boolean {
+  return CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id));
+}
+
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
   size: number;
@@ -1811,7 +1815,7 @@ export function loadPluginManifest(
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
-  if (CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id))) {
+  if (isCoreReservedPluginId(id)) {
     return cacheResult({
       ok: false,
       error: `plugin manifest id "${id}" is reserved by OpenClaw core`,

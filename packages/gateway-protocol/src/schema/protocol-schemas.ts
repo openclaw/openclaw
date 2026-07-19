@@ -152,6 +152,7 @@ import {
 } from "./audit-activity.js";
 import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
+  BoardCanvasDocumentSourceSchema,
   BoardChangedEventSchema,
   BoardCommandEventSchema,
   BoardCommandSchema,
@@ -173,6 +174,7 @@ import {
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
   BoardWidgetMoveOpSchema,
+  BoardWidgetPutContentSchema,
   BoardWidgetPutParamsSchema,
   BoardWidgetRemoveOpSchema,
   BoardWidgetResizeOpSchema,
@@ -600,7 +602,9 @@ export const ProtocolSchemas = {
   BoardMcpAppDescriptor: BoardMcpAppDescriptorSchema,
   BoardWidgetHtmlContent: BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContent: BoardWidgetMcpAppContentSchema,
+  BoardCanvasDocumentSource: BoardCanvasDocumentSourceSchema,
   BoardWidgetContent: BoardWidgetContentSchema,
+  BoardWidgetPutContent: BoardWidgetPutContentSchema,
   BoardGetParams: BoardGetParamsSchema,
   BoardUpdateParams: BoardUpdateParamsSchema,
   BoardWidgetPutParams: BoardWidgetPutParamsSchema,

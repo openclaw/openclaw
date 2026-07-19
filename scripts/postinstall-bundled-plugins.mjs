@@ -823,10 +823,17 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
   const log = params.log ?? console;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const env = params.env ?? process.env;
+  const pathExists = params.existsSync ?? existsSync;
+
+  // Registry migration belongs to installed-package upgrades. Source checkouts
+  // can contain stale dist from a different build and must not touch operator state.
+  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    return { status: "skipped", reason: "source-checkout" };
+  }
 
   try {
     const migrationModule = await importInstalledDistModule(
-      params,
+      { ...params, existsSync: pathExists },
       "dist/commands/doctor/shared/plugin-registry-migration.js",
     );
     if (!migrationModule) {

@@ -251,9 +251,16 @@ not validate, the collector completion keeps the child's raw text, leaves
 `structured` unset, and includes `schemaError`. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
 
-Swarm enforces all three group caps before starting more work. Children above
-`maxConcurrent` queue FIFO. A spawn that exceeds `maxChildrenPerGroup` or
-`maxTotalPerGroup` is rejected with the relevant config key in the error.
+Every child has one admission owner. Announce and interactive children use
+`agents.defaults.subagents.maxChildrenPerAgent` (default `5`) and do not count
+collector children. Collector children use only `maxChildrenPerGroup` and
+`maxTotalPerGroup`; they do not consume the per-session child budget. The spawn
+depth guard still applies to both modes.
+
+After admission, children above `maxConcurrent` queue FIFO within their swarm
+group, nested inside the global sub-agent lane. These concurrency layers queue
+work rather than rejecting it. A collector spawn that exceeds either group cap
+is rejected with the relevant config key in the error.
 
 ## Observe a Swarm
 

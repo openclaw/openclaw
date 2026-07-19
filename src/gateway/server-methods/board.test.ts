@@ -26,10 +26,10 @@ vi.mock("./sessions.runtime.js", () => ({
   })),
 }));
 
-function createHarness() {
+function createHarness(readCanvasHtml?: Parameters<typeof createBoardHandlers>[2]) {
   const store = new InMemoryBoardStore();
   const broadcast = vi.fn();
-  const handlers = createBoardHandlers(store);
+  const handlers = createBoardHandlers(store, undefined, readCanvasHtml);
   const invoke = async (method: string, params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
     await handlers[method]!({
@@ -114,6 +114,11 @@ describe("board gateway methods", () => {
         },
       },
     });
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "plain",
+      content: { kind: "html", html: "<p>plain</p>" },
+    });
 
     const pendingResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const pending = pendingResponse.mock.calls[0]?.[1] as BoardSnapshot;
@@ -142,8 +147,12 @@ describe("board gateway methods", () => {
 
     const firstResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const first = firstResponse.mock.calls[0]?.[1] as BoardSnapshot;
-    const htmlFrameUrl = first.widgets.find((widget) => widget.name === "status")?.frameUrl;
-    expect(htmlFrameUrl).toMatch(
+    const plainFrameUrl = first.widgets.find((widget) => widget.name === "plain")?.frameUrl;
+    const statusFrameUrl = first.widgets.find((widget) => widget.name === "status")?.frameUrl;
+    expect(plainFrameUrl).toMatch(
+      /^\/__openclaw__\/board\/agent%3Amain%3Amain\/plain\/index\.html\?bt=v1\./u,
+    );
+    expect(statusFrameUrl).toMatch(
       /^\/__openclaw__\/board\/agent%3Amain%3Amain\/status\/index\.html\?bt=v1\./u,
     );
     expect(first.widgets.find((widget) => widget.name === "status")?.declaredSummary).toEqual([
@@ -158,7 +167,10 @@ describe("board gateway methods", () => {
     const secondResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const second = secondResponse.mock.calls[0]?.[1] as BoardSnapshot;
     expect(second.widgets.find((widget) => widget.name === "status")?.frameUrl).not.toBe(
-      htmlFrameUrl,
+      statusFrameUrl,
+    );
+    expect(second.widgets.find((widget) => widget.name === "plain")?.frameUrl).not.toBe(
+      plainFrameUrl,
     );
   });
 
@@ -220,6 +232,77 @@ describe("board gateway methods", () => {
       sessionKey: "session",
       revision: 2,
     });
+  });
+
+  it("materializes canvas document sources before storing and broadcasting", async () => {
+    const readCanvasDocument = vi.fn(async () => ({
+      html: "<!doctype html><p>same wrapped bytes</p>",
+      cspSandbox: "scripts" as const,
+    }));
+    const { invoke, store, broadcast } = createHarness(readCanvasDocument);
+
+    const response = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "canvas-widget",
+      title: "Canvas widget",
+      content: { kind: "canvas-doc", docId: "cv_123" },
+    });
+
+    expect(readCanvasDocument).toHaveBeenCalledWith("cv_123");
+    expect(store.readWidgetHtml("session", "canvas-widget")).toMatchObject({
+      html: "<!doctype html><p>same wrapped bytes</p>",
+      revision: 1,
+    });
+    expect(response).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ widgets: [expect.objectContaining({ name: "canvas-widget" })] }),
+    );
+    expect(broadcast).toHaveBeenCalledWith("board.changed", {
+      sessionKey: "session",
+      revision: 1,
+      widget: "canvas-widget",
+    });
+  });
+
+  it("rejects Canvas sources whose strict sandbox forbids scripts", async () => {
+    const readCanvasDocument = vi.fn(async () => ({ html: "<script>unsafe()</script>" }));
+    const { invoke, store, broadcast } = createHarness(readCanvasDocument);
+
+    const response = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "strict-canvas-widget",
+      content: { kind: "canvas-doc", docId: "cv_strict" },
+    });
+
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(store.getSnapshot("session").widgets).toEqual([]);
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("rejects a resolved canvas document above the board HTML limit", async () => {
+    const readCanvasDocument = vi.fn(async () => ({
+      html: "x".repeat(262_145),
+      cspSandbox: "scripts" as const,
+    }));
+    const { invoke, store, broadcast } = createHarness(readCanvasDocument);
+
+    const response = await invoke("board.widget.put", {
+      sessionKey: "session",
+      name: "oversized-canvas-widget",
+      content: { kind: "canvas-doc", docId: "cv_oversized" },
+    });
+
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(store.getSnapshot("session").widgets).toEqual([]);
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("supports rejected grants and rejects grants from non-pending state", async () => {

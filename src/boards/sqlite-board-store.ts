@@ -7,7 +7,7 @@ import type {
   BoardSnapshot,
   BoardTab,
   BoardWidget,
-  BoardWidgetPutParams,
+  BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
@@ -54,6 +54,23 @@ type StoredBoard = {
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
 
+// Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
+// no board tables until the first write. Reads must treat that as "no boards",
+// not "no such table".
+function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
+  if (ensuredBoardDatabases.has(database.db)) {
+    return true;
+  }
+  const row = database.db // sqlite-allow-raw: catalog probe before Kysely table access.
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'board_widgets'")
+    .get();
+  if (!row) {
+    return false;
+  }
+  ensuredBoardDatabases.add(database.db);
+  return true;
+}
+
 function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
@@ -82,7 +99,7 @@ type SqliteBoardStoreOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-function parseManifest(value: string): BoardWidgetPutParams["declared"] {
+function parseManifest(value: string): BoardWidgetMaterializedPutParams["declared"] {
   const parsed = JSON.parse(value) as { netOrigins?: unknown; tools?: unknown };
   const netOrigins = Array.isArray(parsed.netOrigins)
     ? parsed.netOrigins.filter((entry): entry is string => typeof entry === "string")
@@ -270,7 +287,7 @@ function deleteRemovedTabs(
 }
 
 function contentFields(
-  params: BoardWidgetPutParams,
+  params: BoardWidgetMaterializedPutParams,
   revision: number,
   grantState: BoardWidget["grantState"],
   viewGeneration: string,
@@ -373,7 +390,7 @@ export class SqliteBoardStore implements BoardStore {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) =>
-        hasSession(database, resolved.sessionKey)
+        hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
           ? readStoredBoard(database, resolved.sessionKey).snapshot
           : undefined,
       {
@@ -419,7 +436,7 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  putWidget(params: BoardWidgetPutParams): BoardSnapshot {
+  putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot {
     const { database, resolved } = this.prepareWrite(params.sessionKey);
     const canonicalParams = { ...params, sessionKey: resolved.sessionKey };
     const viewGeneration = randomBytes(16).toString("hex");
@@ -523,7 +540,7 @@ export class SqliteBoardStore implements BoardStore {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) => {
-        if (!hasSession(database, resolved.sessionKey)) {
+        if (!hasSession(database, resolved.sessionKey) || !boardTablesPresent(database)) {
           return undefined;
         }
         const db = getNodeSqliteKysely<BoardDatabase>(database.db);
@@ -583,6 +600,9 @@ export class SqliteBoardStore implements BoardStore {
         resolveOpenClawAgentSqlitePath({ agentId, env: this.options.env });
       const result = withOpenClawAgentDatabaseReadOnly(
         (database) => {
+          if (!boardTablesPresent(database)) {
+            return [];
+          }
           const db = getNodeSqliteKysely<BoardDatabase>(database.db);
           return executeSqliteQuerySync(
             database.db,
