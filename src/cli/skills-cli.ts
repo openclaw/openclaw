@@ -13,6 +13,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   fetchClawHubSkillCard,
   fetchClawHubSkillVerification,
@@ -32,6 +33,13 @@ import {
   isSkillSourceInstallSpec,
 } from "../skills/lifecycle/source-install.js";
 import {
+  getSkillCuratorStatus,
+  pinCuratedSkill,
+  restoreCuratedSkill,
+  type SkillCuratorStatus,
+  unpinCuratedSkill,
+} from "../skills/workshop/curator.js";
+import {
   applySkillProposal,
   inspectSkillProposal,
   listSkillProposals,
@@ -49,6 +57,7 @@ import type {
   SkillProposalSupportFileInput,
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
+import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
@@ -67,6 +76,32 @@ type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
   { ok: true }
 >;
+
+function resolveSkillClawHubRiskOptions(
+  acknowledgeClawHubRisk: boolean,
+  action: "installing" | "updating",
+) {
+  const riskOptions = resolveClawHubRiskAcknowledgementCliOptions({
+    acknowledgeClawHubRisk,
+    action,
+  });
+  return {
+    ...(riskOptions.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+    ...(riskOptions.onClawHubRisk ? { onClawHubRisk: riskOptions.onClawHubRisk } : {}),
+  };
+}
+
+function formatSkillWarning(message: string): string {
+  return message.includes("╭─") ? message : theme.warn(message);
+}
+
+function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
+  return (
+    result.code === CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED &&
+    typeof result.warning === "string" &&
+    result.warning.trim().length > 0
+  );
+}
 
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
@@ -149,10 +184,6 @@ async function runSkillsAction(
   }
 }
 
-function resolveActiveWorkspaceDir(options?: ResolveSkillsWorkspaceOptions): string {
-  return resolveSkillsWorkspace(options).workspaceDir;
-}
-
 function resolveSkillsWorkspaceForCommand(
   command: Command | null | undefined,
   opts?: { agent?: string },
@@ -164,6 +195,13 @@ function resolveClawHubTargetWorkspaceDir(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },
 ): string | undefined {
+  return resolveClawHubTargetWorkspace(command, opts)?.workspaceDir;
+}
+
+function resolveClawHubTargetWorkspace(
+  command: Command | undefined,
+  opts: { agent?: string; global?: boolean },
+): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
   const agentId = resolveAgentOption(command, opts);
   if (opts.global && normalizeOptionalString(agentId)) {
     defaultRuntime.error("Use either --global or --agent, not both.");
@@ -171,9 +209,9 @@ function resolveClawHubTargetWorkspaceDir(
     return undefined;
   }
   if (opts.global) {
-    return CONFIG_DIR;
+    return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
   }
-  return resolveActiveWorkspaceDir({ agentId });
+  return resolveSkillsWorkspace({ agentId });
 }
 
 function shouldFailSkillVerification(result: ClawHubSkillVerificationResponse): boolean {
@@ -254,6 +292,91 @@ function formatSkillProposalInspect(read: SkillProposalReadResult): string {
     .join("\n");
 }
 
+function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
+  const timestamp = (value: number | null) =>
+    value === null ? "never" : new Date(value).toISOString();
+  const lines = [
+    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
+    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
+    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
+  ];
+  if (status.lastError) {
+    lines.push(`Last error: ${status.lastError}`);
+  }
+  const keyCounts = new Map<string, number>();
+  for (const skill of status.skills) {
+    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
+  }
+  for (const skill of status.skills) {
+    const pinned = skill.pinned ? " pinned" : "";
+    const lastUsed =
+      skill.lastUsedAtMs === null ? "never" : new Date(skill.lastUsedAtMs).toISOString();
+    const label =
+      keyCounts.get(skill.skillKey) === 1
+        ? skill.skillKey
+        : `${skill.skillKey} (${skill.skillFile})`;
+    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
+  }
+  for (const overlap of status.overlaps) {
+    lines.push(
+      `Possible overlap: ${overlap.left} ~ ${overlap.right} — merge via /learn if desired`,
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function loadGatewaySkillCuratorStatus(
+  config: ReturnType<typeof getRuntimeConfig>,
+): Promise<SkillCuratorStatus | null> {
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<SkillCuratorStatus>({
+      config,
+      method: "skills.curator.status",
+      params: {},
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch (err) {
+    if (config.gateway?.mode === "remote") {
+      throw err;
+    }
+    return null;
+  }
+}
+
+async function loadSkillCuratorStatus(): Promise<SkillCuratorStatus> {
+  const config = getRuntimeConfig();
+  return (await loadGatewaySkillCuratorStatus(config)) ?? getSkillCuratorStatus();
+}
+
+async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skill: string) {
+  const config = getRuntimeConfig();
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<SkillCuratorStatus["skills"][number]>({
+      config,
+      method: `skills.curator.${method}`,
+      params: { skill },
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch (err) {
+    if (config.gateway?.mode === "remote") {
+      throw err;
+    }
+  }
+  if (method === "pin") {
+    return pinCuratedSkill(skill);
+  }
+  if (method === "unpin") {
+    return unpinCuratedSkill(skill);
+  }
+  return restoreCuratedSkill(skill);
+}
+
 async function readSkillProposalInput(options: {
   proposal?: string;
   proposalDir?: string;
@@ -307,9 +430,11 @@ export function registerSkillsCli(program: Command) {
           return;
         }
         for (const entry of results) {
+          const ownerHandle = normalizeOptionalString(entry.ownerHandle);
+          const skillRef = ownerHandle ? `@${ownerHandle}/${entry.slug}` : entry.slug;
           const version = entry.version ? ` v${entry.version}` : "";
           const summary = entry.summary ? `  ${entry.summary}` : "";
-          defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
+          defaultRuntime.log(`${skillRef}${version}  ${entry.displayName}${summary}`);
         }
       } catch (err) {
         defaultRuntime.error(String(err));
@@ -331,6 +456,11 @@ export function registerSkillsCli(program: Command) {
       "Install a pending GitHub-backed skill before ClawHub scan completes",
       false,
     )
+    .option(
+      "--acknowledge-clawhub-risk",
+      "Acknowledge ClawHub release trust warnings without prompting",
+      false,
+    )
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
@@ -342,6 +472,8 @@ export function registerSkillsCli(program: Command) {
           version?: string;
           force?: boolean;
           forceInstall?: boolean;
+          acknowledgeClawhubRisk?: boolean;
+          acknowledgeClawHubRisk?: boolean;
           global?: boolean;
           agent?: string;
           as?: string;
@@ -366,7 +498,7 @@ export function registerSkillsCli(program: Command) {
               force: Boolean(opts.force),
               logger: {
                 info: (message) => defaultRuntime.log(message),
-                warn: (message) => defaultRuntime.log(theme.warn(message)),
+                warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
               },
             });
             if (!result.ok) {
@@ -392,12 +524,19 @@ export function registerSkillsCli(program: Command) {
             version: opts.version,
             force: Boolean(opts.force),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
+            ...resolveSkillClawHubRiskOptions(
+              opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
+              "installing",
+            ),
             logger: {
               info: (message) => defaultRuntime.log(message),
+              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
             },
           });
           if (!result.ok) {
-            defaultRuntime.error(result.error);
+            if (!isClawHubSkillBlockedCliFailure(result)) {
+              defaultRuntime.error(result.error);
+            }
             defaultRuntime.exit(1);
             return;
           }
@@ -412,11 +551,16 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("update")
     .description("Update ClawHub-installed skills in the active or shared managed directory")
-    .argument("[slug]", "Single skill slug")
+    .argument("[skill-ref]", "Single ClawHub skill ref (@owner/slug)")
     .option("--all", "Update all tracked ClawHub skills", false)
     .option(
       "--force-install",
       "Install a pending GitHub-backed skill before ClawHub scan completes",
+      false,
+    )
+    .option(
+      "--acknowledge-clawhub-risk",
+      "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
     .option("--global", "Update skills in the shared managed skills directory", false)
@@ -424,7 +568,14 @@ export function registerSkillsCli(program: Command) {
     .action(
       async (
         slug: string | undefined,
-        opts: { all?: boolean; forceInstall?: boolean; global?: boolean; agent?: string },
+        opts: {
+          all?: boolean;
+          forceInstall?: boolean;
+          acknowledgeClawhubRisk?: boolean;
+          acknowledgeClawHubRisk?: boolean;
+          global?: boolean;
+          agent?: string;
+        },
         command: Command,
       ) => {
         try {
@@ -438,28 +589,36 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
-          if (!workspaceDir) {
+          const target = resolveClawHubTargetWorkspace(command, opts);
+          if (!target) {
             return;
           }
-          const tracked = await readTrackedClawHubSkillSlugs(workspaceDir);
+          const tracked = await readTrackedClawHubSkillSlugs(target.workspaceDir);
           if (opts.all && tracked.length === 0) {
             defaultRuntime.log("No tracked ClawHub skills to update.");
             return;
           }
           const results = await updateSkillsFromClawHub({
-            workspaceDir,
+            workspaceDir: target.workspaceDir,
             slug,
             ...(opts.forceInstall ? { forceInstall: true } : {}),
+            ...resolveSkillClawHubRiskOptions(
+              opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
+              "updating",
+            ),
             logger: {
               info: (message) => defaultRuntime.log(message),
+              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
             },
+            config: target.config,
           });
           let failed = false;
           for (const result of results) {
             if (!result.ok) {
               failed = true;
-              defaultRuntime.error(result.error);
+              if (!isClawHubSkillBlockedCliFailure(result)) {
+                defaultRuntime.error(result.error);
+              }
               continue;
             }
             if (result.changed) {
@@ -483,7 +642,7 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("verify")
     .description("Verify a ClawHub skill with ClawHub")
-    .argument("<slug>", "ClawHub skill slug")
+    .argument("<skill-ref>", "ClawHub skill ref (@owner/slug)")
     .option("--version <version>", "Verify a specific version")
     .option("--tag <tag>", "Verify a dist tag")
     .option("--card", "Print the generated Skill Card Markdown", false)
@@ -493,6 +652,7 @@ export function registerSkillsCli(program: Command) {
       false,
     )
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .addHelpText("after", "\nExamples:\n  openclaw skills verify @owner/weather\n")
     .action(
       async (
         slug: string,
@@ -550,6 +710,54 @@ export function registerSkillsCli(program: Command) {
         }
       },
     );
+
+  const curator = skills
+    .command("curator")
+    .description("Inspect and manage skill lifecycle curation")
+    .option("--json", "Output as JSON", false);
+
+  const showCuratorStatus = async () => {
+    try {
+      const status = await loadSkillCuratorStatus();
+      if (curator.opts<{ json?: boolean }>().json) {
+        defaultRuntime.writeJson(status);
+        return;
+      }
+      defaultRuntime.writeStdout(formatSkillCuratorStatus(status));
+    } catch (err) {
+      defaultRuntime.error(String(err));
+      defaultRuntime.exit(1);
+    }
+  };
+
+  curator
+    .command("status")
+    .description("Show curator run and lifecycle status")
+    .action(showCuratorStatus);
+
+  for (const action of ["pin", "unpin", "restore"] as const) {
+    curator
+      .command(action)
+      .description(`${action} a curated skill`)
+      .argument("<skill>", "Skill name or key")
+      .action(async (skill: string) => {
+        try {
+          const result = await runSkillCuratorMutation(action, skill);
+          if (curator.opts<{ json?: boolean }>().json) {
+            defaultRuntime.writeJson(result);
+            return;
+          }
+          defaultRuntime.writeStdout(
+            `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
+          );
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      });
+  }
+
+  curator.action(showCuratorStatus);
 
   const workshop = skills
     .command("workshop")
@@ -901,3 +1109,4 @@ export function registerSkillsCli(program: Command) {
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

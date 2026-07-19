@@ -1,9 +1,13 @@
 /**
  * Tests shared gateway auth behavior across config method updates.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createConfigHandlerHarness,
   createConfigWriteSnapshot,
@@ -21,9 +25,7 @@ const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
   coalesced: false,
 }));
 const restartSentinelMocks = vi.hoisted(() => ({
-  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => {
-    return "/tmp/restart-sentinel.json";
-  }),
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -97,6 +99,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
 const { configHandlers } = await import("./config.js");
 
 const GATEWAY_CONFIG_WRITE_OPTIONS = {
+  auditOrigin: "config-rpc",
   runtimeRefresh: {
     includeAuthStoreRefs: false,
   },
@@ -143,6 +146,19 @@ function hotReloadConfig(): OpenClawConfig {
   };
 }
 
+function installBrowserReloadRegistry(): void {
+  const registry = createTestRegistry([]);
+  registry.reloads = [
+    {
+      pluginId: "browser",
+      pluginName: "Browser",
+      registration: { restartPrefixes: ["browser"], hotPrefixes: ["browser.profiles"] },
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+}
+
 function mockPreviousConfig(config: OpenClawConfig): void {
   readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(config));
 }
@@ -162,7 +178,10 @@ async function runConfigPatch(
     },
   });
 
-  await configHandlers["config.patch"](options);
+  await expectDefined(
+    configHandlers["config.patch"],
+    'configHandlers["config.patch"] test invariant',
+  )(options);
   await flushConfigHandlerMicrotasks();
   return { disconnectClientsUsingSharedGatewayAuth };
 }
@@ -173,6 +192,7 @@ function expectNoDirectRestart(): void {
 
 afterEach(() => {
   vi.clearAllMocks();
+  resetPluginRuntimeStateForTest();
 });
 
 beforeEach(() => {
@@ -220,7 +240,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.set"](options);
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(submittedConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
@@ -229,9 +252,153 @@ describe("config shared auth disconnects", () => {
       {
         ok: true,
         path: "/tmp/openclaw.json",
+        // Ack hash from the persisted write; equals what config.get reports.
+        hash: "next-hash",
         config: persistedConfig,
       },
       undefined,
+    );
+  });
+
+  it("acks config.apply with the persisted snapshot hash", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.apply",
+      params: {
+        raw: JSON.stringify(tokenAuthConfig("new-token"), null, 2),
+        baseHash: "base-hash",
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.apply"],
+      'configHandlers["config.apply"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, hash: "next-hash" }),
+      undefined,
+    );
+  });
+
+  it("accepts an unresolved isolatable TTS SecretRef and reports the cold owner", async () => {
+    const submittedConfig: OpenClawConfig = {
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+            },
+          },
+        },
+      },
+    };
+    mockPreviousConfig({});
+    prepareSecretsRuntimeSnapshotMock.mockResolvedValueOnce({
+      config: submittedConfig,
+      degradedOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "cold",
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason: "secret reference was not found",
+        },
+      ],
+    });
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(submittedConfig),
+        baseHash: "base-hash",
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
+      config: submittedConfig,
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+    });
+    expect(writeConfigFileMock).toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        degradedSecretOwners: [
+          expect.objectContaining({
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "cold",
+            reason: "secret reference was not found",
+          }),
+        ],
+      }),
+      undefined,
+    );
+  });
+
+  it.each([
+    "secret provider policy denied resolution",
+    "secret provider response violated its contract",
+    "resolved secret value was invalid",
+    "secret reference is not allowed for this provider",
+  ])("rejects non-retryable SecretRef degradation before config writes: %s", async (reason) => {
+    const submittedConfig: OpenClawConfig = {
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+            },
+          },
+        },
+      },
+    };
+    mockPreviousConfig({});
+    prepareSecretsRuntimeSnapshotMock.mockResolvedValueOnce({
+      config: submittedConfig,
+      degradedOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "cold",
+          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason,
+        },
+      ],
+    });
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(submittedConfig),
+        baseHash: "base-hash",
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining(reason) }),
     );
   });
 
@@ -247,7 +414,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.set"](options);
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
@@ -355,6 +525,36 @@ describe("config shared auth disconnects", () => {
     await runConfigPatch({ gateway: { port: 19001 } });
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.stats?.requiresRestart).toBe(true);
+  });
+
+  it("does not schedule a direct restart for hot-mode browser profile config.patch writes", async () => {
+    installBrowserReloadRegistry();
+    mockPreviousConfig({
+      ...hotReloadConfig(),
+      browser: {
+        profiles: {
+          sandbox: {
+            cdpUrl: "http://127.0.0.1:9222",
+            color: "#0066CC",
+          },
+        },
+      },
+    });
+
+    await runConfigPatch({
+      browser: {
+        profiles: {
+          sandbox: {
+            cdpUrl: "http://127.0.0.1:9223",
+            color: "#0066CC",
+          },
+        },
+      },
+    });
+
+    expectNoDirectRestart();
   });
 
   it("does not add an agent continuation from generic control-plane sessionKey params", async () => {

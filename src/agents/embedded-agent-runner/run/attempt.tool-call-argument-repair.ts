@@ -6,10 +6,7 @@ import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
-import {
-  createHtmlEntityToolCallArgumentDecodingWrapper,
-  decodeHtmlEntitiesInObject,
-} from "../tool-call-argument-decoding.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
@@ -291,11 +288,14 @@ function shouldCloseSmartQuotedValueAt(
 }
 
 function decodeSmartQuotedJsonStringEscapes(value: string): string {
-  return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (_match, escaped, hex) =>
-    typeof hex === "string"
-      ? String.fromCharCode(Number.parseInt(hex, 16))
-      : TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped as string],
-  );
+  return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (match, escaped, hex) => {
+    if (typeof hex === "string") {
+      return String.fromCharCode(Number.parseInt(hex, 16));
+    }
+    return typeof escaped === "string"
+      ? (TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped] ?? match)
+      : match;
+  });
 }
 
 function readSmartQuotedValue(
@@ -796,5 +796,4 @@ export function shouldRepairMalformedToolCallArguments(params: {
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }
-
-export { decodeHtmlEntitiesInObject };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

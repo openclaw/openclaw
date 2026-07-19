@@ -17,7 +17,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error("timed out waiting for condition");
@@ -37,6 +37,15 @@ function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
     cwd,
     encoding: "utf8",
   });
+}
+
+function extractReportPath(stdout: string) {
+  const match = stdout.match(/^\[extension-memory\] report: (.+)$/mu);
+  const reportPath = match?.[1];
+  if (!reportPath) {
+    throw new Error(`missing report path in stdout:\n${stdout}`);
+  }
+  return reportPath;
 }
 
 async function waitForChildExit(
@@ -90,7 +99,7 @@ describe("scripts/profile-extension-memory", () => {
       ["--timeout-ms", "1e3"],
       ["--combined-timeout-ms", "90000ms"],
       ["--top", "0x10"],
-    ];
+    ] as const;
 
     for (const [flag, value] of cases) {
       const result = runProfileExtensionMemory([flag, value]);
@@ -98,6 +107,21 @@ describe("scripts/profile-extension-memory", () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(`[extension-memory] ${flag} must be a positive integer`);
+      expect(result.stderr).not.toContain("dist/extensions");
+      expect(result.stderr).not.toContain("at ");
+    }
+  });
+
+  it("rejects option-looking string flag values before scanning built plugin artifacts", () => {
+    for (const args of [
+      ["--extension", "-h"],
+      ["--json", "-h"],
+    ]) {
+      const result = runProfileExtensionMemory(args);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`[extension-memory] ${args[0]} requires a value`);
       expect(result.stderr).not.toContain("dist/extensions");
       expect(result.stderr).not.toContain("at ");
     }
@@ -161,6 +185,44 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+  it("uses distinct default JSON report paths for separate runs", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
+    const reportPaths: string[] = [];
+    try {
+      const extensionDir = path.join(root, "dist", "extensions", "simple");
+      mkdirSync(extensionDir, { recursive: true });
+      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
+
+      for (let index = 0; index < 2; index += 1) {
+        const result = runProfileExtensionMemory(
+          ["--extension", "simple", "--skip-combined", "--concurrency", "1"],
+          root,
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        const reportPath = extractReportPath(result.stdout);
+        reportPaths.push(reportPath);
+        expect(path.dirname(reportPath)).toBe(tmpdir());
+        expect(path.basename(reportPath)).toMatch(
+          /^openclaw-extension-memory-\d+-\d+-[0-9a-f-]+\.json$/u,
+        );
+        expect(JSON.parse(readFileSync(reportPath, "utf8")).counts).toMatchObject({
+          totalEntries: 1,
+          ok: 1,
+          fail: 0,
+          timeout: 0,
+        });
+      }
+
+      expect(reportPaths[0]).not.toBe(reportPaths[1]);
+    } finally {
+      for (const reportPath of reportPaths) {
+        rmSync(reportPath, { force: true });
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails when a profiled plugin import fails", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     try {
@@ -197,7 +259,7 @@ describe("scripts/profile-extension-memory", () => {
       name: "spawn-error",
       body: "",
       timeoutMs: 30_000,
-      spawnImpl: () => {
+      spawnImpl: (() => {
         const child = new EventEmitter() as EventEmitter & {
           kill: () => boolean;
           stderr: EventEmitter;
@@ -208,7 +270,7 @@ describe("scripts/profile-extension-memory", () => {
         child.kill = () => true;
         queueMicrotask(() => child.emit("error", new Error("spawn denied")));
         return child;
-      },
+      }) as unknown as typeof spawn,
     });
 
     expect(Date.now() - startedAt).toBeLessThan(1000);
@@ -250,7 +312,8 @@ describe("scripts/profile-extension-memory", () => {
           hookPath,
           name: "timeout-descendant",
           repoRoot: root,
-          timeoutMs: 1_000,
+          shutdownGraceMs: 100,
+          timeoutMs: 250,
         });
 
         await waitForCondition(() => existsSync(descendantPidPath));
@@ -309,6 +372,7 @@ describe("scripts/profile-extension-memory", () => {
             `  hookPath: ${JSON.stringify(hookPath)},`,
             "  name: 'parent-signal-descendant',",
             `  repoRoot: ${JSON.stringify(root)},`,
+            "  shutdownGraceMs: 100,",
             "  timeoutMs: 30000,",
             "});",
           ].join("\n"),

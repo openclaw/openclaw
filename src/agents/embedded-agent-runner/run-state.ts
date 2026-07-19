@@ -1,12 +1,16 @@
 /**
  * Shared process-local state for active and abandoned embedded-agent runs.
  */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,
   listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
+  type ReplyBackendQueueMessageOptions,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
@@ -18,22 +22,22 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
  */
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
+  runId?: string;
   queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
+  isStopped?: () => boolean;
+  isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
+  /** True only when queueMessage preserves images supplied in its options. */
+  supportsQueueMessageImages?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };
 
-export type EmbeddedAgentQueueMessageOptions = {
-  steeringMode?: "all";
-  debounceMs?: number;
-  deliveryTimeoutMs?: number;
-  waitForTranscriptCommit?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-};
+export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;
@@ -43,7 +47,7 @@ export type ActiveEmbeddedRunSnapshot = {
 
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 };
 
 export type AbandonedEmbeddedRun = {
@@ -58,6 +62,8 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
+  activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
+  retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
   sessionIdsByFile: new Map<string, string>(),
@@ -70,6 +76,12 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
 export const ACTIVE_EMBEDDED_RUNS =
   embeddedRunState.activeRuns ??
   (embeddedRunState.activeRuns = new Map<string, EmbeddedAgentQueueHandle>());
+export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
+  embeddedRunState.activeRunsByRunId ??
+  (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
+export const RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS =
+  embeddedRunState.retainedAbortabilityRunIds ??
+  (embeddedRunState.retainedAbortabilityRunIds = new Set<string>());
 export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS =
   embeddedRunState.snapshots ??
   (embeddedRunState.snapshots = new Map<string, ActiveEmbeddedRunSnapshot>());

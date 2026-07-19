@@ -5,6 +5,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunDurationMs,
+  resolveSubagentRunEffectiveEndedAt,
   resolveSubagentRunTimerDelayMs,
 } from "./subagent-run-timeout.js";
 
@@ -28,6 +29,15 @@ describe("subagent run timeout helpers", () => {
 
     expect(resolveSubagentRunTimerDelayMs(thirtyDaysSeconds)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(resolveSubagentRunDurationMs(thirtyDaysSeconds)).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("clamps delayed terminal observations to the explicit deadline", () => {
+    expect(
+      resolveSubagentRunEffectiveEndedAt(
+        { createdAt: 1_000, startedAt: 2_000, runTimeoutSeconds: 3 },
+        6_000,
+      ),
+    ).toBe(5_000);
   });
 
   it("ignores invalid timeout seconds and invalid start timestamps", () => {

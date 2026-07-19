@@ -1,3 +1,4 @@
+import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
 import type {
@@ -17,6 +18,8 @@ export type ReplyPayload = {
   sensitiveMedia?: boolean;
   /** Channel-agnostic rich presentation. Core degrades or asks the channel renderer to map it. */
   presentation?: MessagePresentation;
+  /** Runtime-authored text is the exact fallback, not additional native presentation content. */
+  presentationTextMode?: "fallback";
   /** Channel-agnostic delivery preferences, e.g. pin the sent message when supported. */
   delivery?: ReplyPayloadDelivery;
   /**
@@ -34,6 +37,10 @@ export type ReplyPayload = {
   replyToCurrent?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Send video media as a round video note when the channel supports it. */
+  videoAsNote?: boolean;
+  /** Channel-neutral geographic location or named place. */
+  location?: OutboundLocation;
   /**
    * Text synthesized into an audio-only TTS payload. Exposed to hooks for
    * archival/search use when no visible channel text is sent.
@@ -48,6 +55,8 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: boolean;
   /** Reasoning stream text is a complete replacement snapshot, not a delta. */
   isReasoningSnapshot?: boolean;
   /** Marks this payload as a compaction status notice (start/end).
@@ -62,6 +71,43 @@ export type ReplyPayload = {
   channelData?: Record<string, unknown>;
 };
 
+// Private device-pair -> Gateway live-display envelope key. Do not re-export
+// through Plugin SDK; this is not a third-party plugin contract.
+const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+
+type PairingQrReplyChannelData = {
+  setupCode: string;
+  expiresAtMs: number;
+};
+
+function normalizePairingQrSetupCode(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+export function readPairingQrReplyChannelData(
+  payload: Pick<ReplyPayload, "channelData">,
+): PairingQrReplyChannelData | undefined {
+  const raw = payload.channelData?.[PAIRING_QR_REPLY_CHANNEL_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
+  return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
+}
+
+/** Metadata for fast-auto progress notices. */
+export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
+
+export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
+  return payload.channelData?.openclawProgressKind === FAST_MODE_AUTO_PROGRESS_KIND;
+}
+
 /** Metadata for audio-only media that supplements already-visible assistant text. */
 export type ReplyPayloadTtsSupplement = {
   spokenText: string;
@@ -74,7 +120,7 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
@@ -165,6 +211,16 @@ export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Foreground freshness prevented a visible final after transcript persistence. */
+  foregroundDeliverySuppression?: {
+    reason: "stale-foreground";
+  };
+  /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
+  finalDeliveryCapture?: object;
+  /** Durable pending-final intent represented by this runtime payload. */
+  pendingFinalDeliveryIntentId?: string;
+  /** Restart-safe text this payload contributes to its pending-final intent. */
+  pendingFinalDeliveryRetryText?: string;
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */
@@ -175,9 +231,9 @@ export type ReplyPayloadMetadata = {
     accountId?: string;
   };
   /**
-   * Internal OpenClaw notices generated after a runtime/provider failure are
-   * not assistant source replies. Dispatch may deliver them even when normal
-   * assistant source replies are message-tool-only; sendPolicy deny still wins.
+   * Internal OpenClaw notices and host-owned artifacts are not assistant source
+   * replies. Dispatch may deliver them even when normal assistant source replies
+   * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
   /**
@@ -196,6 +252,10 @@ export type ReplyPayloadMetadata = {
   beforeAgentRunBlocked?: boolean;
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
+  heartbeatTerminalToolFailure?: {
+    toolName: string;
+  };
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
@@ -226,7 +286,7 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
 }
 
-/** Marks a notice payload as deliverable even when normal source replies are suppressed. */
+/** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,

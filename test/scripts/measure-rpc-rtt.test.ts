@@ -1,6 +1,7 @@
 // Measure Rpc Rtt tests cover measure rpc rtt script behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
@@ -178,8 +179,19 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods"])).toThrow(
       "--methods requires a value.",
     );
-    for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
-      expect(() => parseArgs([flag, "--methods", "health"])).toThrow(`${flag} requires a value.`);
+    expect(() =>
+      parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods", "health, config.get,health"]),
+    ).toThrow("--methods contains duplicate gateway method: health");
+    expect(() => parseArgs(["--output-dir", "/tmp/one", "--output-dir", "/tmp/two"])).toThrow(
+      "--output-dir was provided more than once.",
+    );
+    expect(() =>
+      parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods", "health", "--methods", "config.get"]),
+    ).toThrow("--methods was provided more than once.");
+    for (const value of ["--methods", "-h"]) {
+      for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
+        expect(() => parseArgs([flag, value, "health"])).toThrow(`${flag} requires a value.`);
+      }
     }
   });
 
@@ -278,6 +290,8 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
   });
 
   it("closes parent gateway log handles after spawning", async () => {
+    const repoRoot = "/repo";
+    const tempRoot = "/tmp/rpc-rtt";
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,
       kill: vi.fn(),
@@ -294,12 +308,12 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         env: { PATH: "/bin" },
         openImpl,
         port: 23456,
-        repoRoot: "/repo",
+        repoRoot,
         sourceEntryExists: () => true,
         spawnImpl,
         stderrPath: "/tmp/stderr.log",
         stdoutPath: "/tmp/stdout.log",
-        tempRoot: "/tmp/rpc-rtt",
+        tempRoot,
         token: "secret-token",
       }),
     ).resolves.toBe(child);
@@ -311,7 +325,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       [
         "--import",
         "tsx",
-        "/repo/src/entry.ts",
+        path.join(repoRoot, "src", "entry.ts"),
         "gateway",
         "run",
         "--port",
@@ -321,13 +335,13 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         "--allow-unconfigured",
       ],
       expect.objectContaining({
-        cwd: "/repo",
+        cwd: repoRoot,
         detached: process.platform !== "win32",
         env: expect.objectContaining({
-          HOME: "/tmp/rpc-rtt/home",
+          HOME: path.join(tempRoot, "home"),
           OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
           OPENCLAW_GATEWAY_TOKEN: "secret-token",
-          OPENCLAW_STATE_DIR: "/tmp/rpc-rtt/state",
+          OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
           PATH: "/bin",
         }),
         stdio: ["ignore", 41, 42],

@@ -265,6 +265,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          {
+            "x-openclaw-session-key": "agent:main:harness:codex:supervision:spoofed-native-thread",
+          },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe(
+          "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
@@ -1812,7 +1830,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       mode: "token",
       token: "secret",
       rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
-    } as any;
+    };
     await withGatewayServer(
       async ({ port }) => {
         const headers = {
@@ -2313,6 +2331,81 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
+  it("buffers replaceable assistant events for streaming chat completions", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "final answer", delta: "", replace: true, replaceable: true },
+      });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "final answer" } });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "final answer" }] };
+    }) as never);
+
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    const data = parseSseDataLines(await res.text());
+    const chunks = data
+      .filter((d) => d !== "[DONE]")
+      .map((d) => JSON.parse(d) as Record<string, unknown>);
+    const allContent = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+      .filter((content): content is string => typeof content === "string")
+      .join("");
+
+    expect(allContent).toBe("final answer");
+    expect(allContent).not.toContain("coordination draft");
+  });
+
+  it("prefers final result text over buffered replaceable chat drafts", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "final answer" }] };
+    }) as never);
+
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    const data = parseSseDataLines(await res.text());
+    const chunks = data
+      .filter((d) => d !== "[DONE]")
+      .map((d) => JSON.parse(d) as Record<string, unknown>);
+    const allContent = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+      .filter((content): content is string => typeof content === "string")
+      .join("");
+
+    expect(allContent).toBe("final answer");
+  });
+
   it("includes usage in final stream chunk when stream_options.include_usage=true", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
@@ -2668,3 +2761,4 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

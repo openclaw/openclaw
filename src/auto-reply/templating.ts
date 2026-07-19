@@ -1,9 +1,11 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
@@ -71,6 +73,8 @@ export type SupplementalContextFacts = {
   };
   untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
+  /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
+  untrustedGroupSystemPrompt?: string;
 };
 
 /** Raw inbound message context accepted from channels before finalization. */
@@ -112,6 +116,8 @@ export type MsgContext = {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /** Effective routed DM scope, including binding overrides. */
+  DmScope?: DmScope;
   /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.
@@ -132,8 +138,16 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  AmbientTranscriptWatermarkKey?: string;
+  AmbientTranscriptBody?: string;
+  AmbientTranscriptMessageId?: string;
+  AmbientTranscriptTimestampMs?: number;
+  AmbientTranscriptPreviousMessageId?: string;
+  AmbientTranscriptPreviousTimestampMs?: number;
   /** Per-turn reply-threading overrides. */
   ReplyThreading?: ReplyThreadingPolicy;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: ReplyToMode;
   ReplyToId?: string;
   /**
    * Root message id for thread reconstruction (used by Feishu for root_id).
@@ -248,6 +262,7 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  SenderIsBot?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -264,6 +279,8 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** Effective channel-owned mention policy before any plugin-binding bypass. */
+  GroupRequireMention?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */
@@ -285,12 +302,22 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Gateway client capabilities when the message originates from the gateway. */
+  GatewayClientCaps?: string[];
+  /** Run-scoped plugin tool bindings; never rendered into prompt text. */
+  GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
+  /** Gateway device id allowed to review approvals initiated by this turn. */
+  ApprovalReviewerDeviceId?: string;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Provider-native thread target for reply delivery without making the session thread-scoped. */
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
+  ChannelContext?: PluginHookChannelContext;
+  /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
+  ChatId?: string;
   /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
   NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */
@@ -315,6 +342,11 @@ export type MsgContext = {
    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
    */
   ExplicitDeliverRoute?: boolean;
+  /**
+   * Internal proof that the channel ingress owner admitted this sender/event.
+   * Correlation interceptors must fail closed when this proof is absent.
+   */
+  InboundAccessAuthorized?: boolean;
   /**
    * Internal flag for channels that emit message_received through a channel-specific
    * privacy gate before entering the shared reply dispatcher.

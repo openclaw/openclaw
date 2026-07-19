@@ -84,7 +84,7 @@ function writeSourceFixture(sourceDir: string) {
       agentDatabases: 2,
       channelIngressEvents: 1000,
       cronJobs: 100,
-      cronRunLogs: 1000,
+      cronTaskRuns: 1000,
       deliveryQueueEntries: 1000,
       pluginStateEntries: 1000,
       stateRows: 4100,
@@ -134,6 +134,7 @@ describe("parseArgs", () => {
     for (const flag of ["--source-dir", "--baseline-source-dir", "--output"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, ""])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--source-dir", "reports/current"])).toThrow(
         `${flag} requires a value`,
       );

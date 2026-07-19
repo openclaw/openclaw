@@ -1,5 +1,5 @@
 // Resolution helpers derive media-understanding timeouts, prompts, byte/char
-// caps, scope decisions, model entries, concurrency, and active-model fallback.
+// caps, scope decisions, model entries, and concurrency.
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
@@ -12,6 +12,7 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { runtimeMediaModelSecretOwnerId } from "../secrets/runtime-media-secret-owner.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
@@ -19,12 +20,16 @@ import {
   DEFAULT_PROMPT,
 } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
+export type ResolvedMediaModelEntry = {
+  entry: MediaUnderstandingModelConfig;
+  secretOwnerId?: string;
+};
+
 /** Default per-provider media-understanding runtime timeout in milliseconds. */
-export const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
+const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
 const MIN_MEDIA_TIMEOUT_MS = 1000;
 
 /** Converts configured timeout seconds into a timer-safe millisecond deadline. */
@@ -111,12 +116,24 @@ export function resolveModelEntries(params: {
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-}): MediaUnderstandingModelConfig[] {
+}): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
   const entries = [
-    ...(config?.models ?? []).map((entry) => ({ entry, source: "capability" as const })),
-    ...sharedModels.map((entry) => ({ entry, source: "shared" as const })),
+    ...(config?.models ?? []).map((entry, index) => ({
+      entry,
+      source: "capability" as const,
+      secretOwnerId: runtimeMediaModelSecretOwnerId({
+        source: "capability",
+        capability,
+        index,
+      }),
+    })),
+    ...sharedModels.map((entry, index) => ({
+      entry,
+      source: "shared" as const,
+      secretOwnerId: runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+    })),
   ];
   if (entries.length === 0) {
     return [];
@@ -142,7 +159,7 @@ export function resolveModelEntries(params: {
       }
       return caps.includes(capability);
     })
-    .map(({ entry }) => entry);
+    .map(({ entry, secretOwnerId }) => ({ entry, secretOwnerId }));
 }
 
 /** Resolves the bounded media-understanding task concurrency from config. */
@@ -152,47 +169,4 @@ export function resolveConcurrency(cfg: OpenClawConfig): number {
     return Math.floor(configured);
   }
   return DEFAULT_MEDIA_CONCURRENCY;
-}
-
-/** Adds the active chat model as a provider fallback when enabled media has no explicit entries. */
-export function resolveEntriesWithActiveFallback(params: {
-  cfg: OpenClawConfig;
-  capability: MediaUnderstandingCapability;
-  config?: MediaUnderstandingConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-  activeModel?: { provider: string; model?: string };
-}): MediaUnderstandingModelConfig[] {
-  const entries = resolveModelEntries({
-    cfg: params.cfg,
-    capability: params.capability,
-    config: params.config,
-    providerRegistry: params.providerRegistry,
-  });
-  if (entries.length > 0) {
-    return entries;
-  }
-  // Active chat model fallback is opt-in and only valid when its provider has
-  // declared the requested media capability.
-  if (params.config?.enabled !== true) {
-    return entries;
-  }
-  const activeProviderRaw = params.activeModel?.provider?.trim();
-  if (!activeProviderRaw) {
-    return entries;
-  }
-  const activeProvider = normalizeMediaProviderId(activeProviderRaw);
-  if (!activeProvider) {
-    return entries;
-  }
-  const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
-  if (!capabilities || !capabilities.includes(params.capability)) {
-    return entries;
-  }
-  return [
-    {
-      type: "provider",
-      provider: activeProvider,
-      model: params.activeModel?.model,
-    },
-  ];
 }

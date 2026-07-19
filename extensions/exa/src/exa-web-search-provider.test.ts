@@ -26,6 +26,33 @@ function cancelTrackedResponse(
   };
 }
 
+function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  // Streaming fixture proves an oversized success body stops being read before
+  // the whole payload is buffered into memory.
+  let reads = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    getReadCount: () => reads,
+  };
+}
+
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createExaWebSearchProvider();
@@ -124,6 +151,26 @@ describe("exa web search provider", () => {
         endpoint: "https://proxy.example/exa/search",
       }),
     );
+  });
+
+  it("partitions Exa cache keys by effective content options", () => {
+    const base = {
+      endpoint: "https://api.exa.ai/search",
+      type: "auto" as const,
+      query: "openclaw",
+      count: 5,
+    };
+    const defaultKey = testing.buildExaCacheKey(base);
+
+    expect(testing.buildExaCacheKey({ ...base, contents: { highlights: true } })).toBe(defaultKey);
+
+    const disabledKeys = [
+      testing.buildExaCacheKey({ ...base, contents: { highlights: false } }),
+      testing.buildExaCacheKey({ ...base, contents: { text: false } }),
+      testing.buildExaCacheKey({ ...base, contents: { summary: false } }),
+    ];
+    expect(disabledKeys).not.toContain(defaultKey);
+    expect(new Set(disabledKeys).size).toBe(disabledKeys.length);
   });
 
   it("normalizes Exa result descriptions from highlights before text", () => {
@@ -263,6 +310,27 @@ describe("exa web search provider", () => {
     await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
       "Exa API returned malformed JSON",
     );
+  });
+
+  it("parses well-formed Exa search JSON under the byte cap", async () => {
+    const response = new Response(
+      JSON.stringify({ results: [{ url: "https://example.com", title: "Example" }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+    await expect(testing.readExaSearchResults(response)).resolves.toEqual([
+      { url: "https://example.com", title: "Example" },
+    ]);
+  });
+
+  it("caps oversized Exa search JSON instead of buffering the whole body", async () => {
+    const streamed = streamingJsonResponse({ chunkCount: 64, chunkSize: 1024 });
+
+    await expect(
+      testing.readExaSearchResults(streamed.response, { maxBytes: 4096 }),
+    ).rejects.toThrow(/Exa API response exceeds 4096 bytes/);
+
+    expect(streamed.getReadCount()).toBeLessThan(64);
   });
 
   it("bounds Exa API error bodies without using response.text()", async () => {

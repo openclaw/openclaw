@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -58,26 +58,19 @@ async function makeFakeOpenClawPackage(root: string) {
 
 describe("git commit resolution", () => {
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
-  let testing: (typeof import("./git-commit.js"))["testing"];
 
-  beforeAll(async () => {
-    vi.doUnmock("node:fs");
-    vi.doUnmock("node:module");
-    ({ resolveCommitHash, testing } = await import("./git-commit.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    testing.clearCachedGitCommits();
+    vi.resetModules();
+    ({ resolveCommitHash } = await import("./git-commit.js"));
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    testing.clearCachedGitCommits();
     await tempDirs.cleanup();
   });
 
@@ -293,6 +286,45 @@ describe("git commit resolution", () => {
       }),
     ).toBeNull();
     expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
+  });
+
+  it.each([
+    { name: "successful", result: "abcdef0" },
+    { name: "failed", result: null },
+  ])("bounds $name git probe entries with LRU eviction", async ({ result }) => {
+    const temp = await makeTempDir(`git-commit-${result ? "success" : "failure"}-lru`);
+    const coldDir = path.join(temp, "cold");
+    const hotDir = path.join(temp, "hot");
+    const newestDir = path.join(temp, "newest");
+    const readGitCommit = vi.fn((_searchDir: string, _packageRoot: string | null) => result);
+    const resolve = (cwd: string) =>
+      resolveCommitHash({
+        cwd,
+        env: {},
+        readers: {
+          readGitCommit,
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit: () => null,
+        },
+      });
+    const callsFor = (cwd: string) =>
+      readGitCommit.mock.calls.filter(([searchDir]) => searchDir === cwd).length;
+
+    expect(resolve(coldDir)).toBe(result);
+    expect(resolve(hotDir)).toBe(result);
+    for (let index = 0; index < 254; index += 1) {
+      expect(resolve(path.join(temp, `filler-${index}`))).toBe(result);
+    }
+
+    expect(resolve(hotDir)).toBe(result);
+    expect(resolve(newestDir)).toBe(result);
+    expect(resolve(newestDir)).toBe(result);
+    expect(resolve(hotDir)).toBe(result);
+    expect(resolve(coldDir)).toBe(result);
+
+    expect(callsFor(newestDir)).toBe(1);
+    expect(callsFor(hotDir)).toBe(1);
+    expect(callsFor(coldDir)).toBe(2);
   });
 
   it("formats env-provided commit strings consistently", async () => {

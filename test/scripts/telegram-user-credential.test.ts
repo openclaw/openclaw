@@ -46,7 +46,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`timeout waiting for ${filePath}`);
@@ -59,7 +59,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`process still alive: ${pid}`);
@@ -274,6 +274,24 @@ describe("telegram user credential IO", () => {
     );
   });
 
+  it("rejects short flags as credential script option values", async () => {
+    const credentialModule = (await import(
+      `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=args-${Date.now()}`
+    )) as {
+      parseArgs(argv: string[]): unknown;
+    };
+
+    expect(() =>
+      credentialModule.parseArgs([
+        "node",
+        "scripts/e2e/telegram-user-credential.ts",
+        "restore",
+        "--payload-file",
+        "-h",
+      ]),
+    ).toThrow("Usage:");
+  });
+
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
     await expect(
       runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {
@@ -355,8 +373,8 @@ setInterval(() => {}, 1000);
 
         const startedAt = Date.now();
         const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
-          timeoutKillGraceMs: 1_000,
-          timeoutMs: 1_000,
+          timeoutKillGraceMs: 250,
+          timeoutMs: 300,
         });
         const runError = runPromise.catch((error: unknown) => error);
         await waitForFile(readyPath, 2_000);
@@ -364,11 +382,11 @@ setInterval(() => {}, 1000);
 
         await expect(runError).resolves.toMatchObject({
           code: "ETIMEDOUT",
-          message: expect.stringContaining("timed out after 1000ms"),
+          message: expect.stringContaining("timed out after 300ms"),
         });
 
         expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-        expect(Date.now() - startedAt).toBeLessThan(1_700);
+        expect(Date.now() - startedAt).toBeLessThan(800);
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");

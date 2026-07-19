@@ -208,13 +208,6 @@ write_fixture_plugin_with_vendored_dependency() {
   node scripts/e2e/lib/fixture.mjs plugin-vendored-dep "$dir" "$id" "$version" "$method" "$name"
 }
 
-write_fixture_manifest() {
-  local file="$1"
-  local id="$2"
-
-  node scripts/e2e/lib/fixture.mjs plugin-manifest "$file" "$id"
-}
-
 pack_fixture_plugin() {
   local pack_dir="$1"
   local output_tgz="$2"

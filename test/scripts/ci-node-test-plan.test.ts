@@ -3,11 +3,17 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
-import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import {
+  assignVitestFsCacheWriter,
+  createNodeTestShardBundles,
+  createNodeTestShards,
+  type NodeTestShard,
+} from "../../scripts/lib/ci-node-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
+import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 
 type VitestTestConfig = {
   dir?: string;
@@ -78,6 +84,21 @@ function listMatchedTestFiles(config: VitestConfig): string[] {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function listAllToolingTestFiles(): string[] {
+  const originalArgv = process.argv;
+  try {
+    process.argv = originalArgv.slice(0, 2);
+    return listMatchedTestFiles(
+      createToolingVitestConfig({
+        ...process.env,
+        OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+      }),
+    );
+  } finally {
+    process.argv = originalArgv;
+  }
+}
+
 function isGatewayServerTestFile(file: string): boolean {
   return (
     file.startsWith("src/gateway/") &&
@@ -88,6 +109,40 @@ function isGatewayServerTestFile(file: string): boolean {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
+  it("assigns one semantic Vitest cache writer without changing shard order", () => {
+    const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    const compact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compact: true,
+    });
+
+    const expectWriter = (plan: Array<Pick<NodeTestShard, "groups" | "shardName">>) => {
+      const marked = assignVitestFsCacheWriter(plan);
+      expect(marked.map((shard) => shard.shardName)).toEqual(plan.map((shard) => shard.shardName));
+      expect(marked.filter((shard) => shard.saveVitestFsCache)).toHaveLength(1);
+      expect(
+        marked.find((shard) => shard.saveVitestFsCache)?.shardName.startsWith("core-unit-fast") ||
+          marked
+            .find((shard) => shard.saveVitestFsCache)
+            ?.groups?.some((group) => group.shard_name.startsWith("core-unit-fast")),
+      ).toBe(true);
+    };
+    expectWriter(full);
+    expectWriter(compact);
+
+    expect(assignVitestFsCacheWriter([])).toEqual([]);
+    const changedOnly = {
+      checkName: "checks-node-changed-only",
+      configs: ["test/vitest/vitest.unit.config.ts"],
+      requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
+      shardName: "changed-only",
+    };
+    expect(assignVitestFsCacheWriter([changedOnly])).toEqual([
+      { ...changedOnly, saveVitestFsCache: true },
+    ]);
+  });
+
   it("creates split shards without walking test roots", () => {
     const payload = expectNoNodeFsScans<{
       includePatterns: number;
@@ -107,6 +162,187 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(payload.includePatterns).toBeGreaterThan(0);
   });
 
+  it("bundles split shards deterministically without changing coverage", () => {
+    const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    const basePatterns = base
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+    const bundledPatterns = bundled
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(bundled.length).toBeLessThan(base.length);
+    expect(bundledPatterns).toEqual(basePatterns);
+    expect(
+      bundled
+        .filter((shard) => shard.shardName.startsWith("bundle-"))
+        .every((shard) => (shard.includePatterns?.length ?? 0) <= 64),
+    ).toBe(true);
+    expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
+    expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
+    expect(bundled.slice(0, 6).map((shard) => shard.shardName)).toEqual([
+      "core-unit-fast-1",
+      "core-unit-fast-2",
+      "core-tooling-1",
+      "core-tooling-2",
+      "core-tooling-3",
+      "core-tooling-4",
+    ]);
+    expect(bundled.find((shard) => shard.shardName === "core-unit-fast-1")?.runner).toBe(
+      DEFAULT_NODE_TEST_RUNNER,
+    );
+    expect(bundled.find((shard) => shard.shardName === "core-unit-fast-2")?.runner).toBe(
+      DEFAULT_NODE_TEST_RUNNER,
+    );
+    expect(
+      bundled.find((shard) => shard.shardName === "agentic-control-plane-startup-health-runtime")
+        ?.env,
+    ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
+    expect(
+      bundled.find((shard) => shard.shardName === "agentic-control-plane-startup-core")?.runner,
+    ).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(bundled.find((shard) => shard.shardName === "bundle-infra-small-1")?.runner).toBe(
+      "blacksmith-4vcpu-ubuntu-2404",
+    );
+    expect(
+      new Set(
+        bundled
+          .filter((shard) => shard.shardName.startsWith("bundle-"))
+          .flatMap((shard) => shard.configs),
+      ),
+    ).toEqual(new Set(["test/vitest/vitest.infra.config.ts"]));
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-commands-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-cron-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-agents-core-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-gateway-server-"))).toBe(
+      false,
+    );
+  });
+
+  it("compacts pull-request shards into isolated groups inside fewer jobs", () => {
+    const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const compact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compact: true,
+    });
+
+    expect(compact.length).toBeGreaterThanOrEqual(12);
+    expect(compact.length).toBeLessThanOrEqual(28);
+    expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
+    expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
+    expect(compact.some((shard) => shard.requiresDist)).toBe(true);
+    expect(
+      compact.every((shard) =>
+        shard.groups.every((group) => group.requiresDist === shard.requiresDist),
+      ),
+    ).toBe(true);
+    // Runtime-balanced packing must keep the two heaviest measured groups in
+    // different jobs; regressing to per-file weights recombines them.
+    const jobOf = (name: string) =>
+      compact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
+    expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
+    // Cheap stripes may legally co-locate in one bin; only existence matters.
+    expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
+    expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
+    // Spawn/signal-timing suites never mix with regular groups, and every
+    // compact bin runs serially: overlapping Vitest runs flake timing-
+    // sensitive tests on both runner classes.
+    const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated)$|^core-runtime-tui-pty$/u;
+    for (const shard of compact) {
+      const exclusiveCount = shard.groups.filter((group) =>
+        exclusiveGroupRe.test(group.shard_name),
+      ).length;
+      if (exclusiveCount > 0) {
+        expect(exclusiveCount).toBe(shard.groups.length);
+      }
+      expect(shard.planConcurrency).toBe(1);
+    }
+    expect(
+      compact.filter((shard) =>
+        shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
+      ).length,
+    ).toBeGreaterThan(0);
+    // Both plans carry the same split stripes now; compact bundling must
+    // preserve base include coverage exactly.
+    expect(
+      compact
+        .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(
+      base.flatMap((shard) => shard.includePatterns ?? []).toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(compact.every((shard) => shard.groups.every((group) => group.configs.length > 0))).toBe(
+      true,
+    );
+    expect(
+      compact
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
+    ).toEqual({
+      OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      // Timing-sensitive groups pin the worker budget while the job-level
+      // default scales with the runner class.
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+    const startupCoreJob = compact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
+    );
+    expect(startupCoreJob?.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(
+      startupCoreJob?.groups.find(
+        (group) => group.shard_name === "agentic-control-plane-startup-core",
+      )?.runner,
+    ).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(
+      compact
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "agentic-control-plane-startup-health-runtime")?.env,
+    ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
+    expect(
+      compact
+        .filter((shard) => shard.groups.some((group) => !group.includePatterns))
+        .every((shard) => shard.timeoutMinutes === 120),
+    ).toBe(true);
+    // Whole-config groups now pack into the same runtime-balanced bins as
+    // include-pattern groups; the separate "-whole-" job class is gone.
+    expect(compact.some((shard) => shard.checkName.includes("-whole-"))).toBe(false);
+    expect(
+      compact.some((shard) => shard.groups.some((group) => group.shard_name === "core-tooling")),
+    ).toBe(false);
+    expect(
+      compact
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-tooling-isolated"),
+    ).toEqual(
+      expect.objectContaining({
+        configs: [
+          "test/vitest/vitest.tooling-docker.config.ts",
+          "test/vitest/vitest.tooling-isolated.config.ts",
+        ],
+      }),
+    );
+    // The docker helper config rides with the isolated shard on both plans;
+    // no standalone core-tooling-docker group remains.
+    expect(
+      compact
+        .flatMap((shard) => shard.groups)
+        .some((group) => group.shard_name === "core-tooling-docker"),
+    ).toBe(false);
+    const toolingGroups = compact
+      .flatMap((shard) => shard.groups)
+      .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
+    const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
+    expect(toolingGroups).toHaveLength(4);
+    expect(
+      toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
+    ).toBe(true);
+    const toolingGroupSizes = toolingGroups.map((group) => group.includePatterns?.length ?? 0);
+    expect(Math.max(...toolingGroupSizes) - Math.min(...toolingGroupSizes)).toBeLessThanOrEqual(1);
+    expect(new Set(toolingFiles).size).toBe(toolingFiles.length);
+    expect(toolingFiles.toSorted((a, b) => a.localeCompare(b))).toEqual(listAllToolingTestFiles());
+  });
+
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
@@ -118,12 +354,22 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(coreUnitShards).toEqual([
       {
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-fast-1",
+      },
+      {
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-fast-2",
+      },
+      {
         configs: [
-          "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-fast-isolated.config.ts",
           "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         ],
         requiresDist: false,
-        shardName: "core-unit-fast",
+        shardName: "core-unit-fast-isolated",
       },
       {
         configs: [
@@ -132,11 +378,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         ],
         requiresDist: false,
         shardName: "core-unit-src-security",
-      },
-      {
-        configs: ["test/vitest/vitest.unit-ui.config.ts"],
-        requiresDist: false,
-        shardName: "core-unit-ui",
       },
       {
         configs: ["test/vitest/vitest.unit-support.config.ts"],
@@ -182,25 +423,25 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       shard.shardName.startsWith("core-tooling"),
     );
 
-    expect(toolingShards).toEqual([
-      {
-        checkName: "checks-node-core-tooling",
-        configs: [
-          "test/vitest/vitest.tooling.config.ts",
-          "test/vitest/vitest.tooling-isolated.config.ts",
-        ],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "core-tooling",
-      },
-      {
-        checkName: "checks-node-core-tooling-docker",
-        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "core-tooling-docker",
-      },
-    ]);
+    const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
+    expect(stripes).toHaveLength(4);
+    for (const stripe of stripes) {
+      expect(stripe.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+      expect(stripe.requiresDist).toBe(false);
+      expect(stripe.includePatterns?.length ?? 0).toBeGreaterThan(0);
+    }
+    // Stripes partition the tooling files: no overlap, nothing dropped.
+    const stripeFiles = stripes.flatMap((stripe) => stripe.includePatterns ?? []);
+    expect(new Set(stripeFiles).size).toBe(stripeFiles.length);
+    expect(
+      toolingShards.find((shard) => shard.shardName === "core-tooling-isolated"),
+    ).toMatchObject({
+      configs: [
+        "test/vitest/vitest.tooling-docker.config.ts",
+        "test/vitest/vitest.tooling-isolated.config.ts",
+      ],
+      requiresDist: false,
+    });
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {
@@ -412,6 +653,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-infra-process",
       },
       {
+        configs: ["test/vitest/vitest.tui-pty.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-tui-pty",
+      },
+      {
         configs: [
           "test/vitest/vitest.media.config.ts",
           "test/vitest/vitest.media-understanding.config.ts",
@@ -453,6 +700,21 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-cron-service",
       },
     ]);
+  });
+
+  it("runs the TUI PTY local smoke inside the CI node shard", () => {
+    const tuiPtyShard = createNodeTestShards().find(
+      (shard) => shard.shardName === "core-runtime-tui-pty",
+    );
+
+    expect(tuiPtyShard).toMatchObject({
+      checkName: "checks-node-core-runtime-tui-pty",
+      configs: ["test/vitest/vitest.tui-pty.config.ts"],
+      env: {
+        OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      },
+      requiresDist: false,
+    });
   });
 
   it("covers every infra test exactly once across core runtime infra shards", () => {
@@ -556,9 +818,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       controlPlaneShards.map((shard) => ({
         checkName: `checks-node-${shard.shardName}`,
         configs: ["test/vitest/vitest.gateway-server.config.ts"],
+        ...(shard.shardName === "agentic-control-plane-startup-health-runtime"
+          ? { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } }
+          : {}),
         includePatterns: shard.includePatterns,
         requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
+        runner:
+          shard.shardName === "agentic-control-plane-startup-core"
+            ? DEFAULT_NODE_TEST_RUNNER
+            : "blacksmith-4vcpu-ubuntu-2404",
         shardName: shard.shardName,
       })),
     );
@@ -659,21 +927,71 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-subagents",
       },
+      // cli-runner stripes: agents-core runs files serially, so the
+      // import-heavy suite splits across jobs to parallelize at bin level.
       {
-        checkName: "checks-node-agentic-agents-core-runner",
+        checkName: "checks-node-agentic-agents-core-runner-cli-1",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
         includePatterns: agentShards[4]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-core-runner",
+        shardName: "agentic-agents-core-runner-cli-1",
       },
       {
-        checkName: "checks-node-agentic-agents-core-runtime",
+        checkName: "checks-node-agentic-agents-core-runner-cli-2",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
         includePatterns: agentShards[5]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-cli-2",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-cli-3",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[6]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-cli-3",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-commands",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[7]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-commands",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-embedded",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[8]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-embedded",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-sessions",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[9]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-sessions",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runtime",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[10]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-runtime",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-isolated",
+        configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
+        includePatterns: agentShards[11]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-isolated",
       },
       {
         checkName: "checks-node-agentic-agents-embedded",
@@ -759,7 +1077,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expected = listTestFiles("src/agents")
-      .filter((file) => !relative("src/agents", file).includes("/"))
+      .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);
@@ -804,10 +1122,22 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-agent-runner",
       },
       {
-        checkName: "checks-node-auto-reply-reply-commands",
+        checkName: "checks-node-auto-reply-reply-commands-1",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-commands",
+        shardName: "auto-reply-reply-commands-1",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-2",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-2",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-3",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-3",
       },
       {
         checkName: "checks-node-auto-reply-reply-dispatch",

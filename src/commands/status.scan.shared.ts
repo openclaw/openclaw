@@ -29,7 +29,6 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
-export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
 const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
@@ -217,9 +216,7 @@ async function applyLocalStatusRpcFallback(params: {
         method: "status",
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
-        timeoutMs: params.timeoutMsExplicit
-          ? boundedFallbackTimeoutMs
-          : Math.max(params.cfg.gateway?.handshakeTimeoutMs ?? 0, boundedFallbackTimeoutMs),
+        timeoutMs: boundedFallbackTimeoutMs,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       }),
@@ -296,10 +293,7 @@ export async function resolveGatewayProbeSnapshot(params: {
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const defaultProbeTimeoutMs = Math.max(
-    params.opts.all ? 5000 : 2500,
-    params.cfg.gateway?.handshakeTimeoutMs ?? 0,
-  );
+  const defaultProbeTimeoutMs = params.opts.all ? 5000 : 2500;
   const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
   const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
   const initialGatewayProbe = shouldProbe
@@ -308,7 +302,6 @@ export async function resolveGatewayProbeSnapshot(params: {
           probeGateway({
             url: gatewayConnection.url,
             auth: gatewayProbeAuthResolution.auth,
-            preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",
           }),

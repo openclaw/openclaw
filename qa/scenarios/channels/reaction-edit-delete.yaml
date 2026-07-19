@@ -21,6 +21,7 @@ scenario:
   execution:
     kind: flow
     summary: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
+    channel: qa-channel
     config:
       target: "channel:qa-room"
       seedText: "seed message"
@@ -45,6 +46,8 @@ flow:
                 ref: env
               action: react
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
                 emoji:
@@ -55,6 +58,8 @@ flow:
                 ref: env
               action: edit
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
                 text:
@@ -65,6 +70,8 @@ flow:
                 ref: env
               action: delete
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
         - call: state.readMessage

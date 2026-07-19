@@ -4,14 +4,29 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
+import {
+  claimRecoveryEntry as claimSharedRecoveryEntry,
+  computeBackoffMs,
+  createRecoveryReplayPacer,
+  getErrnoCode,
+  releaseRecoveryEntry as releaseSharedRecoveryEntry,
+} from "./delivery-recovery.shared.js";
 import { formatErrorMessage } from "./errors.js";
 import {
-  ackSessionDelivery,
+  completeSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
+  SessionDeliveryAcknowledgementFinalizeError,
+  SessionDeliveryAttemptStartError,
+  SessionDeliveryDeadLetteredError,
+  SessionDeliveryDeferredError,
+  SessionDeliveryRetryChargedError,
+  SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
+  type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-storage.js";
 
 // Session delivery recovery replays persisted messages after crashes while
@@ -23,7 +38,14 @@ type SessionDeliveryRecoverySummary = {
   deferredBackoff: number;
 };
 
-type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+export type DeliverSessionDeliveryFn = (
+  entry: QueuedSessionDelivery,
+  context?: { stateDir?: string },
+) => Promise<void>;
+export type SettleSessionDeliveryFn = (
+  entry: QueuedSessionDelivery,
+  outcome: SessionDeliverySettledOutcome,
+) => Promise<void> | void;
 
 export interface SessionDeliveryRecoveryLogger {
   info(msg: string): void;
@@ -38,14 +60,57 @@ interface PendingSessionDeliveryDrainDecision {
 
 const MAX_SESSION_DELIVERY_RETRIES = 5;
 
-const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+const recoveryReplayPacer = createRecoveryReplayPacer();
 
-function getErrnoCode(err: unknown): string | null {
-  return err && typeof err === "object" && "code" in err
-    ? String((err as { code?: unknown }).code)
-    : null;
+async function notifySessionDeliverySettled(params: {
+  entry: QueuedSessionDelivery;
+  log: SessionDeliveryRecoveryLogger;
+  onSettled?: SettleSessionDeliveryFn;
+  outcome: SessionDeliverySettledOutcome;
+}): Promise<boolean> {
+  try {
+    await params.onSettled?.(params.entry, params.outcome);
+    return true;
+  } catch (error) {
+    params.log.error(
+      `session delivery: settled callback failed for ${params.entry.id}: ${String(error)}`,
+    );
+    return false;
+  }
+}
+
+async function finalizeSessionDeliverySettlement(params: {
+  entry: QueuedSessionDelivery;
+  log: SessionDeliveryRecoveryLogger;
+  onSettled?: SettleSessionDeliveryFn;
+  outcome: SessionDeliverySettledOutcome;
+  stateDir?: string;
+}): Promise<boolean> {
+  const callbackSettled = await notifySessionDeliverySettled(params);
+  if (!callbackSettled) {
+    return false;
+  }
+  try {
+    if (params.outcome === "recovered") {
+      await completeSessionDelivery(params.entry.id, params.stateDir);
+    } else {
+      await moveSessionDeliveryToFailed(params.entry.id, params.stateDir);
+    }
+    return true;
+  } catch (error) {
+    params.log.error(
+      `session delivery: ${params.outcome} finalization failed for ${params.entry.id}: ${String(error)}`,
+    );
+    return false;
+  }
+}
+
+function resolvePendingSettlementOutcome(
+  entry: QueuedSessionDelivery,
+): SessionDeliverySettledOutcome | undefined {
+  return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
 }
 
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
@@ -57,27 +122,16 @@ function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   };
 }
 
-function claimRecoveryEntry(entryId: string): boolean {
-  if (entriesInProgress.has(entryId)) {
-    return false;
-  }
-  entriesInProgress.add(entryId);
-  return true;
-}
-
-function releaseRecoveryEntry(entryId: string): void {
-  entriesInProgress.delete(entryId);
-}
-
-function computeSessionDeliveryBackoffMs(retryCount: number): number {
-  if (retryCount <= 0) {
-    return 0;
-  }
-  return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
-}
-
 function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
   return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
+}
+
+function canReconcileStartedAgentAttemptAtRetryLimit(entry: QueuedSessionDelivery): boolean {
+  return (
+    entry.kind === "agentTurn" &&
+    entry.deliveryStartedAt !== undefined &&
+    entry.retryCount === resolveSessionDeliveryMaxRetries(entry)
+  );
 }
 
 function resolveSessionDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
@@ -88,11 +142,14 @@ function resolveSessionDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefi
   return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
 }
 
-export function isSessionDeliveryEligibleForRetry(
+function isSessionDeliveryEligibleForRetry(
   entry: QueuedSessionDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  const backoff = computeSessionDeliveryBackoffMs(entry.retryCount);
+  if (entry.availableAt && now < entry.availableAt) {
+    return { eligible: false, remainingBackoffMs: entry.availableAt - now };
+  }
+  const backoff = computeBackoffMs(entry.retryCount);
   if (backoff <= 0) {
     return { eligible: true };
   }
@@ -115,20 +172,49 @@ async function drainQueuedEntry(opts: {
   entry: QueuedSessionDelivery;
   deliver: DeliverSessionDeliveryFn;
   stateDir?: string;
-  onRecovered?: (entry: QueuedSessionDelivery) => void;
   onFailed?: (entry: QueuedSessionDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "deferred" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
   try {
-    await opts.deliver(entry);
-    await ackSessionDelivery(entry.id, opts.stateDir);
-    opts.onRecovered?.(entry);
+    const pendingOutcome = resolvePendingSettlementOutcome(entry);
+    if (pendingOutcome) {
+      return pendingOutcome;
+    }
+    await opts.deliver(entry, { stateDir: opts.stateDir });
+    // Keep route/session metadata pending until owner cleanup succeeds. Recovery
+    // sees this marker and finalizes without replaying the external side effect.
+    await markSessionDeliverySettlement(entry, "recovered", opts.stateDir);
     return "recovered";
   } catch (err) {
+    if (err instanceof SessionDeliveryDeadLetteredError) {
+      try {
+        await markSessionDeliverySettlement(entry, "moved-to-failed", opts.stateDir);
+      } catch (markError) {
+        if (markError instanceof SessionDeliveryAcknowledgementFinalizeError) {
+          return "deferred";
+        }
+        throw markError;
+      }
+      return "moved-to-failed";
+    }
+    if (err instanceof SessionDeliveryDeferredError) {
+      return "deferred";
+    }
+    if (err instanceof SessionDeliveryAcknowledgementFinalizeError) {
+      return "deferred";
+    }
+    if (err instanceof SessionDeliveryAttemptStartError) {
+      return "deferred";
+    }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
+    if (err instanceof SessionDeliveryRetryChargedError) {
+      return "failed";
+    }
     try {
-      await failSessionDelivery(entry.id, errMsg, opts.stateDir);
+      await failSessionDelivery(entry.id, errMsg, opts.stateDir, {
+        releaseAttemptOwnership: err instanceof SessionDeliverySafeRetryError,
+      });
       return "failed";
     } catch (failErr) {
       if (getErrnoCode(failErr) === "ENOENT") {
@@ -146,6 +232,7 @@ export async function drainPendingSessionDeliveries(opts: {
   log: SessionDeliveryRecoveryLogger;
   stateDir?: string;
   deliver: DeliverSessionDeliveryFn;
+  onSettled?: SettleSessionDeliveryFn;
   selectEntry: (entry: QueuedSessionDelivery, now: number) => PendingSessionDeliveryDrainDecision;
 }): Promise<void> {
   if (drainInProgress.get(opts.drainKey)) {
@@ -160,7 +247,7 @@ export async function drainPendingSessionDeliveries(opts: {
       .toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
 
     for (const entry of matchingEntries) {
-      if (!claimRecoveryEntry(entry.id)) {
+      if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
         opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
         continue;
       }
@@ -174,21 +261,29 @@ export async function drainPendingSessionDeliveries(opts: {
         if (!currentDecision.match) {
           continue;
         }
-        if (currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)) {
-          try {
-            await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
-          } catch (err) {
-            if (getErrnoCode(err) !== "ENOENT") {
-              throw err;
-            }
+        const pendingSettlementOutcome = resolvePendingSettlementOutcome(currentEntry);
+        if (
+          !pendingSettlementOutcome &&
+          !canReconcileStartedAgentAttemptAtRetryLimit(currentEntry) &&
+          currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
+        ) {
+          await markSessionDeliverySettlement(currentEntry, "moved-to-failed", opts.stateDir);
+          const finalized = await finalizeSessionDeliverySettlement({
+            entry: currentEntry,
+            log: opts.log,
+            onSettled: opts.onSettled,
+            outcome: "moved-to-failed",
+            stateDir: opts.stateDir,
+          });
+          if (finalized) {
+            opts.log.warn(
+              `${opts.logLabel}: entry ${currentEntry.id} exceeded max retries and was moved to failed`,
+            );
           }
-          opts.log.warn(
-            `${opts.logLabel}: entry ${currentEntry.id} exceeded max retries and was moved to failed/`,
-          );
           continue;
         }
 
-        if (!currentDecision.bypassBackoff) {
+        if (!pendingSettlementOutcome && !currentDecision.bypassBackoff) {
           const retryEligibility = isSessionDeliveryEligibleForRetry(currentEntry, Date.now());
           if (!retryEligibility.eligible) {
             opts.log.info(
@@ -198,7 +293,7 @@ export async function drainPendingSessionDeliveries(opts: {
           }
         }
 
-        await drainQueuedEntry({
+        const result = await drainQueuedEntry({
           entry: currentEntry,
           deliver: opts.deliver,
           stateDir: opts.stateDir,
@@ -206,8 +301,17 @@ export async function drainPendingSessionDeliveries(opts: {
             opts.log.warn(`${opts.logLabel}: retry failed for entry ${failedEntry.id}: ${errMsg}`);
           },
         });
+        if (result === "recovered" || result === "moved-to-failed") {
+          await finalizeSessionDeliverySettlement({
+            entry: currentEntry,
+            log: opts.log,
+            onSettled: opts.onSettled,
+            outcome: result,
+            stateDir: opts.stateDir,
+          });
+        }
       } finally {
-        releaseRecoveryEntry(entry.id);
+        releaseSharedRecoveryEntry(entriesInProgress, entry.id);
       }
     }
   } finally {
@@ -219,6 +323,7 @@ export async function drainPendingSessionDeliveries(opts: {
 export async function recoverPendingSessionDeliveries(opts: {
   deliver: DeliverSessionDeliveryFn;
   log: SessionDeliveryRecoveryLogger;
+  onSettled?: SettleSessionDeliveryFn;
   stateDir?: string;
   maxRecoveryMs?: number;
   maxEnqueuedAt?: number;
@@ -239,7 +344,7 @@ export async function recoverPendingSessionDeliveries(opts: {
       opts.log.warn("Session delivery recovery time budget exceeded — remaining entries deferred");
       break;
     }
-    if (!claimRecoveryEntry(entry.id)) {
+    if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
       continue;
     }
 
@@ -251,41 +356,64 @@ export async function recoverPendingSessionDeliveries(opts: {
       if (opts.maxEnqueuedAt != null && currentEntry.enqueuedAt > opts.maxEnqueuedAt) {
         continue;
       }
-      if (currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)) {
+      const pendingSettlementOutcome = resolvePendingSettlementOutcome(currentEntry);
+      if (
+        !pendingSettlementOutcome &&
+        !canReconcileStartedAgentAttemptAtRetryLimit(currentEntry) &&
+        currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
+      ) {
         summary.skippedMaxRetries += 1;
-        try {
-          await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
-        } catch (err) {
-          if (getErrnoCode(err) !== "ENOENT") {
-            throw err;
-          }
-        }
+        await markSessionDeliverySettlement(currentEntry, "moved-to-failed", opts.stateDir);
+        await finalizeSessionDeliverySettlement({
+          entry: currentEntry,
+          log: opts.log,
+          onSettled: opts.onSettled,
+          outcome: "moved-to-failed",
+          stateDir: opts.stateDir,
+        });
         continue;
       }
 
-      const retryEligibility = isSessionDeliveryEligibleForRetry(currentEntry, Date.now());
-      if (!retryEligibility.eligible) {
-        summary.deferredBackoff += 1;
-        continue;
+      if (!pendingSettlementOutcome) {
+        const retryEligibility = isSessionDeliveryEligibleForRetry(currentEntry, Date.now());
+        if (!retryEligibility.eligible) {
+          summary.deferredBackoff += 1;
+          continue;
+        }
+
+        const paceResult = await recoveryReplayPacer.wait(deadline);
+        if (paceResult === "deadline-exceeded") {
+          opts.log.warn(
+            "Session delivery recovery time budget exceeded — remaining entries deferred",
+          );
+          break;
+        }
       }
 
       const result = await drainQueuedEntry({
         entry: currentEntry,
         deliver: opts.deliver,
         stateDir: opts.stateDir,
-        onRecovered: () => {
-          summary.recovered += 1;
-        },
         onFailed: (_failedEntry, errMsg) => {
           summary.failed += 1;
           opts.log.warn(`Session delivery retry failed: ${errMsg}`);
         },
       });
-      if (result === "recovered") {
-        opts.log.info(`Recovered session delivery ${currentEntry.id}`);
+      if (result === "recovered" || result === "moved-to-failed") {
+        const finalized = await finalizeSessionDeliverySettlement({
+          entry: currentEntry,
+          log: opts.log,
+          onSettled: opts.onSettled,
+          outcome: result,
+          stateDir: opts.stateDir,
+        });
+        if (finalized && result === "recovered") {
+          summary.recovered += 1;
+          opts.log.info(`Recovered session delivery ${currentEntry.id}`);
+        }
       }
     } finally {
-      releaseRecoveryEntry(entry.id);
+      releaseSharedRecoveryEntry(entriesInProgress, entry.id);
     }
   }
 

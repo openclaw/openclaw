@@ -12,6 +12,7 @@ const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
+const runFfprobeMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const imageCreateMock = vi.hoisted(() => vi.fn());
@@ -49,11 +50,11 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   return {
     ...actual,
     runFfmpeg: runFfmpegMock,
+    runFfprobe: runFfprobeMock,
   };
 });
 
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
-let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
@@ -116,12 +117,8 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
-    ({
-      saveMessageResourceFeishu,
-      sanitizeFileNameForUpload,
-      sendMediaFeishu,
-      shouldSuppressFeishuTextForVoiceMedia,
-    } = await import("./media.js"));
+    ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
+      await import("./media.js"));
   });
 
   afterAll(() => {
@@ -189,6 +186,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
     });
+    runFfprobeMock.mockResolvedValue("1.234\n");
   });
 
   it("suppresses reply text only for voice-intent or native voice media", () => {
@@ -210,7 +208,32 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).toBe(false);
   });
 
+  it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "Hello world",
+          visibleTextAlreadyDelivered: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("uses msg_type=media for mp4 video", async () => {
+    runFfprobeMock.mockResolvedValueOnce("4.2\n");
+
     await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
@@ -219,6 +242,17 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(4200);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.slice(0, -1)).toEqual([
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "csv=p=0",
+    ]);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
@@ -234,6 +268,53 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
   });
 
+  it("includes audio duration in the Feishu file upload", async () => {
+    const audio = Buffer.from("opus");
+    runFfprobeMock.mockResolvedValueOnce("2.345\n");
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: audio,
+      fileName: "reply.ogg",
+    });
+
+    expect(runFfprobeMock).toHaveBeenCalledTimes(1);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.slice(0, -1)).toEqual([
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "csv=p=0",
+    ]);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.ogg$/);
+    expect(mockCallArg(runFfprobeMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(2345);
+    const messageData = callData<{ content?: string; msg_type?: string }>(messageCreateMock);
+    expect(messageData.msg_type).toBe("audio");
+    expect(JSON.parse(messageData.content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+    });
+  });
+
+  it("omits audio duration when probing fails", async () => {
+    runFfprobeMock.mockRejectedValueOnce(new Error("ffprobe missing"));
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("opus"),
+      fileName: "reply.ogg",
+    });
+
+    expect(callData<{ duration?: number }>(fileCreateMock)).not.toHaveProperty("duration");
+    expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual({
+      file_key: "file_key_1",
+    });
+  });
+
   it("uses msg_type=file for documents", async () => {
     await sendMediaFeishu({
       cfg: emptyConfig,
@@ -247,6 +328,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("uses msg_type=media for remote mp4 content even when the filename is generic", async () => {
+    runFfprobeMock.mockResolvedValueOnce("6.789\n");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("remote-video"),
       fileName: "download",
@@ -261,6 +343,9 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(6789);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
@@ -583,50 +668,6 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 });
 
-describe("sanitizeFileNameForUpload", () => {
-  it("returns ASCII filenames unchanged", () => {
-    expect(sanitizeFileNameForUpload("report.pdf")).toBe("report.pdf");
-    expect(sanitizeFileNameForUpload("my-file_v2.txt")).toBe("my-file_v2.txt");
-  });
-
-  it("preserves Chinese characters", () => {
-    expect(sanitizeFileNameForUpload("测试文件.md")).toBe("测试文件.md");
-    expect(sanitizeFileNameForUpload("武汉15座山登山信息汇总.csv")).toBe(
-      "武汉15座山登山信息汇总.csv",
-    );
-  });
-
-  it("preserves em-dash and full-width brackets", () => {
-    expect(sanitizeFileNameForUpload("文件—说明（v2）.pdf")).toBe("文件—说明（v2）.pdf");
-  });
-
-  it("preserves single quotes and parentheses", () => {
-    expect(sanitizeFileNameForUpload("文件'(test).txt")).toBe("文件'(test).txt");
-  });
-
-  it("preserves filenames without extension", () => {
-    expect(sanitizeFileNameForUpload("测试文件")).toBe("测试文件");
-  });
-
-  it("preserves mixed ASCII and non-ASCII", () => {
-    expect(sanitizeFileNameForUpload("Report_报告_2026.xlsx")).toBe("Report_报告_2026.xlsx");
-  });
-
-  it("preserves emoji filenames", () => {
-    expect(sanitizeFileNameForUpload("report_😀.txt")).toBe("report_😀.txt");
-  });
-
-  it("strips control characters", () => {
-    expect(sanitizeFileNameForUpload("bad\x00file.txt")).toBe("bad_file.txt");
-    expect(sanitizeFileNameForUpload("inject\r\nheader.txt")).toBe("inject__header.txt");
-  });
-
-  it("strips quotes and backslashes to prevent header injection", () => {
-    expect(sanitizeFileNameForUpload('file"name.txt')).toBe("file_name.txt");
-    expect(sanitizeFileNameForUpload("file\\name.txt")).toBe("file_name.txt");
-  });
-});
-
 describe("saveMessageResourceFeishu", () => {
   function httpStatusError(status: number): Error & { response: { status: number } } {
     return Object.assign(new Error(`Request failed with status code ${status}`), {
@@ -909,6 +950,56 @@ describe("saveMessageResourceFeishu", () => {
         Buffer.from([0xff, 0xd8, 0xff, 0x00]),
       );
     });
+  });
+
+  it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
+    vi.useFakeTimers();
+    let markReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const stalled = new Readable({
+      read() {
+        markReadStarted?.();
+      },
+    });
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => stalled,
+      headers: { "content-type": "image/jpeg" },
+    });
+
+    try {
+      let settled = false;
+      const download = withIsolatedHome(() =>
+        saveMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: "om_stalled_stream",
+          fileKey: "img_key_stalled",
+          type: "image",
+          maxBytes: 1024,
+        }),
+      );
+      void download.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await readStarted;
+      await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(download).rejects.toMatchObject({
+        name: "FeishuInboundMediaTimeoutError",
+        chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+      });
+      expect(stalled.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recovers CJK filenames from the inbound message payload fallback", async () => {

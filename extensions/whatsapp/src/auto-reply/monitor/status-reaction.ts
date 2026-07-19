@@ -6,17 +6,17 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
+import { resolveReactionParticipant } from "./reaction-participant.js";
 
 export type { StatusReactionController };
 
-export type WhatsAppStatusReactionParams = {
+type WhatsAppStatusReactionParams = {
   cfg: OpenClawConfig;
   msg: AdmittedWebInboundMessage;
   agentId: string;
@@ -76,7 +76,7 @@ export async function createWhatsAppStatusReactionController(
     isGroup,
     directEnabled,
     groupMode,
-    wasMentioned: params.msg.wasMentioned === true,
+    wasMentioned: (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
     groupActivated: activation === "always",
   });
 
@@ -84,11 +84,11 @@ export async function createWhatsAppStatusReactionController(
     return null;
   }
 
-  const sender = getSenderIdentity(params.msg);
+  const participant = resolveReactionParticipant(params.msg);
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(participant ? { participant } : {}),
     accountId,
     cfg: params.cfg,
   };
@@ -107,7 +107,6 @@ export async function createWhatsAppStatusReactionController(
     },
     initialEmoji: ackEmoji,
     emojis: statusReactionsConfig.emojis,
-    timing: statusReactionsConfig.timing,
     onError: (err) => {
       logVerbose(`WhatsApp status-reaction error for chat ${chatId}/${msgId}: ${String(err)}`);
     },

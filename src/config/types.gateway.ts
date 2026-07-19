@@ -62,14 +62,20 @@ export type TalkRealtimeConfig = {
   speakerVoice?: string;
   /** Provider speaker voice id override for realtime sessions. */
   speakerVoiceId?: string;
-  /** @deprecated Use speakerVoice. */
-  voice?: string;
   /** Additional system instructions appended to realtime Talk sessions. */
   instructions?: string;
   /** Realtime execution mode. */
   mode?: "realtime" | "stt-tts" | "transcription";
   /** Byte/session transport. */
   transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  /** Voice activity detection threshold from 0 (most sensitive) to 1 (least sensitive). */
+  vadThreshold?: number;
+  /** Milliseconds of silence before the current user turn is committed. */
+  silenceDurationMs?: number;
+  /** Milliseconds of audio retained before detected speech begins. */
+  prefixPaddingMs?: number;
+  /** Provider-specific realtime reasoning effort. */
+  reasoningEffort?: string;
   /** Tool/agent strategy for realtime sessions. */
   brain?: "agent-consult" | "direct-tools" | "none";
   /** How Gateway relay handles final user transcripts when the provider skips a consult. */
@@ -99,7 +105,8 @@ export type TalkConfig = {
     | "high"
     | "xhigh"
     | "adaptive"
-    | "max";
+    | "max"
+    | "ultra";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
   /** BCP 47 locale id used for Talk speech recognition on device nodes. */
@@ -122,6 +129,12 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /**
+   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
+   * When enabled, chat.toolTitles generates short titles through standard
+   * utility-model routing and caches them per agent.
+   */
+  toolTitles?: boolean;
   /**
    * Embed sandbox mode for hosted Control UI previews.
    * - strict: no script execution inside embeds
@@ -185,6 +198,20 @@ export type GatewayTrustedProxyConfig = {
    * trust boundary and direct Gateway access is otherwise locked down.
    */
   allowLoopback?: boolean;
+  /**
+   * Automatically approve new browser device identities after trusted-proxy
+   * authentication. Disabled by default; existing-device upgrades stay manual.
+   */
+  deviceAutoApprove?: {
+    /** Enable automatic approval for new browser devices. @default false */
+    enabled?: boolean;
+    /**
+     * Maximum operator scopes granted by automatic approval. operator.admin
+     * is intentionally forbidden. @default operator.read, operator.write,
+     * operator.approvals
+     */
+    scopes?: string[];
+  };
 };
 
 export type GatewayAuthConfig = {
@@ -236,8 +263,6 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
-  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
-  enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
@@ -254,6 +279,34 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
+  /** macOS SSH host-key policy. Defaults to strict; openssh delegates to effective SSH config. */
+  sshHostKeyPolicy?: "strict" | "openssh";
+};
+
+/**
+ * Operator terminal surface served to Control UI and mobile clients.
+ *
+ * The terminal opens a PTY-backed shell on the gateway host, gated to
+ * admin-scope operator sessions. It starts in the target agent's workspace; if
+ * that agent is fully sandboxed (`sandbox.mode: "all"`) the terminal is refused
+ * rather than handed an unconfined host shell (workspace isolation is
+ * fail-closed). Under "non-main" the agent's main session runs on the host, so a
+ * host terminal is allowed.
+ */
+export type GatewayTerminalConfig = {
+  /** Master switch for the operator terminal. Default: false. */
+  enabled?: boolean;
+  /**
+   * Shell executable to launch. When unset the host login shell is used
+   * ($SHELL on Unix, %ComSpec% on Windows).
+   */
+  shell?: string;
+  /**
+   * How long (seconds) a session survives after its connection drops, staying
+   * reattachable via terminal.attach. 0 kills sessions on disconnect
+   * immediately. Default: 300.
+   */
+  detachedSessionTimeoutSeconds?: number;
 };
 
 /** Gateway config reload strategy for managed installs. */
@@ -262,16 +315,6 @@ export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */
   mode?: GatewayReloadMode;
-  /** Debounce window for config reloads (ms). Default: 300. */
-  debounceMs?: number;
-  /**
-   * Optional maximum time (ms) to wait for in-flight operations to complete
-   * before forcing a restart. Absent uses the gateway's default bounded wait;
-   * 0 waits indefinitely and logs periodic still-pending warnings.
-   * Lower positive values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/65485
-   */
-  deferralTimeoutMs?: number;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -280,21 +323,6 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/chat/completions`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
-  /**
-   * Max number of `image_url` parts processed from the latest user message.
-   * Default: 8.
-   */
-  maxImageParts?: number;
-  /**
-   * Max cumulative decoded image bytes for all `image_url` parts in one request.
-   * Default: 20MB.
-   */
-  maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
 };
@@ -323,11 +351,6 @@ export type GatewayHttpResponsesConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/responses`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
   /**
    * Max number of URL-based `input_file` + `input_image` parts per request.
    * Default: 8.
@@ -436,6 +459,26 @@ export type GatewayNodePairingConfig = {
    * Default: unset/disabled.
    */
   autoApproveCidrs?: string[];
+  /**
+   * SSH-verified auto-approval for first-time node-role pairing (default: enabled).
+   * The gateway connects back to the pairing host over SSH (BatchMode, strict
+   * host keys) and approves only when the remote `openclaw node identity`
+   * output matches the pending request's device key. Set false to disable SSH
+   * verification; this is independent of autoApproveCidrs, so unset that too for
+   * manual-only node pairing. The object form tunes the probe:
+   * - user: remote user (default: gateway process user)
+   * - identity: SSH identity file (default: standard SSH resolution)
+   * - timeoutMs: probe timeout (default: 7000)
+   * - cidrs: CIDRs/IPs eligible for probing (default: private/CGNAT ranges)
+   */
+  sshVerify?:
+    | boolean
+    | {
+        user?: string;
+        identity?: string;
+        timeoutMs?: number;
+        cidrs?: string[];
+      };
 };
 
 export type GatewayNodesConfig = {
@@ -448,6 +491,16 @@ export type GatewayNodesConfig = {
   };
   /** Pairing policy for node-role gateway clients. */
   pairing?: GatewayNodePairingConfig;
+  /** Controls whether paired nodes may publish agent-visible plugin tools (default: true). */
+  pluginTools?: {
+    /** Accept node-published plugin tool descriptors (default: true). */
+    enabled?: boolean;
+  };
+  /** Controls whether paired nodes may publish agent-visible skills (default: true). */
+  skills?: {
+    /** Accept node-published skill descriptors (default: true). */
+    enabled?: boolean;
+  };
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
@@ -474,8 +527,8 @@ export type GatewayConfig = {
    * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
    * - lan: 0.0.0.0 (all interfaces, no fallback, current BYOH path is IPv4-only)
    * - loopback: 127.0.0.1 (local-only)
-   * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
-   * - custom: User-specified IPv4 address, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * - tailnet: Tailnet IPv4 plus 127.0.0.1 if available, else loopback only
+   * - custom: User-specified IPv4 address (requires customBindHost); specific IPv4s also bind 127.0.0.1
    * IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy.
    * Default: loopback (127.0.0.1).
    */
@@ -483,6 +536,7 @@ export type GatewayConfig = {
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
+  terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
@@ -504,27 +558,4 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
-  /**
-   * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
-   * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.
-   */
-  handshakeTimeoutMs?: number;
-  /**
-   * Channel health monitor interval in minutes.
-   * Periodically checks channel health and restarts unhealthy channels.
-   * Set to 0 to disable. Default: 5.
-   */
-  channelHealthCheckMinutes?: number;
-  /**
-   * Stale transport-activity threshold in minutes for the channel health monitor.
-   * A connected channel that reports no provider-proven transport activity for
-   * this duration is treated as a stale socket and restarted. Default: 30.
-   */
-  channelStaleEventThresholdMinutes?: number;
-  /**
-   * Maximum number of health-monitor-initiated channel restarts per hour.
-   * Once this limit is reached, the monitor skips further restarts until
-   * the rolling window expires. Default: 10.
-   */
-  channelMaxRestartsPerHour?: number;
 };

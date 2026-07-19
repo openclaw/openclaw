@@ -6,6 +6,7 @@ import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
 import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
 import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
@@ -17,11 +18,6 @@ type CommandResult = {
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const tempDirs: string[] = [];
-const WORKSPACE_PACKAGE_NAMES = [
-  "@openclaw/gateway-protocol",
-  "@openclaw/gateway-client",
-  "@openclaw/sdk",
-] as const;
 
 type PackageManifest = {
   name: string;
@@ -34,6 +30,14 @@ type PackedPackage = {
   manifest: PackageManifest;
   tarball: string;
 };
+
+function resolveWorkspacePackageRoot(repoRoot: string, packageName: string): string {
+  const prefix = "@openclaw/";
+  if (!packageName.startsWith(prefix)) {
+    throw new Error(`unsupported workspace package name: ${packageName}`);
+  }
+  return path.join(repoRoot, "packages", packageName.slice(prefix.length));
+}
 
 function runCommand(
   command: string,
@@ -162,6 +166,24 @@ function runPnpmCommand(
   });
 }
 
+function runNpmCommand(
+  args: string[],
+  options: { cwd: string; timeoutMs?: number },
+): Promise<CommandResult> {
+  const env = createCommandEnv();
+  const runner = resolveNpmRunner({
+    env,
+    npmArgs: args,
+  });
+  return runCommand(runner.command, runner.args, {
+    cwd: options.cwd,
+    env: runner.env ?? env,
+    shell: runner.shell,
+    timeoutMs: options.timeoutMs,
+    windowsVerbatimArguments: runner.windowsVerbatimArguments,
+  });
+}
+
 function normalizeWorkspaceDependencies(
   dependencies: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -171,18 +193,55 @@ function normalizeWorkspaceDependencies(
   const normalized: Record<string, string> = {};
   for (const [name, spec] of Object.entries(dependencies)) {
     normalized[name] =
-      name.startsWith("@openclaw/") && spec === "workspace:*" ? "0.0.0-private" : spec;
+      name.startsWith("@openclaw/") && spec.startsWith("workspace:") ? "0.0.0-private" : spec;
   }
   return normalized;
 }
 
-async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
+async function readRawPackageManifest(packageRoot: string): Promise<PackageManifest> {
   const packageJson = await fs.readFile(path.join(packageRoot, "package.json"), "utf8");
-  const manifest = JSON.parse(packageJson) as PackageManifest;
+  return JSON.parse(packageJson) as PackageManifest;
+}
+
+async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
+  const manifest = await readRawPackageManifest(packageRoot);
   return {
     ...manifest,
     dependencies: normalizeWorkspaceDependencies(manifest.dependencies),
   };
+}
+
+async function collectWorkspacePackageRoots(params: {
+  repoRoot: string;
+  entryRoot: string;
+}): Promise<string[]> {
+  const orderedRoots: string[] = [];
+  const visitedNames = new Set<string>();
+
+  async function visit(packageRoot: string, expectedName?: string): Promise<void> {
+    const manifest = await readRawPackageManifest(packageRoot);
+    if (expectedName && manifest.name !== expectedName) {
+      throw new Error(
+        `workspace dependency ${expectedName} resolved to unexpected package ${manifest.name}`,
+      );
+    }
+    if (visitedNames.has(manifest.name)) {
+      return;
+    }
+    visitedNames.add(manifest.name);
+
+    const workspaceDependencies = Object.entries(manifest.dependencies ?? {})
+      .filter(([, spec]) => spec.startsWith("workspace:"))
+      .map(([name]) => name)
+      .toSorted();
+    for (const dependencyName of workspaceDependencies) {
+      await visit(resolveWorkspacePackageRoot(params.repoRoot, dependencyName), dependencyName);
+    }
+    orderedRoots.push(packageRoot);
+  }
+
+  await visit(params.entryRoot);
+  return orderedRoots;
 }
 
 function tarballFileName(manifest: PackageManifest): string {
@@ -198,7 +257,7 @@ async function createPackStagingRoot(
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
   await fs.mkdir(stagingRoot, { recursive: true });
   await fs.writeFile(path.join(stagingRoot, "package.json"), JSON.stringify(manifest, null, 2));
-  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const files: string[] = Array.isArray(manifest.files) ? (manifest.files as string[]) : [];
   for (const entry of files) {
     if (typeof entry !== "string") {
       continue;
@@ -324,23 +383,23 @@ describe("OpenClaw SDK package e2e", () => {
 
   it("packs and imports from an external temp consumer", async () => {
     const repoRoot = process.cwd();
-    const packageRoots = [
-      path.join(repoRoot, "packages", "gateway-protocol"),
-      path.join(repoRoot, "packages", "gateway-client"),
-      path.join(repoRoot, "packages", "sdk"),
-    ];
+    const packageRoots = await collectWorkspacePackageRoots({
+      repoRoot,
+      entryRoot: path.join(repoRoot, "packages", "sdk"),
+    });
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-consumer-"));
     tempDirs.push(tempDir);
 
-    for (const packageName of WORKSPACE_PACKAGE_NAMES) {
-      await runPnpmCommand(["--filter", packageName, "build"], {
+    for (const packageRoot of packageRoots) {
+      const manifest = await readRawPackageManifest(packageRoot);
+      await runPnpmCommand(["--filter", manifest.name, "build"], {
         cwd: repoRoot,
         timeoutMs: 180_000,
       });
     }
     for (const packageRoot of packageRoots) {
       const stagingRoot = await createPackStagingRoot(packageRoot, tempDir);
-      await runCommand("npm", ["pack", "--ignore-scripts", "--pack-destination", tempDir], {
+      await runNpmCommand(["pack", "--ignore-scripts", "--pack-destination", tempDir], {
         cwd: stagingRoot,
       });
     }
@@ -363,13 +422,9 @@ describe("OpenClaw SDK package e2e", () => {
     );
     await fs.writeFile(path.join(tempDir, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
     try {
-      await runCommand(
-        "npm",
-        ["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball],
-        {
-          cwd: tempDir,
-        },
-      );
+      await runNpmCommand(["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball], {
+        cwd: tempDir,
+      });
     } finally {
       await registry.close();
     }

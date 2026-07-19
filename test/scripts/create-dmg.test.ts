@@ -150,6 +150,12 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
+function readPngDimensions(imagePath: string): { width: number; height: number } {
+  const data = readFileSync(imagePath);
+  expect(data.subarray(1, 4).toString("ascii")).toBe("PNG");
+  return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -193,6 +199,37 @@ describe("create-dmg plist validation", () => {
     expect(script).not.toContain("/tmp/openclaw-dmg-limits.txt");
     expect(script).not.toContain('"/Volumes/$DMG_VOLUME_NAME"');
     expect(script).not.toContain('tell application "Finder" to close every window');
+  });
+
+  it("keeps the larger Finder layout aligned with the packaged backgrounds", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    expect(script).toContain('DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"');
+    expect(script).toContain('DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"');
+    expect(script).toContain('DMG_APP_POS="${DMG_APP_POS:-170 305}"');
+    expect(script).toContain('DMG_APPS_POS="${DMG_APPS_POS:-510 305}"');
+    expect(readPngDimensions("apps/macos/Packaging/dmg-background-small.png")).toEqual({
+      width: 680,
+      height: 430,
+    });
+    expect(readPngDimensions("apps/macos/Packaging/dmg-background.png")).toEqual({
+      width: 1360,
+      height: 860,
+    });
+  });
+
+  it("fails malformed DMG resize slack before creating images", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const validationBlock = script.slice(
+      script.indexOf("require_integer_list()"),
+      script.indexOf("to_applescript_list4()"),
+    );
+
+    expect(validationBlock).toContain("require_nonnegative_integer()");
+    expect(validationBlock).toContain(
+      'require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"',
+    );
+    expect(validationBlock).toContain("must be a finite non-negative integer");
   });
 
   it.runIf(process.platform === "darwin")(
@@ -263,6 +300,42 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(result.status).not.toBe(0);
     expect(readFileSync(output, "utf8")).toBe("previous output");
     expect(readFileSync(tools.hdiutilLog, "utf8")).not.toContain("detach");
+  });
+
+  it("fails before image creation when Finder layout values are malformed", () => {
+    const app = makeValidApp();
+    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+    tempDirs.push(outputDir);
+    const output = path.join(outputDir, "OpenClaw.dmg");
+    const tools = makeFakeDmgTools();
+
+    const result = runScript([app, output], {
+      ...tools.env,
+      DMG_WINDOW_BOUNDS: "400 nope 900 420",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("DMG_WINDOW_BOUNDS must contain only integer values");
+    expect(existsSync(output)).toBe(false);
+    expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
+  });
+
+  it("fails before image creation when Finder layout values span multiple lines", () => {
+    const app = makeValidApp();
+    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+    tempDirs.push(outputDir);
+    const output = path.join(outputDir, "OpenClaw.dmg");
+    const tools = makeFakeDmgTools();
+
+    const result = runScript([app, output], {
+      ...tools.env,
+      DMG_WINDOW_BOUNDS: "400 100 900 420\nnope",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("DMG_WINDOW_BOUNDS must be a single line");
+    expect(existsSync(output)).toBe(false);
+    expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
   });
 
   it("preserves an existing output when verification fails", () => {

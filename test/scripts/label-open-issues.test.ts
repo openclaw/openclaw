@@ -24,9 +24,11 @@ describe("label-open-issues helpers", () => {
     });
 
     expect(() => testing.parseArgs(["--model", "--dry-run"])).toThrow("Missing --model value");
+    expect(() => testing.parseArgs(["--model", "-h"])).toThrow("Missing --model value");
     expect(() => testing.parseArgs(["--limit", "--dry-run"])).toThrow(
       "Missing/invalid --limit value",
     );
+    expect(() => testing.parseArgs(["--limit", "-h"])).toThrow("Missing/invalid --limit value");
     expect(() => testing.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
   });
 
@@ -223,5 +225,42 @@ describe("label-open-issues helpers", () => {
     expect(() => testing.resolveOpenAITimeoutMs("slow")).toThrow(
       /OPENCLAW_LABEL_OPEN_ISSUES_OPENAI_TIMEOUT_MS must be an integer/u,
     );
+  });
+
+  it("does not split boundary emoji in model prompts", async () => {
+    let requestBody = "";
+    const response = new Response(
+      JSON.stringify({
+        output_text: JSON.stringify({
+          category: "bug",
+          isSupport: false,
+          isSkillOnly: false,
+        }),
+      }),
+      { status: 200 },
+    );
+
+    await testing.classifyItem(
+      {
+        ...labelItem,
+        body: `${"a".repeat(5999)}😀tail`,
+      },
+      "issue",
+      {
+        apiKey: "placeholder",
+        model: "test-model",
+        timeoutMs: 50,
+        fetchImpl: ((_url, init) => {
+          requestBody = String(init?.body ?? "");
+          return Promise.resolve(response);
+        }) as typeof fetch,
+      },
+    );
+
+    const payload = JSON.parse(requestBody) as { input: Array<{ content: string }> };
+    const prompt = payload.input[1]?.content ?? "";
+    expect(prompt).toContain(`${"a".repeat(5999)}\n\n[truncated]`);
+    expect(prompt).not.toContain("\uD83D");
+    expect(prompt).not.toContain("tail");
   });
 });

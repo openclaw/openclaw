@@ -28,6 +28,9 @@ vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
       cfg: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
     }) => {
+      if (params.channelId === "cache-channel") {
+        return Boolean(params.env?.CACHE_CHANNEL_TOKEN?.trim());
+      }
       if (params.channelId === "irc") {
         return Boolean(params.env?.IRC_HOST?.trim() && params.env?.IRC_NICK?.trim());
       }
@@ -509,24 +512,6 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
-  it("auto-enables an opt-in provider plugin when an explicit provider model is configured", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        agents: {
-          defaults: {
-            model: "codex/gpt-5.4",
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([{ id: "codex", channels: [], providers: ["codex"] }]),
-    });
-
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toBeUndefined();
-    expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
-  });
-
   it("auto-enables provider plugins referenced by media generation model fallbacks", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -974,6 +959,25 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("preserves official external plugin entries before installation", () => {
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      },
+      candidates: [],
+      env,
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw", "codex"]);
+    expect(result.changes).toContain("codex plugin config present, added to plugin allowlist.");
+  });
+
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {
@@ -1198,10 +1202,11 @@ describe("applyPluginAutoEnable core", () => {
   it("does not reuse same-turn auto-enable results after discovery mutates in place", () => {
     const config: OpenClawConfig = {};
     const mutableDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
-    const manifestRegistry = makeRegistry([{ id: "irc-plugin", channels: ["irc"] }]);
+    const manifestRegistry = makeRegistry([
+      { id: "cache-channel-plugin", channels: ["cache-channel"] },
+    ]);
     const configuredEnv = makeIsolatedEnv({
-      IRC_HOST: "irc.libera.chat",
-      IRC_NICK: "openclaw-bot",
+      CACHE_CHANNEL_TOKEN: "configured",
     });
 
     const first = applyPluginAutoEnable({
@@ -1211,7 +1216,10 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
     mutableDiscovery.candidates.push(
-      makeBundledChannelCandidate({ pluginId: "irc-plugin", channelId: "irc" }),
+      makeBundledChannelCandidate({
+        pluginId: "cache-channel-plugin",
+        channelId: "cache-channel",
+      }),
     );
     const second = applyPluginAutoEnable({
       config,
@@ -1220,8 +1228,8 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
 
-    expect(first.config.plugins?.entries?.["irc-plugin"]).toBeUndefined();
-    expect(second.config.plugins?.entries?.["irc-plugin"]?.enabled).toBe(true);
+    expect(first.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
+    expect(second.config.plugins?.entries?.["cache-channel-plugin"]?.enabled).toBe(true);
     expect(second).not.toBe(first);
   });
 
@@ -1353,3 +1361,4 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toStrictEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

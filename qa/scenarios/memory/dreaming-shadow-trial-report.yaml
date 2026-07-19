@@ -45,9 +45,15 @@ scenario:
           1. Read DREAMING_SHADOW_TRIAL_BRIEF.md.
           2. Read DREAMING_CANDIDATE_EVIDENCE.md.
           3. Write ./dreaming-shadow-trial-report.md.
-          4. Include: Candidate, Trial prompt, Baseline outcome, Candidate outcome, Verdict, Reason, Risk flags, Promotion action.
-          5. For this seeded evidence, Verdict must be helpful.
-          6. Promotion action must be report-only.
+          4. Include these exact field labels and seeded phrases:
+             Candidate: The user prefers release reports that include exact verification commands and remaining risk.
+             Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.
+             Baseline outcome: mentions tests passed but omits the exact command and remaining risk.
+             Candidate outcome: includes the exact verification command and calls out the remaining review risk.
+             Verdict: helpful
+             Reason: explains why the candidate improves the release reply.
+             Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.
+             Promotion action: report-only
         DREAMING_CANDIDATE_EVIDENCE.md: |-
           # Candidate evidence
 
@@ -59,7 +65,7 @@ scenario:
       prompt: |-
         Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first.
         Then write ./dreaming-shadow-trial-report.md as a report-only shadow trial.
-        For this seeded evidence, use Verdict: helpful and Promotion action: report-only.
+        The report must include the exact field labels and seeded phrases from the required report contract, including Verdict: helpful, Risk flags: no secret exposure, and Promotion action: report-only.
         Do not edit MEMORY.md and do not claim the candidate was promoted.
         Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.
       expectedReportAll:
@@ -114,9 +120,9 @@ flow:
           args:
             - ref: env
             - 60000
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -150,11 +156,14 @@ flow:
             expr: "String(memoryAfter) === config.seededMemory"
             message:
               expr: "`shadow trial modified durable memory instead of staying report-only: ${memoryAfter}`"
-        - call: waitForCondition
+        - call: waitForAgentHistoryReply
           saveAs: outbound
           args:
+            - ref: env
+            - expr: config.sessionKey
             - lambda:
-                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.safeMarker) && candidate.text.includes(config.reportName)).at(-1)"
+                params: [text]
+                expr: "text.includes(config.safeMarker) && text.includes(config.reportName)"
             - expr: liveTurnTimeoutMs(env, 30000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:
@@ -163,7 +172,7 @@ flow:
               expr: "`shadow trial reply overclaimed promotion: ${outbound.text}`"
         - set: shadowTrialDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(requestCountBefore).filter((request) => /dreaming shadow trial report check/i.test(String(request.allInputText ?? ''))) : []"
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => /dreaming shadow trial report check/i.test(String(request.allInputText ?? ''))) : []"
         - assert:
             expr: "!env.mock || shadowTrialDebugRequests.filter((request) => request.plannedToolName === 'read').length >= 2"
             message:

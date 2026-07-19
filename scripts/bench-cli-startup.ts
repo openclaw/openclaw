@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type CommandCase = {
@@ -105,10 +106,20 @@ type CliOptions = {
 const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
-const TIMEOUT_KILL_GRACE_MS = 1_000;
+const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
+const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+
+function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return DEFAULT_TIMEOUT_KILL_GRACE_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_TIMEOUT_KILL_GRACE_MS;
+}
 const VALUE_FLAGS = new Set([
   "--case",
   "--compare-baseline",
@@ -449,7 +460,7 @@ function parseFlagValue(flag: string): string | undefined {
     return undefined;
   }
   const value = process.argv[idx + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
@@ -462,19 +473,27 @@ function hasFlag(flag: string): boolean {
 function parseRepeatableFlag(flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < process.argv.length; i += 1) {
-    if (process.argv[i] === flag && process.argv[i + 1]) {
-      values.push(process.argv[i + 1]);
+    const value = process.argv[i + 1];
+    if (process.argv[i] === flag && value && !value.startsWith("-")) {
+      values.push(value);
     }
   }
   return values;
 }
 
 function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
+  const seenSingleValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+    const arg = expectDefined(argv[index], `CLI benchmark argument at index ${index}`);
     if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new Error(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
       index += 1;
@@ -532,7 +551,12 @@ function parsePresets(raw: string | undefined): string[] {
 function resolveCases(options: { presets: string[]; caseIds: string[] }): CommandCase[] {
   const byId = new Map(COMMAND_CASES.map((commandCase) => [commandCase.id, commandCase]));
   if (options.caseIds.length > 0) {
+    const seenIds = new Set<string>();
     return options.caseIds.map((id) => {
+      if (seenIds.has(id)) {
+        throw new Error(`Duplicate --case "${id}"`);
+      }
+      seenIds.add(id);
       const commandCase = byId.get(id);
       if (!commandCase) {
         throw new Error(`Unknown --case "${id}"`);
@@ -552,9 +576,13 @@ function median(values: number[]): number {
   const sorted = [...values].toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
-    return (sorted[mid - 1] + sorted[mid]) / 2;
+    return (
+      (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
+        expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
+      2
+    );
   }
-  return sorted[mid];
+  return expectDefined(sorted[mid], "middle CLI benchmark sample");
 }
 
 function percentile(values: number[], p: number): number {
@@ -662,6 +690,10 @@ function parseMaxRssMb(stderr: string): number | null {
   return Number(lastMatch[1]) / 1024;
 }
 
+function nodeImportSpecifierForPath(filePath: string): string {
+  return pathToFileURL(filePath).href;
+}
+
 function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: string }): string[] {
   const flags: string[] = [];
   if (options.cpuProfDir) {
@@ -696,7 +728,7 @@ async function runSample(params: {
   }
   const nodeArgs = [
     "--import",
-    params.rssHookPath,
+    nodeImportSpecifierForPath(params.rssHookPath),
     ...buildCpuOrHeapFlags({
       cpuProfDir: params.cpuProfDir,
       heapProfDir: params.heapProfDir,
@@ -1161,12 +1193,12 @@ function readBenchmarkComparisonForTesting(
 }
 
 async function main(): Promise<void> {
+  validateCliArgs();
   if (hasFlag("--help")) {
     printUsage();
     return;
   }
 
-  validateCliArgs();
   const options = parseOptions();
   if (options.compareBaseline || options.compareCandidate) {
     if (!options.compareBaseline || !options.compareCandidate) {
@@ -1267,6 +1299,7 @@ async function main(): Promise<void> {
 export const testing = {
   buildConfigFixture,
   collectFailedSamples,
+  nodeImportSpecifierForPath,
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,

@@ -38,9 +38,12 @@ describe("web-search install catalog", () => {
       resolveWebSearchInstallCatalogEntriesForEnv({
         EXA_API_KEY: "exa-key",
         FIRECRAWL_API_KEY: "firecrawl-key",
+        KIMI_API_KEY: "kimi-key",
         OPENROUTER_API_KEY: "openrouter-key",
         PARALLEL_API_KEY: "parallel-key",
+        SEARXNG_BASE_URL: "http://search.local",
+        TAVILY_API_KEY: "tavily-key",
       }).map((entry) => entry.pluginId),
-    ).toEqual(["exa", "firecrawl", "parallel", "perplexity"]);
+    ).toEqual(["exa", "firecrawl", "moonshot", "parallel", "perplexity", "searxng", "tavily"]);
   });
 });

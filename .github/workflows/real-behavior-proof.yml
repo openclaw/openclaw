@@ -16,6 +16,12 @@ permissions: {}
 jobs:
   real-behavior-proof:
     name: Real behavior proof
+    if: >-
+      ${{
+        github.event.action != 'edited' ||
+        github.event.changes.body ||
+        github.event.changes.base
+      }}
     permissions:
       contents: read
       issues: read
@@ -24,7 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Old PR events can carry a stale base SHA that predates current
+          # trusted checker scripts. Use the workflow revision instead.
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token

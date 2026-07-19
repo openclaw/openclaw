@@ -34,6 +34,7 @@ const DEFAULT_FETCH_BODY_MAX_BYTES = 1024 * 1024;
 const DEFAULT_MAX_RSS_MIB = 2048;
 const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
+export const MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS = 2_147_000_000;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
 const COMMAND_PARENT_SIGNAL_KILL_GRACE_MS = 2000;
@@ -149,8 +150,19 @@ export function readPositiveInt(raw, fallback, label = "value") {
   return parsed;
 }
 
+function clampKitchenSinkTimerTimeoutMs(value) {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(Math.max(1, Math.floor(value)), MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+}
+
+export function readPositiveTimerMs(raw, fallback, label = "value") {
+  return clampKitchenSinkTimerTimeoutMs(readPositiveInt(raw, fallback, label));
+}
+
 export function resolveKitchenSinkRpcConfig(env = process.env) {
-  const commandTimeoutMs = readPositiveInt(
+  const commandTimeoutMs = readPositiveTimerMs(
     env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS,
     DEFAULT_COMMAND_TIMEOUT_MS,
     "OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS",
@@ -167,12 +179,12 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
       DEFAULT_FETCH_BODY_MAX_BYTES,
       "OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES",
     ),
-    fetchTimeoutMs: readPositiveInt(
+    fetchTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS,
       DEFAULT_FETCH_TIMEOUT_MS,
       "OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS",
     ),
-    installTimeoutMs: readPositiveInt(
+    installTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS,
       Math.max(commandTimeoutMs, DEFAULT_INSTALL_TIMEOUT_MS),
       "OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS",
@@ -187,12 +199,12 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
       DEFAULT_OUTPUT_CAPTURE_CHARS,
       "OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS",
     ),
-    readyTimeoutMs: readPositiveInt(
+    readyTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_READY_MS,
       DEFAULT_READY_TIMEOUT_MS,
       "OPENCLAW_KITCHEN_SINK_RPC_READY_MS",
     ),
-    rpcTimeoutMs: readPositiveInt(
+    rpcTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS,
       DEFAULT_RPC_TIMEOUT_MS,
       "OPENCLAW_KITCHEN_SINK_RPC_CALL_MS",
@@ -200,7 +212,7 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
   };
 }
 
-export async function findAvailableLoopbackPort(options = {}) {
+async function findAvailableLoopbackPort(options = {}) {
   const createServer = options.createServer ?? (() => net.createServer());
   const server = createServer();
   return await new Promise((resolve, reject) => {
@@ -360,6 +372,8 @@ export function runCommand(command, args, options = {}) {
       timeoutMs = config.commandTimeoutMs,
       ...spawnOptions
     } = options;
+    const resolvedTimeoutMs = clampKitchenSinkTimerTimeoutMs(timeoutMs);
+    const resolvedTimeoutKillGraceMs = clampKitchenSinkTimerTimeoutMs(timeoutKillGraceMs);
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
@@ -426,10 +440,13 @@ export function runCommand(command, args, options = {}) {
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
-      forceKillAt = Date.now() + timeoutKillGraceMs;
-      forceKillTimer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), timeoutKillGraceMs);
+      forceKillAt = Date.now() + resolvedTimeoutKillGraceMs;
+      forceKillTimer = setTimeout(
+        () => signalProcessGroup(child, "SIGKILL"),
+        resolvedTimeoutKillGraceMs,
+      );
       forceKillTimer.unref();
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     child.stdout?.on("data", (chunk) => {
       stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
     });
@@ -473,7 +490,7 @@ export function runCommand(command, args, options = {}) {
             .join("\n")
             .trim();
           const failure = timedOut
-            ? `timed out after ${timeoutMs}ms`
+            ? `timed out after ${resolvedTimeoutMs}ms`
             : `failed with ${signal || status}`;
           reject(
             Object.assign(
@@ -494,7 +511,7 @@ export function runCommand(command, args, options = {}) {
       if (timedOut) {
         void finishTimedOutCommandProcessTree(child, {
           forceKillAt,
-          timeoutKillGraceMs,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
         }).then(finish, finish);
         return;
       }
@@ -534,14 +551,15 @@ async function shutdownActiveCommands(signal) {
     return commandShutdownPromise;
   }
   const children = [...activeCommandChildren];
+  const killGraceMs = resolveCommandParentSignalKillGraceMs(process.env);
   for (const child of children) {
     signalProcessGroup(child, signal);
   }
   commandShutdownPromise = Promise.all(
     children.map((child) =>
       finishTimedOutCommandProcessTree(child, {
-        forceKillAt: Date.now() + COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
-        timeoutKillGraceMs: COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+        forceKillAt: Date.now() + killGraceMs,
+        timeoutKillGraceMs: killGraceMs,
       }),
     ),
   ).finally(() => {
@@ -549,6 +567,15 @@ async function shutdownActiveCommands(signal) {
     process.kill(process.pid, signal);
   });
   return commandShutdownPromise;
+}
+
+function resolveCommandParentSignalKillGraceMs(env) {
+  const raw = env.VITEST && env.OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS;
+  if (!raw) {
+    return COMMAND_PARENT_SIGNAL_KILL_GRACE_MS;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value >= 0 ? value : COMMAND_PARENT_SIGNAL_KILL_GRACE_MS;
 }
 
 async function waitForCommandProcessTreeExit(child, timeoutMs) {
@@ -691,7 +718,7 @@ export function parseGatewayCliRequestFailure(error) {
   return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
 }
 
-export function createGatewayClientRequestError(requestError) {
+function createGatewayClientRequestError(requestError) {
   if (
     requestError?.type !== "gateway_request_error" ||
     !isNonEmptyString(requestError.code) ||
@@ -952,7 +979,7 @@ export function createRpcCliRunOptions(method, options = {}) {
   return {
     ...options.commandResourceOptions,
     resourceLabel: `gateway call ${method}`,
-    timeoutMs: config.rpcTimeoutMs + 30000,
+    timeoutMs: clampKitchenSinkTimerTimeoutMs(config.rpcTimeoutMs + 30000),
   };
 }
 
@@ -1034,7 +1061,7 @@ function isRetryableTransientNetworkError(error, seen = new Set()) {
 export async function fetchJson(url, options = {}) {
   const config = resolveKitchenSinkRpcConfig();
   const attempts = Math.max(1, options.attempts ?? 3);
-  const timeoutMs = Math.max(1, options.timeoutMs ?? config.fetchTimeoutMs);
+  const timeoutMs = clampKitchenSinkTimerTimeoutMs(options.timeoutMs ?? config.fetchTimeoutMs);
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? config.fetchBodyMaxBytes);
   const externalSignal = options.signal;
   let lastError;
@@ -1434,7 +1461,7 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const config = resolveKitchenSinkRpcConfig();
   const started = Date.now();
   let lastError = "";
-  const timeoutMs = Math.max(1, options.timeoutMs ?? config.readyTimeoutMs);
+  const timeoutMs = clampKitchenSinkTimerTimeoutMs(options.timeoutMs ?? config.readyTimeoutMs);
   const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
   const logReportedReady = createGatewayReadyLogScanner(logPath);
   const childExit = createChildExitPromise(child);
@@ -1513,7 +1540,7 @@ export function extractPluginCommandNames(payload) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function extractToolEntries(payload) {
+function extractToolEntries(payload) {
   return (Array.isArray(payload?.groups) ? payload.groups : []).flatMap((group) =>
     Array.isArray(group?.tools) ? group.tools : [],
   );
@@ -2157,9 +2184,14 @@ function collectPosixProcessTree(rows, rootPid) {
   const root = rows.find((row) => row.processId === rootPid);
   const collected = root ? [root] : [];
   const pending = [rootPid];
+  const seen = new Set(pending);
   while (pending.length > 0) {
     const nextPid = pending.shift();
     for (const child of byParent.get(nextPid) ?? []) {
+      if (seen.has(child.processId)) {
+        continue;
+      }
+      seen.add(child.processId);
       collected.push(child);
       pending.push(child.processId);
     }
@@ -2551,7 +2583,7 @@ export async function main() {
   let sampleTimer;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
       ...commandResourceOptions,
       requireResourceSample: true,
       resourceLabel: "plugins install",

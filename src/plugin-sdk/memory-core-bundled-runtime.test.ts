@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const configureMemoryCoreDreamingStateImpl = vi.hoisted(() => vi.fn());
 const createEmbeddingProviderImpl = vi.hoisted(() => vi.fn());
-const registerBuiltInMemoryEmbeddingProvidersImpl = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidatesImpl = vi.hoisted(() => vi.fn());
 const loadShortTermPromotionDreamingStatsImpl = vi.hoisted(() => vi.fn());
 const previewGroundedRemMarkdownImpl = vi.hoisted(() => vi.fn());
@@ -27,7 +26,6 @@ describe("plugin-sdk memory-core bundled runtime", () => {
   beforeEach(() => {
     configureMemoryCoreDreamingStateImpl.mockReset();
     createEmbeddingProviderImpl.mockReset().mockResolvedValue({ provider: { id: "openai" } });
-    registerBuiltInMemoryEmbeddingProvidersImpl.mockReset();
     removeGroundedShortTermCandidatesImpl.mockReset().mockResolvedValue({ removed: 1 });
     loadShortTermPromotionDreamingStatsImpl.mockReset().mockResolvedValue({ shortTermCount: 0 });
     previewGroundedRemMarkdownImpl.mockReset().mockResolvedValue({ files: [] });
@@ -42,7 +40,6 @@ describe("plugin-sdk memory-core bundled runtime", () => {
           return {
             configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateImpl,
             createEmbeddingProvider: createEmbeddingProviderImpl,
-            registerBuiltInMemoryEmbeddingProviders: registerBuiltInMemoryEmbeddingProvidersImpl,
             removeGroundedShortTermCandidates: removeGroundedShortTermCandidatesImpl,
             loadShortTermPromotionDreamingStats: loadShortTermPromotionDreamingStatsImpl,
           };
@@ -71,6 +68,9 @@ describe("plugin-sdk memory-core bundled runtime", () => {
       artifactBasename: "runtime-api.js",
     });
     expect(configureMemoryCoreDreamingStateImpl).toHaveBeenCalledWith(expect.any(Function));
+    expect(createEmbeddingProviderImpl).toHaveBeenCalledWith({
+      acquireLocalService: expect.any(Function),
+    });
   });
 
   it("delegates doctor and embedding helpers through the bundled public surfaces", async () => {
@@ -79,12 +79,10 @@ describe("plugin-sdk memory-core bundled runtime", () => {
     await module.previewGroundedRemMarkdown({} as never);
     await module.removeGroundedShortTermCandidates({} as never);
     await module.loadShortTermPromotionDreamingStats({} as never);
-    module.registerBuiltInMemoryEmbeddingProviders({} as never);
 
     expect(previewGroundedRemMarkdownImpl).toHaveBeenCalledWith({} as never);
     expect(removeGroundedShortTermCandidatesImpl).toHaveBeenCalledWith({} as never);
     expect(loadShortTermPromotionDreamingStatsImpl).toHaveBeenCalledWith({} as never);
-    expect(registerBuiltInMemoryEmbeddingProvidersImpl).toHaveBeenCalledWith({} as never);
     expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
       dirName: "memory-core",
       artifactBasename: "api.js",

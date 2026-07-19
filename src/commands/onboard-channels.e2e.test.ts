@@ -1,14 +1,14 @@
 // Onboard channels e2e tests cover setup wizard adapters, plugin install hooks, and channel picker behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";
+import type { ChannelSetupWizardAdapter } from "../channels/plugins/setup-wizard-types.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
-import type { ChannelSetupWizardAdapter } from "../commands/channel-setup/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -494,15 +494,6 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",
   );
-  const listChannelPluginCatalogEntries = (
-    ...args: Parameters<typeof actual.listChannelPluginCatalogEntries>
-  ) => {
-    const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
-    if (implementation) {
-      return catalogMocks.listChannelPluginCatalogEntries(...args);
-    }
-    return actual.listChannelPluginCatalogEntries(...args);
-  };
   const listRawChannelPluginCatalogEntries = (
     ...args: Parameters<typeof actual.listRawChannelPluginCatalogEntries>
   ) => {
@@ -514,7 +505,6 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   };
   return {
     ...actual,
-    listChannelPluginCatalogEntries,
     listRawChannelPluginCatalogEntries,
   };
 });
@@ -1283,3 +1273,4 @@ describe("setupChannels", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

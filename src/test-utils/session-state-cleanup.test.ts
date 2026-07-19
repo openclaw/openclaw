@@ -3,12 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
-import {
-  clearSessionStoreCacheForTest,
-  getSessionStoreWriterQueueSizeForTest,
-  withSessionStoreWriterForTest,
-} from "../config/sessions/store.js";
+import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.test-support.js";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import { createDeferred } from "./deferred.js";
 import {
@@ -67,13 +64,12 @@ describe("cleanupSessionStateForTest", () => {
     });
     let running: Promise<void> | undefined;
     try {
-      running = withSessionStoreWriterForTest(storePath, async () => {
+      running = runExclusiveSessionStoreWrite(storePath, async () => {
         started.resolve();
         await release.promise;
       });
 
       await started.promise;
-      expect(getSessionStoreWriterQueueSizeForTest()).toBe(1);
 
       let settled = false;
       const cleanupPromise = cleanupSessionStateForTest().then(() => {
@@ -92,7 +88,6 @@ describe("cleanupSessionStateForTest", () => {
       finishDrain();
       await cleanupPromise;
 
-      expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
       expect(drainFileLockStateMock).toHaveBeenCalledTimes(1);
       expect(drainSessionWriteLockStateMock).toHaveBeenCalledTimes(1);
     } finally {

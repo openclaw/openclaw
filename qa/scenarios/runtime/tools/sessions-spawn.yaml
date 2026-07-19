@@ -34,6 +34,8 @@ scenario:
         qaImpact: P1
         action: hard gate in the standard direct-loading tier
         reason: sessions_spawn is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
+      knownHarnessGap:
+        reason: Live failure-path injection for sessions_spawn can be refused safely in prose before the model calls the tool; happy-path visibility and execution still run in this fixture.
       promptSnippet: "target=sessions_spawn"
       failurePromptSnippet: "failure target=sessions_spawn"
 

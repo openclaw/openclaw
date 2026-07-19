@@ -96,7 +96,19 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
 
     return { actions: Array.from(actions) };
   },
-  supportsAction: ({ action }) => action !== "send",
+  supportsAction: ({ action }) => action === "react",
+  prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const normalizedReplyToId = replyToId?.trim();
+    if (!normalizedReplyToId) {
+      return payload;
+    }
+    return replyToIdSource === "implicit"
+      ? payload
+      : { ...payload, replyToId: normalizedReplyToId };
+  },
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {
