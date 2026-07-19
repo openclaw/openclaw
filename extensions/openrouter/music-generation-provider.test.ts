@@ -41,7 +41,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
 
 function sseResponse(
   lines: Array<string | Uint8Array>,
-  options?: { cancel?: () => void; releaseLock?: () => void },
+  options?: { cancel?: () => void | Promise<void>; releaseLock?: () => void },
 ): Response {
   const encoder = new TextEncoder();
   const encodeLine = (line: string | Uint8Array) =>
@@ -212,7 +212,7 @@ describe("openrouter music generation provider", () => {
   });
 
   it("preserves completed OpenRouter audio when reader cleanup fails", async () => {
-    const cancel = vi.fn(() => {
+    const cancel = vi.fn(async () => {
       throw new Error("cancel failed");
     });
     const releaseLock = vi.fn();
@@ -407,8 +407,10 @@ describe("openrouter music generation provider", () => {
     ).rejects.toThrow("OpenRouter music generation stream ended before completion");
   });
 
-  it("surfaces and cancels OpenRouter mid-stream errors", async () => {
-    const cancel = vi.fn();
+  it("preserves OpenRouter mid-stream errors when reader cleanup fails", async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse(
         [
