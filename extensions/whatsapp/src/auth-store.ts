@@ -12,6 +12,12 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  readWebAuthStateDetails,
+  waitForWebAuthBarrier,
+  webAuthExistsAt,
+  type WhatsAppWebAuthState,
+} from "./auth-state.js";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   assertWebCredsPathRegularFileOrMissing,
@@ -24,9 +30,7 @@ import {
   statWebCredsFileSync,
 } from "./creds-files.js";
 import {
-  waitForCredsSaveQueueWithTimeout,
   writeWebCredsRawAtomically,
-  type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { WebChannel } from "./targets-runtime.js";
@@ -36,7 +40,7 @@ export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";
 
 const authStoreLogger = getChildLogger({ module: "web-auth-store" });
 const emptyWebSelfId = () => ({ e164: null, jid: null, lid: null }) as const;
-export type WhatsAppWebAuthState = "linked" | "not-linked" | "unstable";
+export { formatWhatsAppWebAuthStatusState, type WhatsAppWebAuthState } from "./auth-state.js";
 
 export class WhatsAppAuthUnstableError extends Error {
   readonly code = WHATSAPP_AUTH_UNSTABLE_CODE;
@@ -52,23 +56,6 @@ export function resolveDefaultWebAuthDir(): string {
 }
 
 export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
-
-async function waitForWebAuthBarrier(
-  authDir: string,
-  context: string,
-): Promise<CredsQueueWaitResult> {
-  const result = await waitForCredsSaveQueueWithTimeout(authDir);
-  if (result === "timed_out") {
-    authStoreLogger.warn(
-      {
-        authDir,
-        context,
-      },
-      "timed out waiting for queued WhatsApp creds save before auth read",
-    );
-  }
-  return result;
-}
 
 function isValidJson(raw: string): boolean {
   try {
@@ -127,46 +114,17 @@ export async function restoreCredsFromBackupIfNeeded(
 }
 
 export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()) {
-  const resolvedAuthDir = resolveUserPath(authDir);
-  const credsPath = resolveWebCredsPath(resolvedAuthDir);
-  const raw = await readWebCredsJsonRaw(credsPath);
-  return raw !== null && isValidJson(raw);
-}
-
-async function readWebAuthStateCore(
-  authDir: string,
-  context: string,
-): Promise<{ authDir: string; state: WhatsAppWebAuthState }> {
-  const resolvedAuthDir = resolveUserPath(authDir);
-  const barrierResult = await waitForWebAuthBarrier(resolvedAuthDir, context);
-  const linked = await webAuthExists(resolvedAuthDir);
-  return {
-    authDir: resolvedAuthDir,
-    state: barrierResult === "timed_out" ? "unstable" : linked ? "linked" : "not-linked",
-  };
-}
-
-export function formatWhatsAppWebAuthStatusState(state: WhatsAppWebAuthState): string {
-  switch (state) {
-    case "linked":
-      return "linked";
-    case "not-linked":
-      return "not linked";
-    case "unstable":
-      return "auth stabilizing";
-  }
-  const exhaustive: never = state;
-  return exhaustive;
+  return await webAuthExistsAt(authDir);
 }
 
 export async function readWebAuthState(
   authDir: string = resolveDefaultWebAuthDir(),
 ): Promise<WhatsAppWebAuthState> {
-  return (await readWebAuthStateCore(authDir, "readWebAuthState")).state;
+  return (await readWebAuthStateDetails(authDir, "readWebAuthState")).state;
 }
 
 export async function readWebAuthSnapshot(authDir: string = resolveDefaultWebAuthDir()) {
-  const auth = await readWebAuthStateCore(authDir, "readWebAuthSnapshot");
+  const auth = await readWebAuthStateDetails(authDir, "readWebAuthSnapshot");
   return {
     state: auth.state,
     authAgeMs: auth.state === "linked" ? getWebAuthAgeMs(auth.authDir) : null,

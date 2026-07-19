@@ -1,12 +1,12 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { readWebAuthState } from "./auth-state.js";
 
 const loadWhatsAppAuthStore = createLazyRuntimeModule(() => import("./auth-store.js"));
 
 export async function readWhatsAppAccountLinkState(
   authDir: string,
 ): Promise<"linked" | "not-linked" | "unknown"> {
-  const authStore = await loadWhatsAppAuthStore();
-  const state = await authStore.readWebAuthState(authDir);
+  const state = await readWebAuthState(authDir);
   return state === "unstable" ? "unknown" : state;
 }
 

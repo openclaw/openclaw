@@ -32,7 +32,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
-import { normalizeWhatsAppAllowFromEntries } from "./normalize-target.js";
+import { normalizeWhatsAppAllowFromEntries } from "./allowlist-format.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
