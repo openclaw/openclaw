@@ -19,6 +19,7 @@ import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   applyAgentAutoCompactionGuard as applyAgentAutoCompactionGuardImpl,
+  resolveCompactionEnabled,
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
@@ -72,6 +73,7 @@ type CliCompactionDeps = {
     settingsManager: SettingsManagerLike;
     contextEngineInfo?: ContextEngine["info"];
     compactionMode?: AgentCompactionMode;
+    compactionEnabled?: boolean;
   }) => unknown;
   shouldPreemptivelyCompactBeforePrompt: typeof shouldPreemptivelyCompactBeforePromptImpl;
   resolveLiveToolResultMaxChars: typeof resolveLiveToolResultMaxCharsImpl;
@@ -682,6 +684,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       settingsManager,
       contextEngineInfo: contextEngine.info,
       compactionMode: resolveEffectiveCompactionMode(params.cfg),
+      compactionEnabled: resolveCompactionEnabled(params.cfg),
     });
   };
 
