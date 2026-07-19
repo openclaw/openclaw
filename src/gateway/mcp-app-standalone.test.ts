@@ -55,7 +55,16 @@ const runtime = {
     ],
   })),
   peekCatalog: vi.fn<SessionMcpRuntime["peekCatalog"]>(() => ({
-    servers: { demo: { requestTimeoutMs: mcpRequestTimeoutMs } },
+    version: 1,
+    generatedAt: nowMs,
+    servers: {
+      demo: {
+        serverName: "demo",
+        launchSummary: "demo",
+        toolCount: 0,
+        requestTimeoutMs: mcpRequestTimeoutMs,
+      },
+    },
     tools: [],
   })),
   callTool: vi.fn<SessionMcpRuntime["callTool"]>(async (serverName, toolName) => ({
