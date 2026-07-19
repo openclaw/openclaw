@@ -9,6 +9,9 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+// Static config import is safe for plugin discovery: the plugin entry (index.ts)
+// already imports ./src/app-server/config.js eagerly.
+import { resolveCodexAppServerNativeHookRelay } from "./src/app-server/config.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
 
@@ -173,18 +176,20 @@ export function createCodexAppServerAgentHarness(options: {
       // Keep app-server runtime code behind lazy imports so plugin discovery and
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
+      const pluginConfig = options?.resolvePluginConfig?.() ?? options?.pluginConfig;
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        nativeHookRelay: { enabled: true },
+        pluginConfig,
+        nativeHookRelay: resolveCodexAppServerNativeHookRelay(pluginConfig),
       });
     },
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
+      const pluginConfig = options?.resolvePluginConfig?.() ?? options?.pluginConfig;
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        nativeHookRelay: { enabled: true },
+        pluginConfig,
+        nativeHookRelay: resolveCodexAppServerNativeHookRelay(pluginConfig),
       });
     },
     compact: async (params) => {
