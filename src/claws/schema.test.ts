@@ -471,6 +471,7 @@ describe("buildClawAddPlan", () => {
           ok: true,
           action: "install",
           integrity: `sha256:${(pkg.kind === "skill" ? "a" : "b").repeat(64)}`,
+          warning: `Review ${pkg.ref} before installation.`,
           ...(pkg.kind === "plugin" ? { installId: "github" } : {}),
         }),
       },
@@ -480,13 +481,20 @@ describe("buildClawAddPlan", () => {
       expect.objectContaining({
         id: "skill:@acme/triage",
         digest: `sha256:${"a".repeat(64)}`,
-        details: expect.objectContaining({ ownerAction: "install" }),
+        details: expect.objectContaining({
+          ownerAction: "install",
+          riskWarning: "Review @acme/triage before installation.",
+        }),
         blocked: false,
       }),
       expect.objectContaining({
         id: "plugin:@acme/github",
         digest: `sha256:${"b".repeat(64)}`,
-        details: expect.objectContaining({ ownerAction: "install", installId: "github" }),
+        details: expect.objectContaining({
+          ownerAction: "install",
+          installId: "github",
+          riskWarning: "Review @acme/github before installation.",
+        }),
         blocked: false,
       }),
     ]);

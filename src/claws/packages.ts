@@ -25,9 +25,10 @@ export class ClawPackageInstallError extends Error {
   }
 }
 
-type PackageInstallerDeps = {
+export type PackageInstallerDeps = {
   installPlugin?: typeof runPluginInstallCommand;
   uninstallPlugin?: typeof runPluginUninstallCommand;
+  probePlugin?: typeof installPluginFromClawHub;
   installSkill?: typeof installSkillFromClawHub;
   preflightPlugin?: typeof preflightPluginInstall;
   preflightSkill?: typeof preflightSkillFromClawHub;
@@ -39,12 +40,14 @@ type PackageInstallerDeps = {
 type PlannedClawPackage = ResolvedClawPackage & {
   ownerAction: "install" | "reuse";
   installId?: string;
+  riskWarning?: string;
 };
 function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
   const details = action.details as
     | (Partial<ResolvedClawPackage> & {
         ownerAction?: "install" | "reuse";
         installId?: string;
+        riskWarning?: string;
       })
     | undefined;
   if (details?.kind !== "skill" && details?.kind !== "plugin") {
@@ -75,6 +78,7 @@ function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
     integrity: details.integrity,
     ownerAction: details.ownerAction,
     ...(details.installId ? { installId: details.installId } : {}),
+    ...(details.riskWarning ? { riskWarning: details.riskWarning } : {}),
   };
 }
 
@@ -89,8 +93,22 @@ function installerRuntime(runtime: RuntimeEnv): RuntimeEnv {
 }
 
 type ClawPackagePreflightResult =
-  | { ok: true; action: "install" | "reuse"; integrity: string; installId?: string }
-  | { ok: false; code: string; message: string };
+  | {
+      ok: true;
+      action: "install" | "reuse";
+      integrity: string;
+      installId?: string;
+      warning?: string;
+    }
+  | {
+      ok: false;
+      code: string;
+      message: string;
+      installedVersion?: string;
+      integrity?: string;
+      installId?: string;
+      warning?: string;
+    };
 
 export async function preflightClawPackage(
   pkg: ClawPackage,
@@ -110,7 +128,7 @@ export async function preflightClawPackage(
     rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
     expectedVersion: pkg.version,
   });
-  if (!result.ok) {
+  if (!result.ok && result.code !== "plugin_version_conflict") {
     return {
       ok: false,
       code: result.code,
@@ -138,6 +156,17 @@ export async function preflightClawPackage(
       message: `Plugin ${pkg.ref}@${pkg.version} did not resolve an artifact integrity.`,
     };
   }
+  if (!result.ok) {
+    return {
+      ok: false,
+      code: result.code,
+      installedVersion: result.installedVersion,
+      integrity,
+      installId: probe.pluginId,
+      ...(probe.warning ? { warning: probe.warning } : {}),
+      message: `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${result.installedVersion}.`,
+    };
+  }
   if (
     result.action === "reuse" &&
     (result.installedId !== probe.pluginId ||
@@ -150,7 +179,13 @@ export async function preflightClawPackage(
       message: `Plugin ${pkg.ref}@${pkg.version} is installed as ${result.installedId} with integrity ${result.installedIntegrity ?? "unknown"}, expected ${probe.pluginId} with ${integrity}.`,
     };
   }
-  return { ok: true, action: result.action, integrity, installId: probe.pluginId };
+  return {
+    ok: true,
+    action: result.action,
+    integrity,
+    installId: probe.pluginId,
+    ...(probe.warning ? { warning: probe.warning } : {}),
+  };
 }
 
 export async function installClawPackages(
@@ -159,11 +194,13 @@ export async function installClawPackages(
     deps?: PackageInstallerDeps;
     runtime?: RuntimeEnv;
     nowMs?: number;
+    onExternalMutation?: (pkg: ClawPackage) => void;
   } = {},
 ): Promise<PersistedClawPackageRef[]> {
   const deps = options.deps ?? {};
   const installPlugin = deps.installPlugin ?? runPluginInstallCommand;
   const uninstallPlugin = deps.uninstallPlugin ?? runPluginUninstallCommand;
+  const probePlugin = deps.probePlugin ?? installPluginFromClawHub;
   const installSkill = deps.installSkill ?? installSkillFromClawHub;
   const preflightPlugin = deps.preflightPlugin ?? preflightPluginInstall;
   const preflightSkill = deps.preflightSkill ?? preflightSkillFromClawHub;
@@ -190,6 +227,7 @@ export async function installClawPackages(
         }
         if (
           preflight.action !== pkg.ownerAction ||
+          preflight.warning !== pkg.riskWarning ||
           normalizeClawHubSha256Integrity(preflight.integrity) !==
             normalizeClawHubSha256Integrity(pkg.integrity)
         ) {
@@ -219,6 +257,9 @@ export async function installClawPackages(
           independentOwner: false,
         });
         installedPackages.push(packageRef);
+        // The installer has no mutation receipt. Mark the boundary before calling it so a throw
+        // after an on-disk change is treated as uncertain instead of falsely reported as rolled back.
+        options.onExternalMutation?.(pkg);
         const installed = await installSkill({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
@@ -234,6 +275,29 @@ export async function installClawPackages(
         continue;
       }
 
+      const probe = await probePlugin({
+        spec: `clawhub:${pkg.ref}@${pkg.version}`,
+        dryRun: true,
+        acknowledgeClawHubRisk: true,
+      });
+      packageLease.assertCurrent();
+      if (!probe.ok) {
+        throw new Error(probe.error);
+      }
+      const probeIntegrity = probe.clawhub.integrity
+        ? normalizeClawHubSha256Integrity(probe.clawhub.integrity)
+        : null;
+      if (
+        probe.pluginId !== pkg.installId ||
+        probeIntegrity !== normalizeClawHubSha256Integrity(pkg.integrity) ||
+        probe.warning !== pkg.riskWarning
+      ) {
+        throw new ClawPackageInstallError(
+          "package_owner_state_changed",
+          `Plugin ${pkg.ref}@${pkg.version} identity or trust state changed after planning; run add --dry-run again.`,
+          installedPackages,
+        );
+      }
       const preflight = await preflightPlugin({
         clawhubPackage: pkg.ref,
         rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,

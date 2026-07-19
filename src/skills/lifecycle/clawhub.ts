@@ -1600,7 +1600,7 @@ async function installTrackedSkillFromClawHub(
 }
 
 type ClawHubSkillInstallPreflightResult =
-  | { ok: true; action: "install" | "reuse"; integrity: string }
+  | { ok: true; action: "install" | "reuse"; integrity: string; warning?: string }
   | { ok: false; code: string; error: string };
 
 async function preflightSkillOwnerState(params: {
@@ -1684,13 +1684,14 @@ export async function preflightSkillFromClawHub(params: {
 
     if (params.expectedIntegrity) {
       const integrity = normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
-      return await preflightSkillOwnerState({
+      const owner = await preflightSkillOwnerState({
         workspaceDir: params.workspaceDir,
         requested,
         requestedLabel: params.slug,
         version: resolved.version,
         integrity,
       });
+      return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
     }
 
     const archive = await downloadClawHubSkillArchive({
@@ -1708,13 +1709,14 @@ export async function preflightSkillFromClawHub(params: {
           error: `Skill ${params.slug}@${params.version} did not resolve a valid artifact integrity.`,
         };
       }
-      return await preflightSkillOwnerState({
+      const owner = await preflightSkillOwnerState({
         workspaceDir: params.workspaceDir,
         requested,
         requestedLabel: params.slug,
         version: resolved.version,
         integrity,
       });
+      return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
     } finally {
       await archive.cleanup().catch(() => undefined);
     }
