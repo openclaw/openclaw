@@ -48,6 +48,8 @@ const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
+/** Timeout cap for collector waits that can block for the full swarm budget. */
+const CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type DynamicToolTimeoutDetails = {
@@ -487,6 +489,12 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   // watchdog must also cover bounded same-key reconciliation after that timer.
   if (params.call.tool === "message") {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
+  }
+  if (params.call.tool === "agents_wait") {
+    return clampDynamicToolTimeoutMs(
+      readDynamicToolCallTimeoutMs(params.call.arguments) ??
+        CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS,
+    );
   }
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
