@@ -24,7 +24,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON: LegacyConfigMigrationSpec[] 
     legacyRules: [CRON_WEBHOOK_RULE],
     apply: (raw, changes) => {
       const cron = getRecord(raw.cron);
-      if (!cron || !Object.hasOwn(cron, "webhook")) return;
+      if (!cron || !Object.hasOwn(cron, "webhook")) {
+        return;
+      }
       delete cron.webhook;
       changes.push("Removed retired cron.webhook after stored jobs migrated to per-job delivery.");
     },

@@ -55,21 +55,31 @@ function migrateDiscordVoice(channels: Record<string, unknown>, changes: string[
 
 function hasDiscordRealtimeVoice(value: unknown): boolean {
   const discord = getRecord(value);
-  if (!discord) return false;
+  if (!discord) {
+    return false;
+  }
   const hasAlias = (entry: unknown) => {
     const realtime = getRecord(getRecord(getRecord(entry)?.voice)?.realtime);
     return realtime ? Object.hasOwn(realtime, "voice") : false;
   };
-  if (hasAlias(discord)) return true;
+  if (hasAlias(discord)) {
+    return true;
+  }
   const accounts = getRecord(discord.accounts);
   return accounts ? Object.values(accounts).some(hasAlias) : false;
 }
 
 function mapDeepgram(value: Record<string, unknown>): Record<string, unknown> {
   const mapped: Record<string, unknown> = {};
-  if (typeof value.detectLanguage === "boolean") mapped.detect_language = value.detectLanguage;
-  if (typeof value.punctuate === "boolean") mapped.punctuate = value.punctuate;
-  if (typeof value.smartFormat === "boolean") mapped.smart_format = value.smartFormat;
+  if (typeof value.detectLanguage === "boolean") {
+    mapped.detect_language = value.detectLanguage;
+  }
+  if (typeof value.punctuate === "boolean") {
+    mapped.punctuate = value.punctuate;
+  }
+  if (typeof value.smartFormat === "boolean") {
+    mapped.smart_format = value.smartFormat;
+  }
   return mapped;
 }
 
@@ -79,7 +89,9 @@ function migrateDeepgramOwner(
   changes: string[],
 ): void {
   const legacy = getRecord(owner.deepgram);
-  if (!legacy) return;
+  if (!legacy) {
+    return;
+  }
   const providerOptions = getRecord(owner.providerOptions) ?? {};
   const canonical = getRecord(providerOptions.deepgram) ?? {};
   providerOptions.deepgram = { ...mapDeepgram(legacy), ...canonical };
@@ -90,18 +102,26 @@ function migrateDeepgramOwner(
 
 function migrateMediaDeepgram(raw: Record<string, unknown>, changes: string[]): void {
   const media = getRecord(getRecord(raw.tools)?.media);
-  if (!media) return;
+  if (!media) {
+    return;
+  }
   const migrateModels = (models: unknown, path: string) => {
-    if (!Array.isArray(models)) return;
+    if (!Array.isArray(models)) {
+      return;
+    }
     models.forEach((value, index) => {
       const model = getRecord(value);
-      if (model) migrateDeepgramOwner(model, `${path}[${index}]`, changes);
+      if (model) {
+        migrateDeepgramOwner(model, `${path}[${index}]`, changes);
+      }
     });
   };
   migrateModels(media.models, "tools.media.models");
   for (const capability of ["audio", "image", "video"]) {
     const entry = getRecord(media[capability]);
-    if (!entry) continue;
+    if (!entry) {
+      continue;
+    }
     migrateDeepgramOwner(entry, `tools.media.${capability}`, changes);
     migrateModels(entry.models, `tools.media.${capability}.models`);
   }
@@ -109,13 +129,17 @@ function migrateMediaDeepgram(raw: Record<string, unknown>, changes: string[]): 
 
 function hasMediaDeepgram(value: unknown): boolean {
   const media = getRecord(value);
-  if (!media) return false;
+  if (!media) {
+    return false;
+  }
   const hasAlias = (entry: unknown) => {
     const owner = getRecord(entry);
     return owner ? Object.hasOwn(owner, "deepgram") : false;
   };
   const modelsHaveAlias = (models: unknown) => Array.isArray(models) && models.some(hasAlias);
-  if (modelsHaveAlias(media.models)) return true;
+  if (modelsHaveAlias(media.models)) {
+    return true;
+  }
   return ["audio", "image", "video"].some((capability) => {
     const entry = getRecord(media[capability]);
     return entry ? hasAlias(entry) || modelsHaveAlias(entry.models) : false;
@@ -189,10 +213,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         const enabled = messageTool.allowCrossContextSend === true;
         if (enabled) {
           const crossContext = getRecord(messageTool.crossContext) ?? {};
-          if (crossContext.allowWithinProvider === undefined)
+          if (crossContext.allowWithinProvider === undefined) {
             crossContext.allowWithinProvider = true;
-          if (crossContext.allowAcrossProviders === undefined)
+          }
+          if (crossContext.allowAcrossProviders === undefined) {
             crossContext.allowAcrossProviders = true;
+          }
           messageTool.crossContext = crossContext;
           changes.push("Moved tools.message.allowCrossContextSend → tools.message.crossContext.");
         } else {
@@ -201,9 +227,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete messageTool.allowCrossContextSend;
       }
       const talkRealtime = getRecord(getRecord(raw.talk)?.realtime);
-      if (talkRealtime) moveVoice(talkRealtime, "talk.realtime", changes);
+      if (talkRealtime) {
+        moveVoice(talkRealtime, "talk.realtime", changes);
+      }
       const channels = getRecord(raw.channels);
-      if (channels) migrateDiscordVoice(channels, changes);
+      if (channels) {
+        migrateDiscordVoice(channels, changes);
+      }
       migrateMediaDeepgram(raw, changes);
     },
   }),

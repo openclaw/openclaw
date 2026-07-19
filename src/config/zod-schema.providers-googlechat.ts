@@ -82,7 +82,9 @@ export const GoogleChatConfigSchema = GoogleChatAccountSchemaBase.extend({
       'channels.googlechat.dmPolicy="allowlist" requires channels.googlechat.allowFrom to contain at least one sender ID',
   });
   for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
-    if (!account) continue;
+    if (!account) {
+      continue;
+    }
     const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
     const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
     requireOpenAllowFrom({

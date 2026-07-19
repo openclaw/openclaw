@@ -1,6 +1,6 @@
 // Proxy capture env tests cover environment variable generation for capture sessions.
 import { describe, expect, it } from "vitest";
-import { applyDebugProxyEnv, resolveDebugProxySettings } from "./env.js";
+import { resolveDebugProxySettings } from "./env.js";
 
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";

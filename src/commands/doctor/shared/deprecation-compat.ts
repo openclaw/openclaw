@@ -150,10 +150,10 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     owner: "plugin",
     introduced: "2026-07-18",
     source: "canvasHost",
-    migration: "extensions/canvas/src/config-migration.ts",
+    migration: "extensions/canvas/setup-api.ts",
     replacement: "plugins.entries.canvas.config.host",
     docsPath: "/plugins",
-    tests: ["extensions/canvas/src/config-migration.test.ts"],
+    tests: ["src/plugins/setup-registry.migrations.test.ts"],
   }),
   deprecatedCompatRecord({
     code: "doctor-phase1-channel-noops-aliases",

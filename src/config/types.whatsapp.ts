@@ -1,6 +1,5 @@
 // Defines WhatsApp channel configuration types.
 import type { ReactionLevel } from "../utils/reaction-level.js";
-import type { ChannelDeliveryStreamingConfig } from "./types.base.js";
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
@@ -46,12 +45,7 @@ export type WhatsAppAckReactionConfig = {
   group?: "always" | "mentions" | "never";
 };
 
-type WhatsAppSharedConfig = CommonChannelMessagingConfig<
-  string[],
-  string,
-  string,
-  ChannelDeliveryStreamingConfig
-> &
+type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
   ChannelReadReceiptConfig &
   ChannelReactionConfig<never, WhatsAppReactionLevel, WhatsAppAckReactionConfig> & {
     /** Same-phone setup (bot uses your personal WhatsApp number). */

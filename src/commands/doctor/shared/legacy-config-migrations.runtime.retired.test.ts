@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON } from "./legacy-config-migrations.runtime.cron.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations.runtime.mcp.js";
-import { LEGACY_DEFAULT_MODEL_MIGRATION } from "./legacy-config-migrations.runtime.models.js";
+import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS } from "./legacy-config-migrations.runtime.models.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED } from "./legacy-config-migrations.runtime.retired.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION } from "./legacy-config-migrations.runtime.session.js";
 
@@ -10,7 +10,9 @@ function applyAll(raw: Record<string, unknown>) {
   for (const migration of [
     ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP,
     ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON,
-    LEGACY_DEFAULT_MODEL_MIGRATION,
+    ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.filter(
+      (modelMigration) => modelMigration.id === "defaultModel->agents.defaults.model",
+    ),
     ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION,
     ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED,
   ]) {

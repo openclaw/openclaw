@@ -7,7 +7,6 @@
 export {
   AllowFromListSchema,
   ChannelGroupEntrySchema,
-  ChannelMentionPatternsSchemas,
   buildChannelConfigSchema,
   buildCatchallMultiAccountChannelSchema,
   buildGroupEntrySchema,

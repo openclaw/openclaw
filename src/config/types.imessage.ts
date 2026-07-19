@@ -2,7 +2,6 @@
  * iMessage channel config types shared by core schema, bundled plugin runtime, and plugin SDK exports.
  * Root fields apply to the default account; `accounts` entries override them per account.
  */
-import type { ChannelDeliveryStreamingConfig } from "./types.base.js";
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
@@ -32,7 +31,7 @@ export type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
 /** Per-account iMessage runtime/config shape. */
 export type IMessageAccountConfig = Omit<
-  CommonChannelMessagingConfig<string[], string | number, string, ChannelDeliveryStreamingConfig>,
+  CommonChannelMessagingConfig,
   "mentionPatterns" | "replyToMode"
 > &
   ChannelReadReceiptConfig &

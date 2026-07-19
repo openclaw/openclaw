@@ -58,7 +58,7 @@ export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig,
   preview?: ChannelStreamingPreviewConfig;
 };
 
-export type TelegramExecApprovalConfig = ChannelExecApprovalConfig<string | number>;
+export type TelegramExecApprovalConfig = ChannelExecApprovalConfig;
 
 export type TelegramCapabilitiesConfig =
   | string[]

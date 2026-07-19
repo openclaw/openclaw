@@ -6,7 +6,6 @@ import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   announceDeliveryMocks,
   createMediaCompletionFixture,
-  expectFallbackMediaAnnouncement,
   expectQueuedTaskRun,
   expectRecordedTaskProgress,
   resetMediaBackgroundMocks,

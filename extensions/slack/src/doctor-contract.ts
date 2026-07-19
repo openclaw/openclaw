@@ -44,7 +44,9 @@ function migrateDmReplyMode(
   changes: string[],
 ): boolean {
   const dm = asObjectRecord(entry.dm);
-  if (!dm || !Object.hasOwn(dm, "replyToMode")) return false;
+  if (!dm || !Object.hasOwn(dm, "replyToMode")) {
+    return false;
+  }
   const byType = asObjectRecord(entry.replyToModeByChatType) ?? {};
   if (byType.direct === undefined) {
     byType.direct = dm.replyToMode;

@@ -41,7 +41,9 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
 function removeExposeErrorText(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const entry = asObjectRecord(channels?.whatsapp);
-  if (!entry) return cfg;
+  if (!entry) {
+    return cfg;
+  }
   let changed = false;
   const next = { ...entry };
   if (Object.hasOwn(next, "exposeErrorText")) {
@@ -54,7 +56,9 @@ function removeExposeErrorText(cfg: OpenClawConfig, changes: string[]): OpenClaw
     const nextAccounts = { ...accounts };
     for (const [id, value] of Object.entries(accounts)) {
       const account = asObjectRecord(value);
-      if (!account || !Object.hasOwn(account, "exposeErrorText")) continue;
+      if (!account || !Object.hasOwn(account, "exposeErrorText")) {
+        continue;
+      }
       const cleaned = { ...account };
       delete cleaned.exposeErrorText;
       nextAccounts[id] = cleaned;

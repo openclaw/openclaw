@@ -1,5 +1,4 @@
 // Defines Google Chat channel configuration types.
-import type { ChannelDeliveryStreamingConfig } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
   ChannelBotInteractionConfig,
@@ -25,10 +24,7 @@ export type GoogleChatGroupConfig = {
   systemPrompt?: string;
 };
 
-export type GoogleChatAccountConfig = Omit<
-  CommonChannelMessagingConfig<string[], string | number, string, ChannelDeliveryStreamingConfig>,
-  "mentionPatterns"
-> &
+export type GoogleChatAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> &
   ChannelBotInteractionConfig<boolean> & {
     /** Default mention requirement for space messages (default: true). */
     requireMention?: boolean;

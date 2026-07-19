@@ -5,7 +5,6 @@ import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   announceDeliveryMocks,
   createMediaCompletionFixture,
-  expectFallbackMediaAnnouncement,
   expectQueuedTaskRun,
   expectRecordedTaskProgress,
   resetMediaBackgroundMocks,

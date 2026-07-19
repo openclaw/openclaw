@@ -168,7 +168,7 @@ export const MemorySchema = z
   })
   .optional();
 
-export const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
+const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
 
 const McpOAuthClientMetadataUrlSchema = z
   .string()

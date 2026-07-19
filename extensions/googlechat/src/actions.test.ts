@@ -100,11 +100,13 @@ describe("googlechat message actions", () => {
   });
 
   it("keeps account-scoped discovery send-only", () => {
-    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
-      enabled: true,
-      credentialSource: "service-account",
-      config: {},
-    }));
+    resolveGoogleChatAccount.mockImplementation(
+      ({ accountId: _accountId }: { accountId?: string | null }) => ({
+        enabled: true,
+        credentialSource: "service-account",
+        config: {},
+      }),
+    );
 
     for (const accountId of ["default", "work"]) {
       expect(

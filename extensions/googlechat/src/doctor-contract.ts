@@ -90,11 +90,14 @@ function normalizeGoogleChatEntry(params: {
   }
 
   if (hasRetiredReactions(updated)) {
-    const actions = { ...(asObjectRecord(updated.actions) ?? {}) };
+    const actions = { ...asObjectRecord(updated.actions) };
     delete actions.reactions;
     updated = { ...updated };
-    if (Object.keys(actions).length > 0) updated.actions = actions;
-    else delete updated.actions;
+    if (Object.keys(actions).length > 0) {
+      updated.actions = actions;
+    } else {
+      delete updated.actions;
+    }
     params.changes.push(
       `Removed ${params.pathPrefix}.actions.reactions (Google Chat does not support reactions).`,
     );

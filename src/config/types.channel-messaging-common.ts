@@ -104,4 +104,6 @@ export type ChannelReactionConfig<
   reactionNotifications?: TNotification;
   reactionLevel?: TLevel;
   ackReaction?: TAckReaction;
-} & (TAllowlist extends true ? { reactionAllowlist?: Array<string | number> } : {});
+} & (TAllowlist extends true
+  ? { reactionAllowlist?: Array<string | number> }
+  : Record<never, never>);

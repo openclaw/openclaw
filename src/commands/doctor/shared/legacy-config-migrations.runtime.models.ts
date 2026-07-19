@@ -1708,7 +1708,7 @@ const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
 }));
 
 /** Legacy config migration specs for model/provider runtime config compatibility. */
-export const LEGACY_DEFAULT_MODEL_MIGRATION = defineLegacyConfigMigration({
+const LEGACY_DEFAULT_MODEL_MIGRATION = defineLegacyConfigMigration({
   id: "defaultModel->agents.defaults.model",
   describe: "Move the retired root default model to agent defaults",
   legacyRules: [
@@ -1718,7 +1718,9 @@ export const LEGACY_DEFAULT_MODEL_MIGRATION = defineLegacyConfigMigration({
     },
   ],
   apply: (raw, changes) => {
-    if (!Object.hasOwn(raw, "defaultModel")) return;
+    if (!Object.hasOwn(raw, "defaultModel")) {
+      return;
+    }
     const legacyDefaultModel = raw.defaultModel;
     const currentDefaults = getRecord(getRecord(raw.agents)?.defaults);
     if (currentDefaults?.model === undefined && typeof legacyDefaultModel === "string") {
