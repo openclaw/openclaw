@@ -276,6 +276,23 @@ describe("volcengineTTS", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects malformed Seed Speech audio base64", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ code: 0, data: "not-base64!" })),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        apiKey: "fixture-api-key",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("BytePlus Seed Speech TTS returned malformed base64 audio data");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reports Seed Speech provider errors without exposing credentials", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -346,6 +363,44 @@ describe("volcengineTTS", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Volcengine TTS error 3001: load grant failed");
     expect((error as Error).message).not.toContain("secret-token");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes valid legacy Volcengine audio base64", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({ code: 3000, data: Buffer.from("legacy-audio").toString("base64") }),
+      ),
+      release,
+    });
+
+    const audio = await volcengineTTS({
+      text: "hello",
+      appId: "app-id",
+      token: "fixture-token",
+      timeoutMs: 1000,
+    });
+
+    expect(audio.toString()).toBe("legacy-audio");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed legacy Volcengine audio base64", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ code: 3000, data: "not-base64!" })),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        appId: "app-id",
+        token: "fixture-token",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Volcengine TTS returned malformed base64 audio data");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
