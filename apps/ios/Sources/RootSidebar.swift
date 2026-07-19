@@ -26,13 +26,15 @@ struct RootSidebar: View {
                 self.searchField
             }
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                // One 10pt unit everywhere: side insets, section gaps, and
+                // the picker card's clearance all match.
+                LazyVStack(alignment: .leading, spacing: 10) {
                     self.agentsSection
                     self.pagesSection
                     self.sessionsSection
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 12)
+                .padding(.vertical, 10)
             }
             self.footer
         }
@@ -135,6 +137,10 @@ struct RootSidebar: View {
                     self.moreAgentsRow(Array(agents.dropFirst(shownCount)))
                 }
             }
+            .padding(4)
+            .background(.ultraThinMaterial, in: RoundedRectangle(
+                cornerRadius: OpenClawProMetric.cardRadius,
+                style: .continuous))
         }
     }
 
