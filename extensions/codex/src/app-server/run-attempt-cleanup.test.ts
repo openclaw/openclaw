@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   clearActiveEmbeddedRun: vi.fn(),
-  runAgentCleanupStep: vi.fn(async (input: { cleanup: () => Promise<void> }) => {
+  runAgentCleanupStep: vi.fn(async (input: { cleanup: () => Promise<void>; step: string }) => {
     await input.cleanup();
   }),
   unsubscribeCodexThreadBestEffort: vi.fn(async () => true),
