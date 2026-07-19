@@ -4191,6 +4191,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /help/environment
 - Headings:
   - H2: Precedence (highest to lowest)
+  - H2: Supported operator-facing variables
+  - H3: Paths and instances
+  - H3: Gateway and authentication
+  - H3: Provider credentials
+  - H3: Logging and diagnostics
+  - H3: Feature and runtime toggles
   - H2: Provider credentials and workspace .env
   - H2: Config env block
   - H2: Shell env import
