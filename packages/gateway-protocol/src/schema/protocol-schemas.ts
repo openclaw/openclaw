@@ -352,6 +352,11 @@ import {
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
+  SystemChangeEntrySchema,
+  SystemChangeKindSchema,
+  SystemChangeSourceSchema,
+  SystemChangesListParamsSchema,
+  SystemChangesListResultSchema,
   SystemAgentChatParamsSchema,
   SystemAgentChatResultSchema,
   SystemAgentSetupActivateParamsSchema,
@@ -826,6 +831,11 @@ export const ProtocolSchemas = {
   ConfigSchemaLookupResult: ConfigSchemaLookupResultSchema,
   SystemAgentChatParams: SystemAgentChatParamsSchema,
   SystemAgentChatResult: SystemAgentChatResultSchema,
+  SystemChangeEntry: SystemChangeEntrySchema,
+  SystemChangeKind: SystemChangeKindSchema,
+  SystemChangeSource: SystemChangeSourceSchema,
+  SystemChangesListParams: SystemChangesListParamsSchema,
+  SystemChangesListResult: SystemChangesListResultSchema,
   SystemAgentSetupDetectParams: SystemAgentSetupDetectParamsSchema,
   SystemAgentSetupDetectResult: SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyParams: SystemAgentSetupVerifyParamsSchema,

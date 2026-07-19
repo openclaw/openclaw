@@ -117,6 +117,22 @@ public enum TaskSuggestionResolution: String, Codable, Sendable {
     case expired = "expired"
 }
 
+public enum SystemChangeKind: String, Codable, Sendable {
+    case operation = "operation"
+    case configWrite = "config-write"
+    case externalEdit = "external-edit"
+}
+
+public enum SystemChangeSource: String, Codable, Sendable {
+    case systemAgent = "system-agent"
+    case doctor = "doctor"
+    case configRpc = "config-rpc"
+    case cli = "cli"
+    case pluginInstall = "plugin-install"
+    case external = "external"
+    case unknown = "unknown"
+}
+
 public enum MemoryMigrationItemStatus: String, Codable, Sendable {
     case planned = "planned"
     case migrated = "migrated"
@@ -7589,6 +7605,84 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
         case question
+    }
+}
+
+public struct SystemChangeEntry: Codable, Sendable {
+    public let id: String
+    public let at: Double
+    public let kind: SystemChangeKind
+    public let source: SystemChangeSource
+    public let summary: String
+    public let changedpaths: [String]?
+    public let invalid: Bool?
+    public let opaquechange: Bool?
+
+    public init(
+        id: String,
+        at: Double,
+        kind: SystemChangeKind,
+        source: SystemChangeSource,
+        summary: String,
+        changedpaths: [String]? = nil,
+        invalid: Bool? = nil,
+        opaquechange: Bool? = nil)
+    {
+        self.id = id
+        self.at = at
+        self.kind = kind
+        self.source = source
+        self.summary = summary
+        self.changedpaths = changedpaths
+        self.invalid = invalid
+        self.opaquechange = opaquechange
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case at
+        case kind
+        case source
+        case summary
+        case changedpaths = "changedPaths"
+        case invalid
+        case opaquechange = "opaqueChange"
+    }
+}
+
+public struct SystemChangesListParams: Codable, Sendable {
+    public let limit: Int?
+    public let beforecursor: String?
+
+    public init(
+        limit: Int? = nil,
+        beforecursor: String? = nil)
+    {
+        self.limit = limit
+        self.beforecursor = beforecursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case beforecursor = "beforeCursor"
+    }
+}
+
+public struct SystemChangesListResult: Codable, Sendable {
+    public let entries: [SystemChangeEntry]
+    public let nextcursor: String?
+
+    public init(
+        entries: [SystemChangeEntry],
+        nextcursor: String? = nil)
+    {
+        self.entries = entries
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case entries
+        case nextcursor = "nextCursor"
     }
 }
 

@@ -285,6 +285,10 @@ const loadSystemAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/system-agent.js"),
   (module) => module.systemAgentHandlers,
 );
+const loadSystemChangesHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-changes.js"),
+  (module) => module.systemChangesHandlers,
+);
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
   (module) => module.wizardHandlers,
@@ -358,6 +362,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["logs.tail"],
     loadHandlers: loadLogsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["openclaw.changes.list"],
+    loadHandlers: loadSystemChangesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
