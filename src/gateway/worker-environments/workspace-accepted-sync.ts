@@ -22,7 +22,7 @@ import {
 
 const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
 
-export function createAcceptedWorkspacePublisher(params: {
+function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
   ownerSignal: AbortSignal;

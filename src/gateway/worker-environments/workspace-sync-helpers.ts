@@ -13,7 +13,7 @@ import {
 import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
-export const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 export type WorkerWorkspaceActionsOptions = {
   environmentId: string;
@@ -87,7 +87,7 @@ export function workerWorkspaceSshArgv(
   ];
 }
 
-export async function resolveRemoteWorkspaceBaseManifest(
+async function resolveRemoteWorkspaceBaseManifest(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
   remoteWorkspaceDir: string,
   expectedRef: string,
