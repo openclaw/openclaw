@@ -87,14 +87,15 @@ describe("generate-npm-shrinkwrap", () => {
     }
   });
 
-  it("ships root relative file dependencies in the published package", () => {
+  it("ships the vendored contracts source tree without npm file dependencies", () => {
     const packageJson = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
     const relativeFileDependencies = Object.values(packageJson.dependencies)
       .filter((spec): spec is string => typeof spec === "string" && spec.startsWith("file:"))
       .map((spec) => spec.slice("file:".length));
 
-    expect(relativeFileDependencies).not.toEqual([]);
-    expect(packageJson.files).toEqual(expect.arrayContaining(relativeFileDependencies));
+    expect(relativeFileDependencies).toEqual([]);
+    expect(packageJson.dependencies["@openclaw/contracts"]).toBeUndefined();
+    expect(packageJson.files).toEqual(expect.arrayContaining(["vendor/openclaw-contracts/"]));
   });
 
   it.each([
