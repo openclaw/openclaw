@@ -312,7 +312,9 @@ async function normalizeInputImage(params: {
     (detectedMime && HEIC_INPUT_IMAGE_MIMES.has(detectedMime)) ||
     (HEIC_INPUT_IMAGE_MIMES.has(declaredMime) && !detectedMime)
       ? (detectedMime ?? declaredMime)
-      : declaredMime;
+      : detectedMime?.startsWith("image/")
+        ? detectedMime
+        : declaredMime;
   if (!params.limits.allowedMimes.has(sourceMime)) {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }
