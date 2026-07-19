@@ -227,19 +227,29 @@ describe("Code Mode swarm guest", () => {
 });
 
 describe("Code Mode swarm host bridge", () => {
-  it("scopes stable replay identities to one outer run and source", () => {
+  it("keeps one invocation stable across restore and separates identical later turns", () => {
     const ctx = swarmContext();
-    const first = testing.codeModeReplayIdForToolCall(ctx, "call_1", 'agents.run("one")');
+    const code = 'agents.run("one")';
+    const restoredAssistantTurnId = JSON.parse(JSON.stringify("response-turn-1")) as string;
+    const first = testing.codeModeReplayIdForToolCall(ctx, "call_0", code, "response-turn-1");
 
-    expect(testing.codeModeReplayIdForToolCall(ctx, "call_1", 'agents.run("one")')).toBe(first);
+    expect(testing.codeModeReplayIdForToolCall(ctx, "call_0", code, restoredAssistantTurnId)).toBe(
+      first,
+    );
+    expect(testing.codeModeReplayIdForToolCall(ctx, "call_0", code, "response-turn-2")).not.toBe(
+      first,
+    );
     expect(
       testing.codeModeReplayIdForToolCall(
         { ...ctx, runId: "run-next" },
-        "call_1",
-        'agents.run("one")',
+        "call_0",
+        code,
+        "response-turn-1",
       ),
     ).not.toBe(first);
-    expect(testing.codeModeReplayIdForToolCall(ctx, "call_1", 'agents.run("two")')).not.toBe(first);
+    expect(
+      testing.codeModeReplayIdForToolCall(ctx, "call_0", 'agents.run("two")', "response-turn-1"),
+    ).not.toBe(first);
   });
 
   it("dispatches notes with the canonical swarm group", async () => {
@@ -271,10 +281,11 @@ describe("Code Mode swarm host bridge", () => {
 
   it("re-settles a persisted collector after restart without double-spawn", async () => {
     let persisted: Record<string, unknown> | undefined;
+    let replayId = "";
     const callExactId = vi.fn(async (_id: string, input: Record<PropertyKey, unknown>) => {
       const idempotencyKey = input[SWARM_CODE_MODE_IDEMPOTENCY_KEY];
       const requestFingerprint = input[SWARM_CODE_MODE_REQUEST_FINGERPRINT];
-      expect(idempotencyKey).toBe("cm-restart:bridge:1");
+      expect(idempotencyKey).toBe(`${replayId}:bridge:1`);
       expect(requestFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/u);
       persisted = {
         runId: "collector-1",
@@ -319,11 +330,25 @@ describe("Code Mode swarm host bridge", () => {
         session: { scope: "global" },
       },
     } as const;
+    const code = 'return await agents.run("Research", { label: "facts" });';
+    replayId = testing.codeModeReplayIdForToolCall(
+      globalAliasContext,
+      "call_0",
+      code,
+      "response-turn-1",
+    );
+    const restoredReplayId = testing.codeModeReplayIdForToolCall(
+      globalAliasContext,
+      "call_0",
+      code,
+      JSON.parse(JSON.stringify("response-turn-1")) as string,
+    );
+    expect(restoredReplayId).toBe(replayId);
     const bridgeBase = {
       runtime,
       namespaceRuntime: {},
       parentToolCallId: "parent",
-      codeModeRunId: "cm-restart",
+      codeModeRunId: restoredReplayId,
       ctx: globalAliasContext,
     };
 
@@ -340,12 +365,12 @@ describe("Code Mode swarm host bridge", () => {
     expect(callExactId).toHaveBeenCalledTimes(1);
     expect(getSwarmRunByLaunchReplayKey).toHaveBeenNthCalledWith(
       1,
-      "cm-restart:bridge:1",
+      `${replayId}:bridge:1`,
       "global",
     );
     expect(getSwarmRunByLaunchReplayKey).toHaveBeenNthCalledWith(
       2,
-      "cm-restart:bridge:1",
+      `${replayId}:bridge:1`,
       "global",
     );
     expect(waitForCollectorCompletion).toHaveBeenCalledWith({
@@ -353,6 +378,69 @@ describe("Code Mode swarm host bridge", () => {
       currentSessionKeys: new Set(["main", "global"]),
       signal: undefined,
     });
+  });
+
+  it("spawns two collectors when later turns reuse the tool-call id and source", async () => {
+    const persistedByReplayKey = new Map<string, Record<string, unknown>>();
+    const callExactId = vi.fn(async (_id: string, input: Record<PropertyKey, unknown>) => {
+      const replayKey = String(input[SWARM_CODE_MODE_IDEMPOTENCY_KEY]);
+      const runId = `collector-${persistedByReplayKey.size + 1}`;
+      persistedByReplayKey.set(replayKey, {
+        runId,
+        childSessionKey: `agent:main:subagent:${persistedByReplayKey.size + 1}`,
+        swarmLaunchReplayKey: replayKey,
+        swarmLaunchRequestFingerprint: input[SWARM_CODE_MODE_REQUEST_FINGERPRINT],
+      });
+      return { result: { details: { status: "accepted", runId } } };
+    });
+    testing.setSwarmDepsForTest({
+      getSwarmRunByLaunchReplayKey: (key) => persistedByReplayKey.get(key),
+    });
+    const runtime = {
+      namespaceEntries: () => [
+        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
+      ],
+      callExactId,
+    };
+    const ctx = swarmContext();
+    const code = 'return await agents.run("Research");';
+    const firstReplayId = testing.codeModeReplayIdForToolCall(
+      ctx,
+      "call_0",
+      code,
+      "response-turn-1",
+    );
+    const secondReplayId = testing.codeModeReplayIdForToolCall(
+      ctx,
+      "call_0",
+      code,
+      "response-turn-2",
+    );
+    const bridgeBase = {
+      runtime,
+      namespaceRuntime: {},
+      parentToolCallId: "parent",
+      ctx,
+      request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
+    };
+
+    const first = await testing.runBridgeRequest({
+      ...bridgeBase,
+      codeModeRunId: firstReplayId,
+    });
+    const second = await testing.runBridgeRequest({
+      ...bridgeBase,
+      codeModeRunId: secondReplayId,
+    });
+
+    expect(secondReplayId).not.toBe(firstReplayId);
+    expect(first).toMatchObject({ ok: true, value: { runId: "collector-1" } });
+    expect(second).toMatchObject({ ok: true, value: { runId: "collector-2" } });
+    expect(callExactId).toHaveBeenCalledTimes(2);
+    expect([...persistedByReplayKey.keys()]).toEqual([
+      `${firstReplayId}:bridge:1`,
+      `${secondReplayId}:bridge:1`,
+    ]);
   });
 
   it("rejects replay when the collector request payload changes", async () => {

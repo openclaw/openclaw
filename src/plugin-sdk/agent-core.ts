@@ -58,6 +58,7 @@ export type {
   AgentOptions,
   AgentState,
   AgentTool,
+  AgentToolExecutionContext,
   AgentToolProgress,
   AgentToolResult,
   AgentToolUpdateCallback,

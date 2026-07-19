@@ -41,6 +41,7 @@ type CodeModeTestApi = {
     {
       config: CodeModeConfig;
       expiresAt: number;
+      replayId?: string;
       agentWaitRetainUntil?: number;
       pending: Array<{
         id: string;
@@ -53,7 +54,12 @@ type CodeModeTestApi = {
     }
   >;
   resumingRunIds: Set<string>;
-  codeModeReplayIdForToolCall(ctx: ToolSearchToolContext, toolCallId: string, code: string): string;
+  codeModeReplayIdForToolCall(
+    ctx: ToolSearchToolContext,
+    toolCallId: string,
+    code: string,
+    assistantTurnId?: string,
+  ): string;
   removeExpiredRuns(now?: number): void;
   runBridgeRequest(
     params: Record<string, unknown>,

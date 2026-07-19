@@ -16,6 +16,7 @@ import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type {
   AgentTool,
+  AgentToolExecutionContext,
   AgentToolProgress,
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -48,6 +49,7 @@ type ErasedAgentToolExecute = {
     params: unknown,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback,
+    executionContext?: AgentToolExecutionContext,
   ): Promise<AgentToolResult<unknown>>;
 };
 

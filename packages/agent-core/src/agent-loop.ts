@@ -10,6 +10,7 @@ import type {
 } from "@openclaw/llm-core";
 import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
 import { TranscriptNotContinuableError } from "./errors.js";
+import { uuidv7 } from "./harness/session/uuid.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -26,6 +27,7 @@ import type {
   AgentMessage,
   AgentTool,
   AgentToolCall,
+  AgentToolExecutionContext,
   AgentToolResult,
   StreamFn,
 } from "./types.js";
@@ -85,6 +87,14 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
   }
   const content = message.content.filter((item) => item.type !== "toolCall");
   return content.length === message.content.length ? message : { ...message, content };
+}
+
+function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
+  if (message.stopReason !== "toolUse" || message.responseId?.trim() || message.turnId?.trim()) {
+    return message;
+  }
+  // message_end persists this local identity before any tool can execute.
+  return { ...message, turnId: uuidv7() };
 }
 
 /**
@@ -514,7 +524,9 @@ async function streamAssistantResponse(
 
       case "done":
       case "error": {
-        const finalMessage = removeNonExecutableToolCalls(await response.result());
+        const finalMessage = ensureToolTurnIdentity(
+          removeNonExecutableToolCalls(await response.result()),
+        );
         if (addedPartial) {
           context.messages[context.messages.length - 1] = finalMessage;
         } else {
@@ -529,7 +541,9 @@ async function streamAssistantResponse(
     }
   }
 
-  const finalMessage = removeNonExecutableToolCalls(await response.result());
+  const finalMessage = ensureToolTurnIdentity(
+    removeNonExecutableToolCalls(await response.result()),
+  );
   if (addedPartial) {
     context.messages[context.messages.length - 1] = finalMessage;
   } else {
@@ -661,7 +675,12 @@ async function executeToolCallsSequential(
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       };
     } else {
-      const executed = await executePreparedToolCall(preparation, signal, emit);
+      const executed = await executePreparedToolCall(
+        preparation,
+        { assistantMessage, toolCall: preparation.toolCall },
+        signal,
+        emit,
+      );
       finalized = await finalizeExecutedToolCall(
         currentContext,
         assistantMessage,
@@ -740,7 +759,12 @@ async function executeToolCallsParallel(
     }
 
     finalizedCalls.push(async () => {
-      const executed = await executePreparedToolCall(preparation, signal, emit);
+      const executed = await executePreparedToolCall(
+        preparation,
+        { assistantMessage, toolCall: preparation.toolCall },
+        signal,
+        emit,
+      );
       const finalized = await finalizeExecutedToolCall(
         currentContext,
         assistantMessage,
@@ -980,6 +1004,7 @@ async function prepareToolCall(
 
 async function executePreparedToolCall(
   prepared: PreparedToolCall,
+  executionContext: AgentToolExecutionContext,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
@@ -1020,6 +1045,7 @@ async function executePreparedToolCall(
           ),
         );
       },
+      executionContext,
     );
     acceptingUpdates = false;
     await Promise.all(updateEvents);

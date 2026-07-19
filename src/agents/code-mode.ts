@@ -35,7 +35,7 @@ import {
   type CodeModeNamespaceRuntime,
   type SerializedCodeModeNamespaceValue,
 } from "./code-mode-namespaces.js";
-import type { AgentToolUpdateCallback } from "./runtime/index.js";
+import type { AgentToolExecutionContext, AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { stableStringify } from "./stable-stringify.js";
@@ -618,17 +618,19 @@ function codeModeReplayIdForToolCall(
   ctx: ToolSearchToolContext,
   toolCallId: string,
   code: string,
+  assistantTurnId?: string,
 ): string {
   const outerRunId = ctx.runId?.trim();
   if (!outerRunId) {
     // Swarm bridges require an outer run id; ordinary Code Mode still gets an isolated identity.
     return `cm_replay_${randomUUID()}`;
   }
-  // A replayed tool call rebuilds this identity, while later turns and changed source cannot collide.
+  // Provider response ids survive transcript restore and scope resettable tool-call ids to one turn.
   const identity = JSON.stringify([
     ctx.sessionKey ?? "",
     ctx.sessionId ?? "",
     outerRunId,
+    assistantTurnId?.trim() ?? "",
     toolCallId,
     code,
   ]);
@@ -1726,6 +1728,7 @@ async function runExec(params: {
   toolCallId: string;
   ctx: CodeModeToolContext;
   code: string;
+  assistantTurnId?: string;
   language?: CodeModeLanguage;
   restartSafe: boolean;
   signal?: AbortSignal;
@@ -1756,7 +1759,12 @@ async function runExec(params: {
     params.ctx.runtimeConfig ?? params.ctx.config,
     params.ctx.agentId,
   ).enabled;
-  const codeModeReplayId = codeModeReplayIdForToolCall(params.ctx, params.toolCallId, params.code);
+  const codeModeReplayId = codeModeReplayIdForToolCall(
+    params.ctx,
+    params.toolCallId,
+    params.code,
+    params.assistantTurnId,
+  );
   // Namespace scope factories are trusted plugin registrations; abort is
   // re-checked at the worker boundary rather than racing this setup.
   const namespaceRuntime = await createCodeModeNamespaceRuntime(params.ctx, namespaceCatalog);
@@ -2207,6 +2215,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       args: unknown,
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
+      executionContext?: AgentToolExecutionContext,
     ) => {
       const input = readCode(args);
       return jsonResult(
@@ -2215,6 +2224,9 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
             toolCallId,
             ctx,
             code: input.code,
+            assistantTurnId:
+              executionContext?.assistantMessage.responseId?.trim() ||
+              executionContext?.assistantMessage.turnId?.trim(),
             language: input.language,
             restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
             signal,

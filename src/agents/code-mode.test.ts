@@ -1911,7 +1911,7 @@ describe("Code Mode", () => {
     ]);
   });
 
-  it("allocates distinct snapshots when a later invocation reuses a tool-call id", async () => {
+  it("allocates distinct replay identities when a later turn reuses a tool-call id", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -1923,14 +1923,36 @@ describe("Code Mode", () => {
     });
     const execTool = expectDefined(codeModeTools[0], "codeModeTools[0] test invariant");
     const input = { code: 'await yield_control("pause"); return "done";' };
+    const executionContext = (turnId: string) =>
+      ({
+        assistantMessage: { responseId: " ", turnId },
+        toolCall: { type: "toolCall", id: "reused-call-id", name: "exec", arguments: input },
+      }) as never;
 
-    const first = resultDetails(await execTool.execute("reused-call-id", input));
-    const second = resultDetails(await execTool.execute("reused-call-id", input));
+    const first = resultDetails(
+      await execTool.execute(
+        "reused-call-id",
+        input,
+        undefined,
+        undefined,
+        executionContext("response-turn-1"),
+      ),
+    );
+    const second = resultDetails(
+      await execTool.execute(
+        "reused-call-id",
+        input,
+        undefined,
+        undefined,
+        executionContext("response-turn-2"),
+      ),
+    );
 
     expect(first.status).toBe("waiting");
     expect(second.status).toBe("waiting");
     expect(second.runId).not.toBe(first.runId);
     expect(testing.activeRuns.size).toBe(2);
+    expect(new Set([...testing.activeRuns.values()].map((state) => state.replayId)).size).toBe(2);
   });
 
   it("keeps restart-safe mode across audited core reads", async () => {
