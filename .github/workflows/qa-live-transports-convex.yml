@@ -1,4 +1,4 @@
-﻿name: QA-Lab - All Lanes
+name: QA-Lab - All Lanes
 
 on:
   schedule:
@@ -950,4 +950,3 @@ jobs:
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
-
