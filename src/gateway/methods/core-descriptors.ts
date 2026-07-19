@@ -115,6 +115,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "mcp.app.listResourceTemplates", scope: "operator.read" },
   { name: "mcp.app.readResource", scope: "operator.read" },
   { name: "mcp.app.callTool", scope: "operator.write" },
+  { name: "mcp.app.updateModelContext", scope: "operator.write" },
   { name: "board.get", scope: "operator.read" },
   { name: "board.update", scope: "operator.write" },
   { name: "board.widget.put", scope: "operator.write" },

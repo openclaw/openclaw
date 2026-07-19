@@ -620,6 +620,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "mcp.app.listResources",
       "mcp.app.listResourceTemplates",
       "mcp.app.readResource",
+      "mcp.app.updateModelContext",
     ],
     loadHandlers: loadMcpAppHandlers,
   }),
