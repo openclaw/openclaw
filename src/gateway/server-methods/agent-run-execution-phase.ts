@@ -360,6 +360,8 @@ export function startAgentRunExecution(params: {
             ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
             : params.request.sourceReplyDeliveryMode,
           disableMessageTool: params.request.disableMessageTool,
+          swarmCollector: params.request.swarmCollector,
+          swarmOutputSchema: params.request.swarmOutputSchema,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,

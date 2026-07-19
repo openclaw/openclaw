@@ -74,6 +74,8 @@ type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> =
 
 type ChannelIngressMonitorRetention = {
   pruneIntervalMs: number;
+  pendingTtlMs?: number;
+  pendingMaxEntries?: number;
   completedTtlMs?: number;
   completedMaxEntries?: number;
   failedTtlMs?: number;
@@ -114,6 +116,7 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
   abortSignal?: AbortSignal;
   now?: () => number;
   onError?: (error: unknown) => void;
+  onActivityChange?: (active: boolean) => void;
   createStoppedError?: () => Error;
   admissionMode?: "until-stopped" | "while-running";
 };
@@ -142,12 +145,36 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let stopped = false;
   let requested = false;
   let pumping: Promise<void> | undefined;
+  let drainIdleWake: Promise<void> | undefined;
+  let drainIdleWakeRequested = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
   let admissionClaimLocked = false;
   const admissionClaimWaiters: Array<() => void> = [];
   let stopTask: Promise<void> | undefined;
+  let lastReportedActive = false;
+
+  const reportError = (error: unknown): void => {
+    try {
+      options.onError?.(error);
+    } catch {
+      // Observers must not be able to corrupt ingress bookkeeping.
+    }
+  };
+
+  const publishActivity = (): void => {
+    const active = activeDeliveries.size > 0 || (running && (requested || pumping !== undefined));
+    if (active === lastReportedActive) {
+      return;
+    }
+    lastReportedActive = active;
+    try {
+      options.onActivityChange?.(active);
+    } catch (error) {
+      reportError(error);
+    }
+  };
 
   const withAdmissionClaimLock = <T>(task: () => Promise<T>): Promise<T> => {
     const run = (): Promise<T> => {
@@ -247,6 +274,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           onAdopted: async () => {
             handedOff = true;
             await lifecycle.onAdopted();
+            requestDrain();
           },
           onDeferred: () => {
             handedOff = true;
@@ -262,6 +290,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             handedOff = true;
             deferredHandoff = true;
             await lifecycle.onAbandoned();
+            requestDrain();
           },
         };
 
@@ -271,6 +300,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           options.deliver(raw, wrappedLifecycle, claim),
         );
         activeDeliveries.add(delivery);
+        publishActivity();
         let result: ChannelIngressMonitorDeliveryResult | void;
         try {
           result = await delivery;
@@ -281,12 +311,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           throw error;
         } finally {
           activeDeliveries.delete(delivery);
+          publishActivity();
         }
         if (result?.kind === "failed-retryable") {
           return result;
         }
         if (isAborted() || lifecycle.abortSignal.aborted) {
           return { kind: "failed-retryable", error: createStoppedError() };
+        }
+        if (result?.kind === "completed") {
+          return result;
         }
         if (result?.kind === "deferred") {
           if (!deferredHandoff) {
@@ -313,6 +347,37 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     lastPrunedAt = currentTime;
   };
 
+  const scheduleDrainIdleWake = (activeDrain: ChannelIngressDrain): void => {
+    if (drainIdleWake) {
+      drainIdleWakeRequested = true;
+      return;
+    }
+    drainIdleWakeRequested = false;
+    const wake = activeDrain.waitForIdle();
+    drainIdleWake = wake;
+    void wake.then(
+      () => {
+        if (drainIdleWake !== wake) {
+          return;
+        }
+        const shouldRearm = drainIdleWakeRequested && running && !isAborted();
+        drainIdleWake = undefined;
+        drainIdleWakeRequested = false;
+        if (shouldRearm) {
+          scheduleDrainIdleWake(activeDrain);
+        }
+        requestDrain();
+      },
+      (error: unknown) => {
+        if (drainIdleWake === wake) {
+          drainIdleWake = undefined;
+          drainIdleWakeRequested = false;
+        }
+        reportError(error);
+      },
+    );
+  };
+
   const runPump = async (): Promise<void> => {
     try {
       for (;;) {
@@ -334,28 +399,40 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
                 activeDeliveries.size >= options.drain.startLimit),
           }),
         );
-        await waitForActiveDeliveries();
-        await activeDrain.waitForIdle();
+        if (started > 0) {
+          // Failed-retryable delivery settles after the channel callback returns.
+          // Wake once the drain has released or failed those claims.
+          scheduleDrainIdleWake(activeDrain);
+        }
         if (!running || isAborted() || (!requested && started === 0)) {
           break;
         }
       }
     } catch (error) {
-      options.onError?.(error);
+      reportError(error);
     } finally {
       pumping = undefined;
-      if (running && !isAborted() && requested) {
+      if (!running || isAborted()) {
+        requested = false;
+      } else if (requested) {
         requestDrain();
       }
+      publishActivity();
     }
   };
 
   const requestDrain = (): void => {
+    if (!running || isAborted()) {
+      publishActivity();
+      return;
+    }
     requested = true;
-    if (!running || isAborted() || pumping) {
+    if (pumping) {
+      publishActivity();
       return;
     }
     pumping = runPump();
+    publishActivity();
   };
 
   const clearPollTimer = () => {
@@ -367,6 +444,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     running = false;
     requested = false;
     clearPollTimer();
+    publishActivity();
     await waitForPumpIdle();
   };
 
@@ -458,6 +536,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       pollTimer.unref?.();
       requestDrain();
     },
+    requestDrain,
     pause,
     stop: () => {
       stopTask ??= (async () => {
@@ -465,23 +544,30 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         running = false;
         requested = false;
         clearPollTimer();
+        publishActivity();
         // Every transport callback accepted before stop keeps its durable-append guarantee.
         await admissionTail;
         shutdown.abort(createStoppedError());
-        drain?.dispose();
         await waitForPumpIdle();
         await waitForActiveDeliveries();
-        // A pump may have created the lazy drain just before observing running=false.
+        // Let an aborted dispatcher return failed-retryable before disposal, then
+        // retire settlement tasks so a blocked queue write cannot wedge shutdown.
+        // A pump may also have created the lazy drain just before observing running=false.
         drain?.dispose();
         await drain?.waitForIdle();
       })();
       return stopTask;
     },
     waitForIdle: async () => {
-      await admissionTail;
-      await waitForPumpIdle();
-      await waitForActiveDeliveries();
-      await drain?.waitForIdle();
+      for (;;) {
+        await admissionTail;
+        await waitForPumpIdle();
+        await waitForActiveDeliveries();
+        await drain?.waitForIdle();
+        if (!pumping && activeDeliveries.size === 0 && !requested) {
+          return;
+        }
+      }
     },
     isRunning: () => running,
     isStopped: () => stopped,

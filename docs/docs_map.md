@@ -5107,6 +5107,30 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Patch points
   - H2: Focused tests
 
+## plan/swarms.md
+
+- Route: /plan/swarms
+- Headings:
+  - H1: Swarms — agent fan-out and orchestration in code mode
+  - H2: 1. What and why
+  - H2: 2. Decisions (maintainer, 2026-07-17)
+  - H2: 3. Architecture overview
+  - H2: 4. Config gate (v1)
+  - H2: 5. Core: collector-mode spawn + agentswait (v1)
+  - H3: 5.1 sessionsspawn additions (all gated on swarm enabled)
+  - H3: 5.2 Approvals fail-closed
+  - H3: 5.3 agentswait tool (new, gated)
+  - H3: 5.4 Caps enforcement
+  - H2: 6. Testing contract (v1, lane A)
+  - H2: 7. QuickJS guest surface (lane B, after core)
+  - H2: 8. Codex harness projection (later lane)
+  - H2: 9. Persistence and retention
+  - H2: 10. Progress surface ("the dots") — later lane
+  - H2: 11. Labs page (Control UI, independent lane)
+  - H2: 12. Placement (later)
+  - H2: 13. Non-goals
+  - H2: 14. Build phases / PR slicing
+
 ## plan/ui-channels.md
 
 - Route: /plan/ui-channels

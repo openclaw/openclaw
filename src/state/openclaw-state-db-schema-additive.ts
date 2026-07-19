@@ -295,6 +295,13 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "requester_settle_wake_batch_run_ids_json TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_last_error TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_retire_after INTEGER");
+  ensureColumn(db, "subagent_runs", "swarm_group_id TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_collector INTEGER");
+  ensureColumn(db, "subagent_runs", "swarm_output_schema_json TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_completion_status TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_structured_json TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
+  ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");

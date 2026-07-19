@@ -513,6 +513,7 @@
     <string name="native_565339bc4d33d728" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OK"</string>
     <string name="native_56a508f3f2bf424a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Einrichtungsanleitung konnte nicht geöffnet werden."</string>
     <string name="native_56c41c606c44f3fc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw %1$s fragen"</string>
+    <string name="native_56c4c3d30ceda56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wait for Agents"</string>
     <string name="native_56ef8f20955f2564" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Adresse"</string>
     <string name="native_5702e1d243eeb4e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Auf dem Gateway erstellte geplante Aufgaben werden hier angezeigt."</string>
     <string name="native_572739b05d138f8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Der neueste Protokollausschnitt wird angezeigt."</string>
@@ -1028,6 +1029,7 @@
     <string name="native_aed306fbb63c0c68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android- und Hintergrundpakete einschließen."</string>
     <string name="native_aedf1cf58372f943" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ihr Gateway ist bereit."</string>
     <string name="native_aeffb9182e3d7f3d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ausgelöst"</string>
+    <string name="native_af1f10e9b3af3250" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Structured Output"</string>
     <string name="native_af60a38d6b5866ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dies dauert länger als erwartet.\nPrüfen Sie, ob das Gateway ausgeführt wird und erreichbar ist."</string>
     <string name="native_af7deaf2c81b107d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keine Hintergrundaufgaben für diesen Agenten."</string>
     <string name="native_afb118fcb16c3727" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbindung wird wiederhergestellt"</string>

@@ -513,6 +513,7 @@
     <string name="native_565339bc4d33d728" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"确定"</string>
     <string name="native_56a508f3f2bf424a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法打开设置指南。"</string>
     <string name="native_56c41c606c44f3fc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"询问 OpenClaw %1$s"</string>
+    <string name="native_56c4c3d30ceda56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wait for Agents"</string>
     <string name="native_56ef8f20955f2564" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"地址"</string>
     <string name="native_5702e1d243eeb4e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在 Gateway 上创建的计划任务将显示在此处。"</string>
     <string name="native_572739b05d138f8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在显示最新的日志块。"</string>
@@ -1028,6 +1029,7 @@
     <string name="native_aed306fbb63c0c68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"包括 Android 和后台包。"</string>
     <string name="native_aedf1cf58372f943" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"您的 Gateway 已准备就绪。"</string>
     <string name="native_aeffb9182e3d7f3d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已触发"</string>
+    <string name="native_af1f10e9b3af3250" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Structured Output"</string>
     <string name="native_af60a38d6b5866ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"所需时间比预期更长。\n请检查 Gateway 是否正在运行且可访问。"</string>
     <string name="native_af7deaf2c81b107d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"此代理没有后台任务。"</string>
     <string name="native_afb118fcb16c3727" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在重新连接"</string>
