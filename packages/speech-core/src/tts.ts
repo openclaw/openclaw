@@ -1,5 +1,3 @@
-// Speech Core module implements tts behavior.
-import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
 import type {
   OpenClawConfig,
   ResolvedTtsPersona,
@@ -9,7 +7,6 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { transcodeAudioBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   markReplyPayloadAsTtsSupplement,
@@ -17,7 +14,17 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+// Speech Core module implements tts behavior.
+import { resolveChannelTtsVoiceDelivery } from "../../../src/plugin-sdk/channel-targets.js";
+import { clampTimerTimeoutMs } from "../../../src/plugin-sdk/number-runtime.js";
+import {
+  tempWorkspaceSync,
+  resolvePreferredOpenClawTmpDir,
+} from "../../../src/plugin-sdk/sandbox.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -32,12 +39,8 @@ import {
   type SpeechVoiceOption,
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
-} from "openclaw/plugin-sdk/speech-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+} from "../../../src/plugin-sdk/speech-core.js";
+import { truncateUtf16Safe } from "../../../src/plugin-sdk/text-utility-runtime.js";
 import { withSpeakerSelectionCompat } from "../speaker.js";
 import {
   resolvePrimaryVoiceProviderCandidate,

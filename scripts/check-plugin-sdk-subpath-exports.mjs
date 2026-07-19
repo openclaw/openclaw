@@ -13,7 +13,13 @@ import {
 } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const scanRoots = resolveSourceRoots(repoRoot, ["src", "extensions", "scripts", "test"]);
+const scanRoots = resolveSourceRoots(repoRoot, [
+  "src",
+  "packages",
+  "extensions",
+  "scripts",
+  "test",
+]);
 
 function readPackageExports() {
   const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
@@ -49,6 +55,10 @@ function parsePluginSdkSubpath(specifier) {
   return subpath || null;
 }
 
+function isGeneratedBuildArtifact(filePath) {
+  return normalizeRepoPath(repoRoot, filePath).split("/").includes("dist");
+}
+
 function isRuntimeModuleReference(node) {
   // With verbatimModuleSyntax, inline `type` specifiers emit an empty import/export and still
   // resolve the module. Only declaration-level `import type` and `export type` are erased.
@@ -82,15 +92,18 @@ async function collectViolations() {
   const exports = readPackageExports();
   const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
   const coreRuntimeFiles = new Set(
-    await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), {
-      includeTests: false,
-      extraTestSuffixes: [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"],
-    }),
+    (
+      await collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src", "packages"]), {
+        includeTests: false,
+        extraTestSuffixes: [".test-support.ts", ".test-loader.ts", ".test-fixtures.ts"],
+      })
+    ).filter((filePath) => !isGeneratedBuildArtifact(filePath)),
   );
-  const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true })).toSorted(
-    (left, right) =>
+  const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true }))
+    .filter((filePath) => !isGeneratedBuildArtifact(filePath))
+    .toSorted((left, right) =>
       normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
-  );
+    );
   const violations = [];
 
   for (const filePath of files) {
