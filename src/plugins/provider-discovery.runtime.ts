@@ -109,9 +109,7 @@ function loadProviderDiscoveryModule(params: {
 }
 
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
-  return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
-  );
+  return typeof provider.catalog?.run === "function";
 }
 
 function hasProviderCatalogHook(provider: ProviderPlugin): boolean {
@@ -126,7 +124,6 @@ function hasProviderAuthEnvCredential(
 ): boolean {
   const envVars = [
     ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
   ];
   return envVars.some((name) => {
     const value = env[name]?.trim();
