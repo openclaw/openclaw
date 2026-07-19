@@ -52,6 +52,11 @@ export async function resolveAvatar(input: IdentityAvatarInput): Promise<Resolve
 
   const id = input.id?.trim();
   if (id && EMAIL_PATTERN.test(id)) {
+    // Deliberate direct Gravatar fetch (product decision): the browser
+    // discloses a hashed sender email to gravatar.com per lookup. Once the
+    // gateway user-profile avatar route can proxy/cache these server-side,
+    // profileAvatarUrl becomes the preferred source and this tier stops
+    // firing for profiles resolved through the store.
     const hash = await sha256Hex(id.toLowerCase());
     if (hash) {
       return {

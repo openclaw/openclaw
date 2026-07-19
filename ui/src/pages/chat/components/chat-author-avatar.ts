@@ -42,6 +42,14 @@ function renderResolvedAvatar(
           image.closest<HTMLElement>(".chat-author-avatar")?.classList.add("is-fallback");
         }
       }}
+      @load=${(event: Event) => {
+        // Lit reuses DOM parts across renders; a prior sender's error state
+        // must not hide a successfully loaded avatar for the next source.
+        const image = event.currentTarget;
+        if (image instanceof HTMLImageElement) {
+          image.closest<HTMLElement>(".chat-author-avatar")?.classList.remove("is-fallback");
+        }
+      }}
     />
     ${renderInitialsAvatar(fallback, true)}
   `;
