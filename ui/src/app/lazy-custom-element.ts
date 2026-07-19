@@ -66,9 +66,12 @@ export const APPROVAL_PAGE_ELEMENT = {
 
 // The card is in the chat graph, but modal-only queue controls stay off the
 // startup path until an approval is actually pending.
+const EXEC_APPROVAL_TAG = "openclaw-exec-approval";
+
 export const EXEC_APPROVAL_ELEMENT = {
-  tagName: "openclaw-exec-approval",
-  label: "exec approval modal",
+  tagName: EXEC_APPROVAL_TAG,
+  // This diagnostic uses the tag rather than user-facing copy.
+  label: EXEC_APPROVAL_TAG,
   loadModule: () => import("../components/exec-approval.ts"),
 } satisfies OptionalCustomElement;
 
