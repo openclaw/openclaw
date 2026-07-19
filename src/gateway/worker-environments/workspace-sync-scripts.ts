@@ -24,10 +24,12 @@ const nonce = crypto.randomBytes(16).toString("hex");
 const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 const watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
 if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
+const PS_TIMEOUT_MS = 5000;
 function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
+    timeout: PS_TIMEOUT_MS,
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -58,6 +60,7 @@ function processIdentity(pid) {
     const start = childProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       maxBuffer: 4096,
+      timeout: PS_TIMEOUT_MS,
     }).trim();
     return start || null;
   } catch (error) {
@@ -231,7 +234,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       const watchdogChildProcess = require("node:child_process");
       const identity = (pid) => {
         try {
-          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
+          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: PS_TIMEOUT_MS }).trim() || null;
         } catch (error) {
           if (error && error.status === 1) return null;
           throw error;
