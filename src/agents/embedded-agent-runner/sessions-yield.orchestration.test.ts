@@ -184,7 +184,7 @@ describe("stripSessionsYieldArtifacts — trailing assistant stripping (#109638)
     stripSessionsYieldArtifacts(activeSession);
 
     expect(removeTrailingEntries).toHaveBeenCalledOnce();
-    const [predicate, options] = removeTrailingEntries.mock.calls[0];
+    const [predicate, options] = removeTrailingEntries.mock.calls[0]!;
 
     expect(
       predicate({ type: "message", message: { role: "assistant", stopReason: "aborted" } }),
