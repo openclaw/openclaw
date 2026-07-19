@@ -23,7 +23,7 @@ import {
   listSetupMigrationOptions,
   runSetupMigrationImport,
 } from "./setup.migration-import.js";
-import { runSetupModelAuthStep } from "./setup.model-auth.js";
+import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   readSetupConfigFileSnapshot,
@@ -63,10 +63,14 @@ async function offerLiveModelVerification(params: {
   }
 
   const { verifySetupInferenceConfig } = await import("../system-agent/setup-inference.js");
-  const verify = async (config: OpenClawConfig) => {
+  const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
     const result = await withConsoleSubsystemsSuppressed(() =>
-      verifySetupInferenceConfig({ config, runtime: params.runtime }),
+      verifySetupInferenceConfig({
+        config: candidate.config,
+        runtime: params.runtime,
+        authProfiles: candidate.authProfiles,
+      }),
     );
     progress.stop();
     if (result.ok) {
@@ -83,14 +87,20 @@ async function offerLiveModelVerification(params: {
     return result;
   };
 
-  let candidateConfig = params.config;
+  let candidate: SetupModelAuthCandidate = {
+    config: params.config,
+    authProfiles: [],
+    persistAuthProfiles: async () => {},
+  };
   let shouldPersistCandidate = false;
   while (true) {
-    const result = await verify(candidateConfig);
+    const result = await verify(candidate);
     if (result.ok) {
-      const config = shouldPersistCandidate
-        ? await params.writeConfig(candidateConfig)
-        : params.config;
+      if (!shouldPersistCandidate) {
+        return { config: params.config, verified: true };
+      }
+      await candidate.persistAuthProfiles();
+      const config = await params.writeConfig(candidate.config);
       return { config, verified: true };
     }
     const action = await params.prompter.select({
@@ -105,8 +115,8 @@ async function offerLiveModelVerification(params: {
     }
 
     // Attempts N>1 must pass the same gate as attempt 1 so failed retry config never persists.
-    candidateConfig = await runSetupModelAuthStep({
-      config: candidateConfig,
+    candidate = await runSetupModelAuthStep({
+      config: candidate.config,
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
@@ -555,13 +565,15 @@ async function runSetupWizardOnce(
   }
 
   if (!keepExistingModelConfig) {
-    nextConfig = await runSetupModelAuthStep({
+    const modelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
       workspaceDir,
     });
+    await modelAuth.persistAuthProfiles();
+    nextConfig = modelAuth.config;
   }
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");

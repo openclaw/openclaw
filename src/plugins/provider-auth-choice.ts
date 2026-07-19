@@ -56,6 +56,21 @@ type ApplyProviderAuthChoiceResult = {
   retrySelection?: boolean;
 };
 
+type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
+  authProfiles: ProviderAuthResult["profiles"];
+  persistAuthProfiles: () => Promise<void>;
+};
+
+function preparedWithoutAuthProfiles(
+  result: ApplyProviderAuthChoiceResult,
+): PreparedApplyProviderAuthChoiceResult {
+  return {
+    ...result,
+    authProfiles: [],
+    persistAuthProfiles: async () => {},
+  };
+}
+
 function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): string {
   if (!provider.preserveLiteralProviderPrefix) {
     return modelRef;
@@ -300,7 +315,7 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
   return nextConfig;
 }
 
-export async function runProviderPluginAuthMethod(params: {
+export async function prepareProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
@@ -316,7 +331,12 @@ export async function runProviderPluginAuthMethod(params: {
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
-}): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
+}): Promise<{
+  config: OpenClawConfig;
+  defaultModel?: string;
+  authProfiles: ProviderAuthResult["profiles"];
+  persistAuthProfiles: () => Promise<void>;
+}> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   const workspaceDir =
@@ -342,15 +362,6 @@ export async function runProviderPluginAuthMethod(params: {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
-  await params.beforePersistentEffect?.();
-  for (const profile of result.profiles) {
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: profile.profileId,
-      credential: profile.credential,
-      agentDir,
-    });
-  }
-
   const nextConfig = applyProviderPluginAuthMethodResultConfig({
     config: params.config,
     result,
@@ -360,15 +371,44 @@ export async function runProviderPluginAuthMethod(params: {
     ? normalizeAgentModelRefForConfig(result.defaultModel)
     : undefined;
 
+  let profilesPersisted = false;
+  const persistAuthProfiles = async () => {
+    if (profilesPersisted) {
+      return;
+    }
+    await params.beforePersistentEffect?.();
+    for (const profile of result.profiles) {
+      await upsertAuthProfileWithLockOrThrow({
+        profileId: profile.profileId,
+        credential: profile.credential,
+        agentDir,
+      });
+    }
+    profilesPersisted = true;
+  };
+
   return {
     config: nextConfig,
     ...(defaultModel ? { defaultModel } : {}),
+    authProfiles: result.profiles,
+    persistAuthProfiles,
   };
 }
 
-export async function applyAuthChoiceLoadedPluginProvider(
+export async function runProviderPluginAuthMethod(
+  params: Parameters<typeof prepareProviderPluginAuthMethod>[0],
+): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
+  const prepared = await prepareProviderPluginAuthMethod(params);
+  await prepared.persistAuthProfiles();
+  return {
+    config: prepared.config,
+    ...(prepared.defaultModel ? { defaultModel: prepared.defaultModel } : {}),
+  };
+}
+
+export async function prepareAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
-): Promise<ApplyProviderAuthChoiceResult | null> {
+): Promise<PreparedApplyProviderAuthChoiceResult | null> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const workspaceDir =
     params.workspaceDir ??
@@ -407,7 +447,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
         `${safeLabel} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
         safeLabel,
       );
-      return { config: nextConfig };
+      return preparedWithoutAuthProfiles({ config: nextConfig });
     }
     enabledConfig = enableResult.config;
   }
@@ -466,7 +506,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
       workspaceDir,
     });
     if (!installResult.installed) {
-      return { config: installResult.cfg, retrySelection: true };
+      return preparedWithoutAuthProfiles({ config: installResult.cfg, retrySelection: true });
     }
     nextConfig = installResult.cfg;
     providers = resolveScopedRuntimeProviders(nextConfig);
@@ -476,14 +516,16 @@ export async function applyAuthChoiceLoadedPluginProvider(
     });
   }
   if (!resolved) {
-    return nextConfig === params.config ? null : { config: nextConfig, retrySelection: true };
+    return nextConfig === params.config
+      ? null
+      : preparedWithoutAuthProfiles({ config: nextConfig, retrySelection: true });
   }
   if (nextConfig === params.config && enabledConfig !== params.config) {
     nextConfig = enabledConfig;
   }
 
   const configBeforeProviderAuth = nextConfig;
-  const applied = await runProviderPluginAuthMethod({
+  const applied = await prepareProviderPluginAuthMethod({
     config: nextConfig,
     env: params.env,
     runtime: params.runtime,
@@ -527,13 +569,37 @@ export async function applyAuthChoiceLoadedPluginProvider(
           });
         },
       });
-      return { config: nextConfig };
+      return {
+        config: nextConfig,
+        authProfiles: applied.authProfiles,
+        persistAuthProfiles: applied.persistAuthProfiles,
+      };
     }
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
     agentModelOverride = selectedModel;
   }
 
-  return { config: nextConfig, agentModelOverride };
+  return {
+    config: nextConfig,
+    agentModelOverride,
+    authProfiles: applied.authProfiles,
+    persistAuthProfiles: applied.persistAuthProfiles,
+  };
+}
+
+export async function applyAuthChoiceLoadedPluginProvider(
+  params: ApplyProviderAuthChoiceParams,
+): Promise<ApplyProviderAuthChoiceResult | null> {
+  const prepared = await prepareAuthChoiceLoadedPluginProvider(params);
+  if (!prepared) {
+    return null;
+  }
+  await prepared.persistAuthProfiles();
+  return {
+    config: prepared.config,
+    ...(prepared.agentModelOverride ? { agentModelOverride: prepared.agentModelOverride } : {}),
+    ...(prepared.retrySelection ? { retrySelection: true } : {}),
+  };
 }
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);

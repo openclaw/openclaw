@@ -5364,6 +5364,71 @@ describe("verifySetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
+  it("probes a staged profile in isolation without changing the configured agent store", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "configured-agent");
+    const profileId = "openai:default";
+    const originalCredential = {
+      type: "api_key" as const,
+      provider: "openai",
+      key: "test-original-key",
+    };
+    const stagedCredential = {
+      type: "api_key" as const,
+      provider: "openai",
+      key: "test-staged-key",
+    };
+    await upsertAuthProfileWithLock({ profileId, credential: originalCredential, agentDir });
+    const runEmbeddedAgent = vi.fn(
+      async (params: {
+        agentDir?: string;
+        onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+      }) => {
+        expect(params.agentDir).toBeDefined();
+        expect(params.agentDir).not.toBe(agentDir);
+        expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId]).toEqual(
+          stagedCredential,
+        );
+        return successfulRun("openai", "gpt-5.5", {
+          authProfileId: profileId,
+          onSuccessfulAuthBinding: params.onSuccessfulAuthBinding,
+        });
+      },
+    );
+
+    try {
+      const result = await verifySetupInferenceConfig({
+        config: {
+          auth: {
+            profiles: { [profileId]: { provider: "openai", mode: "api_key" } },
+            order: { openai: [profileId] },
+          },
+          agents: {
+            list: [
+              {
+                id: "main",
+                default: true,
+                agentDir,
+                model: { primary: `openai/gpt-5.5@${profileId}` },
+              },
+            ],
+          },
+        },
+        authProfiles: [{ profileId, credential: stagedCredential }],
+        runtime,
+        deps: {
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+      expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual(originalCredential);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
   it("rejects a configured route that changes during its live check", async () => {
     const initialConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },

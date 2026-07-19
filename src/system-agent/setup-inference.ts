@@ -2568,6 +2568,8 @@ export async function resolvePersistentApplyInference(params: {
 /** Live-test a staged default-agent route before any caller persists it. */
 export async function verifySetupInferenceConfig(params: {
   config: OpenClawConfig;
+  /** Candidate profiles staged in the isolated probe store, never the real agent store. */
+  authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
@@ -2597,7 +2599,7 @@ export async function verifySetupInferenceConfig(params: {
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
   )();
   try {
-    const plan = await buildTestPlan({
+    const builtPlan = await buildTestPlan({
       kind: "existing-model",
       cfg,
       sourceCfg: cfg,
@@ -2608,8 +2610,43 @@ export async function verifySetupInferenceConfig(params: {
       routeAgentId,
       deps,
     });
-    if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+    if ("error" in builtPlan) {
+      return { ok: false, status: "unavailable", error: builtPlan.error };
+    }
+    let plan: SetupInferenceTestPlan = builtPlan;
+    if (params.authProfiles && params.authProfiles.length > 0) {
+      const selectedProfile =
+        params.authProfiles.find((profile) => profile.profileId === plan.authProfileId) ??
+        params.authProfiles.find(
+          (profile) =>
+            normalizeProviderId(profile.credential.provider) === normalizeProviderId(plan.provider),
+        );
+      if (!selectedProfile) {
+        return {
+          ok: false,
+          status: "auth",
+          error: "The staged credential does not belong to the configured inference provider.",
+        };
+      }
+      const stagedAgentDir = path.join(tempDir, "agent");
+      const staged = await persistManualAuthProfiles({
+        profiles: params.authProfiles,
+        agentDir: stagedAgentDir,
+        deps,
+      });
+      if (staged.status !== "persisted") {
+        return {
+          ok: false,
+          status: "unknown",
+          error:
+            "Could not stage the credential for its live inference test; try again in a moment.",
+        };
+      }
+      plan = {
+        ...plan,
+        agentDir: stagedAgentDir,
+        authProfileId: selectedProfile.profileId,
+      };
     }
     const requiresExecutionOwner =
       params.requireExecutionOwner === true || params.onVerifiedExecution !== undefined;

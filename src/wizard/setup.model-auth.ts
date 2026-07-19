@@ -10,6 +10,15 @@ import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 type KeepCurrentAuthChoice =
   typeof import("../commands/auth-choice-prompt.js").KEEP_CURRENT_AUTH_CHOICE;
+type PreparedAuthChoiceResult = Awaited<
+  ReturnType<typeof import("../commands/auth-choice.js").prepareAuthChoice>
+>;
+
+export type SetupModelAuthCandidate = {
+  config: OpenClawConfig;
+  authProfiles: PreparedAuthChoiceResult["authProfiles"];
+  persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"];
+};
 
 const loadAuthChoiceModule = createLazyRuntimeModule(() => import("../commands/auth-choice.js"));
 
@@ -118,9 +127,11 @@ export async function runSetupModelAuthStep(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir: string;
-}): Promise<OpenClawConfig> {
+}): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime, workspaceDir } = params;
   let nextConfig = params.config;
+  let authProfiles: PreparedAuthChoiceResult["authProfiles"] = [];
+  let persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"] = async () => {};
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let authChoice: AuthChoice | KeepCurrentAuthChoice | undefined = opts.authChoice;
   let authStore:
@@ -198,13 +209,13 @@ export async function runSetupModelAuthStep(params: {
     }
 
     const [
-      { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
+      { prepareAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
       { applyPrimaryModel, promptDefaultModel },
     ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
     prompter.disableBackNavigation?.();
-    let authResult: Awaited<ReturnType<typeof applyAuthChoice>>;
+    let authResult: PreparedAuthChoiceResult;
     try {
-      authResult = await applyAuthChoice({
+      authResult = await prepareAuthChoice({
         authChoice,
         config: nextConfig,
         prompter,
@@ -230,6 +241,8 @@ export async function runSetupModelAuthStep(params: {
       continue;
     }
     nextConfig = authResult.config;
+    authProfiles = authResult.authProfiles;
+    persistAuthProfiles = authResult.persistAuthProfiles;
     if (authResult.retrySelection) {
       if (authChoiceFromPrompt) {
         continue;
@@ -271,5 +284,5 @@ export async function runSetupModelAuthStep(params: {
     await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
     break;
   }
-  return nextConfig;
+  return { config: nextConfig, authProfiles, persistAuthProfiles };
 }
