@@ -262,7 +262,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         credential: {
           type: "api_key",
           provider: LOCAL_PROVIDER_ID,
-          key: "test-refreshed-provider-key",
+          key: "test-key",
         },
       },
     ]);
@@ -274,7 +274,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       credential: {
         type: "api_key",
         provider: LOCAL_PROVIDER_ID,
-        key: "test-refreshed-provider-key",
+        key: "test-key",
       },
       agentDir: "/tmp/agent",
     });

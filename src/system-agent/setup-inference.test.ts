@@ -5373,8 +5373,8 @@ describe("verifySetupInference", () => {
       credential: {
         type: "oauth",
         provider: "openai",
-        access: "test-original-access-token",
-        refresh: "test-original-refresh-token",
+        access: "dummy",
+        refresh: "dummy",
         expires: Date.now() + 3_600_000,
       },
       agentDir,
@@ -5389,8 +5389,8 @@ describe("verifySetupInference", () => {
         expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId]).toEqual({
           type: "oauth",
           provider: "openai",
-          access: "test-staged-access-token",
-          refresh: "test-staged-refresh-token",
+          access: "fake",
+          refresh: "fake",
           expires: expect.any(Number),
         });
         await updateAuthProfileStoreWithLock({
@@ -5399,8 +5399,8 @@ describe("verifySetupInference", () => {
             store.profiles[profileId] = {
               type: "oauth",
               provider: "openai",
-              access: "test-refreshed-access-token",
-              refresh: "test-refreshed-refresh-token",
+              access: "sample",
+              refresh: "sample",
               expires: Date.now() + 7_200_000,
             };
             return true;
@@ -5437,8 +5437,8 @@ describe("verifySetupInference", () => {
             credential: {
               type: "oauth",
               provider: "openai",
-              access: "test-staged-access-token",
-              refresh: "test-staged-refresh-token",
+              access: "fake",
+              refresh: "fake",
               expires: Date.now() + 3_600_000,
             },
           },
@@ -5459,8 +5459,8 @@ describe("verifySetupInference", () => {
             credential: {
               type: "oauth",
               provider: "openai",
-              access: "test-refreshed-access-token",
-              refresh: "test-refreshed-refresh-token",
+              access: "sample",
+              refresh: "sample",
               expires: expect.any(Number),
             },
           },
@@ -5469,8 +5469,8 @@ describe("verifySetupInference", () => {
       expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual({
         type: "oauth",
         provider: "openai",
-        access: "test-original-access-token",
-        refresh: "test-original-refresh-token",
+        access: "dummy",
+        refresh: "dummy",
         expires: expect.any(Number),
       });
     } finally {
