@@ -1367,8 +1367,11 @@ describe("agents.delete", () => {
       configuredCheck += 1;
       return configuredCheck < 4 ? 0 : -1;
     });
-    mocks.writeConfigFile.mockImplementationOnce(async (nextConfig: Record<string, unknown>) => {
-      mocks.loadConfigReturn = nextConfig;
+    mocks.writeConfigFile.mockImplementationOnce(async (nextConfig?: unknown) => {
+      if (!nextConfig || typeof nextConfig !== "object") {
+        throw new Error("expected config object");
+      }
+      mocks.loadConfigReturn = nextConfig as Record<string, unknown>;
       throw new Error("post-write refresh failed");
     });
 
