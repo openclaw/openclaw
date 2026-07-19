@@ -111,6 +111,13 @@ describe("new-session composer attachment drops", () => {
     composer.dispatchEvent(shellDrop);
     expect(shellDrop.defaultPrevented).toBe(true);
     expect(replace).not.toHaveBeenCalled();
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    composer.append(checkbox);
+    const checkboxDrop = createDragEvent("drop", [], ["text/uri-list"]);
+    checkbox.dispatchEvent(checkboxDrop);
+    expect(checkboxDrop.defaultPrevented).toBe(true);
   });
 
   it.each([

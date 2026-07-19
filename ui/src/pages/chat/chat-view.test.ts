@@ -3344,6 +3344,13 @@ describe("chat attachment picker", () => {
     const textareaDrop = createDragEvent("drop", ["text/uri-list"]);
     textarea.dispatchEvent(textareaDrop);
     expect(textareaDrop.defaultPrevented).toBe(false);
+
+    const range = document.createElement("input");
+    range.type = "range";
+    chat.append(range);
+    const rangeDrop = createDragEvent("drop", ["text/uri-list"]);
+    range.dispatchEvent(rangeDrop);
+    expect(rangeDrop.defaultPrevented).toBe(true);
   });
 
   it("turns large pasted plain text into a compact attachment", async () => {

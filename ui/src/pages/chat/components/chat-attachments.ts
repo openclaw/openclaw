@@ -40,16 +40,30 @@ export function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
 
+const TEXT_ENTRY_INPUT_TYPES = new Set([
+  "email",
+  "number",
+  "password",
+  "search",
+  "tel",
+  "text",
+  "url",
+]);
+
 // Native text/URL drop insertion is only meaningful on controls that can
-// actually accept it; anywhere else (including disabled/readonly inputs) an
-// uncancelled URL drop navigates the app away and discards unsent drafts.
+// actually accept it; anywhere else (disabled/readonly inputs, non-text
+// controls like checkbox/range) an uncancelled URL drop navigates the app
+// away and discards unsent drafts.
 export function isEditableDropTarget(event: DragEvent): boolean {
   const target = event.target;
   if (!(target instanceof Element)) {
     return false;
   }
   const editable = target.closest("textarea, input, [contenteditable]");
-  if (editable instanceof HTMLTextAreaElement || editable instanceof HTMLInputElement) {
+  if (editable instanceof HTMLInputElement) {
+    return TEXT_ENTRY_INPUT_TYPES.has(editable.type) && !editable.disabled && !editable.readOnly;
+  }
+  if (editable instanceof HTMLTextAreaElement) {
     return !editable.disabled && !editable.readOnly;
   }
   return editable instanceof HTMLElement && editable.isContentEditable;
