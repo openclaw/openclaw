@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { safeHashFile } from "./installed-plugin-index-hash.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
@@ -1156,6 +1157,22 @@ describe("installed plugin index", () => {
       })),
     };
     expect(diffInstalledPluginIndexInvalidationReasons(current, moved)).toContain("source-changed");
+  });
+
+  it("stream-hashes files larger than the per-file size cap instead of rejecting them", () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, "large-asset.bin");
+    const content = Buffer.from("prefix for streaming hash verification", "utf-8");
+    fs.writeFileSync(filePath, content);
+    // Extend via sparse truncation so stat.size exceeds the 50 MiB threshold
+    // without allocating all pages on disk.
+    fs.truncateSync(filePath, 50 * 1024 * 1024 + 1);
+
+    const diagnostics: import("./manifest-types.js").PluginDiagnostic[] = [];
+    const hash = safeHashFile({ filePath, pluginId: "test-plugin", diagnostics, required: true });
+
+    expect(hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(diagnostics).toStrictEqual([]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

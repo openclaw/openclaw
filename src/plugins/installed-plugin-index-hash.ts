@@ -38,12 +38,26 @@ export function safeHashFile(params: {
     if (!stat.isFile()) {
       throw new Error(`not a regular file: ${params.filePath}`);
     }
-    if (stat.size > MAX_PLUGIN_INDEX_HASH_BYTES) {
-      throw new Error(
-        `file too large: ${params.filePath} is ${stat.size} bytes (max ${MAX_PLUGIN_INDEX_HASH_BYTES})`,
-      );
+    const hash = crypto.createHash("sha256");
+    if (stat.size <= MAX_PLUGIN_INDEX_HASH_BYTES) {
+      hash.update(fs.readFileSync(params.filePath));
+    } else {
+      // Stream large files in bounded chunks to avoid OOM.
+      const fd = fs.openSync(params.filePath, "r");
+      try {
+        const buffer = Buffer.alloc(65536); // 64 KiB chunk
+        let remaining = MAX_PLUGIN_INDEX_HASH_BYTES;
+        while (remaining > 0) {
+          const bytesRead = fs.readSync(fd, buffer, 0, Math.min(buffer.length, remaining), null);
+          if (bytesRead === 0) break; // EOF
+          hash.update(buffer.subarray(0, bytesRead));
+          remaining -= bytesRead;
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
     }
-    return crypto.createHash("sha256").update(fs.readFileSync(params.filePath)).digest("hex");
+    return hash.digest("hex");
   } catch (err) {
     if (params.required) {
       params.diagnostics.push({
