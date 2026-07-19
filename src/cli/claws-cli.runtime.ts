@@ -14,6 +14,7 @@ import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
 } from "../cron/store.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type { ClawsAddOptions, ClawsInspectOptions } from "./claws-cli.js";
 
@@ -39,6 +40,15 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Packages: ${plan.summary.packageActions}`);
   runtime.log(`MCP servers: ${plan.summary.mcpServerActions}`);
   runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
+  if (plan.capabilityChanges.length > 0) {
+    runtime.log(`Capability escalations (${plan.capabilityChanges.length}):`);
+    for (const change of plan.capabilityChanges) {
+      runtime.log(
+        redactSensitiveText(`  ! ${change.kind}:${change.id} ${JSON.stringify(change.effect)}`),
+      );
+    }
+    runtime.log("The plan integrity binds every capability line above.");
+  }
   if (plan.summary.blockedActions > 0) {
     runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
   }

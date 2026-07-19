@@ -457,8 +457,17 @@ describe("buildClawAddPlan", () => {
         mcpServerActions: 1,
         cronJobActions: 1,
         blockedActions: 2,
+        capabilityEscalations: 5,
       },
     });
+    expect(plan.capabilityChanges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "agent", id: "github-triage" }),
+        expect.objectContaining({ kind: "package", id: "plugin:@acme/github" }),
+        expect.objectContaining({ kind: "mcpServer", id: "github" }),
+        expect.objectContaining({ kind: "cronJob", id: "weekday-triage" }),
+      ]),
+    );
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
         kind: "workspaceFile",
@@ -588,8 +597,17 @@ describe("buildClawAddPlan", () => {
       source: { ...source, integrity: "sha256:changed" },
       context: { workspace },
     });
+    const changedCapability = await buildClawAddPlan({
+      manifest: requireManifest({
+        ...baseManifest,
+        agent: { ...baseManifest.agent, tools: { allow: ["read", "exec"] } },
+      }),
+      source,
+      context: { workspace },
+    });
 
     expect(repeated.planIntegrity).toBe(first.planIntegrity);
     expect(changed.planIntegrity).not.toBe(first.planIntegrity);
+    expect(changedCapability.planIntegrity).not.toBe(first.planIntegrity);
   });
 });

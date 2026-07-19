@@ -166,6 +166,18 @@ export type ClawAddPlanAction = {
   reason?: string;
 };
 
+export type ClawAddCapabilityChange = {
+  kind: "agent" | "package" | "mcpServer" | "cronJob";
+  id: string;
+  path: string;
+  action: "create" | "install" | "configure" | "schedule";
+  classification: "escalation";
+  requiresDistinctConsent: true;
+  reason: string;
+  effect: Record<string, unknown>;
+  digest: string;
+};
+
 export type ClawLocalPrerequisite =
   | { kind: "environment"; mcpServer: string; name: string }
   | { kind: "oauth"; mcpServer: string };
@@ -192,8 +204,10 @@ export type ClawAddPlan = {
     mcpServerActions: number;
     cronJobActions: number;
     blockedActions: number;
+    capabilityEscalations: number;
   };
   actions: ClawAddPlanAction[];
+  capabilityChanges: ClawAddCapabilityChange[];
   readiness: {
     ready: boolean;
     requirements: ClawLocalPrerequisite[];
