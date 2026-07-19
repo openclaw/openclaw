@@ -93,6 +93,12 @@ public enum SessionPlacementState: String, Codable, Sendable {
     case failed = "failed"
 }
 
+public enum SessionDiscussionState: String, Codable, Sendable {
+    case none = "none"
+    case available = "available"
+    case _open = "open"
+}
+
 public enum SessionFileKind: String, Codable, Sendable {
     case modified = "modified"
     case read = "read"
@@ -5021,6 +5027,100 @@ public struct SessionsReclaimResult: Codable, Sendable {
         case key
         case sessionid = "sessionId"
         case placement
+    }
+}
+
+public struct SessionDiscussionInfo: Codable, Sendable {
+    public let state: SessionDiscussionState
+    public let embedurl: String?
+    public let openurl: String?
+
+    public init(
+        state: SessionDiscussionState,
+        embedurl: String? = nil,
+        openurl: String? = nil)
+    {
+        self.state = state
+        self.embedurl = embedurl
+        self.openurl = openurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case embedurl = "embedUrl"
+        case openurl = "openUrl"
+    }
+}
+
+public struct SessionDiscussionInfoParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionDiscussionInfoResult: Codable, Sendable {
+    public let state: SessionDiscussionState
+    public let embedurl: String?
+    public let openurl: String?
+
+    public init(
+        state: SessionDiscussionState,
+        embedurl: String? = nil,
+        openurl: String? = nil)
+    {
+        self.state = state
+        self.embedurl = embedurl
+        self.openurl = openurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case embedurl = "embedUrl"
+        case openurl = "openUrl"
+    }
+}
+
+public struct SessionDiscussionOpenParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionDiscussionOpenResult: Codable, Sendable {
+    public let state: SessionDiscussionState
+    public let embedurl: String?
+    public let openurl: String?
+
+    public init(
+        state: SessionDiscussionState,
+        embedurl: String? = nil,
+        openurl: String? = nil)
+    {
+        self.state = state
+        self.embedurl = embedurl
+        self.openurl = openurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case embedurl = "embedUrl"
+        case openurl = "openUrl"
     }
 }
 
