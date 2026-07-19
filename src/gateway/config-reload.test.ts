@@ -917,6 +917,38 @@ describe("startGatewayConfigReloader include files", () => {
       await rm(rootDir, { force: true, recursive: true });
     }
   });
+
+  it("keeps a lexically safe rejected include path watchable", async () => {
+    const rootDir = await realpath(
+      await mkdtemp(nodePath.join(tmpdir(), "openclaw-config-reload-")),
+    );
+    const outsideDir = await realpath(
+      await mkdtemp(nodePath.join(tmpdir(), "openclaw-config-outside-")),
+    );
+    const configPath = nodePath.join(rootDir, "openclaw.json5");
+    const includeLinkPath = nodePath.join(rootDir, "hooks-link.json5");
+    const outsideIncludePath = nodePath.join(outsideDir, "hooks.json5");
+    await writeFile(configPath, `${JSON.stringify({ $include: "./hooks-link.json5" })}\n`);
+    await writeFile(outsideIncludePath, `${JSON.stringify({ hooks: { enabled: true } })}\n`);
+    await symlink(outsideIncludePath, includeLinkPath);
+    const configIo = createConfigIO({
+      configPath,
+      env: {},
+      homedir: () => rootDir,
+      observe: false,
+      pluginValidation: "skip",
+      logger: { error: vi.fn(), warn: vi.fn() },
+    });
+
+    try {
+      const snapshot = await configIo.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.includedPaths).toEqual([includeLinkPath]);
+    } finally {
+      await rm(rootDir, { force: true, recursive: true });
+      await rm(outsideDir, { force: true, recursive: true });
+    }
+  });
 });
 
 function getOnlyPromoteSnapshotCall(promoteSnapshot: {

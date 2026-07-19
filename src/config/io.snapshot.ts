@@ -41,15 +41,8 @@ type InternalReadOptions = {
   ) => boolean | Promise<boolean>;
 };
 
-function listResolvedIncludePaths(includeFileTargetsForWrite: Record<string, string>): string[] {
-  return [
-    ...new Set(
-      Object.entries(includeFileTargetsForWrite).flatMap(([lexicalPath, canonicalPath]) => [
-        lexicalPath,
-        canonicalPath,
-      ]),
-    ),
-  ].toSorted();
+function listResolvedIncludePaths(includeFilePathsForWatch: ReadonlySet<string>): string[] {
+  return [...includeFilePathsForWatch].toSorted();
 }
 
 export async function readConfigFileSnapshotInternal(
@@ -86,6 +79,7 @@ export async function readConfigFileSnapshotInternal(
   let fallbackEnvSnapshotForRestore: Record<string, string | undefined> | undefined;
   const includeFileHashesForWrite: Record<string, string> = {};
   const includeFileTargetsForWrite: Record<string, string> = {};
+  const includeFilePathsForWatch = new Set<string>();
 
   try {
     const raw = await deps.measure("config.snapshot.read.file", () =>
@@ -101,7 +95,7 @@ export async function readConfigFileSnapshotInternal(
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
+          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
           exists: true,
           raw,
           parsed: {},
@@ -128,6 +122,7 @@ export async function readConfigFileSnapshotInternal(
           deps,
           includeFileHashesForWrite,
           includeFileTargetsForWrite,
+          includeFilePathsForWatch,
         ),
       );
     } catch (error) {
@@ -138,7 +133,7 @@ export async function readConfigFileSnapshotInternal(
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
+          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
           exists: true,
           raw,
           parsed: effectiveParsed,
@@ -195,7 +190,7 @@ export async function readConfigFileSnapshotInternal(
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
           path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
+          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
           exists: true,
           raw: snapshotRaw,
           parsed: snapshotParsed,
@@ -270,7 +265,7 @@ export async function readConfigFileSnapshotInternal(
         {
           snapshot: createConfigFileSnapshot({
             path: configPath,
-            includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
+            includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
             exists: true,
             raw: snapshotRaw,
             parsed: snapshotParsed,
@@ -311,7 +306,7 @@ export async function readConfigFileSnapshotInternal(
     return await finalizeReadConfigSnapshotInternalResult(deps, {
       snapshot: createConfigFileSnapshot({
         path: configPath,
-        includedPaths: listResolvedIncludePaths(includeFileTargetsForWrite),
+        includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
         exists: true,
         raw: fallbackRaw,
         parsed: fallbackParsed,
