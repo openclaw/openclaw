@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { SerializedEventPayload } from "./node-registry.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 
@@ -37,5 +37,35 @@ describe("node subscription manager", () => {
     await manager.sendToSession("secondary", "tick", {}, sendEvent);
 
     expect(sent).toStrictEqual([]);
+  });
+
+  test("settles sender failures without rejecting fire-and-forget fanout", async () => {
+    const manager = createNodeSubscriptionManager();
+    const sent: string[] = [];
+
+    manager.subscribe("node-a", "generation-a", "main");
+    manager.subscribe("node-b", "generation-b", "main");
+    await expect(
+      manager.sendToSession("main", "tick", {}, ({ nodeId }) => {
+        if (nodeId === "node-a") {
+          throw new Error("transport failed");
+        }
+        sent.push(nodeId);
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(sent).toStrictEqual(["node-b"]);
+  });
+
+  test("drops unserializable payloads without rejecting fanout", async () => {
+    const manager = createNodeSubscriptionManager();
+    const sendEvent = vi.fn();
+
+    manager.subscribe("node-a", "generation-a", "main");
+    await expect(
+      manager.sendToSession("main", "tick", { invalid: 1n }, sendEvent),
+    ).resolves.toBeUndefined();
+
+    expect(sendEvent).not.toHaveBeenCalled();
   });
 });
