@@ -1785,16 +1785,33 @@ async function drainStoredChatOutbox(
       }
       syncChatQueueFromStoredOutbox(host, outbox);
       if (item.localCommandName === "reset") {
+        const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
+        const convertResetToMessage = (sendState?: ChatQueueItem["sendState"]) =>
+          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+            ...entry,
+            localCommandArgs: undefined,
+            localCommandName: undefined,
+            refreshSessions: true,
+            text: resetText,
+            ...(sendState ? { sendState } : {}),
+          }));
         const confirmation = await confirmConversationResetForCurrentSession(host, {
           sessionKey: outbox.sessionKey,
           ...(outbox.agentId ? { agentId: outbox.agentId } : {}),
         });
         if (confirmation === "deferred") {
-          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
-            ...entry,
-            sendError: undefined,
-            sendState: "waiting-idle",
-          }));
+          const approvedDuringRun =
+            visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && host.chatRunId;
+          const deferred = approvedDuringRun
+            ? convertResetToMessage("waiting-idle")
+            : updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
+                ...entry,
+                sendError: undefined,
+                sendState: "waiting-idle",
+              }));
+          if (!deferred) {
+            return "blocked";
+          }
           return "blocked";
         }
         if (confirmation === "cancelled") {
@@ -1803,19 +1820,7 @@ async function drainStoredChatOutbox(
           }
           continue;
         }
-        const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
-        const converted = updateQueuedMessageForSession(
-          host,
-          outbox.sessionKey,
-          item.id,
-          (entry) => ({
-            ...entry,
-            localCommandArgs: undefined,
-            localCommandName: undefined,
-            refreshSessions: true,
-            text: resetText,
-          }),
-        );
+        const converted = convertResetToMessage();
         if (!converted) {
           return "blocked";
         }

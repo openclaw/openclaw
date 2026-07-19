@@ -3986,6 +3986,60 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
 
+  it("preserves queued reset approval when a run starts during confirmation", async () => {
+    const confirmation = createDeferred<boolean>();
+    const sendPayloads: Array<Record<string, unknown>> = [];
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "chat.history") {
+        return Promise.resolve(idleChatHistory());
+      }
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "approved queued reset payload");
+        sendPayloads.push(payload);
+        return Promise.resolve({ runId: payload.idempotencyKey, status: "ok" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const item = {
+      id: "queued-reset-approved-before-run",
+      text: "/reset",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "reset",
+      sessionKey: "agent:main",
+    };
+    const confirmConversationReset = vi.fn(async () => await confirmation.promise);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [item],
+      confirmConversationReset,
+    });
+    admitHostQueueItems(host);
+
+    const draining = retryReconnectableQueuedChatSends(host);
+    await waitForFast(() => expect(confirmConversationReset).toHaveBeenCalledOnce());
+    host.chatRunId = "run-started-during-reset-confirmation";
+    confirmation.resolve(true);
+    await draining;
+
+    const approvedReset = listStoredChatOutboxes(host)[0]?.queue[0];
+    expect(approvedReset).toEqual(
+      expect.objectContaining({
+        id: item.id,
+        sendState: "waiting-idle",
+        text: "/reset",
+      }),
+    );
+    expect(approvedReset).not.toHaveProperty("localCommandName");
+
+    host.chatRunId = null;
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(confirmConversationReset).toHaveBeenCalledOnce();
+    expect(sendPayloads.map((payload) => payload.message)).toEqual(["/reset"]);
+    expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+  });
+
   it("keeps a queued reset when its session changes during confirmation", async () => {
     const confirmation = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
