@@ -125,16 +125,27 @@ export async function runCliFallbackCandidate(params: {
   // Durable segment lane: completed CLI text blocks reach the same block-reply
   // handler embedded runs use, so blockStreaming applies to CLI turns and the
   // pipeline's dedupe suppresses the terminal CLI result when already streamed.
+  // Each completed block receives a compound assistant-message identity encoding
+  // both the Claude message ordinal and the within-message block ordinal so the
+  // coalescer flushes on every completed-block boundary and transport rotation
+  // (e.g. Telegram's answer lane) does not overwrite an earlier block with a
+  // later block from the same assistant message.
   const cliBlockReplyHandler = params.presentation.blockReplyHandler;
   const deliverAssistantBlockText =
     turn.blockStreamingEnabled && cliBlockReplyHandler
-      ? async (payload: { text: string; assistantMessageIndex?: number }) => {
+      ? async (payload: {
+          text: string;
+          assistantMessageIndex?: number;
+          assistantBlockIndex?: number;
+        }) => {
+          const effectiveIndex =
+            payload.assistantMessageIndex !== undefined && payload.assistantBlockIndex !== undefined
+              ? payload.assistantMessageIndex * 1000 + payload.assistantBlockIndex
+              : payload.assistantMessageIndex;
           await cliBlockReplyHandler(
             setReplyPayloadMetadata(
               { text: payload.text },
-              payload.assistantMessageIndex !== undefined
-                ? { assistantMessageIndex: payload.assistantMessageIndex }
-                : {},
+              effectiveIndex !== undefined ? { assistantMessageIndex: effectiveIndex } : {},
             ),
           );
         }

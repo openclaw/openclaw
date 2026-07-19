@@ -165,6 +165,7 @@ type CommentaryTextPayload = {
 type AssistantBlockTextPayload = {
   text: string;
   assistantMessageIndex?: number;
+  assistantBlockIndex?: number;
 };
 
 function readAssistantBlockTextPayload(
@@ -174,14 +175,18 @@ function readAssistantBlockTextPayload(
     return undefined;
   }
   const text = evt.data.blockText.trim();
-  const assistantMessageIndex = evt.data.assistantMessageIndex;
   if (!text) {
     return undefined;
   }
+  const assistantMessageIndex = evt.data.assistantMessageIndex;
+  const assistantBlockIndex = evt.data.assistantBlockIndex;
   return {
     text,
     ...(typeof assistantMessageIndex === "number" && Number.isFinite(assistantMessageIndex)
       ? { assistantMessageIndex }
+      : {}),
+    ...(typeof assistantBlockIndex === "number" && Number.isFinite(assistantBlockIndex)
+      ? { assistantBlockIndex }
       : {}),
   };
 }

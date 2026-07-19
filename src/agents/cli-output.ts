@@ -132,6 +132,8 @@ export type CliAssistantBlockDelta = {
   text: string;
   /** Ordinal of the assistant message this segment belongs to (message_stop advances it). */
   assistantMessageIndex: number;
+  /** Zero-based ordinal of this completed text block within the assistant message. */
+  assistantBlockIndex: number;
 };
 
 export type CliPlanUpdate = {
@@ -1248,12 +1250,14 @@ export function createCliJsonlStreamingParser(params: {
   // Marks the assistantText suffix that has not been reported as a completed segment.
   let assistantBlockStart = 0;
   let assistantMessageIndex = 0;
+  let assistantBlockIndex = 0;
   const thinkingTracker = createThinkingTracker();
 
   const emitAssistantBlockSegment = (segmentText: string) => {
     const text = segmentText.trim();
     if (text && wantAssistantBlocks) {
-      params.onAssistantBlockText?.({ text, assistantMessageIndex });
+      params.onAssistantBlockText?.({ text, assistantMessageIndex, assistantBlockIndex });
+      assistantBlockIndex += 1;
     }
   };
 
@@ -1432,6 +1436,7 @@ export function createCliJsonlStreamingParser(params: {
         flushAssistantBlockFromAccumulated();
         if (evt.type === "message_stop") {
           assistantMessageIndex += 1;
+          assistantBlockIndex = 0;
         }
       }
     }

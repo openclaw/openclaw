@@ -2650,7 +2650,11 @@ describe("createCliJsonlStreamingParser", () => {
     });
 
   it("emits completed block segments with message ordinals across tool boundaries", () => {
-    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const segments: Array<{
+      text: string;
+      assistantMessageIndex: number;
+      assistantBlockIndex: number;
+    }> = [];
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: claudeStreamJsonBackend,
@@ -2673,8 +2677,8 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(segments).toEqual([
-      { text: "Inspecting the repo.", assistantMessageIndex: 0 },
-      { text: "Short wrap-up.", assistantMessageIndex: 1 },
+      { text: "Inspecting the repo.", assistantMessageIndex: 0, assistantBlockIndex: 0 },
+      { text: "Short wrap-up.", assistantMessageIndex: 1, assistantBlockIndex: 0 },
     ]);
     // Without a commentary consumer the preview lane still streams per delta.
     expect(deltas).toEqual([
@@ -2685,7 +2689,11 @@ describe("createCliJsonlStreamingParser", () => {
   });
 
   it("emits pre-tool block segments alongside commentary when both consumers are wired", () => {
-    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const segments: Array<{
+      text: string;
+      assistantMessageIndex: number;
+      assistantBlockIndex: number;
+    }> = [];
     const commentaryTexts: string[] = [];
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
@@ -2710,14 +2718,18 @@ describe("createCliJsonlStreamingParser", () => {
 
     expect(commentaryTexts).toEqual(["Checking the config."]);
     expect(segments).toEqual([
-      { text: "Checking the config.", assistantMessageIndex: 0 },
-      { text: "Done.", assistantMessageIndex: 1 },
+      { text: "Checking the config.", assistantMessageIndex: 0, assistantBlockIndex: 0 },
+      { text: "Done.", assistantMessageIndex: 1, assistantBlockIndex: 0 },
     ]);
     expect(deltas).toEqual([{ text: "Done.", delta: "Done." }]);
   });
 
   it("splits block segments at text block boundaries within one message", () => {
-    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const segments: Array<{
+      text: string;
+      assistantMessageIndex: number;
+      assistantBlockIndex: number;
+    }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: claudeStreamJsonBackend,
       providerId: "claude-cli",
@@ -2737,13 +2749,17 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(segments).toEqual([
-      { text: "First block.", assistantMessageIndex: 0 },
-      { text: "Second block.", assistantMessageIndex: 0 },
+      { text: "First block.", assistantMessageIndex: 0, assistantBlockIndex: 0 },
+      { text: "Second block.", assistantMessageIndex: 0, assistantBlockIndex: 1 },
     ]);
   });
 
   it("reports the tail block segment when a result event arrives without message_stop", () => {
-    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const segments: Array<{
+      text: string;
+      assistantMessageIndex: number;
+      assistantBlockIndex: number;
+    }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: claudeStreamJsonBackend,
       providerId: "claude-cli",
@@ -2760,11 +2776,17 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(segments).toEqual([{ text: "Tail text.", assistantMessageIndex: 0 }]);
+    expect(segments).toEqual([
+      { text: "Tail text.", assistantMessageIndex: 0, assistantBlockIndex: 0 },
+    ]);
   });
 
   it("flushes the trailing block segment when the stream ends without terminal events", () => {
-    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const segments: Array<{
+      text: string;
+      assistantMessageIndex: number;
+      assistantBlockIndex: number;
+    }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: claudeStreamJsonBackend,
       providerId: "claude-cli",
@@ -2780,11 +2802,17 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(segments).toEqual([{ text: "Partial narration.", assistantMessageIndex: 0 }]);
+    expect(segments).toEqual([
+      { text: "Partial narration.", assistantMessageIndex: 0, assistantBlockIndex: 0 },
+    ]);
   });
 
   it("does not emit block segments for the gemini stream-json dialect", () => {
-    const segments: Array<{ text: string; assistantMessageIndex: number }> = [];
+    const segments: Array<{
+      text: string;
+      assistantMessageIndex: number;
+      assistantBlockIndex: number;
+    }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "gemini",
@@ -2808,6 +2836,55 @@ describe("createCliJsonlStreamingParser", () => {
     // Gemini terminal results already include all streamed text, so no segment lane.
     expect(segments).toEqual([]);
     expect(parser.getOutput()?.text).toBe("Gemini text.");
+  });
+
+  it("uses distinct block ordinals for pre-tool and post-tool text within one message", () => {
+    // Claude can emit text → tool_use → text all inside one assistant message,
+    // where both text blocks share the same message ordinal. The block index
+    // must distinguish them so transport rotation does not overwrite the first.
+    const segments: Array<{
+      text: string;
+      assistantMessageIndex: number;
+      assistantBlockIndex: number;
+    }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: claudeStreamJsonBackend,
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onAssistantBlockText: (segment) => segments.push(segment),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-text-tool-text" }),
+        // Pre-tool narration in content block 0.
+        textDeltaLine("Let me inspect the config."),
+        // Tool use starts in content block 1 — boundary flushes the pre-tool text.
+        streamEventLine({
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", id: "toolu_proof", name: "Bash", input: {} },
+        }),
+        // Post-tool text in content block 2 (same assistant message, no message_stop yet).
+        streamEventLine({ type: "content_block_start", index: 2, content_block: { type: "text" } }),
+        textDeltaLine("Done — check complete."),
+        streamEventLine({ type: "message_stop" }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(segments).toEqual([
+      {
+        text: "Let me inspect the config.",
+        assistantMessageIndex: 0,
+        assistantBlockIndex: 0,
+      },
+      {
+        text: "Done — check complete.",
+        assistantMessageIndex: 0,
+        assistantBlockIndex: 1,
+      },
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

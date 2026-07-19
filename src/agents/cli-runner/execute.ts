@@ -1529,6 +1529,7 @@ export async function executePreparedCliRun(
         const emitCliAssistantBlockText = ({
           text,
           assistantMessageIndex,
+          assistantBlockIndex: blockIndex,
         }: CliAssistantBlockDelta) => {
           observedCliActivity = true;
           if (!emitLiveEvents) {
@@ -1543,6 +1544,7 @@ export async function executePreparedCliRun(
                 context.backendResolved.textTransforms?.output,
               ),
               assistantMessageIndex,
+              assistantBlockIndex: blockIndex,
             },
           });
         };
