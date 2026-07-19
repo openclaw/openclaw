@@ -14,6 +14,7 @@ import {
   readSessionUpdatedAt,
   runProcessDiscordMessage,
   sendMocksForTest as sendMocks,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -21,6 +22,8 @@ import {
   getReactionEmojis,
   requireRecord,
 } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage session routing and room events", () => {
   it("suppresses Discord reactions for room events when ack scope does not force all messages", async () => {

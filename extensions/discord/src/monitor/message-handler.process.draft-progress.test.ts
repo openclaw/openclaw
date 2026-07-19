@@ -7,6 +7,7 @@ import {
   deliverDiscordReply,
   dispatchInboundMessageForTest as dispatchInboundMessage,
   runProcessDiscordMessage,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -15,6 +16,8 @@ import {
   getDeliveredFinalTexts,
   useProgressDraftStartDelay,
 } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage draft streaming progress", () => {
   it("keeps opt-in commentary receipts independent from hidden tool progress", async () => {

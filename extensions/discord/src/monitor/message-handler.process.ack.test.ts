@@ -15,6 +15,7 @@ import {
   runProcessDiscordMessage,
   sendMocksForTest as sendMocks,
   typingMocksForTest as typingMocks,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -27,6 +28,8 @@ import {
   requireReactionCall,
   requireRecord,
 } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage ack reactions", () => {
   it("skips ack reactions for group-mentions when mentions are not required", async () => {

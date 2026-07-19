@@ -534,46 +534,48 @@ export async function processStreamOffDiscordMessage() {
   await runProcessDiscordMessage(ctx);
 }
 
-beforeAll(async () => {
-  vi.useRealTimers();
-  ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
-    await import("./message-handler.test-harness.js"));
-  ({ testing: threadBindingTesting, createThreadBindingManager } =
-    await import("./thread-bindings.js"));
-  ({ processDiscordMessage, formatDiscordReplySkip } =
-    await import("./message-handler.process.js"));
-  ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
-});
+export function registerDiscordProcessTestLifecycle() {
+  beforeAll(async () => {
+    vi.useRealTimers();
+    ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
+      await import("./message-handler.test-harness.js"));
+    ({ testing: threadBindingTesting, createThreadBindingManager } =
+      await import("./thread-bindings.js"));
+    ({ processDiscordMessage, formatDiscordReplySkip } =
+      await import("./message-handler.process.js"));
+    ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
+  });
 
-beforeEach(() => {
-  vi.useRealTimers();
-  sendMocks.reactMessageDiscord.mockClear();
-  sendMocks.removeReactionDiscord.mockClear();
-  typingMocks.sendTyping.mockClear();
-  typingMocks.sendTyping.mockResolvedValue(undefined);
-  discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
-  editMessageDiscord.mockClear();
-  deliverDiscordReply.mockClear();
-  createDiscordDraftStream.mockClear();
-  dispatchInboundMessage.mockClear();
-  recordInboundSession.mockClear();
-  readSessionUpdatedAt.mockClear();
-  getSessionEntry.mockClear();
-  readLatestAssistantTextByIdentity.mockClear();
-  resolveStorePath.mockClear();
-  createDiscordRestClientSpy.mockClear();
-  dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
-  recordInboundSession.mockResolvedValue(undefined);
-  readSessionUpdatedAt.mockReturnValue(undefined);
-  getSessionEntry.mockReturnValue(undefined);
-  readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
-  resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
-  threadBindingTesting.resetThreadBindingsForTests();
-});
+  beforeEach(() => {
+    vi.useRealTimers();
+    sendMocks.reactMessageDiscord.mockClear();
+    sendMocks.removeReactionDiscord.mockClear();
+    typingMocks.sendTyping.mockClear();
+    typingMocks.sendTyping.mockResolvedValue(undefined);
+    discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
+    editMessageDiscord.mockClear();
+    deliverDiscordReply.mockClear();
+    createDiscordDraftStream.mockClear();
+    dispatchInboundMessage.mockClear();
+    recordInboundSession.mockClear();
+    readSessionUpdatedAt.mockClear();
+    getSessionEntry.mockClear();
+    readLatestAssistantTextByIdentity.mockClear();
+    resolveStorePath.mockClear();
+    createDiscordRestClientSpy.mockClear();
+    dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
+    recordInboundSession.mockResolvedValue(undefined);
+    readSessionUpdatedAt.mockReturnValue(undefined);
+    getSessionEntry.mockReturnValue(undefined);
+    readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
+    resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
+    threadBindingTesting.resetThreadBindingsForTests();
+  });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+}
 
 export function getLastRouteUpdate():
   | {

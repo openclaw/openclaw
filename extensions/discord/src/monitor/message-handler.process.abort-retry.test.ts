@@ -13,9 +13,12 @@ import {
   recordInboundSessionForTest as recordInboundSession,
   runProcessDiscordMessage,
   sleepWithAbortForTest as sleepWithAbort,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import { expectFreshFinalText, getReactionEmojis } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage deliver-lambda abort logging", () => {
   it("emits logVerbose with formatDiscordReplySkip when deliver fires on a pre-aborted signal", async () => {

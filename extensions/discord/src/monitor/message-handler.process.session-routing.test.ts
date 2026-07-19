@@ -13,6 +13,7 @@ import {
   getLastRouteUpdate,
   runProcessDiscordMessage,
   sendMocksForTest as sendMocks,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -20,6 +21,8 @@ import {
   getReactionEmojis,
   requireRecord,
 } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage session routing", () => {
   it("carries preflight audio transcript into dispatch context and marks media transcribed", async () => {

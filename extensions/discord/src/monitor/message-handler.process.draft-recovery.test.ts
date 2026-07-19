@@ -13,6 +13,7 @@ import {
   processStreamOffDiscordMessage,
   readLatestAssistantTextByIdentity,
   runProcessDiscordMessage,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -27,6 +28,8 @@ import {
   runSingleChunkFinalScenario,
   useProgressDraftStartDelay,
 } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage draft streaming recovery", () => {
   it("falls back to standard send when final needs multiple chunks", async () => {

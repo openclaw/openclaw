@@ -14,6 +14,7 @@ import {
   getSessionEntry,
   readLatestAssistantTextByIdentity,
   runProcessDiscordMessage,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -25,6 +26,8 @@ import {
   runSingleChunkFinalScenario,
   useProgressDraftStartDelay,
 } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage draft streaming final delivery", () => {
   it("sends a fresh final message when final fits one chunk", async () => {

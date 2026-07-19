@@ -6,6 +6,7 @@ import {
   dispatchInboundMessageForTest as dispatchInboundMessage,
   runInPartialStreamMode,
   runProcessDiscordMessage,
+  registerDiscordProcessTestLifecycle,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
@@ -14,6 +15,8 @@ import {
   firstDispatchParams,
   useProgressDraftStartDelay,
 } from "./message-handler.process.test-helpers.js";
+
+registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage draft streaming reasoning", () => {
   it("skips empty apply_patch starts and renders the patch summary", async () => {
