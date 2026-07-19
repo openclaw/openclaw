@@ -429,10 +429,16 @@ export async function attachAuthenticatedGatewayConnect(
     incrementPresenceVersion();
   }
   if (role === "node") {
+    // Node-role admission above returns when generation capture fails. Preserve
+    // that required fact locally instead of rereading the optional session API.
+    const pairingGeneration = nodePairingGeneration;
+    if (!pairingGeneration) {
+      throw new Error("authenticated node pairing generation missing during registration");
+    }
     const requestContext = buildRequestContext();
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
-      pairingGeneration: nodePairingGeneration,
+      pairingGeneration,
     });
     recordRemoteNodeInfo({
       nodeId: nodeSession.nodeId,
@@ -464,7 +470,7 @@ export async function attachAuthenticatedGatewayConnect(
         const cfg = await loadVoiceWakeConfig();
         await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
           nodeSession.nodeId,
-          nodeSession.pairingGeneration,
+          pairingGeneration,
           "voicewake.changed",
           serializeEventPayload({ triggers: cfg.triggers }),
         );
@@ -479,7 +485,7 @@ export async function attachAuthenticatedGatewayConnect(
         const routing = await loadVoiceWakeRoutingConfig();
         await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
           nodeSession.nodeId,
-          nodeSession.pairingGeneration,
+          pairingGeneration,
           "voicewake.routing.changed",
           serializeEventPayload({ config: routing }),
         );
