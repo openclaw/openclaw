@@ -562,8 +562,10 @@ function finalizeUpdatedJob(params: {
   // add/remove maintenance recompute; otherwise the pending run is dropped.
   const schedulingInputsChanged =
     params.schedulingInputsRequested && !cronSchedulingInputsEqual(job, nextJob);
+  const explicitNextRunSelected =
+    params.nextRunStateRequested && hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs);
   const runOwnershipInputsChanged =
-    params.nextRunStateRequested ||
+    explicitNextRunSelected ||
     (params.schedulingInputsRequested && !cronRunSchedulingInputsEqual(job, nextJob));
   const stateOwnershipInputsChanged =
     params.triggerStateRequested || !cronRunStateDefinitionsEqual(job, nextJob);
@@ -614,7 +616,7 @@ function finalizeUpdatedJob(params: {
         clearCronActiveRunOwnershipState(nextJob.state);
       }
     }
-  } else if (params.nextRunStateRequested) {
+  } else if (explicitNextRunSelected) {
     // An explicitly selected slot is a new scheduler owner even when the job
     // definition is unchanged. Release provenance from the previous slot.
     nextJob.state.startupCatchupAtMs = undefined;

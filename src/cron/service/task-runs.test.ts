@@ -18,7 +18,7 @@ import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState } from "./state.js";
 import {
   tryCreateCronTaskRun,
-  tryFindCronTaskRunIdForRecovery,
+  tryFindCronTaskRunForRecovery,
   tryFindFinalizedCronTaskRun,
   tryFinishCronTaskRun,
   tryFinishCronTaskRunWithoutHistory,
@@ -622,7 +622,9 @@ describe("cron task run terminal records", () => {
           notifyPolicy: "silent",
           startedAt,
         });
-        expect(tryFindCronTaskRunIdForRecovery(state, "legacy-job", startedAt)).toBe(legacyRunId);
+        expect(tryFindCronTaskRunForRecovery(state, "legacy-job", startedAt)?.taskRunId).toBe(
+          legacyRunId,
+        );
         finalizeTaskRunByRunId({
           runId: legacyRunId,
           runtime: "cron",
@@ -693,8 +695,8 @@ describe("cron task run terminal records", () => {
         expect(runB).toBeTruthy();
         expect(runA).not.toBe(runB);
 
-        expect(tryFindCronTaskRunIdForRecovery(stateA, job.id, startedAt)).toBe(runA);
-        expect(tryFindCronTaskRunIdForRecovery(stateB, job.id, startedAt)).toBe(runB);
+        expect(tryFindCronTaskRunForRecovery(stateA, job.id, startedAt)?.taskRunId).toBe(runA);
+        expect(tryFindCronTaskRunForRecovery(stateB, job.id, startedAt)?.taskRunId).toBe(runB);
       },
     );
   });

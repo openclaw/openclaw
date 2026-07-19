@@ -730,6 +730,7 @@ describe("cron service run admission", () => {
       nowMs: dueAt,
       nextRunAtMs: dueAt + 3_600_000,
     });
+    job.state.instanceId = "manual-finalization-reload-failure-instance";
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     const state = createCronServiceState({

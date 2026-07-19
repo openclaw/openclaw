@@ -151,21 +151,6 @@ function findLatestCronTaskRunForRecovery(
     )[0];
 }
 
-/** Finds the unique task identity owned by one persisted cron reservation. */
-export function tryFindCronTaskRunIdForRecovery(
-  state: CronServiceState,
-  jobId: string,
-  startedAt: number,
-): string | undefined {
-  try {
-    return findLatestCronTaskRunForRecovery(jobId, startedAt, cronStoreKey(state.deps.storePath))
-      ?.runId;
-  } catch (error) {
-    state.deps.log.warn({ jobId, error }, "cron: failed to read task ledger recovery record");
-    return undefined;
-  }
-}
-
 /** Reads the durable ownership captured when a cron run was admitted. */
 export function tryFindCronTaskRunForRecovery(
   state: CronServiceState,
