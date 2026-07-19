@@ -32,6 +32,7 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
+import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
@@ -122,7 +123,13 @@ export async function attachAuthenticatedGatewayConnect(
   const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
   const clientId = connectParams.client.id;
   const instanceId = connectParams.client.instanceId;
-  const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
+  // Nodes retain device-owned presence. User clients need one row per connection
+  // so two tabs watching different sessions cannot overwrite each other.
+  const presenceKey = shouldTrackPresence
+    ? role === "node"
+      ? (device?.id ?? instanceId ?? connId)
+      : connId
+    : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
 
   if (isClosed()) {
@@ -143,6 +150,7 @@ export async function attachAuthenticatedGatewayConnect(
         profileId: profile.id,
         displayName: profile.displayName,
         hasAvatar: profile.avatarMime !== null,
+        updatedAt: profile.updatedAt,
       };
     } catch (error) {
       // Profile storage must not block login; retain the legacy email-only identity on failure.
@@ -343,7 +351,7 @@ export async function attachAuthenticatedGatewayConnect(
       deviceId: device?.id,
       roles: [role],
       scopes,
-      instanceId: device?.id ?? instanceId,
+      instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
       ...(authenticatedUserId
         ? {
             user: authenticatedUserProfile
@@ -353,11 +361,12 @@ export async function attachAuthenticatedGatewayConnect(
                   ...(authenticatedUserProfile.displayName
                     ? { name: authenticatedUserProfile.displayName }
                     : {}),
-                  ...(authenticatedUserProfile.hasAvatar
-                    ? {
-                        avatarUrl: `/api/users/${authenticatedUserProfile.profileId}/avatar`,
-                      }
-                    : {}),
+                  // This authenticated route resolves the uploaded avatar first, then the
+                  // gateway-side Gravatar proxy, so clients never need an email-hash URL.
+                  // The ?v=<updatedAt> revision changes when the profile (avatar) is
+                  // updated, so a reconnecting viewer's <img> refetches instead of reusing
+                  // a stale cached image for the unchanged route.
+                  avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
                 }
               : { id: authenticatedUserId, email: authenticatedUserId },
           }

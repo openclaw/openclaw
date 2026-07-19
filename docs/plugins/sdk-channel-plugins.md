@@ -116,8 +116,10 @@ dedupes `chat_id:message_id` because debounce merges can re-surface a message
 under a fresh `update_id`), or a longer window than the channel's tombstone
 retention. If your guard key would equal the drain `event_id`, delete the
 guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
-to cover the old guard window instead. Non-dedupe protections (age fences,
-outbound echo caches) are unrelated to this rule and stay.
+to cover the old guard window instead. Non-dedupe protections such as age
+fences are unrelated to this rule. Stable outbound message IDs use the shared
+outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
+channel-local TTL cache.
 
 #### Transport classes and retention
 
@@ -478,10 +480,9 @@ adapter/wizard fail closed on config writes and finalization, and they reuse
 the same install-required message across validation, finalize, and docs-link
 copy.
 
-If your channel supports env-driven setup or auth and generic startup/config
-flows should know those env names before runtime loads, declare them in the
-plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
-constants for operator-facing copy only.
+If your channel supports env-driven setup or auth, expose it through the
+channel config schema and setup descriptors. Keep channel runtime `envVars` or
+local constants for operator-facing copy only.
 
 If your channel can appear in `status`, `channels list`, `channels status`, or
 SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
@@ -525,10 +526,6 @@ surfaces:
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
   payload field layout is still required
-- `openclaw/plugin-sdk/telegram-command-config` (deprecated: no bundled
-  plugin uses it in production) for Telegram custom-command normalization,
-  duplicate/conflict validation, and a fallback-stable command config
-  contract; prefer plugin-local command config handling for new plugin code
 
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native

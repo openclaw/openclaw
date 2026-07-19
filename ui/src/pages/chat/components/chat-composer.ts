@@ -103,6 +103,7 @@ type ChatComposerProps = {
   disabledReason: string | null;
   disabledActionLabel?: string | null;
   onDisabledAction?: (() => void) | null;
+  runError?: { summary: string } | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
@@ -2650,6 +2651,14 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
+    ${props.runError
+      ? html`
+          <div class="chat-run-error" role="alert">
+            <span class="chat-run-error__icon" aria-hidden="true">${icons.alertTriangle}</span>
+            <span class="chat-run-error__summary">${props.runError.summary}</span>
+          </div>
+        `
+      : nothing}
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
         ? html`

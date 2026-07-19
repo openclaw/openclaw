@@ -120,6 +120,7 @@ type ChatThreadProps = {
   /** Host context resolving global-alias session keys (scope=global fleets). */
   /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
   sessionHost?: UiSessionDefaultsHost | null;
+  gatewayUrl?: string;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -1254,6 +1255,7 @@ function renderChatThreadContents(
     Math.floor(Date.now() / 60_000),
     getToolTitlesVersion(),
     props.sessionKey,
+    props.gatewayUrl,
     props.fullMessageAgentId,
     showReasoning,
     props.showToolCalls,

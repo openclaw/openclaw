@@ -341,6 +341,7 @@ export type ChatState = {
   planStatus?: PlanStatus | null;
   lastError: string | null;
   chatError?: string | null;
+  chatRunError?: { summary: string } | null;
   /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
   chatSideChatTurns?: ChatSideResult[];
   chatSideResultPending?: ChatSideResultPending | null;
@@ -897,6 +898,7 @@ export async function clearChatHistory(
     return "completed";
   }
   state.chatMessages = [];
+  state.chatRunError = null;
   state.chatSideChatTurns = [];
   state.chatSideChatHidden = false;
   state.chatReplyTarget = null;

@@ -1525,11 +1525,11 @@ describe("runSetupWizard", () => {
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
         pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        compatCode: "legacy-before-agent-start",
-        severity: "warn",
+        code: "hook-only",
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
         message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+          "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
       },
     ]);
     readConfigFileSnapshot.mockResolvedValueOnce({

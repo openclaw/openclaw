@@ -61,7 +61,7 @@ vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
   resolveQmdBinaryUnavailableReason: (result: { reason?: string }) => result.reason ?? "binary",
 }));
 
-vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
+vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
   repairDreamingArtifacts,

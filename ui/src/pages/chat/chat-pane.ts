@@ -6,6 +6,8 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
+  SessionDiscussionInfo,
+  SessionDiscussionState,
   SessionsCatalogContinueResult,
   SessionsCatalogReadResult,
   SessionsFilesRevealResult,
@@ -53,6 +55,7 @@ import {
 } from "../../components/command-palette-contract.ts";
 import "../../components/modal-dialog.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
+import { icons } from "../../components/icons.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -192,6 +195,7 @@ import {
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
   type DetailFullMessageResult,
+  type SidebarContent,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 import { ChatTranscriptController } from "./components/chat-thread.ts";
@@ -406,6 +410,8 @@ class ChatPane extends OpenClawLightDomElement {
   private swarmBoardSnapshot: BoardSnapshot | null = null;
   private swarmBoardSnapshotBase: BoardSnapshot | null = null;
   private swarmBoardSnapshotRequest = 0;
+  private readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
+  private readonly sessionDiscussionProbes = new Set<string>();
   private headerRenameInitialLabel: string | null = null;
   private headerRenameInitialValue = "";
   private headerRenameSessionKey = "";
@@ -2166,6 +2172,13 @@ class ChatPane extends OpenClawLightDomElement {
       const nextSessionKey = catalogKey
         ? this.sessionKey
         : resolveSessionKey(this.sessionKey, this.context.gateway.snapshot.hello);
+      if (nextSessionKey) {
+        this.sessionDiscussionStates.delete(nextSessionKey);
+        // Resolve availability before the action renders: the methods are
+        // advertised even without a provider, so an unprobed session would
+        // otherwise show a dead Discussion button on provider-less installs.
+        void this.probeSessionDiscussion(nextSessionKey);
+      }
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         this.switchPaneSession(nextSessionKey);
       } else if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
@@ -2332,6 +2345,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.taskSuggestions = [];
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
+      this.sessionDiscussionStates.clear();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
     }
@@ -2339,6 +2353,17 @@ class ChatPane extends OpenClawLightDomElement {
     state.connected = snapshot.connected;
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (sourceChanged && state.sidebarContent?.kind === "session-discussion") {
+      // A reconnect may point at a different gateway/provider; an open panel
+      // would keep rendering the previous provider's URL. Close it — the
+      // re-probe below restores the action for the new source.
+      state.handleCloseSidebar();
+    }
+    if (sourceChanged && snapshot.connected && state.sessionKey) {
+      // Reconnects clear the probed states above; re-probe the active session
+      // so the Discussion action reappears without a manual session switch.
+      void this.probeSessionDiscussion(state.sessionKey);
+    }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
       snapshot.connected &&
@@ -2660,6 +2685,127 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
+  // Probe once per session activation; transient failures stay uncached so the
+  // next activation retries instead of permanently hiding the feature.
+  private async probeSessionDiscussion(sessionKey: string) {
+    const state = this.state;
+    if (
+      !state?.connected ||
+      !state.client ||
+      this.sessionDiscussionStates.has(sessionKey) ||
+      // One in-flight probe per key: a rapid A→B→A switch must not start a
+      // second probe whose slower twin could later overwrite the fresh result.
+      this.sessionDiscussionProbes.has(sessionKey) ||
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+    ) {
+      return;
+    }
+    const generation = this.connectionGeneration;
+    this.sessionDiscussionProbes.add(sessionKey);
+    try {
+      const info = await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
+        sessionKey,
+      });
+      // A reconnect supersedes in-flight probes; a stale result must not
+      // overwrite the new source's cache (e.g. an old "none" hiding the action).
+      if (generation !== this.connectionGeneration) {
+        return;
+      }
+      this.sessionDiscussionStates.set(sessionKey, info.state);
+      this.requestUpdate();
+    } catch {
+      // Leave unprobed: the action stays hidden and a later switch retries.
+    } finally {
+      this.sessionDiscussionProbes.delete(sessionKey);
+      // A reconnect during this probe skipped its own probe (the key was
+      // still held here); retry now so the new source gets a fresh answer.
+      if (
+        generation !== this.connectionGeneration &&
+        this.state?.sessionKey === sessionKey &&
+        !this.sessionDiscussionStates.has(sessionKey)
+      ) {
+        void this.probeSessionDiscussion(sessionKey);
+      }
+    }
+  }
+
+  private renderSessionDiscussionAction() {
+    const state = this.state;
+    const sessionKey = state?.sessionKey.trim() ?? "";
+    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    if (
+      !state?.connected ||
+      !state.client ||
+      !sessionKey ||
+      known === undefined ||
+      known === "none" ||
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+    ) {
+      return nothing;
+    }
+    const canOpen =
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.open") === true;
+    const contentGeneration = this.connectionGeneration;
+    const content: SidebarContent = {
+      kind: "session-discussion",
+      sessionKey,
+      canOpen,
+      loadInfo: async (key) => {
+        if (!state.connected || !state.client) {
+          throw new Error(t("chat.sessionDiscussion.disconnected"));
+        }
+        return await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
+          sessionKey: key,
+        });
+      },
+      openDiscussion: async (key) => {
+        if (!state.connected || !state.client) {
+          throw new Error(t("chat.sessionDiscussion.disconnected"));
+        }
+        return await state.client.request<SessionDiscussionInfo>("session.discussion.open", {
+          sessionKey: key,
+        });
+      },
+      onStateChange: (key, discussionState) => {
+        // Panels created under a previous connection may report late; their
+        // state belongs to the old provider and must not touch the new cache.
+        if (contentGeneration !== this.connectionGeneration) {
+          return;
+        }
+        this.sessionDiscussionStates.set(key, discussionState);
+        const current = state.sidebarContent;
+        if (
+          discussionState === "none" &&
+          current?.kind === "session-discussion" &&
+          current.sessionKey === key
+        ) {
+          state.handleCloseSidebar();
+          return;
+        }
+        state.requestUpdate();
+      },
+    };
+    const active =
+      state.sidebarOpen &&
+      state.sidebarContent?.kind === "session-discussion" &&
+      state.sidebarContent.sessionKey === sessionKey;
+    const label = t("chat.sessionDiscussion.show");
+    return html`
+      <openclaw-tooltip .content=${label}>
+        <button
+          class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle"
+          type="button"
+          aria-label=${label}
+          aria-pressed=${String(active)}
+          @click=${() => state.handleOpenSidebar(content)}
+        >
+          ${icons.messageSquare}
+        </button>
+      </openclaw-tooltip>
+    `;
+  }
+
   private renderPaneHeader(
     sessionWorkspace: SessionWorkspaceProps,
     backgroundTasks: BackgroundTasksProps,
@@ -2733,6 +2879,7 @@ class ChatPane extends OpenClawLightDomElement {
         this.state?.connected === true &&
         hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
       terminalAction: renderCatalogTerminalButton(this.state, this.catalogSession),
+      discussionAction: this.renderSessionDiscussionAction(),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
@@ -2916,6 +3063,7 @@ class ChatPane extends OpenClawLightDomElement {
           ? () => void this.restoreArchivedSession(state.sessionKey)
           : null,
       error: state.lastError,
+      runError: catalogKey ? null : (state.chatRunError ?? null),
       inlineApproval,
       approvalBusy: approvalSnapshot?.approvalBusy,
       approvalErrors: approvalSnapshot?.approvalErrors,
@@ -3142,6 +3290,7 @@ class ChatPane extends OpenClawLightDomElement {
       chatMessageMaxWidth: state.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       basePath: state.basePath,
+      gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
     const content =
