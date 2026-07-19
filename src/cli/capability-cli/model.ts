@@ -98,12 +98,15 @@ async function readModelRunImageFileSafely(
   budget: { remaining: number },
 ): Promise<Buffer> {
   const resolvedPath = path.resolve(filePath);
+  // Stat first to reject non-regular files (FIFOs, sockets, etc.) before
+  // opening, because opening a FIFO for reading blocks until a writer appears.
+  const preStat = await fs.stat(resolvedPath);
+  if (!preStat.isFile()) {
+    throw new Error(`not a regular file: ${resolvedPath}`);
+  }
   const handle = await fs.open(resolvedPath, "r");
   try {
     const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error(`not a regular file: ${resolvedPath}`);
-    }
     if (stat.size > MAX_MODEL_RUN_IMAGE_BYTES) {
       throw new Error(
         `--file too large: ${resolvedPath} is ${stat.size} bytes (max ${MAX_MODEL_RUN_IMAGE_BYTES})`,
@@ -122,7 +125,9 @@ async function readModelRunImageFileSafely(
     let offset = 0;
     while (offset < stat.size) {
       const { bytesRead } = await handle.read(buf, offset, stat.size - offset, offset);
-      if (bytesRead === 0) break;
+      if (bytesRead === 0) {
+        break;
+      }
       offset += bytesRead;
     }
     return buf.subarray(0, offset);
