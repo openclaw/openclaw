@@ -2,11 +2,12 @@
  * Model registry - manages configured/provider-owned models and API key resolution.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import { readRegularFileSync } from "../../infra/regular-file.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -316,6 +317,8 @@ function mergeCompat(
 /** Clear the config value command cache. Exported for testing. */
 export const clearApiKeyCache = clearConfigValueCache;
 
+const MAX_MODELS_CATALOG_BYTES = 1024 * 1024;
+
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
@@ -487,7 +490,10 @@ export class ModelRegistry {
     }
 
     try {
-      const content = readFileSync(modelsJsonPath, "utf-8");
+      const content = readRegularFileSync({
+        filePath: modelsJsonPath,
+        maxBytes: MAX_MODELS_CATALOG_BYTES,
+      }).buffer.toString("utf-8");
       const parsed = JSON.parse(stripJsonComments(content)) as unknown;
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();

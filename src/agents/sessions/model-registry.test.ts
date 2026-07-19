@@ -656,6 +656,23 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
   });
+
+  it("rejects oversized models.json catalogs with a size-bound error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-model-registry-"));
+    tempDirs.push(dir);
+    const file = join(dir, "models.json");
+    // Write a file larger than the 1 MB limit with a valid JSON prefix so the
+    // size check fires before parsing.
+    const header = JSON.stringify({ providers: {} });
+    const padding = Buffer.alloc(1024 * 1024 + 1 - header.length, " ");
+    writeFileSync(file, header + padding.toString());
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), file);
+
+    expect(registry.getError()).toBeDefined();
+    expect(registry.getError()).toContain("exceeds");
+    expect(registry.getAvailable()).toHaveLength(0);
+  });
 });
 
 describe("ModelRegistry OAuth provider ownership", () => {
