@@ -20,6 +20,7 @@ import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   hasVisibleStreamParts,
+  terminalMessageReplacesVisibleStream,
 } from "./stream-reconciliation.ts";
 import {
   authoritativeHistoryAppliedForRun,
@@ -310,23 +311,41 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     );
     if (hadActiveRunBeforeEvent) {
       if (visiblePayloadMessage && !projectedErrorMessage) {
-        if (
-          hasVisibleStreamParts(state, {
-            includeCurrent: false,
+        const replacesVisibleStream = terminalMessageReplacesVisibleStream(
+          visiblePayloadMessage,
+          state,
+          {
             isHiddenStreamText: isHiddenAssistantStreamText,
-          })
-        ) {
+            persistCommentary: state.settings?.chatPersistCommentary === true,
+          },
+        );
+        if (replacesVisibleStream) {
+          if (
+            hasVisibleStreamParts(state, {
+              includeCurrent: false,
+              isHiddenStreamText: isHiddenAssistantStreamText,
+            })
+          ) {
+            state.chatMessages = materializeVisibleAssistantStreamMessages(
+              state.chatMessages,
+              state,
+              { includeCurrent: false },
+            );
+            clearToolStreamSegments(state);
+          }
+          state.chatMessages = appendTerminalAssistantMessage(
+            state.chatMessages,
+            visiblePayloadMessage,
+          );
+        } else {
           state.chatMessages = materializeVisibleAssistantStreamMessages(
             state.chatMessages,
             state,
-            { includeCurrent: false },
+            { includeCurrent: true },
           );
           clearToolStreamSegments(state);
+          state.chatMessages = [...state.chatMessages, visiblePayloadMessage];
         }
-        state.chatMessages = appendTerminalAssistantMessage(
-          state.chatMessages,
-          visiblePayloadMessage,
-        );
       } else {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: true,

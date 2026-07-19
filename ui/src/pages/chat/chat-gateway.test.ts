@@ -1821,6 +1821,37 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
+  it("preserves streamed text before a differing terminal assistant message", () => {
+    const terminalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Configure provider auth, then try again." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer before gateway error.",
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message: terminalMessage,
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(
+      state.chatMessages[0],
+      "assistant",
+      "Partial answer before gateway error.",
+    );
+    expect(state.chatMessages[1]).toEqual(terminalMessage);
+  });
+
   it("preserves terminal extensions after a tool splits the stream", () => {
     const message = {
       role: "assistant",
@@ -1853,6 +1884,37 @@ describe("handleChatGatewayEvent", () => {
       "First thought. After tool. Final detail.",
     );
     expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
+  });
+
+  it("preserves a split stream when the terminal message only overlaps its prefix", () => {
+    const terminalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "First thought. Configure provider auth." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "After tool.",
+      chatStreamStartedAt: 100,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; toolCallId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "First thought.", ts: 90, toolCallId: "call-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message: terminalMessage,
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(3);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "First thought.");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "After tool.");
+    expect(state.chatMessages[2]).toEqual(terminalMessage);
   });
 
   it("preserves terminal extensions when split stream punctuation is adjacent", () => {
