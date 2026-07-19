@@ -18,11 +18,11 @@ import {
 import { USER_PROFILES_SCHEMA_SQL } from "./user-profiles-schema.js";
 
 export const MAX_USER_PROFILE_AVATAR_BYTES = 512 * 1024;
-export const USER_PROFILE_AVATAR_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+const USER_PROFILE_AVATAR_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 
-export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
+type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
 
-export type UserProfile = {
+type UserProfile = {
   id: string;
   displayName: string | null;
   avatarMime: UserProfileAvatarMime | null;
@@ -31,19 +31,19 @@ export type UserProfile = {
   updatedAt: number;
 };
 
-export type UserProfileListItem = UserProfile & {
+type UserProfileListItem = UserProfile & {
   emails: string[];
   hasAvatar: boolean;
 };
 
-export type UserProfileAvatar = {
+type UserProfileAvatar = {
   bytes: Uint8Array;
   mime: UserProfileAvatarMime;
   sha256: string;
   updatedAt: number;
 };
 
-export type UserProfileAvatarError =
+type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
 
@@ -81,7 +81,7 @@ type UserProfileListRow = Pick<
   UserProfileRow,
   "id" | "display_name" | "avatar_mime" | "merged_into" | "created_at" | "updated_at"
 > & {
-  has_avatar: number;
+  has_avatar: unknown;
 };
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
@@ -146,6 +146,10 @@ function toUserProfileListItem(row: UserProfileListRow, emails: string[]): UserP
   };
 }
 
+function hasAvatarColumn() {
+  return sql`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar");
+}
+
 function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
   const kysely = profileDb(db);
   const profile = executeSqliteQueryTakeFirstSync(
@@ -159,7 +163,7 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
         "merged_into",
         "created_at",
         "updated_at",
-        sql<number>`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
+        hasAvatarColumn(),
       ])
       .where("id", "=", profileId),
   );
@@ -461,7 +465,7 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}): UserPr
             "merged_into",
             "created_at",
             "updated_at",
-            sql<number>`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
+            hasAvatarColumn(),
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),

@@ -16,11 +16,14 @@ vi.mock("../state/user-profiles.js", () => ({
 }));
 
 function response() {
+  const end = vi.fn();
+  const setHeader = vi.fn();
+  const writeHead = vi.fn();
   return {
-    end: vi.fn(),
-    setHeader: vi.fn(),
-    writeHead: vi.fn(),
-  } as unknown as ServerResponse;
+    end,
+    response: { end, setHeader, writeHead } as unknown as ServerResponse,
+    writeHead,
+  };
 }
 
 function request(path: string, headers: Record<string, string> = {}) {
@@ -45,7 +48,7 @@ describe("profile avatar HTTP endpoint", () => {
 
     await handleUserProfileAvatarHttpRequest(
       request("/ignored-by-handler"),
-      res,
+      res.response,
       "/api/users/profile-1/avatar",
       { auth: {} as never },
     );
@@ -71,7 +74,7 @@ describe("profile avatar HTTP endpoint", () => {
 
     await handleUserProfileAvatarHttpRequest(
       request("/ignored-by-handler", { "if-none-match": '"current-hash-png"' }),
-      res,
+      res.response,
       "/api/users/profile-1/avatar",
       { auth: {} as never },
     );
@@ -90,7 +93,7 @@ describe("profile avatar HTTP endpoint", () => {
 
     await handleUserProfileAvatarHttpRequest(
       request("/ignored-by-handler"),
-      response(),
+      response().response,
       "/api/users/profile%2D1/avatar",
       { auth: {} as never },
     );
@@ -109,7 +112,7 @@ describe("profile avatar HTTP endpoint", () => {
 
     await handleUserProfileAvatarHttpRequest(
       { method: "HEAD", url: "/ignored-by-handler", headers: {} } as unknown as IncomingMessage,
-      res,
+      res.response,
       "/api/users/profile-1/avatar",
       { auth: {} as never },
     );
@@ -134,7 +137,7 @@ describe("profile avatar HTTP endpoint", () => {
 
       await handleUserProfileAvatarHttpRequest(
         request("/ignored-by-handler", { "if-none-match": header }),
-        res,
+        res.response,
         "/api/users/profile-1/avatar",
         { auth: {} as never },
       );
