@@ -7704,11 +7704,6 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "Anexo"
-    },
-    {
       "id": "native.android.5aafbef3744d86f3",
       "source": "Preparing audio…",
       "translated": "Preparando áudio…"
@@ -7812,6 +7807,11 @@
       "id": "native.android.623e434c83e3c020",
       "source": "Attach image",
       "translated": "Anexar imagem"
+    },
+    {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "Anexo"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
@@ -8159,11 +8159,6 @@
       "translated": "Reconhecimento de fala indisponível"
     },
     {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "Ouvindo (PTT)"
-    },
-    {
       "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "Pronto"
@@ -8237,6 +8232,11 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "Falando…"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "Ouvindo (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
