@@ -1601,6 +1601,135 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
+  it("requires approval for OpenClaw lifecycle commands unless yolo mode is active", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "launchctl stop gui/$UID/com.openclaw.gateway",
+      security: "full",
+      ask: "on-miss",
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("keeps OpenClaw lifecycle commands off the auto-review path", async () => {
+    const warnings: string[] = [];
+    const command = "kill -TERM $(pidof openclaw)";
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ raw: command, resolution: null, argv: ["kill", "-TERM", "$(pidof openclaw)"] }],
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: ["safeBins"],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      security: "full",
+      ask: "on-miss",
+      autoReview: true,
+      warnings,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(warnings[0]).toContain("OpenClaw lifecycle commands require explicit approval");
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("keeps gateway lifecycle RPC calls off the auto-review path", async () => {
+    const warnings: string[] = [];
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "openclaw gateway call update.run --params '{}'",
+      security: "full",
+      ask: "on-miss",
+      autoReview: true,
+      warnings,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(warnings[0]).toContain("OpenClaw lifecycle commands require explicit approval");
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("requires lifecycle approval before durable allowlist trust can run wrappers", async () => {
+    const command = "env -S 'openclaw gateway --force'";
+    const warnings: string[] = [];
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [
+        { raw: command, resolution: null, argv: ["env", "-S", "openclaw gateway --force"] },
+      ],
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/env", source: "allow-always" }],
+      segmentSatisfiedBy: ["allowlist"],
+    });
+    buildEnforcedShellCommandMock.mockReturnValue({ ok: true, command });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      security: "allowlist",
+      ask: "off",
+      warnings,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(
+      warnings.some((warning) =>
+        warning.includes("OpenClaw lifecycle commands require explicit approval"),
+      ),
+    ).toBe(true);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("does not require approval for OpenClaw lifecycle commands in yolo mode", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    await runGatewayAllowlist({
+      command: "launchctl stop gui/$UID/com.openclaw.gateway",
+      security: "full",
+      ask: "off",
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+  });
+
   it("does not require approval for security audit suppression edits in yolo mode", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },

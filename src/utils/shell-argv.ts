@@ -16,6 +16,13 @@ export function hasTopLevelShellControlOperator(raw: string): boolean {
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw.charAt(i);
     if (escaped) {
+      if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && raw[i + 1] === "\n") {
+          i += 1;
+        }
+        escaped = false;
+        continue;
+      }
       escaped = false;
       wordStart = false;
       continue;
@@ -60,19 +67,29 @@ export function splitShellArgs(raw: string): string[] | null {
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let tokenStarted = false;
 
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (tokenStarted) {
       tokens.push(buf);
       buf = "";
+      tokenStarted = false;
     }
   };
 
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw.charAt(i);
     if (escaped) {
+      if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && raw[i + 1] === "\n") {
+          i += 1;
+        }
+        escaped = false;
+        continue;
+      }
       buf += ch;
       escaped = false;
+      tokenStarted = true;
       continue;
     }
     if (!inSingle && !inDouble && ch === "\\") {
@@ -84,6 +101,7 @@ export function splitShellArgs(raw: string): string[] | null {
         inSingle = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
@@ -91,7 +109,12 @@ export function splitShellArgs(raw: string): string[] | null {
       const next = raw[i + 1];
       // Inside double quotes, only POSIX-recognized escapes consume the backslash.
       if (ch === "\\" && isDoubleQuoteEscape(next)) {
-        buf += next;
+        if (next !== "\n" && next !== "\r") {
+          buf += next;
+          tokenStarted = true;
+        } else if (next === "\r" && raw[i + 2] === "\n") {
+          i += 1;
+        }
         i += 1;
         continue;
       }
@@ -99,20 +122,23 @@ export function splitShellArgs(raw: string): string[] | null {
         inDouble = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
     if (ch === "'") {
       inSingle = true;
+      tokenStarted = true;
       continue;
     }
     if (ch === '"') {
       inDouble = true;
+      tokenStarted = true;
       continue;
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
     // inline hashes inside tokens so URLs/fragments are not truncated.
-    if (ch === "#" && buf.length === 0) {
+    if (ch === "#" && !tokenStarted) {
       break;
     }
     if (/\s/.test(ch)) {
@@ -120,6 +146,7 @@ export function splitShellArgs(raw: string): string[] | null {
       continue;
     }
     buf += ch;
+    tokenStarted = true;
   }
 
   if (escaped || inSingle || inDouble) {
