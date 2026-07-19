@@ -459,8 +459,6 @@ export type CodexDynamicToolCallParams = {
 
 export type CodexDynamicToolCallResponse = {
   asyncStarted?: boolean;
-  /** Non-enumerable phase timing kept off the wire; read at the transport write boundary only. */
-  bridgeTiming?: import("./dynamic-tool-execution.js").CodexDynamicToolBridgeTiming;
   contentItems: CodexDynamicToolCallOutputContentItem[];
   diagnosticTerminalReason?: CodexDynamicToolDiagnosticTerminalReason;
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
