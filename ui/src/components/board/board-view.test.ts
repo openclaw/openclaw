@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type {
   BoardViewCallbacks,
   BoardViewSnapshot,
@@ -656,7 +656,7 @@ describe("openclaw-board-view", () => {
   });
 
   it("applies mock moves as insertion and shifts sibling positions", () => {
-    const moved = applyBoardFixtureOps(snapshot(), [
+    const moved = applyBoardFixtureOps(snapshot() as BoardSnapshot, [
       { kind: "widget_move", name: "beta", position: 0 },
     ]);
     expect(

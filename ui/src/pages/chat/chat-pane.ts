@@ -1543,7 +1543,7 @@ class ChatPane extends OpenClawLightDomElement {
   private resolveBoardView(): ResolvedBoardView {
     const provider = this.resolveBoardProvider();
     const baseSnapshot = provider.snapshot$.value;
-    const snapshot =
+    const snapshot: BoardViewSnapshot =
       this.swarmBoardSnapshotBase === baseSnapshot
         ? (this.swarmBoardSnapshot ?? baseSnapshot)
         : baseSnapshot;
