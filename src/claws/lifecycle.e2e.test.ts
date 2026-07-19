@@ -150,6 +150,52 @@ describe("claws lifecycle cli e2e", () => {
     ]);
   });
 
+  it("creates declared bootstrap and supporting files in the new workspace", async () => {
+    const preview = await runOpenClaw([
+      "claws",
+      "add",
+      "src/claws/fixtures/workspace-agent.claw.json",
+      "--dry-run",
+      "--json",
+    ]);
+    const plan = parseJson(preview.stdout) as { planIntegrity: string };
+    const result = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        "src/claws/fixtures/workspace-agent.claw.json",
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
+      { stateDir: preview.stateDir },
+    );
+    const payload = parseJson(result.stdout);
+    const workspace = join(result.stateDir, ".openclaw", "workspace-workspace-agent");
+
+    expect(payload).toMatchObject({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      status: "complete",
+      agent: { finalId: "workspace-agent", workspace },
+      workspaceFiles: [
+        expect.objectContaining({ path: "SOUL.md" }),
+        expect.objectContaining({ path: "HEARTBEAT.md" }),
+        expect.objectContaining({ path: "reference/policy.md" }),
+      ],
+      installRecord: { agentId: "workspace-agent", status: "complete" },
+    });
+    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toContain(
+      "Incident Response",
+    );
+    await expect(readFile(join(workspace, "HEARTBEAT.md"), "utf8")).resolves.toContain(
+      "Incident Heartbeat",
+    );
+    await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toContain(
+      "operator settings",
+    );
+  });
+
   it("blocks mutation when declared components need later lifecycle slices", async () => {
     const preview = await runOpenClaw(["claws", "add", manifestPath, "--dry-run", "--json"], {
       expectFailure: true,
