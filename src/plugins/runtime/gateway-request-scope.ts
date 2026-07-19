@@ -16,6 +16,7 @@ type PluginRuntimeGatewayRequestScope = {
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
+  pluginHttpRoute?: boolean;
 };
 
 type PluginRuntimePluginScope = {

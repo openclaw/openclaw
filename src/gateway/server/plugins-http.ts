@@ -138,6 +138,7 @@ function createPluginRouteRuntimeScope(params: {
     ...(params.route.gatewayMethodDispatchAllowed === true
       ? { gatewayMethodDispatchAllowed: true }
       : {}),
+    pluginHttpRoute: true,
   };
 }
 

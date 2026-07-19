@@ -201,8 +201,15 @@ function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boo
   return scopes.includes(ADMIN_SCOPE);
 }
 
-function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
-  return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
+function hasServerAttestedPluginSubagentClient(
+  client: GatewayRequestOptions["client"] | undefined,
+  pluginId: string | undefined,
+): boolean {
+  return (
+    typeof pluginId === "string" &&
+    client?.internal?.agentRunTracking === "plugin_subagent" &&
+    client.internal.pluginRuntimeOwnerId === pluginId
+  );
 }
 
 function canTrustedOfficialPluginRequestScopes(params: {
@@ -289,8 +296,12 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
+    pluginRuntimeOwnerId ||
+      options?.agentRunTracking ||
+      options?.allowSyntheticModelOverride ||
+      options?.runtimePluginToolGrant
       ? {
+          ...(options?.allowSyntheticModelOverride ? { allowModelOverride: true } : {}),
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
@@ -399,9 +410,20 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       });
       const overrideRequested = Boolean(params.provider || params.model);
       const hasRequestScopeClient = Boolean(scope?.client);
-      let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
+      const hasServerAttestedPluginSubagentScope = hasServerAttestedPluginSubagentClient(
+        scope?.client,
+        pluginId,
+      );
+      // Plugin runtime reauthorizes every override against its own allowlist; a nested run
+      // must not inherit the gateway dispatch's one-shot internal override capability.
+      let allowOverride = hasRequestScopeClient && hasAdminScope(scope?.client);
       let allowSyntheticModelOverride = false;
-      if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
+      if (
+        overrideRequested &&
+        !allowOverride &&
+        !scope?.pluginHttpRoute &&
+        (!hasRequestScopeClient || hasServerAttestedPluginSubagentScope)
+      ) {
         const fallbackAuth = authorizeFallbackModelOverride({
           pluginId: scope?.pluginId,
           provider: params.provider,
