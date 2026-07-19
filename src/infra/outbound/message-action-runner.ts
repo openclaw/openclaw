@@ -21,6 +21,7 @@ import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-p
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
+import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -35,10 +36,10 @@ import type {
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  hasInteractiveReplyBlocks,
+  hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyPayloadContent,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
@@ -67,7 +68,9 @@ import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
@@ -91,6 +94,7 @@ import {
 import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
+import type { OutboundMirror } from "./mirror.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -110,6 +114,7 @@ import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbo
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
+  isDeliveredCurrentSourceReply,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -162,6 +167,26 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
+  suppressTranscriptMirror?: boolean;
+  /** @internal Explicit durable transcript destination owned by the caller. */
+  transcriptMirror?: OutboundMirror;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
+  gatewayOwnedDelivery?: boolean;
+  /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
+  forceCoreDelivery?: boolean;
+  /** @internal Fail before platform I/O unless the core delivery queue persisted the intent. */
+  requireQueuePersistence?: boolean;
+  /** @internal Stable producer id for idempotent durable queue creation. */
+  deliveryIntentId?: string;
+  /** @internal Serializable owner state finalized by live send or recovery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Runs after queue persistence and before platform I/O. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** @internal Runs on identified platform evidence before queue acknowledgement. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -182,6 +207,8 @@ export type MessageActionRunResult =
       to: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
+      /** Exact text handed to the direct transport after core normalization and hooks. */
+      deliveredText?: string;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
       dryRun: boolean;
@@ -229,6 +256,63 @@ export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
+}
+
+function asResultRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
+  result: T,
+  params: {
+    cfg: OpenClawConfig;
+    actionParams: Record<string, unknown>;
+    channel: ChannelId;
+    accountId?: string | null;
+    input: RunMessageActionParams;
+    agentId?: string;
+    replyToIsExplicit: boolean;
+  },
+): T {
+  if (result.kind !== "send" || params.input.sourceReplyDeliveryMode !== "message_tool_only") {
+    return result;
+  }
+  const authorization = params.input.messageActionAuthorization;
+  if (
+    !authorization?.toolContext ||
+    !isDeliveredCurrentSourceReply({
+      action: "send",
+      channel: params.channel,
+      actionParams: params.actionParams,
+      cfg: params.cfg,
+      accountId: params.accountId,
+      currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
+      sessionKey: params.input.sessionKey,
+      sessionId: params.input.sessionId,
+      agentId: params.agentId,
+      toolContext: authorization.toolContext,
+      deliveredPayload: result.payload,
+      replyToIsExplicit: params.replyToIsExplicit,
+    })
+  ) {
+    return result;
+  }
+  const payload = asResultRecord(result.payload);
+  const details = asResultRecord(result.toolResult?.details);
+  return {
+    ...result,
+    payload: payload ? { ...payload, sourceReplyRoute: "current-source" } : result.payload,
+    ...(result.toolResult
+      ? {
+          toolResult: {
+            ...result.toolResult,
+            details: { ...details, sourceReplyRoute: "current-source" },
+          },
+        }
+      : {}),
+  } as T;
 }
 
 function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
@@ -799,6 +883,9 @@ async function runGatewayPluginMessageActionOrNull(params: {
     channel: params.channel,
     actionParams: params.params,
     cfg: params.cfg,
+    accountId: params.accountId,
+    currentAccountId:
+      params.input.messageActionAuthorization?.requesterAccountId ?? params.input.defaultAccountId,
     sessionKey: params.input.sessionKey,
     sessionId: params.input.sessionId,
     agentId: params.agentId,
@@ -1100,7 +1187,7 @@ async function buildSendPayloadParts(params: {
   const hasMediaHint =
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
-  const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
+  const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
   const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
@@ -1223,7 +1310,7 @@ async function buildSendPayloadParts(params: {
       ? (rawChannelData as Record<string, unknown>)
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
-  const interactive = normalizeInteractiveReply(actionParams.interactive);
+  const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
   return {
     message,
     payload: {
@@ -1365,30 +1452,45 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     requesterSenderE164: input.requesterSenderE164,
   });
 
+  // Required queue persistence is itself an ownership decision: neither the
+  // remote gateway action nor a provider-native action may bypass core queueing.
+  const requiresCoreDelivery =
+    input.forceCoreDelivery === true || input.requireQueuePersistence === true;
+
   // Gateway action ownership wins even when this process has a render-capable
   // outbound adapter; credentials and account selection may exist only remotely.
-  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
-    cfg,
-    params,
-    channel,
-    action,
-    accountId,
-    dryRun,
-    gateway,
-    input,
-    agentId,
-    result: (payload) => ({
-      kind: "send",
-      channel,
-      action,
-      to,
-      handledBy: "plugin",
-      payload,
-      dryRun,
-    }),
-  });
+  const gatewayPluginAction = requiresCoreDelivery
+    ? null
+    : await runGatewayPluginMessageActionOrNull({
+        cfg,
+        params,
+        channel,
+        action,
+        accountId,
+        dryRun,
+        gateway,
+        input,
+        agentId,
+        result: (payload) => ({
+          kind: "send",
+          channel,
+          action,
+          to,
+          handledBy: "plugin",
+          payload,
+          dryRun,
+        }),
+      });
   if (gatewayPluginAction) {
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    });
   }
 
   const useCorePresentationDelivery = Boolean(
@@ -1433,16 +1535,30 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       toolContext: input.toolContext,
       deps: input.deps,
       dryRun,
+      preparedMessageId: input.preparedMessageId,
+      gatewayOwnedDelivery: input.gatewayOwnedDelivery,
+      forceCoreDelivery: requiresCoreDelivery,
+      requireQueuePersistence: input.requireQueuePersistence,
+      deliveryIntentId: input.deliveryIntentId,
+      deliveryCompletion: input.deliveryCompletion,
+      onDeliveryIntent: input.onDeliveryIntent,
+      onDeliveryResult: input.onDeliveryResult,
       mirror:
-        outboundRoute && !dryRun
+        !dryRun && input.transcriptMirror
           ? {
-              sessionKey: outboundRoute.sessionKey,
-              agentId,
+              ...input.transcriptMirror,
               text: sendPayload.message,
               mediaUrls: sendPayload.mediaUrls,
-              idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
             }
-          : undefined,
+          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
+            ? {
+                sessionKey: outboundRoute.sessionKey,
+                agentId,
+                text: sendPayload.message,
+                mediaUrls: sendPayload.mediaUrls,
+                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+              }
+            : undefined,
       abortSignal,
       silent: sendPayload.silent ?? undefined,
     },
@@ -1463,17 +1579,27 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     threadId: resolvedThreadId ?? undefined,
   });
 
-  return {
+  const result: MessageActionRunResult = {
     kind: "send",
     channel,
     action,
     to,
     handledBy: send.handledBy,
     payload: send.payload,
+    ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),
     toolResult: send.toolResult,
     sendResult: send.sendResult,
     dryRun,
   };
+  return markDeliveredCurrentSourceReply(result, {
+    cfg,
+    actionParams: params,
+    channel,
+    accountId,
+    input,
+    agentId,
+    replyToIsExplicit,
+  });
 }
 
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {

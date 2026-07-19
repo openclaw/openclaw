@@ -136,6 +136,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/telegram-account` | Deprecated Telegram account-resolution compatibility facade for tracked owner compatibility; new plugins should use injected runtime helpers or generic channel SDK subpaths |
     | `plugin-sdk/zalouser` | Deprecated Zalo Personal compatibility facade for published Lark/Zalo packages that still import sender command authorization; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
+    | `plugin-sdk/question-gateway-runtime` | Resolve runtime-authored `ask_user` choices through the Gateway from channel interaction handlers |
     | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, formatting, roots, debounce, mention matching, mention-policy, and inbound logging |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
     | `plugin-sdk/channel-mention-gating` | Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
@@ -274,7 +275,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), repair/lifecycle helpers (`deleteSessionEntry`, `cleanupSessionLifecycleArtifacts`, `resolveSessionStoreBackupPaths`), marker helpers for transitional `sessionFile` values, bounded recent user/assistant transcript text reads by session identity, session store path/session-key helpers, and updated-at reads, without broad config writes/maintenance imports |
-    | `plugin-sdk/session-transcript-runtime` | Transcript identity, scoped target/read/write helpers, visible message-entry projection, update publishing, write locks, and transcript memory hit keys |
+    | `plugin-sdk/session-transcript-runtime` | Transcript identity, bounded raw and visible cursors, scoped target/read/write helpers, visible message-entry projection, update publishing, write locks, and transcript memory hit keys |
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
@@ -299,6 +300,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/json-unsafe-integers` | JSON parsing helpers that preserve unsafe integer literals as strings |
     | `plugin-sdk/file-lock` | Re-entrant file-lock helpers plus Doctor-safe reclaim of definitely stale, unchanged retired lock sidecars |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
+    | `plugin-sdk/ingress-effect-once` | Durable claim/commit guard for non-idempotent ingress side effects |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
     | `plugin-sdk/acp-binding-resolve-runtime` | Read-only ACP binding resolution without lifecycle startup imports |
@@ -361,6 +363,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-bootstrap-context` | Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
     | `plugin-sdk/realtime-voice` | Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness and output activity tracking |
+    | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter`, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
     | `plugin-sdk/image-generation` | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/music-generation` | Music generation provider/request/result types |

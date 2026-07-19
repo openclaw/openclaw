@@ -25,10 +25,12 @@ import type { SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
+  | "conversation_deliveries"
   | "conversations"
   | "session_conversations"
   | "session_entries"
   | "session_routes"
+  | "session_transcript_generations"
   | "sessions"
   | "trajectory_runtime_events"
   | "transcript_event_identities"

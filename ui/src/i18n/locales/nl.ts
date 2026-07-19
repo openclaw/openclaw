@@ -1783,6 +1783,11 @@ export const nl: TranslationMap = {
       testingButton: "Testen…",
       testing: "Testen — {modelRef} om een snel antwoord vragen…",
     },
+    empty: {
+      title: "Aanbevolen installaties",
+      intro:
+        "Er is geen bestaande AI-toegang gedetecteerd. Installeer een van deze tools en controleer opnieuw.",
+    },
     unavailable: {
       title: "Gedetecteerd, maar niet automatisch getest",
     },
@@ -2339,6 +2344,13 @@ export const nl: TranslationMap = {
     session: "Sessie",
     outputTruncated: "Voorvertoning geredigeerd en afgekapt.",
     noOutputPreview: "Geen uitvoervoorbeeld.",
+    answerCandidate: {
+      title: "Antwoordkandidaat",
+      itemId: "Item",
+      candidate: "Kandidaat-antwoord",
+      superseded: "Vervangen antwoord",
+      selected: "Geselecteerd antwoord",
+    },
     status: {
       running: "Actief",
       done: "Voltooid",
@@ -3750,6 +3762,11 @@ export const nl: TranslationMap = {
       pause: "Doel pauzeren",
       resume: "Doel hervatten",
       clear: "Doel wissen",
+    },
+    questions: {
+      title: "Codex heeft invoer nodig",
+      other: "Typ een ander antwoord",
+      submit: "Antwoord verzenden",
     },
     messages: {
       activity: "Activiteit",

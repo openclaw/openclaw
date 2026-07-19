@@ -587,6 +587,23 @@ const PLUGIN_COMPAT_RECORDS = [
   ...UNUSED_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   {
+    code: "removed-global-api-provider-publication",
+    status: "removed",
+    owner: "sdk",
+    introduced: "2026-05-27",
+    replacement:
+      "provider plugins via `api.registerProvider(...)`; host/runtime code registers against its lifecycle-owned `ApiRegistry`",
+    docsPath: "/plugins/sdk-migration#process-global-api-provider-publication",
+    surfaces: [
+      "openclaw/plugin-sdk/llm registerApiProvider",
+      "openclaw/plugin-sdk/llm unregisterApiProviders",
+    ],
+    diagnostics: ["plugin SDK compatibility registry and migration guide"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The process-global API-provider publication facade was removed; provider plugins now publish through their lifecycle-owned registration, and host runtimes register directly on their prepared ApiRegistry.",
+  },
+  {
     code: "legacy-before-agent-start",
     status: "deprecated",
     owner: "sdk",
@@ -806,7 +823,7 @@ const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript @deprecated WebInboundMessage flat field annotations"],
+    diagnostics: ["TypeScript deprecated WebInboundMessage flat field annotations"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "WhatsApp WebInboundMessage flat fields remain wired as deprecated aliases while callbacks migrate to nested inbound contexts.",
@@ -827,7 +844,7 @@ const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript @deprecated WebInboundMessage admission field annotations"],
+    diagnostics: ["TypeScript deprecated WebInboundMessage admission field annotations"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "WhatsApp WebInboundMessage top-level admission fields remain available while callbacks migrate to the admission envelope.",

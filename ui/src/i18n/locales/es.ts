@@ -1786,6 +1786,11 @@ export const es: TranslationMap = {
       testingButton: "Probando…",
       testing: "Probando — solicitando una respuesta rápida a {modelRef}…",
     },
+    empty: {
+      title: "Instalaciones recomendadas",
+      intro:
+        "No se detectó acceso a IA existente. Instala una de estas herramientas y vuelve a comprobar.",
+    },
     unavailable: {
       title: "Detectados, pero sin probar automáticamente",
     },
@@ -2350,6 +2355,13 @@ export const es: TranslationMap = {
     session: "Sesión",
     outputTruncated: "Vista previa censurada y truncada.",
     noOutputPreview: "Sin vista previa de salida.",
+    answerCandidate: {
+      title: "Respuesta candidata",
+      itemId: "Elemento",
+      candidate: "Respuesta candidata",
+      superseded: "Respuesta reemplazada",
+      selected: "Respuesta seleccionada",
+    },
     status: {
       running: "En ejecución",
       done: "Completado",
@@ -3769,6 +3781,11 @@ export const es: TranslationMap = {
       pause: "Pausar objetivo",
       resume: "Reanudar objetivo",
       clear: "Borrar objetivo",
+    },
+    questions: {
+      title: "Codex necesita información",
+      other: "Escribe otra respuesta",
+      submit: "Enviar respuesta",
     },
     messages: {
       activity: "Actividad",

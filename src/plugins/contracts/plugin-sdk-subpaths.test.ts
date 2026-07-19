@@ -1398,6 +1398,9 @@ describe("plugin-sdk subpath exports", () => {
 
     expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
     expect(coreSdk.optionalStringEnum).toBe(coreDirectSdk.optionalStringEnum);
+    expect(coreSdk.prepareMemorySystemPromptAddition).toBe(
+      coreDirectSdk.prepareMemorySystemPromptAddition,
+    );
     expect(channelActionsSdk.optionalStringEnum).toBe(channelActionsDirectSdk.optionalStringEnum);
     expect(channelActionsSdk.stringEnum).toBe(channelActionsDirectSdk.stringEnum);
     expect(globalSingletonSdk.resolveGlobalMap).toBe(globalSingletonDirectSdk.resolveGlobalMap);

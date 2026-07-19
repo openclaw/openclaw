@@ -194,6 +194,35 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `markdown lists and thematic breaks build across appearance and type size`() {
+        let markdown = """
+        Here are the options:
+
+        9. **Option one heading** – a sentence describing it.
+        10. **Option two heading** – another sentence.
+           - Nested detail
+           - [x] Completed detail
+
+        ---
+
+        Final paragraph.
+        """
+        for scheme in [ColorScheme.light, .dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let root = ChatMarkdownRenderer(
+                    text: markdown,
+                    context: .assistant,
+                    variant: .standard,
+                    font: OpenClawChatTypography.body,
+                    textColor: OpenClawChatTheme.assistantText)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
+
+                _ = Self.host(root, size: CGSize(width: 320, height: 700))
+            }
+        }
+    }
+
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
         let text = """
         Earlier prose stays visible.
@@ -208,7 +237,7 @@ struct SwiftUIRenderSmokeTests {
         let root = ChatStreamingAssistantBubble(
             text: text,
             markdownVariant: .standard,
-            showsAssistantTrace: false,
+            showsReasoning: false,
             assistantName: "OpenClaw",
             assistantAvatarText: "OC",
             assistantAvatarTint: nil,
@@ -245,7 +274,7 @@ struct SwiftUIRenderSmokeTests {
                 style: .standard,
                 markdownVariant: .standard,
                 userAccent: nil,
-                showsAssistantTrace: false,
+                displayOptions: [],
                 assistantName: "OpenClaw",
                 assistantAvatarText: "OC",
                 assistantAvatarTint: nil,

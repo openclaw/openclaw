@@ -208,6 +208,18 @@ function createLegacyStateMigrationDetectionResult(params?: {
     targetScope: undefined,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
+    deviceIdentity: {
+      sourcePath: "/tmp/state/identity/device.json",
+      claimPath: "/tmp/state/identity/device.json.doctor-importing",
+      nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+      hasLegacy: false,
+      hasInvalidCanonical: false,
+    },
+    mcpOauth: {
+      sourceDir: "/tmp/state/mcp-oauth",
+      sourcePaths: [],
+      hasLegacy: false,
+    },
     sessions: {
       legacyDir: "/tmp/state/sessions",
       legacyStorePath: "/tmp/state/sessions/sessions.json",
@@ -282,6 +294,14 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     commitments: {
       sourcePath: "/tmp/state/commitments/commitments.json",
+      hasLegacy: false,
+    },
+    auditLogs: {
+      sources: [],
+      hasLegacy: false,
+    },
+    acpReplayLedger: {
+      sourcePath: "/tmp/state/acp/event-ledger.json",
       hasLegacy: false,
     },
     managedOutgoingImages: {

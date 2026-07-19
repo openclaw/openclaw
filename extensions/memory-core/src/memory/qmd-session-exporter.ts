@@ -38,15 +38,38 @@ type BuildSearchPath = (
   absolutePath: string,
 ) => string;
 
+type ExportedSessionState = {
+  entryHash: string;
+  mtimeMs: number;
+  revisionToken: string | null;
+  target: string;
+  targetRevision: string | null;
+};
+
+function buildSessionExportRevision(corpusEntry: SessionTranscriptCorpusEntry): string | null {
+  if (!corpusEntry.contentRevision) {
+    return null;
+  }
+  return [
+    corpusEntry.contentRevision,
+    corpusEntry.sessionKey ?? "",
+    corpusEntry.updatedAtMs ?? "",
+    corpusEntry.generatedByDreamingNarrative === true ? "dreaming" : "",
+    corpusEntry.generatedByCronRun === true ? "cron" : "",
+  ].join("\0");
+}
+
+function pathStatRevision(stat: {
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  size: number;
+}): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
 export class QmdSessionExporter {
-  private readonly exportedSessionState = new Map<
-    string,
-    {
-      hash: string;
-      mtimeMs: number;
-      target: string;
-    }
-  >();
+  private readonly exportedSessionState = new Map<string, ExportedSessionState>();
 
   constructor(
     readonly config: QmdSessionExporterConfig,
@@ -74,6 +97,42 @@ export class QmdSessionExporter {
     for (const corpusEntry of corpusEntries) {
       signal.throwIfAborted();
       const sessionFile = corpusEntry.sessionFile;
+      const targetName = `${this.sessionExportStem(corpusEntry)}.md`;
+      const target = path.join(exportDir, targetName);
+      const revisionToken = buildSessionExportRevision(corpusEntry);
+      const state = this.exportedSessionState.get(sessionFile);
+      // The corpus owns source revision detection. This hot path only stats the
+      // derived target, so unchanged transcripts are never reread or rehashed.
+      const targetRevision =
+        state?.target === target
+          ? await exportRoot
+              .stat(targetName)
+              .then(pathStatRevision)
+              .catch(() => null)
+          : null;
+      signal.throwIfAborted();
+      if (
+        revisionToken &&
+        state?.revisionToken === revisionToken &&
+        state.targetRevision !== null &&
+        targetRevision === state.targetRevision
+      ) {
+        if (cutoff && state.mtimeMs < cutoff) {
+          continue;
+        }
+        tracked.add(sessionFile);
+        const identity = this.buildSessionArtifactMapping(
+          sessionFile,
+          targetName,
+          target,
+          corpusEntry,
+        );
+        if (identity) {
+          artifactMappings.push(identity);
+        }
+        keep.add(target);
+        continue;
+      }
       const entry = await buildSessionEntry(sessionFile, {
         generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
         generatedByCronRun: corpusEntry.generatedByCronRun === true,
@@ -83,8 +142,6 @@ export class QmdSessionExporter {
       if (!entry || (cutoff && entry.mtimeMs < cutoff)) {
         continue;
       }
-      const targetName = `${this.sessionExportStem(corpusEntry)}.md`;
-      const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
       const identity = this.buildSessionArtifactMapping(
         sessionFile,
@@ -95,17 +152,32 @@ export class QmdSessionExporter {
       if (identity) {
         artifactMappings.push(identity);
       }
-      const state = this.exportedSessionState.get(sessionFile);
-      if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
+      const needsWrite =
+        !state ||
+        state.target !== target ||
+        state.entryHash !== entry.hash ||
+        state.targetRevision === null ||
+        targetRevision !== state.targetRevision;
+      let nextTargetRevision = targetRevision;
+      if (needsWrite) {
+        // fs-safe Root.write stages a sibling and atomically renames it, so a
+        // failed export cannot expose partially rendered markdown to QMD.
         lease.assertOwned();
         await exportRoot.write(targetName, renderSessionMarkdown(entry), { encoding: "utf-8" });
+        signal.throwIfAborted();
+        nextTargetRevision = await exportRoot
+          .stat(targetName)
+          .then(pathStatRevision)
+          .catch(() => null);
         signal.throwIfAborted();
       }
       lease.assertOwned();
       this.exportedSessionState.set(sessionFile, {
-        hash: entry.hash,
+        entryHash: entry.hash,
         mtimeMs: entry.mtimeMs,
+        revisionToken,
         target,
+        targetRevision: nextTargetRevision,
       });
       keep.add(target);
     }

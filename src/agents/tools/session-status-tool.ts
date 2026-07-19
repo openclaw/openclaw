@@ -44,7 +44,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { loadModelCatalog } from "../model-catalog.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -53,6 +53,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
+import { loadPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
 import {
   describeSessionStatusTool,
@@ -86,6 +87,123 @@ const SessionStatusToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
   changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
 });
+
+const SessionStatusOriginSchema = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusDeliveryContextSchema = Type.Object(
+  {
+    channel: Type.Optional(Type.String()),
+    to: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusStateEventPayloadSchema = Type.Object(
+  {
+    outcome: Type.Optional(
+      Type.Union([Type.Literal("error"), Type.Literal("timeout"), Type.Literal("cancelled")]),
+    ),
+    channel: Type.Optional(Type.String()),
+    turns: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusStateEventSchema = Type.Object(
+  {
+    sequence: Type.Integer(),
+    kind: Type.String(),
+    actorType: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
+    occurredAt: Type.Number(),
+    summary: Type.String(),
+    actorId: Type.Optional(Type.String()),
+    runId: Type.Optional(Type.String()),
+    payload: Type.Optional(SessionStatusStateEventPayloadSchema),
+  },
+  { additionalProperties: false },
+);
+
+const SessionStatusOutputSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    sessionKey: Type.String(),
+    changedModel: Type.Boolean(),
+    stateVersion: Type.Integer(),
+    statusText: Type.String(),
+    stateChanges: Type.Optional(
+      Type.Object(
+        {
+          events: Type.Array(SessionStatusStateEventSchema),
+          truncated: Type.Boolean(),
+          earliestAvailableSequence: Type.Integer(),
+          historyGap: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    model: Type.Optional(Type.String()),
+    modelProvider: Type.Optional(Type.String()),
+    modelOverride: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    origin: Type.Optional(SessionStatusOriginSchema),
+    active: Type.Optional(SessionStatusDeliveryContextSchema),
+    deliveryContext: Type.Optional(SessionStatusDeliveryContextSchema),
+  },
+  { additionalProperties: false },
+);
+
+type SessionStatusStateChanges = ReturnType<typeof listSessionStateEventsSince>;
+
+function compactSessionStateEventPayload(
+  payload: Record<string, unknown> | undefined,
+): { outcome?: "error" | "timeout" | "cancelled"; channel?: string; turns?: number } | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  const outcome =
+    payload.outcome === "error" || payload.outcome === "timeout" || payload.outcome === "cancelled"
+      ? payload.outcome
+      : undefined;
+  const channel = readStringValue(payload.channel);
+  const turns =
+    typeof payload.turns === "number" && Number.isSafeInteger(payload.turns) && payload.turns > 0
+      ? payload.turns
+      : undefined;
+  return outcome || channel || turns !== undefined
+    ? {
+        ...(outcome ? { outcome } : {}),
+        ...(channel ? { channel } : {}),
+        ...(turns !== undefined ? { turns } : {}),
+      }
+    : undefined;
+}
+
+function compactSessionStateChanges(stateChanges: SessionStatusStateChanges) {
+  return {
+    ...stateChanges,
+    events: stateChanges.events.map((event) => {
+      const payload = compactSessionStateEventPayload(event.payload);
+      return {
+        sequence: event.sequence,
+        kind: event.kind,
+        actorType: event.actorType,
+        occurredAt: event.occurredAt,
+        summary: event.summary,
+        ...(event.actorId ? { actorId: event.actorId } : {}),
+        ...(event.runId ? { runId: event.runId } : {}),
+        ...(payload ? { payload } : {}),
+      };
+    }),
+  };
+}
 
 type CommandsStatusRuntimeModule = {
   buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
@@ -320,6 +438,8 @@ async function resolveModelOverride(params: {
   raw: string;
   sessionEntry?: SessionEntry;
   agentId: string;
+  agentDir: string;
+  workspaceDir: string;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -345,7 +465,15 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    agentId: params.agentId,
+    agentDir: params.agentDir,
+    readOnly: true,
+    ...(params.sessionEntry?.spawnedWorkspaceDir
+      ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
+      : {}),
+  });
   const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
     config: params.cfg,
     workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
@@ -412,6 +540,7 @@ export function createSessionStatusTool(opts?: {
     displaySummary: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     description: describeSessionStatusTool(),
     parameters: SessionStatusToolSchema,
+    outputSchema: SessionStatusOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
@@ -696,6 +825,8 @@ export function createSessionStatusTool(opts?: {
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
+      const selectedAgentDir = resolveAgentDir(cfg, agentId);
+      const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const modelRaw = readStringParam(params, "model");
       let changedModel = false;
       if (typeof modelRaw === "string") {
@@ -704,6 +835,8 @@ export function createSessionStatusTool(opts?: {
           raw: modelRaw,
           sessionEntry: resolved.entry,
           agentId,
+          agentDir: selectedAgentDir,
+          workspaceDir: selectedWorkspaceDir,
         });
         const modelSelection =
           selection.kind === "reset"
@@ -830,6 +963,16 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
+      // Tool status may read persisted/configured facts, but must not start provider discovery.
+      const thinkingCatalog = await loadPreparedModelCatalog({
+        config: cfg,
+        agentId,
+        agentDir: selectedAgentDir,
+        readOnly: true,
+        ...(statusSessionEntry.spawnedWorkspaceDir
+          ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
+          : {}),
+      });
       const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
@@ -846,6 +989,7 @@ export function createSessionStatusTool(opts?: {
         workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
         provider: providerForCard,
         model: defaultModelForCard,
+        thinkingCatalog,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
         resolvedFastMode: statusSessionEntry.fastMode,
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
@@ -856,7 +1000,13 @@ export function createSessionStatusTool(opts?: {
             cfg,
             provider: providerForCard,
             model: defaultModelForCard,
-            loadModelCatalog: () => loadModelCatalog({ config: cfg }),
+            loadRuntimeCatalog: () =>
+              loadPreparedModelCatalog({
+                config: cfg,
+                agentId,
+                agentDir: selectedAgentDir,
+                readOnly: true,
+              }),
           }),
         isGroup,
         defaultGroupActivation: () => "mention",
@@ -887,13 +1037,18 @@ export function createSessionStatusTool(opts?: {
       });
       const routeContextText = formatSessionStatusRouteContext(routeDetails);
       const stateVersion = getSessionStateVersion(resolved.key, agentId);
-      const stateChanges =
+      const rawStateChanges =
         changesSince !== undefined
           ? listSessionStateEventsSince(resolved.key, agentId, changesSince, 200)
           : undefined;
+      const stateChanges = rawStateChanges
+        ? compactSessionStateChanges(rawStateChanges)
+        : undefined;
       const extraBlocks = [
         routeContextText,
-        stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
+        rawStateChanges
+          ? formatSessionStateChanges({ stateVersion, stateChanges: rawStateChanges })
+          : undefined,
       ].filter((block): block is string => Boolean(block));
       const visibleStatusText =
         extraBlocks.length > 0

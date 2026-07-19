@@ -24,6 +24,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
@@ -124,6 +125,7 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import {
@@ -1412,6 +1414,7 @@ export async function runReplyAgent(params: {
       followupRun.prompt,
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
         ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
@@ -2197,6 +2200,18 @@ export async function runReplyAgent(params: {
       clearCliSessionBinding,
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
+    if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
+      // A completed run that executed the persisted selection consumes the
+      // pending live-switch flag; CLI harness runs never hit the embedded
+      // attempt-recovery clear, so /status would report the switch forever.
+      await consolidateLiveModelSwitchAfterRun({
+        cfg,
+        sessionKey,
+        agentId: followupRun.run.agentId,
+        providerUsed,
+        modelUsed,
+      });
+    }
 
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
@@ -2482,6 +2497,13 @@ export async function runReplyAgent(params: {
         );
       }
     }
+
+    replyPayloads = attachMcpAppChannelAction({
+      payloads: replyPayloads,
+      channel: replyToChannel,
+      sessionKey,
+      view: runResult.latestMcpAppChannelView,
+    });
 
     const hasVisibleReplyPayload = replyPayloads.some(
       (payload) =>

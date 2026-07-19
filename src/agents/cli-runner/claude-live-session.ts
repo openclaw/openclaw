@@ -30,6 +30,7 @@ import {
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliUsage,
   type CliStreamJsonOutputLimits,
   type CliStreamingDelta,
   type CliThinkingDelta,
@@ -39,7 +40,12 @@ import {
   resolveCliStreamJsonOutputLimits,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
-import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
+import {
+  type CliTimeoutContext,
+  FailoverError,
+  isTimeoutError,
+  resolveFailoverStatus,
+} from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
@@ -80,6 +86,8 @@ type ClaudeLiveTurn = {
   completedToolCallIds: Set<string>;
   toolEventCount: number;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
@@ -562,6 +570,7 @@ function createTimeoutError(
   session: ClaudeLiveSession,
   message: string,
   code?: string,
+  cliTimeout?: CliTimeoutContext,
 ): FailoverError {
   return new FailoverError(message, {
     reason: "timeout",
@@ -569,6 +578,7 @@ function createTimeoutError(
     model: session.modelId,
     status: resolveFailoverStatus("timeout"),
     code,
+    cliTimeout,
   });
 }
 
@@ -804,6 +814,14 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
         `CLI produced no output for ${Math.round((Date.now() - quietSinceMs) / 1000)}s and was terminated.`,
         // Retryable only when the process never produced any output this turn.
         turn.lastOutputAtMs === null ? "cli_no_output_timeout" : undefined,
+        {
+          mode: "no-output",
+          timeoutSeconds: Math.round((Date.now() - quietSinceMs) / 1000),
+          observedActivity:
+            turn.lastOutputAtMs !== null || turn.toolEventCount > 0 || turn.rawLines.length > 0,
+          activeToolCount: turn.activeTools.size,
+          backgroundTaskCount: session.outstandingBackgroundTaskIds.size,
+        },
       ),
     );
   }, delayMs);
@@ -1108,6 +1126,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (parsed.type !== "result") {
     return;
   }
+  turn.onPhase?.("resolve");
   const raw = turn.rawLines.join("\n");
   // Reuse the parser that classified pre-tool text as commentary. Reparsing the
   // transcript loses that boundary when Claude's terminal result is empty.
@@ -1138,6 +1157,8 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   // outstanding subagent/workflow tasks: keep the turn open for the final
   // post-drain result. Other listed types (e.g. local_bash) do not hold it.
   if (session.outstandingBackgroundTaskIds.size > 0) {
+    // An interim result is not terminal; background work returns the run to send.
+    turn.onPhase?.("send");
     emitClaudeLiveProgress(turn, "cli_live:result_deferred_background_tasks");
     return;
   }
@@ -1152,6 +1173,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 }
 
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
+  session.currentTurn?.onCliOutput?.(chunk, "stdout");
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
   const maxPendingLineChars =
@@ -1250,13 +1272,13 @@ function createClaudeUserInputMessage(content: string): string {
   })}\n`;
 }
 
-async function writeTurnInput(session: ClaudeLiveSession, prompt: string): Promise<void> {
+async function writeTurnInput(session: ClaudeLiveSession, payload: string): Promise<void> {
   const stdin = session.managedRun.stdin;
   if (!stdin) {
     throw new Error("Claude CLI live session stdin is unavailable");
   }
   await new Promise<void>((resolve, reject) => {
-    stdin.write(createClaudeUserInputMessage(prompt), (error) => {
+    stdin.write(payload, (error) => {
       if (error) {
         reject(error);
         return;
@@ -1305,6 +1327,7 @@ async function createClaudeLiveSession(params: {
       },
       onStderr: (chunk) => {
         if (session) {
+          session.currentTurn?.onCliOutput?.(chunk, "stderr");
           session.stderr += chunk;
           if (session.stderr.length > LIVE_SESSION_LIMITS.maxStderrChars) {
             closeLiveSession(
@@ -1372,6 +1395,10 @@ function createTurn(params: {
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   session: ClaudeLiveSession;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -1417,7 +1444,11 @@ function createTurn(params: {
       },
       onCommentaryText: params.onCommentaryText,
       onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
     }),
+    onCliOutput: params.onCliOutput,
+    onPhase: params.onPhase,
     execPermission: params.execPermission,
     resolve: params.resolve,
     reject: params.reject,
@@ -1430,6 +1461,15 @@ function createTurn(params: {
       createTimeoutError(
         params.session,
         `CLI exceeded timeout (${Math.round(params.context.params.timeoutMs / 1000)}s) and was terminated.`,
+        "cli_overall_timeout",
+        {
+          mode: "overall",
+          timeoutSeconds: Math.round(params.context.params.timeoutMs / 1000),
+          observedActivity:
+            turn.observedStdout || turn.rawLines.length > 0 || turn.toolEventCount > 0,
+          activeToolCount: turn.activeTools.size,
+          backgroundTaskCount: params.session.outstandingBackgroundTaskIds.size,
+        },
       ),
     );
   }, params.context.params.timeoutMs);
@@ -1504,6 +1544,11 @@ export async function runClaudeLiveSessionTurn(params: {
   onCommentaryText?: (text: string) => void;
   onMcpCaptureReady?: (captureKey: string) => void;
   onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onRequestPayload?: (payload: string) => void;
+  onPhase?: (phase: "send" | "resolve") => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
@@ -1728,6 +1773,10 @@ export async function runClaudeLiveSessionTurn(params: {
       resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
       onCommentaryText: params.onCommentaryText,
       onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
+      onCliOutput: params.onCliOutput,
+      onPhase: params.onPhase,
       session: liveSession,
       execPermission,
       resolve,
@@ -1756,7 +1805,9 @@ export async function runClaudeLiveSessionTurn(params: {
       abort();
     } else {
       try {
-        await Promise.race([writeTurnInput(liveSession, params.prompt), outputPromise]);
+        const requestPayload = createClaudeUserInputMessage(params.prompt);
+        params.onRequestPayload?.(requestPayload);
+        await Promise.race([writeTurnInput(liveSession, requestPayload), outputPromise]);
       } catch (error) {
         closeLiveSession(liveSession, "abort", error);
       }

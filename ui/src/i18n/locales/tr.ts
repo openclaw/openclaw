@@ -1783,6 +1783,11 @@ export const tr: TranslationMap = {
       testingButton: "Test ediliyor…",
       testing: "Test ediliyor — hızlı bir yanıt için {modelRef} modeline soruluyor…",
     },
+    empty: {
+      title: "Önerilen kurulumlar",
+      intro:
+        "Mevcut bir yapay zeka erişimi algılanmadı. Bu araçlardan birini kurun, ardından tekrar kontrol edin.",
+    },
     unavailable: {
       title: "Algılandı ancak otomatik olarak test edilmedi",
     },
@@ -2346,6 +2351,13 @@ export const tr: TranslationMap = {
     session: "Oturum",
     outputTruncated: "Önizleme gizlendi ve kısaltıldı.",
     noOutputPreview: "Çıkış önizlemesi yok.",
+    answerCandidate: {
+      title: "Yanıt adayı",
+      itemId: "Öğe",
+      candidate: "Aday yanıt",
+      superseded: "Geçersiz kılınan yanıt",
+      selected: "Seçilen yanıt",
+    },
     status: {
       running: "Çalışıyor",
       done: "Tamamlandı",
@@ -3755,6 +3767,11 @@ export const tr: TranslationMap = {
       pause: "Hedefi duraklat",
       resume: "Hedefi sürdür",
       clear: "Hedefi temizle",
+    },
+    questions: {
+      title: "Codex girdiye ihtiyaç duyuyor",
+      other: "Başka bir yanıt yazın",
+      submit: "Yanıtı gönder",
     },
     messages: {
       activity: "Etkinlik",

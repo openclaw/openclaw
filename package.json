@@ -1,6 +1,12 @@
 {
   "name": "openclaw",
   "version": "2026.7.2",
+  "openclaw": {
+    "schemaVersions": {
+      "state": 5,
+      "agent": 13
+    }
+  },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -190,6 +196,7 @@
     "scripts/lib/official-external-plugin-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/package-dist-imports.mjs",
+    "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -328,6 +335,10 @@
     "./plugin-sdk/approval-runtime": {
       "types": "./dist/plugin-sdk/approval-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-runtime.js"
+    },
+    "./plugin-sdk/question-gateway-runtime": {
+      "types": "./dist/plugin-sdk/question-gateway-runtime.d.ts",
+      "default": "./dist/plugin-sdk/question-gateway-runtime.js"
     },
     "./plugin-sdk/config-runtime": {
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
@@ -1017,6 +1028,10 @@
       "types": "./dist/plugin-sdk/session-catalog.d.ts",
       "default": "./dist/plugin-sdk/session-catalog.js"
     },
+    "./plugin-sdk/session-discussion": {
+      "types": "./dist/plugin-sdk/session-discussion.d.ts",
+      "default": "./dist/plugin-sdk/session-discussion.js"
+    },
     "./plugin-sdk/session-key-runtime": {
       "types": "./dist/plugin-sdk/session-key-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-key-runtime.js"
@@ -1121,6 +1136,10 @@
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
+    "./plugin-sdk/meeting-runtime": {
+      "types": "./dist/plugin-sdk/meeting-runtime.d.ts",
+      "default": "./dist/plugin-sdk/meeting-runtime.js"
+    },
     "./plugin-sdk/transcripts": {
       "types": "./dist/plugin-sdk/transcripts.d.ts",
       "default": "./dist/plugin-sdk/transcripts.js"
@@ -1152,6 +1171,10 @@
     "./plugin-sdk/persistent-dedupe": {
       "types": "./dist/plugin-sdk/persistent-dedupe.d.ts",
       "default": "./dist/plugin-sdk/persistent-dedupe.js"
+    },
+    "./plugin-sdk/ingress-effect-once": {
+      "types": "./dist/plugin-sdk/ingress-effect-once.d.ts",
+      "default": "./dist/plugin-sdk/ingress-effect-once.js"
     },
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
@@ -1576,6 +1599,7 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mjs",
+    "check:script-declarations": "node scripts/check-script-declarations.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:test-types": "pnpm tsgo:test",
@@ -1675,7 +1699,7 @@
     "ios:version:check": "node --import tsx scripts/ios-sync-versioning.ts --check",
     "ios:version:sync": "node --import tsx scripts/ios-sync-versioning.ts --write",
     "leak:embedded-run": "node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts",
-    "lint": "pnpm lint:ui:i18n && node scripts/run-oxlint-shards.mjs",
+    "lint": "node scripts/run-lint.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "node scripts/run-oxlint.mjs",
     "lint:apps": "pnpm lint:swift",
@@ -1699,7 +1723,7 @@
     "lint:plugins:no-extension-src-imports": "node --import tsx scripts/check-no-extension-src-imports.ts",
     "lint:plugins:no-extension-test-core-imports": "node --import tsx scripts/check-no-extension-test-core-imports.ts",
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
-    "lint:plugins:no-register-http-handler": "node scripts/check-no-register-http-handler.mjs",
+    "lint:plugins:no-register-http-handler": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions",
     "lint:plugins:plugin-sdk-subpaths-exported": "node scripts/check-plugin-sdk-subpath-exports.mjs",
     "lint:scripts": "pnpm lint:docker-e2e && pnpm lint:tmp:no-raw-http2-imports && node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts",
     "lint:swift": "./scripts/lint-swift.sh",
@@ -1714,7 +1738,7 @@
     "lint:tmp:sqlite-transaction-boundary": "node scripts/check-sqlite-transaction-boundary.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
     "lint:ui:i18n": "pnpm ui:i18n:verify",
-    "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
+    "lint:ui:no-raw-window-open": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json ui/src",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
     "lint:web-search-provider-boundaries": "node scripts/check-web-search-provider-boundaries.mjs",
     "lint:webhook:no-low-level-body-read": "node scripts/check-webhook-auth-body-order.mjs",
@@ -1758,7 +1782,7 @@
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
     "prompt:snapshots:gen": "node --import tsx scripts/generate-prompt-snapshots.ts --write",
     "prompt:snapshots:sync-codex-model": "node --import tsx scripts/sync-codex-model-prompt-fixture.ts",
-    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && pnpm protocol:gen:kotlin && git diff --exit-code -- dist/protocol.schema.json apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
+    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && pnpm protocol:gen:kotlin && node scripts/check-protocol-since.mjs && git diff --exit-code -- dist/protocol.schema.json apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
     "protocol:check:kotlin": "pnpm protocol:gen:kotlin && git diff --exit-code -- apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:kotlin": "node --import tsx scripts/protocol-gen-kotlin.ts",
@@ -1900,6 +1924,7 @@
     "test:docker:update-corrupt-plugin": "bash scripts/e2e/update-corrupt-plugin-docker.sh",
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:update-run-package-self-upgrade": "bash scripts/e2e/update-run-package-self-upgrade-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:env-mutations:report": "node --import tsx scripts/test-env-mutation-report.ts",
     "test:skip-inventory:report": "node --import tsx scripts/test-skip-inventory.ts",
@@ -1977,7 +2002,7 @@
     "test:unit:fast:audit": "node scripts/test-unit-fast-audit.mjs",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/test-projects.mjs --watch",
-    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/process/exec.windows.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
+    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/config/sessions/store.session-lifecycle-mutation.test.ts src/agents/sessions/windows-git-bash-path.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
@@ -2024,7 +2049,7 @@
     "@anthropic-ai/sdk": "0.109.1",
     "@clack/core": "1.4.2",
     "@clack/prompts": "1.6.0",
-    "@earendil-works/pi-tui": "0.80.3",
+    "@earendil-works/pi-tui": "0.80.9",
     "@google/genai": "2.10.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
@@ -2034,7 +2059,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.4.1",
+    "@openclaw/fs-safe": "0.4.4",
     "@openclaw/proxyline": "0.3.3",
     "@silvia-odwyer/photon-node": "0.3.4",
     "chalk": "5.6.2",
@@ -2107,6 +2132,7 @@
     "acorn": "8.17.0",
     "esbuild": "0.28.1",
     "fast-glob": "3.3.3",
+    "ipaddr.js": "2.4.0",
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
     "lit": "3.3.3",

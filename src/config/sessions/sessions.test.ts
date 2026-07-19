@@ -25,6 +25,7 @@ import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js"
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
 } from "./store.js";
@@ -151,16 +152,16 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      expect(groupPolicy.mode).toBe("none");
     });
   });
 
-  it("defaults to daily resets at 4am local time", () => {
+  it("defaults to no automatic reset", () => {
     const policy = resolveSessionResetPolicy({
       resetType: "direct",
     });
 
-    expect(policy.mode).toBe("daily");
+    expect(policy.mode).toBe("none");
     expect(policy.atHour).toBe(4);
   });
 
@@ -894,7 +895,8 @@ describe("session store writer queue", () => {
     writeSessionStoreCache({
       storePath,
       store,
-      mtimeMs: 1,
+      ctimeNs: 1n,
+      mtimeNs: 1n,
       sizeBytes: serialized.length,
       serialized,
       cloneSerialized: serialized,
@@ -904,11 +906,43 @@ describe("session store writer queue", () => {
 
     const cached = readSessionStoreCache({
       storePath,
-      mtimeMs: 1,
+      ctimeNs: 1n,
+      mtimeNs: 1n,
       sizeBytes: serialized.length,
     });
 
     expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
+  });
+
+  it("invalidates session store cache when ctime nanoseconds change inside the same millisecond", () => {
+    const key = "agent:main:ctime-ns-cache";
+    const storePath = "/tmp/openclaw-ctime-ns-cache-test.json";
+    const store = {
+      [key]: {
+        sessionId: "s-ctime-ns-cache",
+        updatedAt: Date.now(),
+      },
+    } satisfies Record<string, SessionEntry>;
+    const serialized = JSON.stringify(store);
+    writeSessionStoreCache({
+      storePath,
+      store,
+      ctimeNs: 1_000_000n,
+      mtimeNs: 1_000_000n,
+      sizeBytes: serialized.length,
+      serialized,
+      cloneSerialized: serialized,
+      takeOwnership: true,
+    });
+
+    const cached = readSessionStoreCache({
+      storePath,
+      ctimeNs: 1_000_001n,
+      mtimeNs: 1_000_000n,
+      sizeBytes: serialized.length,
+    });
+
+    expect(cached).toBeNull();
   });
 
   it("returns an owned parsed store for fresh skip-cache loads without cloning again", async () => {
@@ -965,6 +999,38 @@ describe("session store writer queue", () => {
     expect(writeOptions?.mode).toBe(0o600);
     expect(writeOptions?.beforeRename).toBeTypeOf("function");
     writeSpy.mockRestore();
+  });
+
+  it("uses a durable index write before disk-budget eviction deletes transcripts", async () => {
+    const oldKey = "agent:main:subagent:old-worker";
+    const activeKey = "agent:main:main";
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      [oldKey]: { sessionId: "old", updatedAt: now - 1_000 },
+      [activeKey]: { sessionId: "active", updatedAt: now },
+    };
+    const { dir, storePath } = await makeTmpStore(store);
+    await fsPromises.writeFile(path.join(dir, "old.jsonl"), "t".repeat(10 * 1024), "utf-8");
+    await fsPromises.writeFile(path.join(dir, "active.jsonl"), "a".repeat(64), "utf-8");
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    try {
+      await saveSessionStore(storePath, store, {
+        activeSessionKey: activeKey,
+        maintenanceOverride: { mode: "enforce", maxDiskBytes: 100, highWaterBytes: 100 },
+      });
+
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      const [writtenPath, , writeOptions] = requireWriteTextAtomicCall(writeSpy);
+      expect(writtenPath).toBe(storePath);
+      expect(writeOptions?.durable).toBe(true);
+      expect(store[oldKey]).toBeUndefined();
+      await expect(fsPromises.access(path.join(dir, "old.jsonl"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 
   it("can persist a known single entry without touching hydrated prompts from other sessions", async () => {

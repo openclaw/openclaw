@@ -9,7 +9,10 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
   detectAndLoadAgentHarnessPromptImages,
+  embeddedAgentLog,
   getModelProviderRequestTransport,
   isHostScopedAgentToolActive,
   resolveAgentHarnessBeforePromptBuildResult,
@@ -898,10 +901,28 @@ export async function runCopilotAttempt(
       isAborted: () => aborted,
     });
 
+    const cancelGatewayQuestionBestEffort = (resolvedBy: string) => {
+      void cancelPendingAgentQuestionForSession({
+        sessionKey: input.sessionKey ?? input.sessionId,
+        resolvedBy,
+      }).catch((error: unknown) => {
+        embeddedAgentLog.warn("failed to cancel copilot gateway question during shutdown", {
+          error,
+        });
+      });
+    };
     const activeRunHandle = {
       kind: "embedded" as const,
-      queueMessage: async (text: string) => {
-        if (userInputBridge.handleQueuedMessage(text)) {
+      // This backend intentionally omits supportsQueueMessageImages, so the reply
+      // registry rejects attachment turns before this text-only callback runs.
+      queueMessage: async (text: string, options?: { isInboundUserMessage?: boolean }) => {
+        if (
+          options?.isInboundUserMessage === true &&
+          (await claimPendingAgentQuestionAnswer({
+            sessionKey: input.sessionKey ?? input.sessionId,
+            text,
+          }))
+        ) {
           return;
         }
         throw new Error("Copilot runtime is not waiting for user input.");
@@ -910,10 +931,12 @@ export async function runCopilotAttempt(
       isCompacting: () => bridge?.isCompacting() ?? false,
       sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
       cancel: () => {
+        cancelGatewayQuestionBestEffort("run-cancel");
         userInputBridge.cancelPending();
         abortActiveSession();
       },
       abort: () => {
+        cancelGatewayQuestionBestEffort("run-abort");
         userInputBridge.cancelPending();
         abortActiveSession();
       },
@@ -1134,12 +1157,12 @@ export async function runCopilotAttempt(
   // its own private files; OpenClaw-side audit state is addressed only by
   // session identity so missing identity cannot silently recreate JSONL state.
   const openClawSessionIdForMirror = readString(input.sessionId);
-  const openClawSessionKeyForMirror = readString((input as { sessionKey?: unknown }).sessionKey);
+  const sessionKeyForMirror = readString((input as { sessionKey?: unknown }).sessionKey);
   const openClawStorePathForMirror = readString(input.sessionTarget?.storePath);
   const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
   if (
     openClawSessionIdForMirror &&
-    openClawSessionKeyForMirror &&
+    sessionKeyForMirror &&
     openClawStorePathForMirror &&
     messagesSnapshot.length > 0
   ) {
@@ -1168,7 +1191,7 @@ export async function runCopilotAttempt(
     });
     await dualWriteCopilotTranscriptBestEffort({
       sessionId: openClawSessionIdForMirror,
-      sessionKey: openClawSessionKeyForMirror,
+      sessionKey: sessionKeyForMirror,
       agentId: readString(input.agentId),
       storePath: openClawStorePathForMirror,
       messages: taggedMessages,

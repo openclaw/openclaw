@@ -566,6 +566,18 @@ contract should own it.
 
 ## Removed compatibility surfaces
 
+### Process-global API-provider publication
+
+`registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from
+`openclaw/plugin-sdk/llm`. They published API transports into process-global
+state, which lifecycle-owned model runtimes then had to copy into each prepared
+registry.
+
+Provider plugins should register text-inference providers through
+`api.registerProvider(...)`. Host-owned code and tests that construct an
+`ApiRegistry` should register directly on that registry so provider ownership
+and teardown stay scoped to the prepared runtime.
+
 ### Private testing barrel
 
 `openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
@@ -918,8 +930,16 @@ Realtime voice, telephony, meeting, and browser Talk code shares one Talk
 session controller exported by `openclaw/plugin-sdk/realtime-voice`. The
 controller owns the common Talk event envelope, active turn state, capture
 state, output-audio state, recent event history, and stale-turn rejection.
-Provider plugins own vendor-specific realtime sessions; surface plugins own
-capture, playback, telephony, and meeting quirks.
+Provider plugins own vendor-specific realtime sessions. Browser-meeting plugins
+use `openclaw/plugin-sdk/meeting-runtime` for session, browser, audio, node-host,
+agent-consult, and voice-call mechanics, then implement `MeetingPlatformAdapter`
+for URL rules, DOM scripts, manual-action mapping, captions, creation, and dial-in
+plans. Platform REST APIs, OAuth, artifacts, selectors, and wire names remain in
+the plugin. Browser permission plans receive the requested meeting URL so each
+platform can grant only its exact supported origins. Session runtimes must also
+normalize platform-specific live health after confirmed browser departure;
+historical transcript fields may remain, but caption and audio readiness must
+not stay active after leave.
 
 All bundled surfaces run on the shared controller: browser relay,
 managed-room handoff, voice-call realtime, voice-call streaming STT, Google

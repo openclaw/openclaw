@@ -1,9 +1,15 @@
-// Telegram plugin module implements message dispatch dedupe behavior.
+// Telegram dispatch dedupe: a PERMANENT second layer above the ingress spool,
+// not a leftover to delete on drain adoption. The spool tombstones transport
+// update_ids; debounce/media-group flushes merge N update_ids into one
+// dispatched turn, so a constituent message re-arriving under a *fresh*
+// update_id is invisible to the update_id tombstone. This guard keys the
+// logical (chat_id, message_id) — the only identity that catches that replay.
 import path from "node:path";
 import type { Message } from "grammy/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChannelReplayGuard,
+  runClaimableDedupeClaimLoop,
   type ChannelReplayClaimHandle,
 } from "openclaw/plugin-sdk/persistent-dedupe";
 
@@ -127,28 +133,14 @@ export async function claimTelegramMessageDispatchReplay(params: {
   accountId: string;
   msg: Message;
 }): Promise<TelegramMessageDispatchClaim> {
-  let releaseRetries = 0;
-  while (true) {
-    const claim = await params.guard.claim({
-      accountId: params.accountId,
-      msg: params.msg,
-    });
-    if (claim.kind === "claimed") {
-      return { kind: "claimed", handle: claim.handle };
-    }
-    if (claim.kind === "duplicate" || claim.kind === "invalid") {
-      return claim;
-    }
-    try {
-      await claim.pending;
-      return { kind: "duplicate" };
-    } catch {
-      releaseRetries += 1;
-      if (releaseRetries > 1) {
-        return { kind: "duplicate" };
-      }
-    }
-  }
+  return await runClaimableDedupeClaimLoop(
+    () =>
+      params.guard.claim({
+        accountId: params.accountId,
+        msg: params.msg,
+      }),
+    (_error, rejectionCount) => rejectionCount <= 1,
+  );
 }
 
 export async function commitTelegramMessageDispatchReplay(params: {

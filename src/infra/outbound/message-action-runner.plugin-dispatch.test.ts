@@ -105,6 +105,7 @@ const mocks = vi.hoisted(() => ({
   prepareOutboundMirrorRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
+  isDeliveredCurrentSourceReply: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
 }));
 
@@ -130,6 +131,7 @@ vi.mock("./message.gateway.runtime.js", () => ({
 vi.mock("./source-reply-mirror.js", () => ({
   beginTerminalSourceReplyDelivery: mocks.beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery: mocks.cancelTerminalSourceReplyDelivery,
+  isDeliveredCurrentSourceReply: mocks.isDeliveredCurrentSourceReply,
   reconcileTerminalSourceReplyDelivery: mocks.reconcileTerminalSourceReplyDelivery,
 }));
 
@@ -1289,6 +1291,68 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "result payload",
       );
+    });
+
+    it("makes required queue persistence bypass gateway plugin dispatch", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat durable send test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
+      );
+      mocks.executeSendAction.mockResolvedValueOnce({
+        handledBy: "core",
+        payload: { ok: true, messageId: "core-send-1" },
+        sendResult: {
+          channel: "gatewaychat",
+          to: "user-123",
+          via: "direct",
+          mediaUrl: null,
+        },
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          message: "durable hello",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        requireQueuePersistence: true,
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      expectRecordFields(
+        readRecordField(executeCall, "ctx", "execute send context"),
+        {
+          forceCoreDelivery: true,
+          requireQueuePersistence: true,
+        },
+        "execute send context",
+      );
+      expectRecordFields(result, { handledBy: "core" }, "result");
     });
 
     it("owns terminal source-reply receipts before dispatching to a remote gateway", async () => {
@@ -3011,6 +3075,7 @@ describe("runMessageAction plugin dispatch", () => {
           mode: "cli",
         },
         agentId: "main",
+        suppressTranscriptMirror: true,
         dryRun: false,
       });
 
@@ -3020,11 +3085,9 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
       expectRecordFields(executeCall, { message: "Deployment trend" }, "execute send call");
-      expectRecordFields(
-        readRecordField(executeCall, "ctx", "execute send context"),
-        { conversationType: "channel" },
-        "execute send context",
-      );
+      const executeContext = readRecordField(executeCall, "ctx", "execute send context");
+      expectRecordFields(executeContext, { conversationType: "channel" }, "execute send context");
+      expect(executeContext.mirror).toBeUndefined();
       expectRecordFields(
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },

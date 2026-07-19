@@ -52,13 +52,13 @@ async function offerLiveModelVerification(params: {
   runtime: RuntimeEnv;
   workspaceDir: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
-}): Promise<OpenClawConfig> {
+}): Promise<{ config: OpenClawConfig; verified: boolean }> {
   const shouldTest = await params.prompter.confirm({
     message: t("wizard.setup.testAiAccess"),
     initialValue: true,
   });
   if (!shouldTest) {
-    return params.config;
+    return { config: params.config, verified: false };
   }
 
   const { verifySetupInference } = await import("../system-agent/setup-inference.js");
@@ -84,7 +84,7 @@ async function offerLiveModelVerification(params: {
 
   const firstResult = await verify();
   if (firstResult.ok) {
-    return params.config;
+    return { config: params.config, verified: true };
   }
   const action = await params.prompter.select({
     message: t("wizard.setup.testAiFailureChoice"),
@@ -94,7 +94,7 @@ async function offerLiveModelVerification(params: {
     ],
   });
   if (action === "continue") {
-    return params.config;
+    return { config: params.config, verified: false };
   }
 
   const fixedConfig = await runSetupModelAuthStep({
@@ -105,8 +105,8 @@ async function offerLiveModelVerification(params: {
     workspaceDir: params.workspaceDir,
   });
   const persistedConfig = await params.writeConfig(fixedConfig);
-  await verify();
-  return persistedConfig;
+  const retryResult = await verify();
+  return { config: persistedConfig, verified: retryResult.ok };
 }
 
 function isSetupImportFlowChoice(flow: SetupFlowChoice): boolean {
@@ -550,13 +550,14 @@ async function runSetupWizardOnce(
     allowConfigSizeDrop: false,
   });
 
+  let liveModelVerified = false;
   if (
     opts.nonInteractive !== true &&
     opts.authChoice !== "skip" &&
     !usedImportFlow &&
     hasConfiguredDefaultModel(nextConfig)
   ) {
-    nextConfig = await offerLiveModelVerification({
+    const verification = await offerLiveModelVerification({
       config: nextConfig,
       opts,
       prompter,
@@ -565,6 +566,8 @@ async function runSetupWizardOnce(
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
     });
+    nextConfig = verification.config;
+    liveModelVerified = verification.verified;
   }
 
   prompter.disableBackNavigation?.();
@@ -632,6 +635,14 @@ async function runSetupWizardOnce(
       prompter,
       runtime,
       workspaceDir,
+    });
+    const { setupAppRecommendations } = await import("./setup.app-recommendations.js");
+    nextConfig = await setupAppRecommendations({
+      config: nextConfig,
+      prompter,
+      runtime,
+      workspaceDir,
+      modelRouteVerified: liveModelVerified,
     });
     const { setupPluginConfig } = await import("./setup.plugin-config.js");
     nextConfig = await setupPluginConfig({

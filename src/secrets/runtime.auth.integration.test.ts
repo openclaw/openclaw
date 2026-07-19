@@ -58,14 +58,22 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
     }
   },
   resolveRuntimeWebTools: async () => ({
-    search: { providerSource: "none", diagnostics: [] },
-    fetch: { providerSource: "none", diagnostics: [] },
-    diagnostics: [],
+    metadata: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    degradedOwners: [],
+    secretOwners: [],
   }),
 }));
 
 vi.mock("./runtime-owner-assignments.js", () => ({
-  resolveAndApplySecretAssignments: async () => [],
+  listSecretAssignmentOwners: () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
+  }),
 }));
 
 function loadAuthStoreFromTestFile(agentDir?: string): AuthProfileStore {

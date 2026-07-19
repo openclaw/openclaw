@@ -15,6 +15,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
@@ -22,13 +23,19 @@ import {
 } from "../memory-host-sdk/multimodal.js";
 import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { clampInt, clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
+  rememberAcrossConversations: boolean;
+  /** Sources indexed by the manager. */
   sources: Array<"memory" | "sessions">;
+  /** Sources searched when memory_search omits an explicit corpus. */
+  searchSources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
   provider: string;
@@ -129,6 +136,7 @@ const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
+const DEFAULT_CACHE_MAX_ENTRIES = undefined;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
@@ -218,8 +226,10 @@ function mergeConfig(
   agentId: string,
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
-  const sessionMemory =
+  const rememberAcrossConversations = resolveRememberAcrossConversations(cfg, agentId);
+  const configuredSessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
   const rawProvider = overrides?.provider ?? defaults?.provider;
   const provider =
     rawProvider?.trim() === "auto"
@@ -286,7 +296,16 @@ function mergeConfig(
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
     contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
-  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
+  const configuredSources = overrides?.sources ?? defaults?.sources;
+  const searchSources = normalizeSources(
+    configuredSources,
+    configuredSessionMemory ||
+      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
+  );
+  const sources = normalizeSources(
+    rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
+    sessionMemory,
+  );
   const rawPaths = normalizeStringEntries([
     ...(defaults?.extraPaths ?? []),
     ...(overrides?.extraPaths ?? []),
@@ -312,8 +331,8 @@ function mergeConfig(
     vector,
   };
   const chunking = {
-    tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
-    overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+    tokens: DEFAULT_CHUNK_TOKENS,
+    overlap: DEFAULT_CHUNK_OVERLAP,
   };
   const sync = resolveSyncConfig(defaults, overrides);
   const query = {
@@ -325,42 +344,27 @@ function mergeConfig(
       overrides?.query?.hybrid?.enabled ??
       defaults?.query?.hybrid?.enabled ??
       DEFAULT_HYBRID_ENABLED,
-    vectorWeight:
-      overrides?.query?.hybrid?.vectorWeight ??
-      defaults?.query?.hybrid?.vectorWeight ??
-      DEFAULT_HYBRID_VECTOR_WEIGHT,
-    textWeight:
-      overrides?.query?.hybrid?.textWeight ??
-      defaults?.query?.hybrid?.textWeight ??
-      DEFAULT_HYBRID_TEXT_WEIGHT,
-    candidateMultiplier:
-      overrides?.query?.hybrid?.candidateMultiplier ??
-      defaults?.query?.hybrid?.candidateMultiplier ??
-      DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    vectorWeight: DEFAULT_HYBRID_VECTOR_WEIGHT,
+    textWeight: DEFAULT_HYBRID_TEXT_WEIGHT,
+    candidateMultiplier: DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
     mmr: {
       enabled:
         overrides?.query?.hybrid?.mmr?.enabled ??
         defaults?.query?.hybrid?.mmr?.enabled ??
         DEFAULT_MMR_ENABLED,
-      lambda:
-        overrides?.query?.hybrid?.mmr?.lambda ??
-        defaults?.query?.hybrid?.mmr?.lambda ??
-        DEFAULT_MMR_LAMBDA,
+      lambda: DEFAULT_MMR_LAMBDA,
     },
     temporalDecay: {
       enabled:
         overrides?.query?.hybrid?.temporalDecay?.enabled ??
         defaults?.query?.hybrid?.temporalDecay?.enabled ??
         DEFAULT_TEMPORAL_DECAY_ENABLED,
-      halfLifeDays:
-        overrides?.query?.hybrid?.temporalDecay?.halfLifeDays ??
-        defaults?.query?.hybrid?.temporalDecay?.halfLifeDays ??
-        DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+      halfLifeDays: DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
     },
   };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
-    maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
+    maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
   };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
@@ -384,7 +388,9 @@ function mergeConfig(
   const postCompactionForce = sync.sessions.postCompactionForce;
   return {
     enabled,
+    rememberAcrossConversations,
     sources,
+    searchSources,
     extraPaths,
     multimodal,
     provider,
@@ -447,11 +453,8 @@ function resolveSyncConfig(
     onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
     onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
     watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
-    watchDebounceMs:
-      overrides?.sync?.watchDebounceMs ??
-      defaults?.sync?.watchDebounceMs ??
-      DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    watchDebounceMs: DEFAULT_WATCH_DEBOUNCE_MS,
+    intervalMinutes: 0,
     embeddingBatchTimeoutSeconds:
       overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
     sessions: {
@@ -481,6 +484,7 @@ export function resolveMemorySearchConfig(
   if (!resolved.enabled) {
     return null;
   }
+  assertSecretOwnerAvailable("capability", runtimeMemorySecretOwnerId(agentId));
   const isFtsOnly = normalizeProviderId(resolved.provider) === "none";
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider = isFtsOnly

@@ -154,6 +154,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
       artifactKind: "archive-artifact",
+      contentRevision: expect.any(String),
       generatedByCronRun: true,
       sessionFile: archivePath,
       sessionId: "cron-run",
@@ -204,6 +205,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect.objectContaining({
           agentId: "main",
           artifactKind: "active-session",
+          contentRevision: expect.any(String),
           sessionFile: turn.sessionFile,
           sessionId,
           sessionKey,
@@ -213,6 +215,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect.objectContaining({
           agentId: "main",
           artifactKind: "archive-artifact",
+          contentRevision: expect.any(String),
           sessionFile: archivePath,
           sessionId,
         }),
@@ -240,6 +243,57 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
+  });
+
+  it("exposes content revisions that change with SQLite appends and file replacement", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:chat:revision";
+    const sessionId = "revision";
+    const archivePath = path.join(
+      sessionsDir,
+      `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
+    );
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId, updatedAt: 1 },
+    );
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "user", content: "first" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    fsSync.writeFileSync(archivePath, "first");
+
+    const before = await listSessionTranscriptCorpusEntriesForAgent("main");
+    const beforeLive = before.find((entry) => entry.transcriptSource === "sqlite");
+    const beforeArchive = before.find((entry) => entry.sessionFile === archivePath);
+    expect(beforeLive?.contentRevision).toEqual(expect.any(String));
+    expect(beforeArchive?.contentRevision).toEqual(expect.any(String));
+
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "second" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    const replacement = `${archivePath}.replacement`;
+    fsSync.writeFileSync(replacement, "second");
+    fsSync.renameSync(replacement, archivePath);
+
+    const after = await listSessionTranscriptCorpusEntriesForAgent("main");
+    expect(after.find((entry) => entry.transcriptSource === "sqlite")?.contentRevision).not.toBe(
+      beforeLive?.contentRevision,
+    );
+    expect(after.find((entry) => entry.sessionFile === archivePath)?.contentRevision).not.toBe(
+      beforeArchive?.contentRevision,
+    );
   });
 
   it("classifies active entries through cron parentage chains", async () => {
@@ -323,6 +377,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       {
         agentId: "main",
         artifactKind: "archive-artifact",
+        contentRevision: expect.any(String),
         generatedByCronRun: true,
         sessionFile: expectedArchivePath,
         sessionId: "cron-run",
@@ -493,6 +548,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       {
         agentId: "main",
         artifactKind: "archive-artifact",
+        contentRevision: expect.any(String),
         sessionFile: archivePath,
         sessionId: "retained",
       },

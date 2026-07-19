@@ -63,6 +63,17 @@ export type ControlUiMockGatewayScenario = {
   historyMessages?: unknown[];
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
+  /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
+  inFlightRun?: { runId: string; text?: string; plan?: unknown } | null;
+  /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
+  repeatingSessionEvents?: {
+    events: Array<{ event: "agent" | "session.tool"; payload: unknown }>;
+    intervalMs?: number;
+  };
+  /** Session run state served alongside history (hasActiveRun/activeRunIds). */
+  sessionInfo?: Record<string, unknown> | null;
+  /** Partition sessions.list fixtures by archived state after applying patches. */
+  sessionArchiveFiltering?: boolean;
   models?: Array<{
     id: string;
     name: string;
@@ -253,7 +264,11 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
+    inFlightRun: scenario.inFlightRun ?? null,
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
+    sessionInfo: scenario.sessionInfo ?? null,
+    sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -358,7 +373,10 @@ function installControlUiMockGateway(input: {
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
+  const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{ readonly url: string }> = [];
+  let sessionMessageEventIndex = 0;
+  let sessionMessageEventTimer: number | null = null;
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
   // Gateway-owned custom group catalog (sessions.groups.*). Persisted in
   // sessionStorage so a page reload keeps the catalog the way the real
@@ -572,37 +590,104 @@ function installControlUiMockGateway(input: {
         patch[key] = params[key];
       }
     }
+    if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
+      patch.archived = params.archived;
+    }
     sessionPatches.set(params.key, patch);
   }
 
-  function applySessionPatches(response: unknown): unknown {
+  function applySessionPatches(response: unknown, params: unknown): unknown {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
     }
+    const showArchived = isRecord(params) && params.archived === true;
+    const sessions = response.sessions.map((row) => {
+      if (!isRecord(row) || typeof row.key !== "string") {
+        return row;
+      }
+      const patch = sessionPatches.get(row.key);
+      const next = patch ? { ...row, ...patch } : { ...row };
+      // Replay group renames/deletes over static fixtures: the real gateway
+      // rewrites member categories server-side before the next sessions.list.
+      let category = typeof next.category === "string" ? next.category : undefined;
+      for (const rename of groupsState.renames) {
+        if (category === rename.from) {
+          category = rename.to ?? undefined;
+        }
+      }
+      if (category === undefined) {
+        delete next.category;
+      } else {
+        next.category = category;
+      }
+      return next;
+    });
+    if (!scenario.sessionArchiveFiltering) {
+      return { ...response, sessions };
+    }
+    const filteredSessions = sessions.filter(
+      (row) => isRecord(row) && (row.archived === true) === showArchived,
+    );
     return {
       ...response,
-      sessions: response.sessions.map((row) => {
-        if (!isRecord(row) || typeof row.key !== "string") {
-          return row;
-        }
-        const patch = sessionPatches.get(row.key);
-        const next = patch ? { ...row, ...patch } : { ...row };
-        // Replay group renames/deletes over static fixtures: the real gateway
-        // rewrites member categories server-side before the next sessions.list.
-        let category = typeof next.category === "string" ? next.category : undefined;
-        for (const rename of groupsState.renames) {
-          if (category === rename.from) {
-            category = rename.to ?? undefined;
-          }
-        }
-        if (category === undefined) {
-          delete next.category;
-        } else {
-          next.category = category;
-        }
-        return next;
-      }),
+      count: filteredSessions.length,
+      sessions: filteredSessions,
     };
+  }
+
+  function stopRepeatingSessionEvents(): void {
+    if (sessionMessageEventTimer !== null) {
+      window.clearInterval(sessionMessageEventTimer);
+      sessionMessageEventTimer = null;
+    }
+  }
+
+  function emitRepeatingSessionEvent(): void {
+    const events = scenario.repeatingSessionEvents.events;
+    if (events.length === 0) {
+      return;
+    }
+    const event = events[sessionMessageEventIndex % events.length];
+    sessionMessageEventIndex += 1;
+    if (!event || !isRecord(event.payload) || typeof event.payload.sessionKey !== "string") {
+      return;
+    }
+    if (!sessionMessageSubscriptions.has(event.payload.sessionKey)) {
+      return;
+    }
+    MockWebSocket.latest?.deliver({
+      event: event.event,
+      payload: event.payload,
+      seq: ++seq,
+      type: "event",
+    });
+  }
+
+  function startRepeatingSessionEvents(): void {
+    if (sessionMessageEventTimer !== null || scenario.repeatingSessionEvents.events.length === 0) {
+      return;
+    }
+    emitRepeatingSessionEvent();
+    const intervalMs = Math.max(250, scenario.repeatingSessionEvents.intervalMs ?? 3_000);
+    sessionMessageEventTimer = window.setInterval(emitRepeatingSessionEvent, intervalMs);
+  }
+
+  function updateSessionMessageSubscription(method: string, params: unknown): void {
+    const sessionKey = isRecord(params) && typeof params.key === "string" ? params.key : "";
+    if (!sessionKey) {
+      return;
+    }
+    if (method === "sessions.messages.subscribe") {
+      sessionMessageSubscriptions.add(sessionKey);
+      startRepeatingSessionEvents();
+      return;
+    }
+    if (method === "sessions.messages.unsubscribe") {
+      sessionMessageSubscriptions.delete(sessionKey);
+      if (sessionMessageSubscriptions.size === 0) {
+        stopRepeatingSessionEvents();
+      }
+    }
   }
 
   function sessionRow() {
@@ -694,7 +779,9 @@ function installControlUiMockGateway(input: {
     }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      return method === "sessions.list" ? applySessionPatches(configured.value) : configured.value;
+      return method === "sessions.list"
+        ? applySessionPatches(configured.value, params)
+        : configured.value;
     }
     switch (method) {
       case "connect":
@@ -778,6 +865,8 @@ function installControlUiMockGateway(input: {
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
+          ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
         };
       case "chat.startup":
         return {
@@ -800,6 +889,8 @@ function installControlUiMockGateway(input: {
           },
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
+          ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
+          ...(scenario.sessionInfo ? { sessionInfo: scenario.sessionInfo } : {}),
         };
       case "chat.metadata":
         return {
@@ -831,17 +922,20 @@ function installControlUiMockGateway(input: {
       case "models.list":
         return { models: scenario.models };
       case "sessions.list":
-        return applySessionPatches({
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
+        return applySessionPatches(
+          {
+            count: 1,
+            defaults: {
+              contextTokens: null,
+              model: "gpt-5.5",
+              modelProvider: "openai",
+            },
+            path: "",
+            sessions: [sessionRow()],
+            ts: Date.now(),
           },
-          path: "",
-          sessions: [sessionRow()],
-          ts: Date.now(),
-        });
+          params,
+        );
       case "sessions.groups.list":
         return groupsPayload();
       case "sessions.groups.put": {
@@ -875,6 +969,12 @@ function installControlUiMockGateway(input: {
         return { ok: true, updatedSessions: 0, ...groupsPayload() };
       }
       case "sessions.subscribe":
+        return { ok: true };
+      case "sessions.messages.subscribe":
+        return {
+          key: isRecord(params) && typeof params.key === "string" ? params.key : "",
+        };
+      case "sessions.messages.unsubscribe":
         return { ok: true };
       default:
         return {};
@@ -962,6 +1062,8 @@ function installControlUiMockGateway(input: {
         return;
       }
       this.readyState = MockWebSocket.CLOSED;
+      sessionMessageSubscriptions.clear();
+      stopRepeatingSessionEvents();
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
     }
 
@@ -989,6 +1091,9 @@ function installControlUiMockGateway(input: {
             ? { id, ok: false, error: mockError, type: "res" }
             : { id, ok: true, payload, type: "res" },
         );
+        if (!mockError) {
+          updateSessionMessageSubscription(method, frame.params);
+        }
         if (
           method === "chat.abort" &&
           isRecord(frame.params) &&
@@ -1123,6 +1228,10 @@ function installControlUiMockGateway(input: {
 
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  window.addEventListener("pagehide", () => {
+    sessionMessageSubscriptions.clear();
+    stopRepeatingSessionEvents();
+  });
 }
 
 export async function installMockGateway(
