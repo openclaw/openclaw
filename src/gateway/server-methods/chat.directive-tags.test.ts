@@ -2344,7 +2344,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("does not broadcast an error terminal after an internal-ui source reply final", async () => {
+  it("broadcasts an error terminal after an internal-ui source reply final", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-source-reply-error-");
     mockState.triggerAgentRunStart = true;
     const sourceReply = setReplyPayloadMetadata(
@@ -2375,29 +2375,86 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    const broadcast = await runNonStreamingChatSend({
+    await runNonStreamingChatSend({
       context,
       respond,
       idempotencyKey: "idem-agent-source-reply-error",
       message: "hello from codex",
+      waitFor: "dedupe",
     });
 
-    expect(broadcast).toMatchObject({
+    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, payload]) => payload as Record<string, unknown>,
+    );
+    expect(broadcasts[0]).toMatchObject({
       runId: "idem-agent-source-reply-error",
       sessionKey: "main",
       state: "final",
     });
-    expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
-    const errorBroadcasts = (
-      context.broadcast as unknown as ReturnType<typeof vi.fn>
-    ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "error");
-    expect(errorBroadcasts).toStrictEqual([]);
+    expect(extractFirstTextBlock(broadcasts[0])).toBe("Codex source reply");
+    expect(broadcasts[1]).toMatchObject({
+      runId: "idem-agent-source-reply-error",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "tool warning",
+    });
     const dedupe = context.dedupe.get("chat:idem-agent-source-reply-error");
-    expect(dedupe?.ok).toBe(true);
+    expect(dedupe?.ok).toBe(false);
     expect(dedupe?.payload).toMatchObject({
       runId: "idem-agent-source-reply-error",
-      status: "ok",
+      status: "error",
+      summary: "tool warning",
     });
+  });
+
+  it("does not finalize an error-marked source reply as assistant transcript content", async () => {
+    const mirrorIdempotencyKey = "idem-agent-source-reply-marked-error:internal-source-reply:0";
+    await createTranscriptFixture("openclaw-chat-send-agent-source-reply-marked-error-");
+    await appendSourceReplyMirrorEntry({
+      idempotencyKey: mirrorIdempotencyKey,
+      text: "Original source reply",
+    });
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Model login expired. Re-authenticate, then try again.",
+            isError: true,
+          },
+          {
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              text: "Model login expired. Re-authenticate, then try again.",
+              idempotencyKey: mirrorIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey: "idem-agent-source-reply-marked-error",
+      waitFor: "dedupe",
+    });
+
+    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, payload]) => payload as Record<string, unknown>,
+    );
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({
+      state: "error",
+      errorMessage: "Model login expired. Re-authenticate, then try again.",
+    });
+    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]?.content).toStrictEqual([
+      { type: "text", text: "Original source reply" },
+    ]);
   });
 
   it("broadcasts returned agent errors after status notices", async () => {

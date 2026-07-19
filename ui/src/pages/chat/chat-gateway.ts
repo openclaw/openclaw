@@ -20,6 +20,8 @@ import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   hasVisibleStreamParts,
+  visibleAssistantStreamTextParts,
+  visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
   authoritativeHistoryAppliedForRun,
@@ -35,9 +37,8 @@ type AssistantMessageNormalizationOptions = {
   allowTextField?: boolean;
 };
 
-function setChatError(state: ChatState, error: string | null) {
-  state.lastError = error;
-  state.chatError = error;
+function setChatRunError(state: ChatState, summary: string) {
+  state.chatRunError = { summary };
 }
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
@@ -123,25 +124,131 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
-function buildErrorAssistantMessage(payload: ChatEventPayload): Record<string, unknown> | null {
-  const normalized = normalizeFinalAssistantMessage(payload.message);
-  if (normalized && !shouldHideAssistantChatMessage(normalized)) {
-    return normalized;
+function stripChatErrorMarker(text: string): string {
+  return text.replace(/^⚠️\s*/u, "");
+}
+
+function resolveGatewayErrorText(payload: ChatEventPayload): string {
+  const errorText = payload.errorMessage?.trim();
+  if (!errorText) {
+    return "chat error";
   }
-  const error = payload.errorMessage?.trim();
-  if (!error) {
+  return errorText.startsWith("⚠️") || errorText.startsWith("Error:")
+    ? stripChatErrorMarker(errorText)
+    : `Error: ${errorText}`;
+}
+
+function payloadMessageIsErrorProjection(
+  payload: ChatEventPayload,
+  message: Record<string, unknown>,
+): boolean {
+  const messageText = extractText(message)?.trim();
+  if (!messageText) {
+    return false;
+  }
+  const errorText = payload.errorMessage?.trim();
+  if (messageText.startsWith("⚠️") || messageText.startsWith("Error:")) {
+    return true;
+  }
+  if (!errorText) {
+    return false;
+  }
+  const projectedErrorText =
+    errorText.startsWith("⚠️") || errorText.startsWith("Error:")
+      ? errorText
+      : `Error: ${errorText}`;
+  return stripChatErrorMarker(messageText) === stripChatErrorMarker(projectedErrorText);
+}
+
+function resolveChatErrorText(payload: ChatEventPayload): string {
+  const message = normalizeFinalAssistantMessage(payload.message);
+  if (message && !shouldHideAssistantChatMessage(message)) {
+    const messageText = extractText(message)?.trim();
+    if (messageText) {
+      return stripChatErrorMarker(messageText);
+    }
+  }
+  return resolveGatewayErrorText(payload);
+}
+
+function errorPayloadMessageProjectsVisibleStream(
+  state: ChatState,
+  payload: ChatEventPayload,
+): boolean {
+  const message = normalizeFinalAssistantMessage(payload.message);
+  if (!message || shouldHideAssistantChatMessage(message)) {
+    return false;
+  }
+  const messageText = extractText(message)?.replace(/\s+/gu, " ").trim();
+  if (!messageText) {
+    return false;
+  }
+  const streamParts = visibleAssistantStreamTextParts(state, isHiddenAssistantStreamText)
+    .map((part) => part.replace(/\s+/gu, " ").trim())
+    .filter(Boolean);
+  return streamParts.some((part) => messageText.startsWith(part) || part.startsWith(messageText));
+}
+
+function errorPayloadMessageProjectsCurrentStreamTail(
+  state: ChatState,
+  payload: ChatEventPayload,
+): boolean {
+  const message = normalizeFinalAssistantMessage(payload.message);
+  if (!message || shouldHideAssistantChatMessage(message)) {
+    return false;
+  }
+  const messageText = extractText(message)?.replace(/\s+/gu, " ").trim();
+  const currentTail = visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)
+    ?.replace(/\s+/gu, " ")
+    .trim();
+  return Boolean(
+    messageText &&
+    currentTail &&
+    (messageText.startsWith(currentTail) || currentTail.startsWith(messageText)),
+  );
+}
+
+function resolveExtendedErrorAssistantMessage(
+  state: ChatState,
+  payload: ChatEventPayload,
+): Record<string, unknown> | null {
+  const message = normalizeFinalAssistantMessage(payload.message);
+  if (
+    !message ||
+    shouldHideAssistantChatMessage(message) ||
+    payloadMessageIsErrorProjection(payload, message)
+  ) {
     return null;
   }
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "text",
-        text: error.startsWith("⚠️") || error.startsWith("Error:") ? error : `Error: ${error}`,
-      },
-    ],
-    timestamp: Date.now(),
-  };
+  const messageText = extractText(message)?.trim();
+  const normalizedMessageText = messageText?.replace(/\s+/gu, " ").trim();
+  if (!normalizedMessageText) {
+    return null;
+  }
+  const streamParts = visibleAssistantStreamTextParts(state, isHiddenAssistantStreamText)
+    .map((part) => part.replace(/\s+/gu, " ").trim())
+    .filter(Boolean);
+  let searchIndex = 0;
+  let matchedLength = 0;
+  for (const [partIndexInStream, part] of streamParts.entries()) {
+    const partIndex = normalizedMessageText.indexOf(part, searchIndex);
+    // Reconstruct from the start with separators only; a loose substring match
+    // can promote unrelated recovery guidance into the assistant transcript.
+    if (
+      partIndex < 0 ||
+      (partIndexInStream === 0 && partIndex !== 0) ||
+      (partIndexInStream > 0 &&
+        !/^[\s.,;:!?…—–-]*$/u.test(normalizedMessageText.slice(searchIndex, partIndex)))
+    ) {
+      return null;
+    }
+    searchIndex = partIndex + part.length;
+    matchedLength += part.length;
+  }
+  if (streamParts.length === 0 || normalizedMessageText.length <= matchedLength) {
+    return null;
+  }
+  return message;
 }
 
 function appendCachedChatMessage(
@@ -185,6 +292,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
   if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
     state.chatRunId = payload.runId;
+    state.chatRunError = null;
     state.chatStreamStartedAt ??= Date.now();
   }
 
@@ -281,30 +389,48 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
-    const payloadMessage = hadActiveRunBeforeEvent
-      ? normalizeFinalAssistantMessage(payload.message)
+    const payloadMessage = normalizeFinalAssistantMessage(payload.message);
+    const payloadMessageIsProjection = Boolean(
+      payloadMessage && payloadMessageIsErrorProjection(payload, payloadMessage),
+    );
+    const extendedAssistantMessage = hadActiveRunBeforeEvent
+      ? resolveExtendedErrorAssistantMessage(state, payload)
       : null;
-    const visiblePayloadMessage =
-      payloadMessage && !shouldHideAssistantChatMessage(payloadMessage) ? payloadMessage : null;
-    if (visiblePayloadMessage) {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-        replacementMessages: [visiblePayloadMessage],
-      });
+    const payloadMessageProjectsStream =
+      hadActiveRunBeforeEvent && errorPayloadMessageProjectsVisibleStream(state, payload);
+    const errorProjectionProjectsStream =
+      payloadMessageProjectsStream && payloadMessageIsProjection;
+    const errorProjectionProjectsCurrentTail =
+      errorProjectionProjectsStream && errorPayloadMessageProjectsCurrentStreamTail(state, payload);
+    if (extendedAssistantMessage) {
+      // A terminal payload may complete genuine prose that only partially
+      // streamed. Preserve that fuller answer before presenting the run error.
       state.chatMessages = appendTerminalAssistantMessage(
         state.chatMessages,
-        visiblePayloadMessage,
+        extendedAssistantMessage,
       );
-    } else {
-      const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
-      if (hadActiveRunBeforeEvent) {
+    } else if (hadActiveRunBeforeEvent) {
+      if (errorProjectionProjectsCurrentTail) {
+        // The current tail is the projected failure, but earlier tool-split
+        // assistant content remains genuine transcript output.
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+        });
+      } else if (!errorProjectionProjectsStream) {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
-      }
-      if (errorMessage) {
-        state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, errorMessage);
       }
     }
     reconcileTerminalRun("interrupted", "failed");
-    setChatError(state, payload.errorMessage ?? "chat error");
+    setChatRunError(
+      state,
+      hadActiveRunBeforeEvent
+        ? extendedAssistantMessage || (payloadMessageProjectsStream && !payloadMessageIsProjection)
+          ? resolveGatewayErrorText(payload)
+          : resolveChatErrorText(payload)
+        : payload.message
+          ? resolveChatErrorText(payload)
+          : payload.errorMessage?.trim() || "chat error",
+    );
   }
   return payload.state;
 }

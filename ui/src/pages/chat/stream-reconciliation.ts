@@ -376,6 +376,24 @@ function visibleAssistantStreamParts(
   return parts;
 }
 
+export function assembledVisibleAssistantStreamText(
+  state: StreamReconciliationState,
+  isHiddenStreamText: StreamVisibility,
+): string | null {
+  const text = visibleAssistantStreamTextParts(state, isHiddenStreamText)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ");
+  return text || null;
+}
+
+export function visibleAssistantStreamTextParts(
+  state: StreamReconciliationState,
+  isHiddenStreamText: StreamVisibility,
+): string[] {
+  return visibleAssistantStreamParts(state, { isHiddenStreamText }).map((part) => part.text);
+}
+
 export function visibleCurrentAssistantStreamTail(
   state: StreamReconciliationState,
   isHiddenStreamText: StreamVisibility,

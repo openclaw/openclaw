@@ -12,7 +12,6 @@ import {
   isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
-import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isFallbackSummaryError } from "../../agents/model-fallback.js";
@@ -438,20 +437,19 @@ export async function handleAgentExecutionError(params: {
           failoverReason === "overloaded" ? "overloaded" : message,
         )
       : undefined;
-  const trimmedMessage = (
-    isTransientHttp ? sanitizeUserFacingText(message, { errorContext: true }) : message
-  ).replace(/\.\s*$/, "");
   const externalRunFailureReply =
     !isBilling &&
     !(isRateLimit && !isOverloaded) &&
     !rateLimitOrOverloadedCopy &&
-    !isContextOverflow &&
-    !params.shouldSurfaceToControlUi
+    !isContextOverflow
       ? buildExternalRunFailureReply(
           { message, error: err },
           {
-            includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
-            includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+            includeAuthProfileId:
+              !params.shouldSurfaceToControlUi && !isNonDirectConversationContext(turn.sessionCtx),
+            includeDetails:
+              !params.shouldSurfaceToControlUi &&
+              isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
             replayPrevented: params.overloadRetryState.unsafeToReplay,
           },
@@ -465,12 +463,10 @@ export async function handleAgentExecutionError(params: {
         ? rateLimitOrOverloadedCopy
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : params.shouldSurfaceToControlUi
-            ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-            : (externalRunFailureReply?.text ??
-              (turn.isHeartbeat
-                ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-                : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
+          : (externalRunFailureReply?.text ??
+            (turn.isHeartbeat
+              ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+              : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
   const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
     text: fallbackText,
     sessionCtx: turn.sessionCtx,

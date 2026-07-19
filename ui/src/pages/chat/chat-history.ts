@@ -71,6 +71,7 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import {
+  assembledVisibleAssistantStreamText,
   clearToolStreamSegments,
   currentLiveToolCallIds,
   hasVisibleStreamParts,
@@ -263,6 +264,10 @@ export function materializeVisibleAssistantStreamMessages(
   });
 }
 
+export function assembledVisibleChatStreamText(state: ChatState): string | null {
+  return assembledVisibleAssistantStreamText(state, isHiddenAssistantStreamText);
+}
+
 function chatPersistCommentaryEnabled(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary === true;
 }
@@ -341,6 +346,7 @@ export type ChatState = {
   planStatus?: PlanStatus | null;
   lastError: string | null;
   chatError?: string | null;
+  chatRunError?: { summary: string } | null;
   /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
   chatSideChatTurns?: ChatSideResult[];
   chatSideResultPending?: ChatSideResultPending | null;
