@@ -2,18 +2,18 @@
 import { randomUUID } from "node:crypto";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 
-export type SystemAgentTranscriptEntry = {
+type SystemAgentTranscriptEntry = {
   role: "user" | "assistant" | "reset";
   text: string;
   at: number;
 };
 
-export type SystemAgentTranscriptTurn = Omit<SystemAgentTranscriptEntry, "role"> & {
+type SystemAgentTranscriptTurn = Omit<SystemAgentTranscriptEntry, "role"> & {
   role: "user" | "assistant";
 };
 
-export const SYSTEM_AGENT_TRANSCRIPT_SCOPE = "system-agent-transcript";
-export const SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES = 1_000;
+const SYSTEM_AGENT_TRANSCRIPT_SCOPE = "system-agent-transcript";
+const SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES = 1_000;
 
 function openTranscriptStore(env?: NodeJS.ProcessEnv) {
   return createSqliteAuditRecordStore<SystemAgentTranscriptEntry>({

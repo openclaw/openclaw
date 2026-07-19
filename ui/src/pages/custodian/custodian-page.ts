@@ -707,7 +707,9 @@ export class CustodianPage extends OpenClawLightDomElement {
               loading: this.historyLoading,
               loadingMore: this.historyLoadingMore,
               nextCursor: this.historyNextCursor,
-              onLoad: (reset) => this.loadHistory(reset),
+              onLoad: (reset) => {
+                void this.loadHistory(reset);
+              },
             })
           : nothing}
 

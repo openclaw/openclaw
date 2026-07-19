@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  appendTranscriptTurn,
-  readTranscriptTail,
-  SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES,
-} from "./transcript-store.js";
+import { appendTranscriptTurn, readTranscriptTail } from "./transcript-store.js";
+
+// Mirrors the store's internal retention bound (kept module-local there).
+const SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES = 1_000;
 
 describe("system-agent transcript store", () => {
   afterEach(() => {
