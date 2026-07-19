@@ -972,7 +972,9 @@ describe("tryDispatchAcpReply", () => {
     await turnDone;
     const earlyOutcome = await Promise.race([
       dispatchPromise.then(() => "settled" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 10)),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 10);
+      }),
     ]);
     expect(earlyOutcome).toBe("pending");
     expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
