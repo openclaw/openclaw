@@ -23,7 +23,7 @@ export const handleTeamsMeetingsNodeHostCommand = MeetingPlatformAdapter.createN
   normalizeUrl: (url) => TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.validateAndNormalize(url),
   normalizeMeetingKey: (url) => TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(url),
   outputMentionsAudioDevice: outputMentionsBlackHole2ch,
-  sharePrerequisiteDeadline: false,
+  sharePrerequisiteDeadline: true,
   systemProfilerCommand: TEAMS_MEETINGS_SYSTEM_PROFILER_COMMAND,
   browser: {
     application: "Google Chrome",
