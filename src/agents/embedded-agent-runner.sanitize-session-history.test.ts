@@ -657,68 +657,6 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
-  it("replays a retained estimate alongside its provider-billed provenance", async () => {
-    const assistant = await getSingleAssistantUsage(
-      castAgentMessages([
-        { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer with a provider-billed cost" }],
-          usage: {
-            output: 3,
-            cache_read_input_tokens: 9,
-            cost: {
-              input: 1.25,
-              output: 2.5,
-              cacheRead: 0.25,
-              cacheWrite: 0,
-              total: 4,
-              totalOrigin: "provider-billed",
-              estimatedTotal: 4,
-            },
-          },
-        },
-      ]),
-    );
-
-    expect((assistant as { usage?: Usage } | undefined)?.usage?.cost).toMatchObject({
-      total: 4,
-      totalOrigin: "provider-billed",
-      estimatedTotal: 4,
-    });
-  });
-
-  it("drops a retained estimate whose provider-billed provenance did not survive", async () => {
-    const assistant = await getSingleAssistantUsage(
-      castAgentMessages([
-        { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer with a corrupted origin" }],
-          usage: {
-            output: 3,
-            cache_read_input_tokens: 9,
-            cost: {
-              input: 1.25,
-              output: 2.5,
-              cacheRead: 0.25,
-              cacheWrite: 0,
-              total: 4,
-              totalOrigin: "not-a-known-origin",
-              estimatedTotal: 4,
-            },
-          },
-        },
-      ]),
-    );
-
-    // `estimatedTotal` exists only because a billed total replaced it, so replaying it
-    // without that provenance would assert a replacement the record no longer records.
-    const cost = (assistant as { usage?: Usage } | undefined)?.usage?.cost;
-    expect(cost?.totalOrigin).toBeUndefined();
-    expect(cost?.estimatedTotal).toBeUndefined();
-  });
-
   it("preserves unknown cost when token fields already match", async () => {
     const assistant = await getSingleAssistantUsage(
       castAgentMessages([

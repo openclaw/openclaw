@@ -75,9 +75,6 @@ export function projectWorkerInferenceTerminalMessage(params: {
         cacheWrite: usage.cost.cacheWrite,
         total: usage.cost.total,
         ...(usage.cost.totalOrigin ? { totalOrigin: usage.cost.totalOrigin } : {}),
-        ...(usage.cost.estimatedTotal !== undefined
-          ? { estimatedTotal: usage.cost.estimatedTotal }
-          : {}),
       },
     },
     stopReason: params.stopReason,

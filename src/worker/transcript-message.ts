@@ -89,9 +89,6 @@ export function cloneUsage(
         cacheWrite: message.usage.cost.cacheWrite,
         total: message.usage.cost.total,
         ...(message.usage.cost.totalOrigin ? { totalOrigin: message.usage.cost.totalOrigin } : {}),
-        ...(message.usage.cost.estimatedTotal !== undefined
-          ? { estimatedTotal: message.usage.cost.estimatedTotal }
-          : {}),
       },
     },
     stopReason: message.stopReason,

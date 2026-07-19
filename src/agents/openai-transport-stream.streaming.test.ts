@@ -689,49 +689,6 @@ describe("openai transport stream", () => {
     expect(usage.cost.totalOrigin).toBe("provider-billed");
   });
 
-  it("retains the catalog estimate when a provider-billed total replaces it", () => {
-    const model = makeCompletionsModel({
-      id: "openrouter/free",
-      name: "OpenRouter Free",
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-    });
-
-    const usage = parseTransportChunkUsage(
-      { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cost: 0 },
-      model,
-    );
-
-    // The provider total is authoritative, but the breakdown must still reconcile
-    // against the estimate it replaced instead of silently disagreeing with `total`.
-    expect(usage.cost.total).toBe(0);
-    expect(usage.cost.estimatedTotal).toBeCloseTo(0.00002, 10);
-    expect(
-      usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite,
-    ).toBeCloseTo(usage.cost.estimatedTotal ?? Number.NaN, 10);
-  });
-
-  it("omits the retained estimate when the provider reports no cost", () => {
-    const model = makeCompletionsModel({
-      id: "openrouter/free",
-      name: "OpenRouter Free",
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-    });
-
-    const usage = parseTransportChunkUsage(
-      { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      model,
-    );
-
-    expect(usage.cost.estimatedTotal).toBeUndefined();
-    expect(usage.cost.totalOrigin).toBeUndefined();
-  });
-
   it("maps cache_write_tokens as a separate write count", () => {
     const model = makeCompletionsModel({
       id: "openrouter/cached",

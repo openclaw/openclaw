@@ -243,37 +243,6 @@ describe("worker protocol schemas", () => {
     expect(Value.Check(WorkerHeartbeatResponseFrameSchema, response)).toBe(true);
   });
 
-  it("carries provider-billed cost provenance through a transcript commit", () => {
-    // The usage cost block is a closed object, so provider-reported billing only
-    // survives the wire if the schema declares it. Without these fields the commit
-    // is rejected outright rather than silently dropping them.
-    const providerBilledMessages = transcriptMessages.map((message) =>
-      message.role === "assistant"
-        ? {
-            ...message,
-            usage: {
-              ...usage,
-              cost: {
-                ...usage.cost,
-                total: 0.00042,
-                totalOrigin: "provider-billed" as const,
-                estimatedTotal: 0.00002,
-              },
-            },
-          }
-        : message,
-    );
-
-    expect(
-      validateWorkerTranscriptCommitParams({
-        runEpoch: 2,
-        seq: 1,
-        baseLeafId: null,
-        messages: providerBilledMessages,
-      }),
-    ).toBe(true);
-  });
-
   it("accepts semantic transcript commits and generated-id responses", () => {
     const commitParams = {
       runEpoch: 2,

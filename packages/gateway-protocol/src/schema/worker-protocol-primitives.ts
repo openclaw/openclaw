@@ -88,7 +88,6 @@ export const WorkerTranscriptUsageSchema = closedObject({
     cacheWrite: Type.Number({ minimum: 0 }),
     total: Type.Number({ minimum: 0 }),
     totalOrigin: Type.Optional(Type.Literal("provider-billed")),
-    estimatedTotal: Type.Optional(Type.Number({ minimum: 0 })),
   }),
 });
 

@@ -19,20 +19,11 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
   return usage.cost;
 }
 
-/**
- * Replaces the catalog estimate when the provider reports an authoritative billed total.
- *
- * `calculateCost` derives `cost.total` from the per-component estimates, so overwriting
- * only `total` would leave `input + output + cacheRead + cacheWrite` disagreeing with it.
- * Keep the replaced estimate in `estimatedTotal` so the breakdown stays reconcilable.
- */
+/** Replaces the catalog estimate when the provider reports an authoritative billed total. */
 export function applyProviderReportedUsageCost(usage: Usage, reportedCost: unknown): void {
   if (typeof reportedCost !== "number" || !Number.isFinite(reportedCost) || reportedCost < 0) {
     return;
   }
-  // Snapshot once: a second application would otherwise overwrite the retained
-  // estimate with the billed total and make the breakdown reconcile by construction.
-  usage.cost.estimatedTotal ??= usage.cost.total;
   usage.cost.total = reportedCost;
   usage.cost.totalOrigin = "provider-billed";
 }
