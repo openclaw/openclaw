@@ -5,7 +5,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isLocalCheckEnabled, resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mjs";
+import {
+  ensureRepoToolNodeModulesLink,
+  isLocalCheckEnabled,
+  resolveRepoToolBinPath,
+} from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
@@ -37,8 +41,10 @@ let parentSignalExitTimer;
 export function resolveTsxImportSpecifier({
   resolveTool = resolveRepoToolBinPath,
   createRequireFrom = createRequire,
+  ensureToolchain = ensureRepoToolNodeModulesLink,
 } = {}) {
   const tsxBinPath = resolveTool("tsx");
+  ensureToolchain(tsxBinPath);
   return pathToFileURL(createRequireFrom(tsxBinPath).resolve("tsx")).href;
 }
 

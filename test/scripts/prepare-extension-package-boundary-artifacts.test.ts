@@ -111,6 +111,10 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           expect(toolName).toBe("tsx");
           return tsxBinPath;
         },
+        ensureToolchain: (toolPath) => {
+          expect(toolPath).toBe(tsxBinPath);
+          return "/worktree/node_modules";
+        },
         createRequireFrom: (filename) => {
           expect(filename).toBe(tsxBinPath);
           return {
