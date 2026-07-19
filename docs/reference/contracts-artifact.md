@@ -7,7 +7,7 @@ vendored runtime and types directly. No sibling contracts checkout and no
 npm/`file:` dependency graph change is required.
 
 Approved tree SHA-256:
-`f7faaf55a6c1c542116df0c32d4fa44ead8dbb3742eb0c7736915eb56972ab76`
+`ae640f0d6e8b19cc8476e4231d502adfcc6a9c225b57b1b6c428f84d6eb586cc`
 
 Run `pnpm verify:contracts` for a focused check. The normal build, check, and
 test lifecycle hooks run the same stdlib verifier before loading contracts.

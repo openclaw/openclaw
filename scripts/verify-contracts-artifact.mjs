@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const expectedVersion = "0.1.0";
-const expectedTreeSHA256 = "f7faaf55a6c1c542116df0c32d4fa44ead8dbb3742eb0c7736915eb56972ab76";
+const expectedTreeSHA256 = "ae640f0d6e8b19cc8476e4231d502adfcc6a9c225b57b1b6c428f84d6eb586cc";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const artifactRoot = resolve(root, "vendor", "openclaw-contracts");
 const runtimeEntry = resolve(artifactRoot, "src", "index.mjs");
