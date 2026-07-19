@@ -20,7 +20,8 @@ export function hashJson(value: unknown): string {
 }
 
 // Plugin install records can reference binaries, model files, or bundled assets.
-// Most are under 10 MiB; cap at 50 MiB to prevent OOM on accidentally large files.
+// Most are under 10 MiB. The inline read path is bounded to 50 MiB to prevent
+// OOM on accidentally large files; larger files are streamed with a fixed 64 KiB buffer.
 const MAX_PLUGIN_INDEX_HASH_BYTES = 50 * 1024 * 1024;
 
 /** Safely hashes a file, optionally recording required-file diagnostics. */
@@ -42,16 +43,13 @@ export function safeHashFile(params: {
     if (stat.size <= MAX_PLUGIN_INDEX_HASH_BYTES) {
       hash.update(fs.readFileSync(params.filePath));
     } else {
-      // Stream large files in bounded chunks to avoid OOM.
+      // Stream large files through EOF using a fixed 64 KiB buffer.
       const fd = fs.openSync(params.filePath, "r");
       try {
         const buffer = Buffer.alloc(65536); // 64 KiB chunk
-        let remaining = MAX_PLUGIN_INDEX_HASH_BYTES;
-        while (remaining > 0) {
-          const bytesRead = fs.readSync(fd, buffer, 0, Math.min(buffer.length, remaining), null);
-          if (bytesRead === 0) break; // EOF
+        let bytesRead: number;
+        while ((bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
           hash.update(buffer.subarray(0, bytesRead));
-          remaining -= bytesRead;
         }
       } finally {
         fs.closeSync(fd);
