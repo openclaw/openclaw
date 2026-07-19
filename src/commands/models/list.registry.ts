@@ -97,10 +97,11 @@ export async function loadModelRegistry(
   },
 ) {
   const runtimeSuppression = opts?.normalizeModels !== false;
+  const skipDiscovery = opts?.loadAvailability === false;
   const { config: runtimeConfig, registry } = await loadAgentModelRegistry(cfg, {
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.agentDir ? { agentDir: opts.agentDir } : {}),
-    ...(opts?.loadAvailability === false ? { skipCredentials: true } : {}),
+    skipCredentials: skipDiscovery,
     workspaceDir: opts?.workspaceDir,
     providerFilter: opts?.providerFilter,
     normalizeModels: opts?.normalizeModels,
