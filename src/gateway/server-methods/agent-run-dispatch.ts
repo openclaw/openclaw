@@ -183,27 +183,6 @@ export function dispatchAgentRunFromGateway(params: {
           ? (result?.meta?.stopReason ?? "rpc")
           : undefined;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
-      if (taskTracked) {
-        tryFinalizeTrackedAgentTask({
-          runId: params.runId,
-          status: aborted ? resolveAbortedAgentTaskStatus(stopReason) : "succeeded",
-          terminalSummary: aborted ? "aborted" : "completed",
-          log: params.context.logGateway,
-        });
-      }
-      const payload = {
-        runId: params.runId,
-        status: aborted ? ("timeout" as const) : ("ok" as const),
-        summary: aborted ? "aborted" : "completed",
-        ...(aborted ? { stopReason } : {}),
-        ...(aborted && timeoutAttribution.timeoutPhase
-          ? { timeoutPhase: timeoutAttribution.timeoutPhase }
-          : {}),
-        ...(aborted && timeoutAttribution.providerStarted !== undefined
-          ? { providerStarted: timeoutAttribution.providerStarted }
-          : {}),
-        result,
-      };
       const terminalOutcome = buildAgentRunTerminalOutcome({
         status:
           aborted || result?.meta?.stopReason === "timeout" || timeoutAttribution.timeoutPhase
@@ -217,6 +196,34 @@ export function dispatchAgentRunFromGateway(params: {
         timeoutPhase: timeoutAttribution.timeoutPhase,
         providerStarted: timeoutAttribution.providerStarted,
       });
+      const responseTimedOut = aborted || terminalOutcome.status === "timeout";
+      if (taskTracked) {
+        tryFinalizeTrackedAgentTask({
+          runId: params.runId,
+          status: aborted
+            ? resolveAbortedAgentTaskStatus(stopReason)
+            : responseTimedOut
+              ? "timed_out"
+              : "succeeded",
+          terminalSummary: responseTimedOut ? "aborted" : "completed",
+          log: params.context.logGateway,
+        });
+      }
+      const payload = {
+        runId: params.runId,
+        status: responseTimedOut ? ("timeout" as const) : ("ok" as const),
+        summary: responseTimedOut ? "aborted" : "completed",
+        ...(responseTimedOut && terminalOutcome.stopReason
+          ? { stopReason: terminalOutcome.stopReason }
+          : {}),
+        ...(responseTimedOut && timeoutAttribution.timeoutPhase
+          ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+          : {}),
+        ...(responseTimedOut && timeoutAttribution.providerStarted !== undefined
+          ? { providerStarted: timeoutAttribution.providerStarted }
+          : {}),
+        result,
+      };
       const persistTerminalDedupe = () => {
         setGatewayDedupeEntries({
           dedupe: params.context.dedupe,
