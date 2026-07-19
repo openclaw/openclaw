@@ -38,7 +38,7 @@ describe("page share delivery", () => {
     const [text, options] = enqueueSystemEvent.mock.calls[0] as [string, { sessionKey: string }];
     expect(options).toEqual({ sessionKey: "agent:main:main" });
     expect(text).toContain(
-      "Page shared from the OpenClaw Chrome extension: Example article\nURL: https://example.com/article\nNote: Summarize for me",
+      "Page shared from the OpenClaw Chrome extension.\nNote: Summarize for me",
     );
     expect(text).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
     expect(text).toContain("Source: Browser");
@@ -47,6 +47,10 @@ describe("page share delivery", () => {
     expect(text.indexOf("Note: Summarize for me")).toBeLessThan(
       text.indexOf("<<<EXTERNAL_UNTRUSTED_CONTENT"),
     );
+    // Page-controlled title/URL must sit inside the untrusted boundary.
+    const boundaryStart = text.indexOf("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(text.indexOf("Title: Example article")).toBeGreaterThan(boundaryStart);
+    expect(text.indexOf("URL: https://example.com/article")).toBeGreaterThan(boundaryStart);
     expect(requestHeartbeat).toHaveBeenCalledWith({
       source: "other",
       intent: "immediate",

@@ -483,13 +483,19 @@ async function connectRelay() {
   // onclose follows onerror and drives the reconnect, so no error handler needed.
 }
 
-async function capturePageShare(tab) {
+async function capturePageShare(tab, selectionOverride) {
   const tabId = tab.id;
   if (typeof tabId !== "number") {
     throw new Error("No tab.");
   }
   const docId = googleDocIdFromUrl(tab.url);
   if (docId) {
+    // Selection wins over the export: never send a whole private document
+    // when the user asked for a highlighted passage.
+    const selection = selectionOverride || (await captureDomSelection(tabId));
+    if (selection) {
+      return { url: tab.url ?? "", title: tab.title ?? "", selection, content: "" };
+    }
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId },
       func: fetchGoogleDocExportInTab,
@@ -514,7 +520,24 @@ async function capturePageShare(tab) {
   if (!injection?.result) {
     throw new Error("Could not read this page.");
   }
+  // A context-menu selection is authoritative: it can live in an iframe or be
+  // cleared during the relay-connect delay, both invisible to the recapture.
+  if (selectionOverride) {
+    return { ...injection.result, selection: selectionOverride };
+  }
   return injection.result;
+}
+
+async function captureDomSelection(tabId) {
+  try {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => window.getSelection()?.toString().trim() ?? "",
+    });
+    return typeof injection?.result === "string" ? injection.result : "";
+  } catch {
+    return "";
+  }
 }
 
 async function sendPageShareRequest(payload) {
@@ -538,7 +561,7 @@ async function sendPageShareRequest(payload) {
   });
 }
 
-async function sendPageToOpenClaw(tabId, note) {
+async function sendPageToOpenClaw(tabId, note, selectionOverride) {
   const config = await getConfig();
   if (!config.relayUrl || !config.token) {
     throw new Error("Pair the extension first.");
@@ -551,7 +574,7 @@ async function sendPageToOpenClaw(tabId, note) {
   }
 
   const tab = await chrome.tabs.get(tabId);
-  const capture = await capturePageShare(tab);
+  const capture = await capturePageShare(tab, selectionOverride?.trim() || "");
   const payload = buildPageSharePayload({ ...capture, note });
   if (!payload.content && !payload.selection) {
     throw new Error("Nothing to send on this page.");
@@ -559,8 +582,8 @@ async function sendPageToOpenClaw(tabId, note) {
   await sendPageShareRequest(payload);
 }
 
-function sendPageFromChromeEntry(tabId) {
-  return sendPageToOpenClaw(tabId, "").then(
+function sendPageFromChromeEntry(tabId, selectionOverride) {
+  return sendPageToOpenClaw(tabId, "", selectionOverride).then(
     () => flashPageShareBadge(true),
     () => flashPageShareBadge(false),
   );
@@ -769,7 +792,7 @@ chrome.commands.onCommand.addListener((command) => {
 });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "openclaw-send-page" && typeof tab?.id === "number") {
-    void sendPageFromChromeEntry(tab.id);
+    void sendPageFromChromeEntry(tab.id, info.selectionText ?? "");
   }
 });
 
