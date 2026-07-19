@@ -663,7 +663,7 @@ describe("runSetupWizard", () => {
   });
 
   it("seeds interactive remote setup from command flags", async () => {
-    const remoteToken = "test-token";
+    const remoteToken = "test-token"; // pragma: allowlist secret
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -772,7 +772,7 @@ describe("runSetupWizard", () => {
   });
 
   it("does not probe an invalid CLI remote URL with its token", async () => {
-    const remoteToken = "test-token";
+    const remoteToken = "test-token"; // pragma: allowlist secret
     validateGatewayWebSocketUrl.mockReturnValueOnce("Use wss:// for public gateways");
 
     await runSetupWizard(

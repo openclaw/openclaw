@@ -153,7 +153,7 @@ describe("registerOnboardCommand", () => {
   });
 
   it("forwards remote seed flags to setup wizard options", async () => {
-    const remoteToken = "test-token";
+    const remoteToken = "test-token"; // pragma: allowlist secret
     await runCli([
       "onboard",
       "--mode",
