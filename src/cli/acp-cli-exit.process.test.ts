@@ -257,5 +257,5 @@ describe("ACP CLI process exit", () => {
       });
       rmSync(stateDir, { force: true, recursive: true });
     }
-  }, CHILD_PROCESS_TIMEOUT_MS + 10_000);
+  }, 40_000);
 });
