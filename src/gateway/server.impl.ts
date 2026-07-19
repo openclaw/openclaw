@@ -8,6 +8,7 @@ import {
 } from "../agents/embedded-agent-runner/run-state.js";
 import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import {
   getLoadedChannelPluginEntryById,
@@ -167,10 +168,10 @@ const loadWorkerPlacementStartupModule = createLazyRuntimeModule(
   () => import("./server-worker-placement-startup.js"),
 );
 
-export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+export async function resetPreparedModelCatalogForTest(): Promise<void> {
+  const { resetPreparedModelCatalogForTest: resetPreparedModelCatalogForTestLocal } =
     await loadGatewayModelCatalogModule();
-  await resetModelCatalogCacheForTestLocal();
+  await resetPreparedModelCatalogForTestLocal();
 }
 
 ensureOpenClawCliOnPath();
@@ -1084,8 +1085,7 @@ export async function startGatewayServer(
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   };
-  const preauthHandshakeTimeoutMs =
-    cfgAtStart.gateway?.handshakeTimeoutMs ?? getRuntimeConfig().gateway?.handshakeTimeoutMs;
+  const preauthHandshakeTimeoutMs = undefined;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
@@ -1200,6 +1200,7 @@ export async function startGatewayServer(
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
+      getRuntimeConfig,
       bindHost,
       port,
       controlUiEnabled,
@@ -1232,6 +1233,53 @@ export async function startGatewayServer(
     }),
   );
   resolveWorkerGatewayEndpoint = getWorkerIngressEndpoint;
+  const presenceWatchedSessions = (connId: string): string[] => {
+    // Presence snapshots stay small even if a long-lived client accumulates
+    // subscriptions. Keep only the 32 most recently subscribed session keys.
+    return [...sessionMessageSubscribers.getForConnection(connId)].slice(-32).toSorted();
+  };
+  const updateWatchedSessionsPresence = (connId: string, previous: readonly string[]) => {
+    const watchedSessions = presenceWatchedSessions(connId);
+    if (
+      watchedSessions.length === previous.length &&
+      watchedSessions.every((key, index) => key === previous[index])
+    ) {
+      return;
+    }
+    const client = [...clients].find((candidate) => candidate.connId === connId);
+    if (!client?.presenceKey) {
+      return;
+    }
+    upsertPresence(client.presenceKey, {
+      watchedSessions: watchedSessions.length > 0 ? watchedSessions : undefined,
+    });
+    broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+  };
+  const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
+    connId,
+    sessionKey,
+    options,
+  ) => {
+    const previous = presenceWatchedSessions(connId);
+    const rollback = sessionMessageSubscribers.subscribe(connId, sessionKey, options);
+    updateWatchedSessionsPresence(connId, previous);
+    if (!rollback) {
+      return undefined;
+    }
+    const rollbackPresence = (() => {
+      const rollbackPrevious = presenceWatchedSessions(connId);
+      rollback();
+      updateWatchedSessionsPresence(connId, rollbackPrevious);
+    }) as NonNullable<ReturnType<GatewayRequestContext["subscribeSessionMessageEvents"]>>;
+    rollbackPresence.commit = () => rollback.commit();
+    return rollbackPresence;
+  };
+  const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
+    (connId, sessionKey) => {
+      const previous = presenceWatchedSessions(connId);
+      sessionMessageSubscribers.unsubscribe(connId, sessionKey);
+      updateWatchedSessionsPresence(connId, previous);
+    };
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
@@ -1612,6 +1660,7 @@ export async function startGatewayServer(
 
     const {
       execApprovalManager,
+      cancelRunBoundApprovals,
       forwardPluginApprovalRequest,
       pluginApprovalIosPushDelivery,
       pluginApprovalManager,
@@ -1894,6 +1943,7 @@ export async function startGatewayServer(
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
+          cancelRunBoundApprovals,
           forwardPluginApprovalRequest,
           pluginApprovalIosPushDelivery,
           pluginApprovalManager,
@@ -1952,8 +2002,8 @@ export async function startGatewayServer(
           removeChatRun,
           subscribeSessionEvents: sessionEventSubscribers.subscribe,
           unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
-          subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
-          unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+          subscribeSessionMessageEvents,
+          unsubscribeSessionMessageEvents,
           unsubscribeAllSessionEvents: (connId: string) => {
             sessionEventSubscribers.unsubscribe(connId);
             sessionMessageSubscribers.unsubscribeAll(connId);
@@ -2039,7 +2089,10 @@ export async function startGatewayServer(
         gatewayHost: bindHost ?? undefined,
         pluginSurfaceScheme,
         getPluginNodeCapabilities: () =>
-          withCoreCanvasNodeCapability(listPluginNodeCapabilities(pluginRegistry)),
+          withCoreCanvasNodeCapability(
+            listPluginNodeCapabilities(pluginRegistry),
+            isCoreCanvasHostEnabled(getRuntimeConfig()),
+          ),
         resolvedAuth,
         getResolvedAuth,
         getRequiredSharedGatewaySessionGeneration: () =>
@@ -2239,6 +2292,12 @@ export async function startGatewayServer(
       minimalTestGateway,
       initialConfig: cfgAtStart,
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
+      initialSnapshotRawHash: startupLastGoodSnapshot.exists
+        ? (startupLastGoodSnapshot.hash ?? null)
+        : null,
+      initialAuthoredConfig: startupLastGoodSnapshot.parsed,
+      initialSnapshotValid: startupLastGoodSnapshot.valid,
+      initialSnapshotIssues: startupLastGoodSnapshot.issues,
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshotForRuntimeTransaction,

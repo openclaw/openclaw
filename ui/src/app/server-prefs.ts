@@ -7,6 +7,7 @@
 // failed push degrades to device-local behavior instead of flip-flopping.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
   loadSettings,
@@ -40,6 +41,13 @@ type SyncedPrefSpec<T> = {
 };
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
+
+function prefValuesEqual(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+  }
+  return left === right;
+}
 
 const SYNCED_PREFS = {
   theme: prefSpec<ThemeName>({
@@ -88,6 +96,14 @@ const SYNCED_PREFS = {
     // propagate, so the push serializes an explicit null removal.
     clearable: true,
   }),
+  sidebarEntries: prefSpec<string[]>({
+    extract: (value) => normalizeSidebarEntries(value) ?? undefined,
+    local: (settings) => settings.sidebarEntries,
+  }),
+  sidebarLiveActivity: prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local: (settings) => settings.sidebarLiveActivity !== false,
+  }),
 } as const;
 
 type SyncedPrefKey = keyof typeof SYNCED_PREFS;
@@ -133,7 +149,7 @@ function serverPrefsLocalPatch(
       }
       continue;
     }
-    if (serverValue === specification.local(settings)) {
+    if (prefValuesEqual(serverValue, specification.local(settings))) {
       continue;
     }
     if (
@@ -157,7 +173,7 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
     const specification = SYNCED_PREFS[key];
     const previousValue = specification.local(previous);
     const nextValue = specification.local(next);
-    if (previousValue === nextValue) {
+    if (prefValuesEqual(previousValue, nextValue)) {
       continue;
     }
     if (nextValue === undefined) {

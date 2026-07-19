@@ -567,7 +567,7 @@ function isHeartbeatTypingEnabled(params: { cfg: OpenClawConfig; hasChatDelivery
 
 function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   const agentCfg = cfg.agents?.defaults;
-  const configured = agentCfg?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  const configured = agentCfg?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
@@ -1324,12 +1324,13 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
+  const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
     cfg,
     agentId,
     requestedHeartbeat: opts.heartbeat,
-    source: opts.source,
-    mergeRequestedHeartbeat: opts.source === "cron",
+    source: wakeSource,
+    mergeRequestedHeartbeat: wakeSource === "cron",
   });
   const runScope = opts.runScope ?? "global";
   const allowsUnscheduledTarget =
@@ -1345,7 +1346,12 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!allowsUnscheduledTarget && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  // Cron uses the heartbeat runner as execution transport; heartbeat scheduling windows do not own it.
+  if (
+    !allowsUnscheduledTarget &&
+    wakeSource !== "cron" &&
+    !isWithinActiveHours(cfg, heartbeat, startedAt)
+  ) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
@@ -1445,7 +1451,7 @@ export async function runHeartbeatOnce(opts: {
     heartbeat,
     runScope,
     forcedSessionKey: opts.sessionKey,
-    source: opts.source,
+    source: wakeSource,
     reason: opts.reason,
     nowMs: startedAt,
   });
@@ -1965,7 +1971,7 @@ export async function runHeartbeatOnce(opts: {
         runSessionKey,
         response: heartbeatToolResponse,
         taskNames: dueHeartbeatTasks.map((task) => task.name),
-        wakeSource: opts.source,
+        wakeSource,
         wakeReason: opts.reason,
         occurredAt: startedAt,
       });

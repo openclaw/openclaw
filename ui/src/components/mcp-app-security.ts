@@ -20,7 +20,8 @@ function resolveWidgetPromptText(raw: unknown): string | null {
     return null;
   }
   const text = raw.trim();
-  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || text.startsWith("/")) {
+  const isHostCommand = text.startsWith("/") || text.startsWith("!");
+  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || isHostCommand) {
     return null;
   }
   return text;
@@ -97,6 +98,7 @@ export function dispatchWidgetPrompt(
 export function buildMcpAppHostCapabilities(
   csp?: McpAppHostSandboxCsp,
   supportsMessage = false,
+  supportsUpdateModelContext = false,
 ): McpAppHostCapabilities {
   return {
     openLinks: {},
@@ -104,6 +106,7 @@ export function buildMcpAppHostCapabilities(
     serverTools: {},
     sandbox: { csp: csp ?? {} },
     ...(supportsMessage ? { message: { text: {} } } : {}),
+    ...(supportsUpdateModelContext ? { updateModelContext: { text: {} } } : {}),
   };
 }
 

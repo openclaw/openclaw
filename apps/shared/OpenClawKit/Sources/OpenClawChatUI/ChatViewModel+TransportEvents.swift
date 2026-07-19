@@ -43,6 +43,17 @@ extension OpenClawChatViewModel {
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
                 return
             }
+            if change.reason == "rewind" {
+                guard let sessionKey = change.sessionKey,
+                      self.matchesCurrentSessionKey(
+                          incoming: sessionKey,
+                          agentId: change.agentId,
+                          current: self.sessionKey)
+                else { return }
+                let context = self.beginHistoryRequest()
+                Task { await self.refreshHistoryAfterRun(historyRequest: context) }
+                return
+            }
             guard change.reason == "patch" || change.reason == "command-metadata" else { return }
             let context = self.currentSessionSnapshot()
             Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
@@ -271,7 +282,9 @@ extension OpenClawChatViewModel {
             toolName: message.toolName,
             usage: message.usage,
             stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+            errorMessage: message.errorMessage,
+            details: message.details,
+            isError: message.isError)
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {

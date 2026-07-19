@@ -83,6 +83,18 @@ export const GatewayConfigSchema = z
             requiredHeaders: z.array(z.string()).optional(),
             allowUsers: z.array(z.string()).optional(),
             allowLoopback: z.boolean().optional(),
+            deviceAutoApprove: z
+              .strictObject({
+                enabled: z.boolean().optional(),
+                scopes: z
+                  .array(z.string().min(1))
+                  .refine((scopes) => !scopes.some((scope) => scope.trim() === "operator.admin"), {
+                    message:
+                      "operator.admin is not allowed in trusted-proxy device auto-approval scopes; approve admin access manually",
+                  })
+                  .optional(),
+              })
+              .optional(),
           })
           .optional(),
       })
@@ -95,10 +107,6 @@ export const GatewayConfigSchema = z
         allow: z.array(z.string()).optional(),
       })
       .optional(),
-    handshakeTimeoutMs: z.number().int().min(1).optional(),
-    channelHealthCheckMinutes: z.number().int().min(0).optional(),
-    channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
-    channelMaxRestartsPerHour: z.number().int().min(1).optional(),
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
@@ -113,8 +121,6 @@ export const GatewayConfigSchema = z
         mode: z
           .union([z.literal("off"), z.literal("restart"), z.literal("hot"), z.literal("hybrid")])
           .optional(),
-        debounceMs: z.number().int().min(0).optional(),
-        deferralTimeoutMs: z.number().int().min(0).optional(),
       })
       .optional(),
     tls: z
@@ -143,9 +149,6 @@ export const GatewayConfigSchema = z
             chatCompletions: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                maxBodyBytes: z.number().int().positive().optional(),
-                maxImageParts: z.number().int().nonnegative().optional(),
-                maxTotalImageBytes: z.number().int().positive().optional(),
                 images: z
                   .strictObject({
                     ...ResponsesEndpointUrlFetchShape,
@@ -156,7 +159,6 @@ export const GatewayConfigSchema = z
             responses: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                maxBodyBytes: z.number().int().positive().optional(),
                 maxUrlParts: z.number().int().nonnegative().optional(),
                 files: z
                   .strictObject({
@@ -239,20 +241,5 @@ export const GatewayConfigSchema = z
         denyCommands: z.array(z.string()).optional(),
       })
       .optional(),
-  })
-  .superRefine((gateway, ctx) => {
-    const effectiveHealthCheckMinutes = gateway.channelHealthCheckMinutes ?? 5;
-    if (
-      gateway.channelStaleEventThresholdMinutes != null &&
-      effectiveHealthCheckMinutes !== 0 &&
-      gateway.channelStaleEventThresholdMinutes < effectiveHealthCheckMinutes
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["channelStaleEventThresholdMinutes"],
-        message:
-          "channelStaleEventThresholdMinutes should be >= channelHealthCheckMinutes to avoid delayed stale detection",
-      });
-    }
   })
   .optional();

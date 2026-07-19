@@ -66,6 +66,8 @@ describe("config view", () => {
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
+    sidebarLiveActivity: true,
+    setSidebarLiveActivity: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
@@ -685,8 +687,8 @@ describe("config view", () => {
           auth: {
             type: "object",
             properties: {
-              authPermanentBackoffMinutes: {
-                type: "number",
+              order: {
+                type: "object",
               },
             },
           },
@@ -694,12 +696,12 @@ describe("config view", () => {
       },
       formValue: {
         auth: {
-          authPermanentBackoffMinutes: 10,
+          order: {},
         },
       },
       originalValue: {
         auth: {
-          authPermanentBackoffMinutes: 10,
+          order: {},
         },
       },
     });
@@ -1301,6 +1303,16 @@ describe("config view", () => {
       },
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh: vi.fn(),
+      camera: {
+        devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
+        selectedDeviceId: "camera-1",
+        loading: false,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh: vi.fn(),
+      composerHoldToRecord: true,
+      setComposerHoldToRecord: vi.fn(),
     });
 
     const shortcutSelect = queryRequired(
@@ -1328,6 +1340,31 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+    expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
+    expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
+      "System default",
+      "Desk Camera",
+    ]);
+    expect(container.textContent).toContain("Hold microphone button to dictate");
+  });
+
+  it("renders and changes the live sidebar activity preference", () => {
+    const setSidebarLiveActivity = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      sidebarLiveActivity: true,
+      setSidebarLiveActivity,
+    });
+
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row--toggle")).find(
+      (candidate) => candidate.textContent?.includes("Show live agent activity in sidebar"),
+    );
+    expect(row).toBeDefined();
+    expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
+    row?.click();
+    expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

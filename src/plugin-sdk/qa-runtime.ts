@@ -529,6 +529,7 @@ export function createQaDockerRuntime(params: {
     try {
       return { ok: response.ok };
     } finally {
+      await releaseQaDockerFetchResponse(response);
       await release();
     }
   };

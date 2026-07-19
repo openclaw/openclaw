@@ -36,99 +36,6 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
-  it("keeps active and pinned sessions visible beyond the first page", async () => {
-    const pinnedKey = "agent:main:pinned";
-    const keys = [
-      ...Array.from({ length: 10 }, (_, index) => `agent:main:session-${index + 1}`),
-      pinnedKey,
-      "agent:main:extra",
-    ];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    expect(result).not.toBeNull();
-    if (!result) {
-      return;
-    }
-    const pinnedIndex = result.sessions.findIndex((row) => row.key === pinnedKey);
-    const pinned = result.sessions[pinnedIndex];
-    expect(pinned).toBeDefined();
-    if (!pinned) {
-      return;
-    }
-    const sessionRows = [...result.sessions];
-    sessionRows[pinnedIndex] = { ...pinned, pinned: true };
-    sessions.publish({
-      result: {
-        ...result,
-        sessions: sessionRows,
-      },
-    });
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
-    expect(sidebar.querySelector(`[data-session-key="${pinnedKey}"]`)).not.toBeNull();
-    expect(sidebar.querySelector('[data-session-key="agent:main:session-10"]')).toBeNull();
-  });
-
-  it("hides pagination when required sessions cannot be collapsed", async () => {
-    const keys = [
-      "agent:main:pinned-0",
-      ...Array.from({ length: 30 }, (_, index) => `agent:main:pinned-${index + 1}`),
-    ];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    expect(result).not.toBeNull();
-    if (!result) {
-      return;
-    }
-    for (const row of result.sessions) {
-      row.pinned = true;
-    }
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(31);
-    expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
-  });
-
-  it("reveals optional sessions immediately when required sessions exceed the page size", async () => {
-    const keys = [
-      "agent:main:session-0",
-      ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
-    ];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    expect(result).not.toBeNull();
-    if (!result) {
-      return;
-    }
-    for (const row of result.sessions.slice(0, 31)) {
-      row.pinned = true;
-    }
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-    const rows = () => sidebar.querySelectorAll(".sidebar-recent-session");
-    const button = (label: string) =>
-      sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-
-    expect(rows()).toHaveLength(31);
-    expect(button("Load more sessions")).not.toBeNull();
-    expect(button("Collapse")).toBeNull();
-
-    button("Load more sessions")?.click();
-    await sidebar.updateComplete;
-    expect(rows()).toHaveLength(41);
-    expect(button("Load more sessions")).toBeNull();
-    expect(button("Collapse")).not.toBeNull();
-
-    button("Collapse")?.click();
-    await sidebar.updateComplete;
-    expect(rows()).toHaveLength(31);
-    expect(button("Load more sessions")).not.toBeNull();
-    expect(button("Collapse")).toBeNull();
-  });
-
   it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
     const keys = [
       "agent:main:session-0",
@@ -141,35 +48,35 @@ describe("AppSidebar session pagination", () => {
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
     expect(rows()).toHaveLength(10);
-    expect(button("Load more sessions")).not.toBeNull();
+    expect(button("Load more threads")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(20);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(30);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(40);
-    expect(button("Load more sessions")).not.toBeNull();
+    expect(button("Load more threads")).not.toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
-    button("Load more sessions")?.click();
+    button("Load more threads")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(41);
-    expect(button("Load more sessions")).toBeNull();
+    expect(button("Load more threads")).toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
     button("Collapse")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(10);
-    expect(button("Load more sessions")).not.toBeNull();
+    expect(button("Load more threads")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
   });
 });
@@ -539,7 +446,7 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived"),
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Thread archived"),
     );
     expect(harness.patch).toHaveBeenCalledWith(
       archivedRow.key,
@@ -558,6 +465,25 @@ describe("AppSidebar session mutation feedback", () => {
     expect(navigate).toHaveBeenLastCalledWith("chat", {
       search: "?session=agent%3Amain%3Aa",
     });
+  });
+
+  it("patches a session icon from the picker", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    const menu = await openSessionMenu(sidebar, "agent:main:a");
+    menu.querySelector<HTMLElement>('wa-dropdown-item[value="change-icon"]')?.click();
+    await menu.updateComplete;
+
+    menu
+      .querySelector<HTMLButtonElement>('.session-menu__icon-choice[aria-label="spark"]')
+      ?.click();
+
+    await waitForFast(() =>
+      expect(harness.patch).toHaveBeenCalledWith(
+        "agent:main:a",
+        { icon: "name:spark" },
+        { agentId: "main" },
+      ),
+    );
   });
 
   it("reconciles and stops an idle active cloud worker through its session", async () => {
