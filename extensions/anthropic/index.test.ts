@@ -134,6 +134,20 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("publishes Claude Fable 5 CLI metadata without downgrading its API contract", () => {
+    expect(
+      buildClaudeCliCatalogEntries().find((model) => model.id === "claude-fable-5"),
+    ).toMatchObject({
+      id: "claude-fable-5",
+      name: "Claude Fable 5 (Claude CLI)",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+    });
+  });
+
   it("keeps bare Claude CLI context plan-safe while publishing output limits", () => {
     const models = buildClaudeCliCatalogEntries();
     for (const id of [

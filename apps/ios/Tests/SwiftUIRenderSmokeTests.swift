@@ -208,7 +208,7 @@ struct SwiftUIRenderSmokeTests {
         let root = ChatStreamingAssistantBubble(
             text: text,
             markdownVariant: .standard,
-            showsAssistantTrace: false,
+            showsReasoning: false,
             assistantName: "OpenClaw",
             assistantAvatarText: "OC",
             assistantAvatarTint: nil,
@@ -245,7 +245,7 @@ struct SwiftUIRenderSmokeTests {
                 style: .standard,
                 markdownVariant: .standard,
                 userAccent: nil,
-                showsAssistantTrace: false,
+                displayOptions: [],
                 assistantName: "OpenClaw",
                 assistantAvatarText: "OC",
                 assistantAvatarTint: nil,

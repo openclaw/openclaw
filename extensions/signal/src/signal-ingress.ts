@@ -42,7 +42,7 @@ export type SignalIngressLifecycle = {
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
-  onAbandoned: () => void;
+  onAbandoned: () => void | Promise<void>;
 };
 
 type SignalIngressDispatchResult =

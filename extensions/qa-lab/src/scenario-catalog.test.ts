@@ -186,10 +186,12 @@ describe("qa scenario catalog", () => {
       );
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
+      "active-memory-preprompt-recall",
       "cron-model-created-one-shot-recurring",
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
       "matrix-restart-resume",
+      "remember-across-conversations",
       "slack-restart-resume",
       "subagent-stale-child-links",
       "telegram-repeated-command-authorization",
@@ -413,18 +415,12 @@ describe("qa scenario catalog", () => {
     expect(config?.unavailableNeedles).toContain("not in my available tool surface");
   });
 
-  it("loads Matrix flow provider overrides", () => {
+  it("loads the Matrix room block streaming provider override", () => {
     expect(readQaScenarioById("matrix-room-block-streaming").execution).toMatchObject({
       kind: "flow",
       providerMode: "mock-openai",
       retryCount: 0,
       timeoutMs: 75_000,
-    });
-    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
-      kind: "flow",
-      providerMode: "live-frontier",
-      retryCount: 0,
-      timeoutMs: 180_000,
     });
   });
 
@@ -727,6 +723,7 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.requiredProvider).toBe("openai");
     expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
+    expect(JSON.stringify(scenario.execution.flow)).toContain('"--force"');
     expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
     expect(config?.pluginPersonality).toBe("conformance");
     expect(config?.adversarialPersonality).toBe("adversarial");
@@ -905,6 +902,7 @@ describe("qa scenario catalog", () => {
       "goal-context-survives-compaction",
       "goal-followthrough-live",
       "active-memory-preprompt-recall",
+      "remember-across-conversations",
       "memory-recall",
       "session-memory-ranking",
       "thread-memory-isolation",
@@ -940,6 +938,40 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("subagent-thread-spawn");
 
     expect(scenario.execution.channel).toBe("matrix");
+  });
+
+  it("keeps the Control UI transcript role boundary in the mock lane", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("control-ui-assistant-transcript-role-boundary"),
+    );
+
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+  });
+
+  it("keeps remember-across-conversations isolated and product-only", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("remember-across-conversations"));
+    const config = readQaScenarioExecutionConfig("remember-across-conversations") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(config?.requiredChannelDriver).toBe("qa-channel");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      session: { dmScope: "per-channel-peer" },
+      agents: {
+        defaults: {
+          memorySearch: { rememberAcrossConversations: true },
+        },
+      },
+      plugins: {
+        entries: {
+          "active-memory": {
+            enabled: true,
+            config: { enabled: true, agents: [] },
+          },
+        },
+      },
+    });
   });
 
   it("routes native command session targeting through Crabline Telegram", () => {

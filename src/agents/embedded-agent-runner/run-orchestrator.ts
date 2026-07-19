@@ -42,6 +42,7 @@ import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
 } from "./run/attempt-stage-timing.js";
+import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import type {
   RunEmbeddedAgentInternalParams,
@@ -100,14 +101,14 @@ async function runEmbeddedAgentInternal(
     ...paramsBase,
     sessionKey: effectiveSessionKey,
   });
-  let params: RunEmbeddedAgentParamsWithSessionFile = {
+  let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
     agentId: paramsBase.agentId ?? runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
     skillWorkshopProposalMutationBudget,
-  };
+  });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another

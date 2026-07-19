@@ -29,6 +29,7 @@ export function assembleResolvedChannelTurn<TDispatchResult>(
     const { cfg, route, ...turn } = value;
     return {
       ...turn,
+      ctxPayload: route.dmScope ? { ...turn.ctxPayload, DmScope: route.dmScope } : turn.ctxPayload,
       routeSessionKey: route.sessionKey,
       storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
       recordInboundSession,
@@ -37,6 +38,7 @@ export function assembleResolvedChannelTurn<TDispatchResult>(
   const { cfg, route, ...turn } = value;
   return {
     ...turn,
+    ctxPayload: route.dmScope ? { ...turn.ctxPayload, DmScope: route.dmScope } : turn.ctxPayload,
     cfg,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
@@ -120,6 +122,14 @@ async function runChannelDeliveryObserver(params: {
   }
 }
 
+function createObserveOnlyDeliveryAdapter(): ChannelEventDeliveryAdapter {
+  // Observe-only turns still run the agent, but transport delivery must remain impossible for
+  // every assembled-turn entry point, including direct SDK dispatch.
+  return {
+    deliver: async () => ({ visibleReplySent: false }),
+  };
+}
+
 type AssembledChannelTurnWithBotLoopProtection = AssembledChannelTurn & {
   botLoopProtection: NonNullable<AssembledChannelTurn["botLoopProtection"]>;
 };
@@ -144,6 +154,8 @@ export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<ChannelTurnResult> {
   const replyPipeline = resolveAssembledReplyPipeline(params);
+  const delivery =
+    params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
   return await runPreparedChannelTurnCore(
     {
       channel: params.channel,
@@ -168,13 +180,13 @@ export async function dispatchAssembledChannelTurn(
               dispatcherOptions: {
                 ...replyPipeline.dispatcherOptions,
                 deliver: async (payload: ReplyPayload, info) => {
-                  const preparedPayload = params.delivery.preparePayload
-                    ? await params.delivery.preparePayload(payload, info)
+                  const preparedPayload = delivery.preparePayload
+                    ? await delivery.preparePayload(payload, info)
                     : payload;
                   const durableOptions =
-                    typeof params.delivery.durable === "function"
-                      ? await params.delivery.durable(preparedPayload, info)
-                      : params.delivery.durable;
+                    typeof delivery.durable === "function"
+                      ? await delivery.durable(preparedPayload, info)
+                      : delivery.durable;
                   if (durableOptions) {
                     const durable = await deliverInboundReplyWithMessageSendContext({
                       cfg: params.cfg,
@@ -189,7 +201,7 @@ export async function dispatchAssembledChannelTurn(
                     throwIfDurableInboundReplyDeliveryFailed(durable);
                     if (isDurableInboundReplyDeliveryHandled(durable)) {
                       await runChannelDeliveryObserver({
-                        onDelivered: params.delivery.onDelivered,
+                        onDelivered: delivery.onDelivered,
                         payload: preparedPayload,
                         info,
                         result: durable.delivery,
@@ -197,16 +209,16 @@ export async function dispatchAssembledChannelTurn(
                       return durable.delivery;
                     }
                   }
-                  const result = await params.delivery.deliver(preparedPayload, info);
+                  const result = await delivery.deliver(preparedPayload, info);
                   await runChannelDeliveryObserver({
-                    onDelivered: params.delivery.onDelivered,
+                    onDelivered: delivery.onDelivered,
                     payload: preparedPayload,
                     info,
                     result,
                   });
                   return result;
                 },
-                onError: params.delivery.onError,
+                onError: delivery.onError,
               },
               toolsAllow: params.toolsAllow,
               replyOptions: replyPipeline.replyOptions,

@@ -150,6 +150,7 @@ describe("iMessage monitor attachment policy", () => {
           params: {
             message: {
               id: 1,
+              guid: "dropped-media-policy-guid-1",
               chat_id: 123,
               sender: "+15550001111",
               is_from_me: false,

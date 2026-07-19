@@ -207,6 +207,7 @@ describe("release validation no-push transport", () => {
 
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
+      [FULL_RELEASE, "prepare_release_candidate"],
       [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],
       [RELEASE_CHECKS, "live_repo_e2e_release_checks"],
       [RELEASE_CHECKS, "docker_e2e_release_checks"],
