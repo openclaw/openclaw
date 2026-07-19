@@ -43,7 +43,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Every cron execution creates a [background task](/automation/tasks) record.
 - One-shot jobs (`--at`) auto-delete after success by default; pass `--keep-after-run` to keep them.
-- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by cron's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes.
+- Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by cron's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes, and script payloads default to 5 minutes.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled instead of replayed immediately, keeping model/tool bootstrap work out of the channel-connect window.
 - If you drive `openclaw agent` from system cron or another external scheduler, wrap it with a hard-kill escalation even though the CLI already handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; local and embedded fallback runs get the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...` — the `-k` value is the backstop if the process cannot drain in time. For systemd units, use a `SIGTERM` stop signal with a grace window (`TimeoutStopSec`) before the final kill. Reusing a `--run-id` while the original Gateway run is still active reports the duplicate as in-flight instead of starting a second run.
 
@@ -119,7 +119,7 @@ The script must return `{ fire, message?, state? }`. The previous JSON state is 
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 
 <Warning>
-Enabling `cron.triggers.enabled` lets agent-authored scripts run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create cron jobs is trusted accordingly.
+Enabling `cron.triggers.enabled` permits both condition-trigger scripts and `script` payloads to run headlessly with the owning agent's **full tool policy, including `exec`**. Treat this as unattended code execution with that agent's permissions; leave it disabled unless every agent allowed to create cron jobs is trusted accordingly.
 </Warning>
 
 Create a watcher from a local script file (`-` reads the script from stdin):
@@ -137,11 +137,12 @@ openclaw cron add \
 
 Every job carries exactly one payload kind, chosen by flag:
 
-| Payload       | Flag                                           | Runs                                                    |
-| ------------- | ---------------------------------------------- | ------------------------------------------------------- |
-| System event  | `--system-event <text>`                        | Enqueued into the main session, no model call by itself |
-| Agent message | `--message <text>`                             | A model-backed agent turn                               |
-| Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call      |
+| Payload       | Flag                                           | Runs                                                       |
+| ------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| System event  | `--system-event <text>`                        | Enqueued into the main session, no model call by itself    |
+| Agent message | `--message <text>`                             | A model-backed agent turn                                  |
+| Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
+| Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
 ### Agent-turn options
 
@@ -209,6 +210,31 @@ openclaw cron create "*/15 * * * *" \
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution without shell parsing. Optional `--command-env KEY=VALUE` (repeatable), `--command-input`, `--timeout-seconds` (default 10 minutes), `--no-output-timeout-seconds`, and `--output-max-bytes` control the process environment, stdin, and output bounds.
 
 Delivered text is derived from process output: non-empty stdout wins; if stdout is empty and stderr is non-empty, stderr is delivered; if both are present, cron sends a small `stdout:` / `stderr:` block. Exit code `0` records the run `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
+
+### Script payloads
+
+Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. Enable `cron.triggers.enabled` before creating or running them; this dangerous-automation gate covers both trigger scripts and script payloads. Script jobs support only `main` and `isolated` session targets.
+
+```bash
+openclaw cron create "0 * * * *" \
+  --name "Hourly queue check" \
+  --script ./automation/check-queue.js \
+  --script-timeout-seconds 300 \
+  --script-tool-budget 50 \
+  --session isolated \
+  --announce
+```
+
+Use `--script <file|->` to read JavaScript from a file or stdin. The timeout defaults to 300 seconds and is capped at 900; the tool budget defaults to 50 calls and is capped at 200. These payload budgets are separate from the smaller trigger-gate evaluation budgets.
+
+The script may return an object with these optional fields:
+
+- `notify`: Text delivered through the job's `announce`, `webhook`, or `none` delivery mode. If omitted, nothing is delivered. For a `main` job, the text becomes a system event.
+- `wake`: `"now"` requests an immediate heartbeat after enqueueing `notify` (or a compact completion event); `"next-heartbeat"` enqueues the event for the next heartbeat.
+- `state`: JSON state, capped at 16 KB and persisted only after a successful run. The next run receives a frozen copy as `trigger.state`, matching trigger scripts. Because that namespace has one persisted owner, a script payload cannot be combined with a condition trigger on the same job.
+- `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
+
+Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal cron run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
 
 ## Execution styles
 

@@ -90,6 +90,7 @@ function appHtml(appModuleUrl: string): string {
 <output id="app-tool"></output>
 <output id="model-tool"></output>
 <output id="resource"></output>
+<output id="teardown"></output>
 <output id="isolation"></output>
 <script type="module">
 import { App, McpUiResourceTeardownResultSchema } from ${JSON.stringify(appModuleUrl)};
@@ -98,7 +99,11 @@ try { void window.top.document; write("isolation", "failed"); } catch { write("i
 const app = new App({ name: "OpenClaw conformance fixture", version: "1.0.0" });
 app.ontoolinput = ({ arguments: args }) => write("input", JSON.stringify(args ?? {}));
 app.ontoolresult = (value) => write("result", JSON.stringify(value.structuredContent ?? value));
-app.onteardown = async () => ({});
+app.onteardown = async () => {
+  write("teardown", "received");
+  console.info("mcp-conformance-teardown-received");
+  return {};
+};
 app.onerror = (error) => console.error("mcp-conformance-app", error);
 document.getElementById("call-app").onclick = async () => {
   try {
@@ -224,6 +229,16 @@ async function mountControlUiHost(page: Page): Promise<void> {
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
+window.mcpConformanceUnmount = async () => {
+  const mount = document.getElementById("mount");
+  const view = window.mcpConformanceView;
+  if (!mount || !view) return;
+  const frame = view.shadowRoot?.querySelector("iframe");
+  await view.teardown();
+  if (frame?.isConnected) throw new Error("MCP App frame remained mounted");
+  console.info("mcp-conformance-frame-detached");
+  mount.replaceChildren();
+};
 </script>`,
     });
   });
@@ -468,7 +483,21 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#resource"), "resource-ok");
 
     const standaloneUrl = await requestStandaloneUrl(controlPage);
-    await controlPage.evaluate(() => Reflect.get(window, "mcpConformanceView")?.remove());
+    await controlPage.evaluate(async () => {
+      const unmount = Reflect.get(window, "mcpConformanceUnmount") as
+        | (() => Promise<void>)
+        | undefined;
+      await unmount?.();
+    });
+    const teardownDiagnostic = browserDiagnostics.findIndex((entry) =>
+      entry.includes("mcp-conformance-teardown-received"),
+    );
+    const detachedDiagnostic = browserDiagnostics.findIndex((entry) =>
+      entry.includes("mcp-conformance-frame-detached"),
+    );
+    expect(teardownDiagnostic).toBeGreaterThanOrEqual(0);
+    expect(detachedDiagnostic).toBeGreaterThan(teardownDiagnostic);
+    await expect.poll(() => controlPage.frames().length).toBe(1);
 
     const standaloneContext = await browser.newContext({ permissions: ["local-network-access"] });
     openContexts.add(standaloneContext);

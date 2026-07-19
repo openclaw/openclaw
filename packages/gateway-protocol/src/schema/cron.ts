@@ -50,6 +50,17 @@ function cronCommandPayloadSchema(params: { argv: TSchema; toolsAllow: TSchema }
   });
 }
 
+function cronScriptPayloadSchema(params: { script: TSchema; toolsAllow: TSchema }) {
+  return closedObject({
+    kind: Type.Literal("script"),
+    script: params.script,
+    timeoutSeconds: Type.Optional(Type.Number({ minimum: 1 })),
+    toolBudget: Type.Optional(Type.Integer({ minimum: 1 })),
+    toolsAllow: Type.Optional(params.toolsAllow),
+    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+  });
+}
+
 /** Session target accepted by cron jobs. */
 const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
@@ -255,6 +266,10 @@ export const CronPayloadSchema = Type.Union([
     argv: Type.Array(NonEmptyString, { minItems: 1 }),
     toolsAllow: Type.Array(Type.String()),
   }),
+  cronScriptPayloadSchema({
+    script: Type.String({ minLength: 1, maxLength: 65_536 }),
+    toolsAllow: Type.Array(Type.String()),
+  }),
 ]);
 
 /** Partial cron payload for job updates. */
@@ -274,6 +289,10 @@ export const CronPayloadPatchSchema = Type.Union([
   }),
   cronCommandPayloadSchema({
     argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+    toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+  }),
+  cronScriptPayloadSchema({
+    script: Type.Optional(Type.String({ minLength: 1, maxLength: 65_536 })),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
 ]);

@@ -251,13 +251,15 @@ export type CronFailureAlertPatch = {
 export type CronPayload =
   | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
   | (CronAgentTurnPayload & CronPayloadToolAllow)
-  | (CronCommandPayload & CronPayloadToolAllow);
+  | (CronCommandPayload & CronPayloadToolAllow)
+  | (CronScriptPayload & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
   | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
-  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch);
+  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch)
+  | (CronScriptPayloadPatch & CronPayloadToolAllowPatch);
 
 type CronPayloadToolAllow = {
   /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
@@ -317,6 +319,20 @@ type CronCommandPayload = {
 type CronCommandPayloadPatch = {
   kind: "command";
 } & Partial<CronCommandPayloadFields>;
+
+type CronScriptPayloadFields = {
+  script: string;
+  timeoutSeconds?: number;
+  toolBudget?: number;
+};
+
+type CronScriptPayload = {
+  kind: "script";
+} & CronScriptPayloadFields;
+
+type CronScriptPayloadPatch = {
+  kind: "script";
+} & Partial<CronScriptPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;

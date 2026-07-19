@@ -17,6 +17,7 @@ import {
   computeNextRunAtMs,
   computePreviousRunAtMs,
 } from "../schedule.js";
+import { normalizeCronScriptPayload } from "../script-payload.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
 import {
   normalizeCronStaggerMs,
@@ -315,12 +316,50 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget.startsWith("session:")) {
     assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
   }
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
-    throw new Error('main cron jobs require payload.kind="systemEvent"');
+  if (
+    job.sessionTarget === "main" &&
+    job.payload.kind !== "systemEvent" &&
+    job.payload.kind !== "script"
+  ) {
+    throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+  if (
+    job.payload.kind === "script" &&
+    job.sessionTarget !== "main" &&
+    job.sessionTarget !== "isolated"
+  ) {
+    throw new Error('script cron jobs require sessionTarget="main" or "isolated"');
+  }
+  if (
+    isIsolatedLike &&
+    job.payload.kind !== "agentTurn" &&
+    job.payload.kind !== "command" &&
+    !(job.sessionTarget === "isolated" && job.payload.kind === "script")
+  ) {
     throw new Error(
-      'isolated/current/session cron jobs require payload.kind="agentTurn" or "command"',
+      'isolated cron jobs require payload.kind="agentTurn", "command", or "script"; script payloads do not support current/session targets',
+    );
+  }
+}
+
+function assertScriptPayloadSupport(
+  job: Pick<CronJob, "payload" | "trigger">,
+  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+) {
+  if (job.payload.kind !== "script") {
+    return;
+  }
+  if (!job.payload.script.trim()) {
+    throw new Error("cron script payload must not be empty");
+  }
+  if (job.trigger) {
+    // Both script kinds expose trigger.state, so composing them would give one
+    // persisted state slot two owners and make the next trigger run ambiguous.
+    throw new Error("cron script payloads cannot be combined with a condition trigger");
+  }
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
+    throw new Error(
+      "cron script payloads are disabled; set cron.triggers.enabled=true to allow unattended scripts",
     );
   }
 }
@@ -357,13 +396,16 @@ function assertCronExpressionSatisfiable(job: CronJob, nowMs: number) {
 }
 
 function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId">,
+  job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
   defaultAgentId: string | undefined,
 ) {
   if (job.sessionTarget !== "main") {
     return;
   }
   if (!job.agentId) {
+    return;
+  }
+  if (job.payload.kind === "script") {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);
@@ -971,7 +1013,10 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
-    payload: input.payload,
+    payload:
+      input.payload.kind === "script"
+        ? normalizeCronScriptPayload(structuredClone(input.payload))
+        : input.payload,
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -986,6 +1031,10 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertTriggerSupport(job, {
     cronConfig: state.deps.cronConfig,
     requireEnabled: job.trigger !== undefined,
+  });
+  assertScriptPayloadSupport(job, {
+    cronConfig: state.deps.cronConfig,
+    requireEnabled: job.payload.kind === "script",
   });
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
@@ -1089,6 +1138,9 @@ export function applyJobPatch(
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
+    if (job.payload.kind === "script") {
+      job.payload = normalizeCronScriptPayload(job.payload);
+    }
   }
   if (patch.delivery) {
     const implicitMode = resolveCronDeliveryPlan(job).mode;
@@ -1131,6 +1183,10 @@ export function applyJobPatch(
   assertTriggerSupport(job, {
     cronConfig: opts?.cronConfig,
     requireEnabled: patch.trigger !== null && patch.trigger !== undefined,
+  });
+  assertScriptPayloadSupport(job, {
+    cronConfig: opts?.cronConfig,
+    requireEnabled: patch.payload?.kind === "script",
   });
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
@@ -1199,7 +1255,10 @@ export function applyDeclarativeJobSpec(
   } else {
     delete job.pacing;
   }
-  job.payload = structuredClone(input.payload);
+  job.payload =
+    input.payload.kind === "script"
+      ? normalizeCronScriptPayload(structuredClone(input.payload))
+      : structuredClone(input.payload);
   if (input.trigger) {
     job.trigger = structuredClone(input.trigger);
   } else {
@@ -1217,6 +1276,10 @@ export function applyDeclarativeJobSpec(
   assertTriggerSupport(job, {
     cronConfig: opts.cronConfig,
     requireEnabled: input.trigger !== undefined,
+  });
+  assertScriptPayloadSupport(job, {
+    cronConfig: opts.cronConfig,
+    requireEnabled: input.payload.kind === "script",
   });
 
   assertSupportedJobSpec(job);
