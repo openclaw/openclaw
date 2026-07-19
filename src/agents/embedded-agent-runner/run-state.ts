@@ -29,8 +29,6 @@ export type EmbeddedAgentQueueHandle = {
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
-  /** True only when queueMessage preserves images supplied in its options. */
-  supportsQueueMessageImages?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -47,7 +45,14 @@ export type ActiveEmbeddedRunSnapshot = {
 
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
-  timer?: NodeJS.Timeout;
+  timer: NodeJS.Timeout;
+  /**
+   * When set, the waiter tracks one captured run generation. It resolves once
+   * that handle is no longer the active registry occupant (clear, force-clear,
+   * or replace). Session-only waiters omit this and wait until the session has
+   * no active embedded handle.
+   */
+  handle?: EmbeddedAgentQueueHandle;
 };
 
 export type AbandonedEmbeddedRun = {
