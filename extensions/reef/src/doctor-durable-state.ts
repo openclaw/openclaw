@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -90,6 +91,35 @@ async function readLegacyReefFileSafely(filePath: string, maxBytes: number): Pro
     }
   } finally {
     fsSync.closeSync(fd);
+  }
+}
+
+function isFileTooLargeError(error: unknown): boolean {
+  return error instanceof RangeError && (error as Error).message.includes("file too large");
+}
+
+/**
+ * Archive an oversized legacy source by renaming it to `<path>.migrated`.
+ * Reading the file is avoided so the safe-migration cap is not bypassed
+ * during archival; a failed rename leaves the source in place for retry.
+ *
+ * This preserves valid legacy data that exceeds the bounded read cap while
+ * allowing `openclaw doctor` to complete the remaining migration.
+ */
+async function archiveOversizedLegacySource(params: {
+  filePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const archivedPath = `${params.filePath}.migrated`;
+  try {
+    await fsPromises.rename(params.filePath, archivedPath);
+    params.changes.push(`Archived oversized ${params.label} legacy source to ${archivedPath}`);
+  } catch (error) {
+    params.warnings.push(
+      `Failed archiving oversized ${params.label} legacy source: ${String(error)}; left source in place`,
+    );
   }
 }
 
@@ -377,6 +407,19 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return { changes, warnings };
       }
+      if (isFileTooLargeError(error)) {
+        warnings.push(
+          `Reef audit trail exceeds the safe migration size cap and has been archived to ${filePath}.migrated for manual recovery`,
+        );
+        await archiveOversizedLegacySource({
+          filePath,
+          label: "Reef audit trail",
+          changes,
+          warnings,
+        });
+        await migrationStore.delete(REEF_AUDIT_MIGRATION_KEY);
+        return { changes, warnings };
+      }
       warnings.push(`Failed importing Reef audit trail: ${String(error)}; left source in place`);
       return { changes, warnings };
     }
@@ -574,7 +617,21 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        warnings.push(`Failed importing Reef replay state: ${String(error)}; left source in place`);
+        if (isFileTooLargeError(error)) {
+          warnings.push(
+            `Reef replay state exceeds the safe migration size cap and has been archived to ${replayPath}.migrated for manual recovery`,
+          );
+          await archiveOversizedLegacySource({
+            filePath: replayPath,
+            label: "Reef replay state",
+            changes,
+            warnings,
+          });
+        } else {
+          warnings.push(
+            `Failed importing Reef replay state: ${String(error)}; left source in place`,
+          );
+        }
       }
     }
 
@@ -618,7 +675,19 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        warnings.push(`Failed importing Reef reviews: ${String(error)}; left source in place`);
+        if (isFileTooLargeError(error)) {
+          warnings.push(
+            `Reef reviews exceed the safe migration size cap and have been archived to ${reviewsPath}.migrated for manual recovery`,
+          );
+          await archiveOversizedLegacySource({
+            filePath: reviewsPath,
+            label: "Reef reviews",
+            changes,
+            warnings,
+          });
+        } else {
+          warnings.push(`Failed importing Reef reviews: ${String(error)}; left source in place`);
+        }
       }
     }
 
@@ -667,9 +736,21 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        warnings.push(
-          `Failed importing Reef delivered markers: ${String(error)}; left source in place`,
-        );
+        if (isFileTooLargeError(error)) {
+          warnings.push(
+            `Reef delivered markers exceed the safe migration size cap and have been archived to ${deliveredPath}.migrated for manual recovery`,
+          );
+          await archiveOversizedLegacySource({
+            filePath: deliveredPath,
+            label: "Reef delivered markers",
+            changes,
+            warnings,
+          });
+        } else {
+          warnings.push(
+            `Failed importing Reef delivered markers: ${String(error)}; left source in place`,
+          );
+        }
       }
     }
     const remainingSources = (
