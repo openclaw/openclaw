@@ -518,6 +518,7 @@ export function loadRuntimePluginCandidate(params: {
   });
   const transaction = createPluginRegistrationTransaction({
     registry,
+    activeRecord: record,
     rollbackGlobalSideEffects: () =>
       params.registryBuilder.rollbackPluginGlobalSideEffects(record.id),
   });
