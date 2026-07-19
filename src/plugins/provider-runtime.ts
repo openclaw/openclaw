@@ -11,18 +11,24 @@ import {
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
+import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataRegistryView,
+  PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.types.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   clearProviderRuntimePluginCacheForTest,
@@ -48,6 +54,7 @@ import {
   resolveExternalAuthProfileProviderPluginIds,
   resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForProviderRef,
+  resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
@@ -183,13 +190,18 @@ function resolveProviderPluginsForCatalogHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): ProviderPlugin[] {
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const workspaceDir =
+    params.workspaceDir ??
+    params.metadataSnapshot?.workspaceDir ??
+    getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
   const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
     env,
+    metadataSnapshot: params.metadataSnapshot,
   });
   if (onlyPluginIds.length === 0) {
     return [];
@@ -199,6 +211,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
     workspaceDir,
     env,
     onlyPluginIds,
+    pluginMetadataSnapshot: params.metadataSnapshot,
   });
 }
 
@@ -336,11 +349,20 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
     model: ProviderRuntimeModel;
   };
 }): ProviderRuntimeModel | undefined {
+  const context = {
+    ...params.context,
+    ...(params.context.config === undefined && params.config !== undefined
+      ? { config: params.config }
+      : {}),
+    ...(params.context.workspaceDir === undefined && params.workspaceDir !== undefined
+      ? { workspaceDir: params.workspaceDir }
+      : {}),
+  };
   return (
     resolveProviderRuntimePlugin({
       ...params,
       modelId: params.context.modelId,
-    })?.normalizeResolvedModel?.(params.context) ?? undefined
+    })?.normalizeResolvedModel?.(context) ?? undefined
   );
 }
 
@@ -352,13 +374,17 @@ export function applyProviderResolvedTransportWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeResolvedModelContext;
 }): ProviderRuntimeModel | undefined {
+  const config = params.context.config ?? params.config;
+  const workspaceDir = params.context.workspaceDir ?? params.workspaceDir;
   const normalized = normalizeProviderTransportWithPlugin({
     provider: params.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
+    config,
+    workspaceDir,
     env: params.env,
     modelId: params.context.modelId,
     context: {
+      ...(config !== undefined ? { config } : {}),
+      ...(workspaceDir !== undefined ? { workspaceDir } : {}),
       provider: params.context.provider,
       modelId: params.context.modelId,
       api: params.context.model.api,
@@ -408,8 +434,17 @@ export function normalizeProviderTransportWithPlugin(params: {
   const hasTransportChange = (normalized: { api?: string | null; baseUrl?: string }) =>
     (normalized.api ?? params.context.api) !== params.context.api ||
     (normalized.baseUrl ?? params.context.baseUrl) !== params.context.baseUrl;
+  const context = {
+    ...params.context,
+    ...(params.context.config === undefined && params.config !== undefined
+      ? { config: params.config }
+      : {}),
+    ...(params.context.workspaceDir === undefined && params.workspaceDir !== undefined
+      ? { workspaceDir: params.workspaceDir }
+      : {}),
+  };
   const matchedPlugin = resolveProviderHookPlugin(params);
-  const normalizedMatched = matchedPlugin?.normalizeTransport?.(params.context);
+  const normalizedMatched = matchedPlugin?.normalizeTransport?.(context);
   if (normalizedMatched && hasTransportChange(normalizedMatched)) {
     return normalizedMatched;
   }
@@ -421,7 +456,7 @@ export function normalizeProviderTransportWithPlugin(params: {
     if (!candidate.normalizeTransport || candidate === matchedPlugin) {
       continue;
     }
-    const normalized = candidate.normalizeTransport(params.context);
+    const normalized = candidate.normalizeTransport(context);
     if (normalized && hasTransportChange(normalized)) {
       return normalized;
     }
@@ -622,7 +657,20 @@ export async function prepareProviderRuntimeAuth(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderPrepareRuntimeAuthContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth?.(params.context);
+  const prepareRuntimeAuth = resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth;
+  if (!prepareRuntimeAuth) {
+    return undefined;
+  }
+  // Secret material crosses into provider code only when that provider owns an
+  // auth hook. Callers can safely pass sentinels without probing plugin state.
+  const preparedInput = unwrapSecretSentinelsForProviderEgress(
+    params.context.apiKey,
+    "provider runtime auth exchange",
+  );
+  return await prepareRuntimeAuth({
+    ...params.context,
+    apiKey: preparedInput,
+  });
 }
 
 export async function resolveProviderUsageAuthWithPlugin(params: {
@@ -650,7 +698,74 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderFetchUsageSnapshotContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot?.(params.context);
+  const providerHook = resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot;
+  if (providerHook) {
+    const snapshot = await providerHook(params.context);
+    if (snapshot != null) {
+      return snapshot;
+    }
+  }
+
+  // A distinct hook owner is an explicit synthetic contribution route. Avoid
+  // probing harness manifests for ordinary provider usage misses.
+  if (params.provider === params.context.provider) {
+    return undefined;
+  }
+
+  let harness = getRegisteredAgentHarness(params.provider)?.harness;
+  if (!harness) {
+    const workspaceDir =
+      params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState() ?? process.cwd();
+    const { ensureSelectedAgentHarnessPlugin } =
+      await import("../agents/harness/runtime-plugin.js");
+    await ensureSelectedAgentHarnessPlugin({
+      provider: params.context.provider,
+      modelId: "",
+      config: params.config,
+      agentHarnessId: params.provider,
+      workspaceDir,
+    });
+    harness = getRegisteredAgentHarness(params.provider)?.harness;
+  }
+  return await harness?.fetchUsageSnapshot?.(params.context);
+}
+
+export type ProviderUsagePluginDescriptor = {
+  provider: UsageProviderId;
+  displayName: string;
+};
+
+/** Lists provider plugins that own the complete usage auth + fetch lifecycle. */
+export function listProviderUsagePluginDescriptors(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderUsagePluginDescriptor[] {
+  const pluginContracts = resolveUsageHookProviderPluginContracts(params);
+  if (pluginContracts.length === 0) {
+    return [];
+  }
+  const descriptors = new Map<string, ProviderUsagePluginDescriptor>();
+  for (const contract of pluginContracts) {
+    const declaredProviderIds = new Set(contract.providerIds);
+    for (const plugin of resolveProviderPluginsForHooks({
+      ...params,
+      onlyPluginIds: [contract.pluginId],
+    })) {
+      if (!plugin.resolveUsageAuth || !plugin.fetchUsageSnapshot) {
+        continue;
+      }
+      const provider = normalizeProviderId(plugin.id);
+      if (!provider || !declaredProviderIds.has(provider) || descriptors.has(provider)) {
+        continue;
+      }
+      descriptors.set(provider, {
+        provider,
+        displayName: normalizeOptionalString(plugin.label) ?? provider,
+      });
+    }
+  }
+  return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
 export function matchesProviderContextOverflowWithPlugin(params: {
@@ -1005,6 +1120,7 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
   context: ProviderAugmentModelCatalogContext;
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
@@ -1017,3 +1133,4 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   }
   return supplemental;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

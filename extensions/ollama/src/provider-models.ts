@@ -1,5 +1,6 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -10,6 +11,7 @@ import {
   OLLAMA_DEFAULT_MAX_TOKENS,
   OLLAMA_GLM52_CLOUD_MODEL_ID,
   OLLAMA_GLM52_CONTEXT_WINDOW,
+  OLLAMA_LOCAL_CONTEXT_TOKENS,
 } from "./defaults.js";
 
 export type OllamaTagModel = {
@@ -21,6 +23,7 @@ export type OllamaTagModel = {
   details?: {
     family?: string;
     parameter_size?: string;
+    quantization_level?: string;
   };
 };
 
@@ -101,7 +104,7 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
-export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
   if (typeof parameters !== "string" || !parameters.trim()) {
     return undefined;
   }
@@ -112,7 +115,11 @@ export function parseOllamaNumCtxParameter(parameters: unknown): number | undefi
     if (!match) {
       continue;
     }
-    const parsed = Number.parseInt(match[1], 10);
+    const rawValue = match[1];
+    if (!rawValue) {
+      continue;
+    }
+    const parsed = Number.parseInt(rawValue, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       lastValue = parsed;
     }
@@ -146,11 +153,11 @@ export async function queryOllamaModelShowInfo(
       if (!response.ok) {
         return {};
       }
-      const data = (await response.json()) as {
+      const data = await readProviderJsonResponse<{
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
         parameters?: unknown;
-      };
+      }>(response, "ollama-provider-models.show");
 
       let contextWindow: number | undefined;
       if (data.model_info) {
@@ -295,6 +302,25 @@ export function buildOllamaModelDefinition(
   };
 }
 
+export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
+  if (typeof model.contextWindow !== "number") {
+    return model;
+  }
+  return {
+    ...model,
+    // Local Ollama allocates KV cache from num_ctx. Keep native metadata, but cap
+    // setup-assistant and typical agent turns at 32k; config overlays remain authoritative.
+    contextTokens: Math.min(OLLAMA_LOCAL_CONTEXT_TOKENS, model.contextWindow),
+  };
+}
+
+export function capLocalOllamaProviderContext(provider: ModelProviderConfig): ModelProviderConfig {
+  return {
+    ...provider,
+    models: provider.models?.map(capLocalOllamaModelContext),
+  };
+}
+
 export async function fetchOllamaModels(
   baseUrl: string,
   opts?: { apiKey?: string },
@@ -314,7 +340,10 @@ export async function fetchOllamaModels(
       if (!response.ok) {
         return { reachable: true, models: [] };
       }
-      const data = (await response.json()) as OllamaTagsResponse;
+      const data = await readProviderJsonResponse<OllamaTagsResponse>(
+        response,
+        "ollama-provider-models.tags",
+      );
       const models = (data.models ?? []).filter((m) => m.name);
       return { reachable: true, models };
     } finally {
@@ -347,8 +376,4 @@ export async function buildOllamaProvider(
       buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
     ),
   };
-}
-
-export function resetOllamaModelShowInfoCacheForTest(): void {
-  ollamaModelShowInfoCache.clear();
 }

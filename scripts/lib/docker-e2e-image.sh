@@ -44,6 +44,17 @@ docker_e2e_read_nonnegative_decimal_env() {
     echo "invalid $name: $value" >&2
     return 2
   fi
+  local integer_part="${value%%.*}"
+  local fractional_part=""
+  if [[ "$value" == *.* ]]; then
+    fractional_part="${value#*.}"
+  fi
+  # These suite knobs are human-authored resource/time ceilings. Reject
+  # pathological decimal strings before Docker setup instead of failing later.
+  if [ "${#integer_part}" -gt 9 ] || [ "${#fractional_part}" -gt 6 ]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
   printf '%s\n' "$value"
 }
 
@@ -82,6 +93,10 @@ docker_e2e_build_or_reuse() {
   if [ "${OPENCLAW_SKIP_DOCKER_BUILD:-0}" = "1" ] || [ "$skip_build" = "1" ]; then
     echo "Reusing Docker image: $image_name"
     if ! docker_e2e_docker_cmd image inspect "$image_name" >/dev/null 2>&1; then
+      if [ "${OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE:-0}" = "1" ]; then
+        echo "Required local Docker E2E image not found: $image_name" >&2
+        return 1
+      fi
       echo "Docker image not found locally; pulling: $image_name"
       if docker_e2e_docker_cmd pull "$image_name"; then
         return 0

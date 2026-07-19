@@ -22,13 +22,21 @@ vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
-const {
-  buildThreadingToolContext,
-  buildEmbeddedRunBaseParams,
-  buildEmbeddedRunExecutionParams,
-  resolveModelFallbackOptions,
-  resolveProviderScopedAuthProfile,
-} = await import("./agent-runner-utils.js");
+const { buildThreadingToolContext, buildEmbeddedRunExecutionParams, resolveModelFallbackOptions } =
+  await import("./agent-runner-utils.js");
+const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
+const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
+  await import("./agent-runner-run-params.js");
+const { setChannelSourceTurnId } = await import("./source-turn-id.js");
+
+function buildEmbeddedRunBaseParams(
+  params: Omit<Parameters<typeof buildEmbeddedRunBaseParamsCore>[0], "isReasoningTagProvider">,
+) {
+  return buildEmbeddedRunBaseParamsCore({
+    ...params,
+    isReasoningTagProvider: hoisted.isReasoningTagProviderMock,
+  });
+}
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
   return {
@@ -107,6 +115,15 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
+  it("disables model fallback options for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual([]);
+  });
+
   it("passes through missing agentId for helper-based fallback resolution", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
@@ -128,6 +145,7 @@ describe("agent-runner-utils", () => {
     const run = makeRun({
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
+      taskSuggestionDeliveryMode: "gateway",
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -165,6 +183,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.timeoutMs).toBe(run.timeoutMs);
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
+    expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {
@@ -230,6 +249,26 @@ describe("agent-runner-utils", () => {
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
   });
 
+  it("disables embedded model fallbacks for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "openai",
+      primaryProvider: "openai",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.modelFallbacksOverride).toEqual([]);
+    expect(resolved.modelSelectionLocked).toBe(true);
+  });
+
   it("does not force final-tag enforcement for minimax providers", () => {
     const run = makeRun({ enforceFinalTag: false });
     const authProfile = resolveProviderScopedAuthProfile({
@@ -266,7 +305,12 @@ describe("agent-runner-utils", () => {
         Provider: "OpenAI",
         To: "channel-1",
         ChatType: "Channel",
+        NativeChannelId: "native-chat-1",
         SenderId: "sender-1",
+        ChannelContext: {
+          sender: { id: "sender-1", providerUserId: "provider-user-1" },
+          chat: { id: "native-chat-1", topicId: "topic-1" },
+        },
         MemberRoleIds: ["admin", " ", "operator"],
       },
       hasRepliedRef: undefined,
@@ -283,10 +327,15 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
     expect(resolved.embeddedContext.chatType).toBe("channel");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
+    expect(resolved.embeddedContext.chatId).toBe("native-chat-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",
+      channelContext: {
+        sender: { id: "sender-1", providerUserId: "provider-user-1" },
+        chat: { id: "native-chat-1", topicId: "topic-1" },
+      },
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,
@@ -417,20 +466,23 @@ describe("agent-runner-utils", () => {
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
+    const sessionCtx = {
+      Provider: "discord",
+      To: "slash:1177378744822943744",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:123456789012345678",
+      MessageSid: "msg-9",
+    };
+    setChannelSourceTurnId(sessionCtx, "channel-user:v1:source-9");
     const context = buildThreadingToolContext({
-      sessionCtx: {
-        Provider: "discord",
-        To: "slash:1177378744822943744",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:123456789012345678",
-        MessageSid: "msg-9",
-      },
+      sessionCtx,
       config: {},
       hasRepliedRef: undefined,
     });
 
     expect(context.currentChannelId).toBe("channel:123456789012345678");
     expect(context.currentMessageId).toBe("msg-9");
+    expect(context.currentSourceTurnId).toBe("channel-user:v1:source-9");
   });
 
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {

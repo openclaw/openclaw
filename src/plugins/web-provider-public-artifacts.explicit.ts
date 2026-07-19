@@ -1,7 +1,7 @@
 // Extracts explicit public artifacts from web provider plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -19,6 +19,7 @@ const WEB_FETCH_ARTIFACT_CANDIDATES = [
   "web-fetch-provider.js",
   "web-fetch.js",
 ] as const;
+const WEB_FETCH_RUNTIME_ARTIFACT_CANDIDATES = ["web-fetch-provider.js", "web-fetch.js"] as const;
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
@@ -91,29 +92,6 @@ function unableToInitializeProviderError(params: {
   });
 }
 
-function tryLoadBundledPublicArtifactModule(params: {
-  dirName: string;
-  artifactCandidates: readonly string[];
-}): Record<string, unknown> | null {
-  for (const artifactBasename of params.artifactCandidates) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: params.dirName,
-        artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return null;
-}
-
 function normalizeExplicitBundledPluginIds(pluginIds: readonly string[]): string[] {
   return sortUniqueStrings(pluginIds);
 }
@@ -125,7 +103,7 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   suffix: string;
   isProvider: (value: unknown) => value is TProvider;
 }): Array<TProvider & { pluginId: string }> | null {
-  const mod = tryLoadBundledPublicArtifactModule({
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
     dirName: params.dirName,
     artifactCandidates: params.artifactCandidates,
   });
@@ -175,6 +153,19 @@ export function loadBundledWebFetchProviderEntriesFromDir(params: {
   });
 }
 
+function loadBundledRuntimeWebFetchProviderEntriesFromDir(params: {
+  dirName: string;
+  pluginId: string;
+}): PluginWebFetchProviderEntry[] | null {
+  return loadBundledProviderEntriesFromDir<WebFetchProviderPlugin>({
+    dirName: params.dirName,
+    pluginId: params.pluginId,
+    artifactCandidates: WEB_FETCH_RUNTIME_ARTIFACT_CANDIDATES,
+    suffix: "WebFetchProvider",
+    isProvider: isWebFetchProviderPlugin,
+  });
+}
+
 export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(params: {
   onlyPluginIds: readonly string[];
 }): PluginWebSearchProviderEntry[] | null {
@@ -198,6 +189,23 @@ export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(param
   const providers: PluginWebFetchProviderEntry[] = [];
   for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
     const loadedProviders = loadBundledWebFetchProviderEntriesFromDir({
+      dirName: pluginId,
+      pluginId,
+    });
+    if (!loadedProviders) {
+      return null;
+    }
+    providers.push(...loadedProviders);
+  }
+  return providers;
+}
+
+export function resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts(params: {
+  onlyPluginIds: readonly string[];
+}): PluginWebFetchProviderEntry[] | null {
+  const providers: PluginWebFetchProviderEntry[] = [];
+  for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
+    const loadedProviders = loadBundledRuntimeWebFetchProviderEntriesFromDir({
       dirName: pluginId,
       pluginId,
     });

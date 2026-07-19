@@ -168,6 +168,72 @@ async function writeInboundMedia(
 }
 
 describe("stageSandboxMedia", () => {
+  it("stages managed inbound media URIs into the sandbox workspace", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const fileName = "report.pdf";
+      const mediaPath = await writeInboundMedia(home, fileName, "pdf-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+      ctx.MediaType = "application/pdf";
+      sessionCtx.MediaType = "application/pdf";
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = `media/inbound/${fileName}`;
+      expect(result.staged.get(mediaUri)).toBe(stagedPath);
+      expect(result.staged.get(await fs.realpath(mediaPath))).toBe(stagedPath);
+      expect(ctx.MediaPath).toBe(stagedPath);
+      expect(sessionCtx.MediaPath).toBe(stagedPath);
+      expect(ctx.MediaUrl).toBe(stagedPath);
+      expect(sessionCtx.MediaUrl).toBe(stagedPath);
+      await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
+    });
+  });
+
+  it("keeps host-staged inbound images available to native vision", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const cfg = createSandboxMediaStageConfig(home);
+      const workspaceDir = join(home, "openclaw");
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const fileName = "host-photo.png";
+      await writeInboundMedia(home, fileName, "host-image-bytes");
+      const existingProjectFile = join(workspaceDir, "media", "inbound", fileName);
+      await fs.mkdir(dirname(existingProjectFile), { recursive: true });
+      await fs.writeFile(existingProjectFile, "project-file");
+      const mediaUri = `media://inbound/${fileName}`;
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+      ctx.MediaType = "image/png";
+      sessionCtx.MediaType = "image/png";
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = ctx.MediaPath ?? "";
+      const stagedRelativePath = path.relative(workspaceDir, stagedPath);
+      expect(stagedRelativePath).toMatch(
+        new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/${fileName}$`),
+      );
+      expect(result.staged.get(mediaUri)).toBe(stagedPath);
+      expect(sessionCtx.MediaPath).toBe(stagedPath);
+      expect(ctx.MediaWorkspaceDir).toBe(dirname(stagedPath));
+      expect(sessionCtx.MediaWorkspaceDir).toBeUndefined();
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
+      await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
+    });
+  });
+
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);

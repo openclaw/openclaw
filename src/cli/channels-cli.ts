@@ -51,6 +51,16 @@ function getOptionNames(command: Command): string[] {
   return command.options.map((option) => option.attributeName());
 }
 
+function resolveChannelsAddOptions(
+  channelArg: string | undefined,
+  opts: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...opts,
+    channel: opts.channel ?? channelArg,
+  };
+}
+
 function shouldRegisterChannelSetupOptions(
   argv: string[] = process.argv,
   options: RegisterChannelsCliOptions = {},
@@ -195,9 +205,46 @@ export async function registerChannelsCli(
       });
     });
 
+  const deadLetters = channels
+    .command("dead-letters")
+    .description("Inspect and resubmit failed inbound channel events");
+
+  deadLetters
+    .command("list")
+    .description("List failed inbound events for one channel account")
+    .requiredOption("--channel <name>", "Channel id")
+    .option("--account <id>", "Account id", "default")
+    .option("--limit <n>", "Maximum entries", "100")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runChannelsCommand(async () => {
+        const { channelsDeadLettersListCommand } =
+          await import("../commands/channels/dead-letters.js");
+        await channelsDeadLettersListCommand(opts, defaultRuntime);
+      });
+    });
+
+  deadLetters
+    .command("resubmit")
+    .description("Re-enqueue one failed inbound event")
+    .argument("<event-id>", "Ingress event id")
+    .requiredOption("--channel <name>", "Channel id")
+    .option("--account <id>", "Account id", "default")
+    .option("--json", "Output JSON", false)
+    .action(async (eventId, opts) => {
+      await runChannelsCommand(async () => {
+        const { channelsDeadLettersResubmitCommand } =
+          await import("../commands/channels/dead-letters.js");
+        await channelsDeadLettersResubmitCommand(eventId, opts, defaultRuntime);
+      });
+    });
+
+  applyParentDefaultHelpAction(deadLetters);
+
   const addCommand = channels
     .command("add")
     .description("Add or update a channel account")
+    .argument("[channel]", "Channel id")
     .addHelpText(
       "after",
       () =>
@@ -223,6 +270,7 @@ export async function registerChannelsCli(
     .option("--cli-path <path>", "Channel CLI path")
     .option("--url <url>", "Channel setup URL")
     .option("--base-url <url>", "Channel base URL")
+    .option("--workspace <workspace>", "Channel workspace id, slug, or name")
     .option("--http-url <url>", "Channel HTTP service URL")
     .option("--auth-dir <path>", "Channel auth directory override")
     .option("--use-env", "Use env-backed credentials when supported", false);
@@ -231,11 +279,13 @@ export async function registerChannelsCli(
     await addChannelSetupOptions(addCommand);
   }
 
-  addCommand.action(async (opts, command) => {
+  addCommand.action(async (channelArg: string | undefined, opts, command) => {
     await runChannelsCommand(async () => {
       const { channelsAddCommand } = await loadChannelsCommands();
       const hasFlags = hasExplicitOptions(command, getOptionNames(command));
-      await channelsAddCommand(opts, defaultRuntime, { hasFlags });
+      await channelsAddCommand(resolveChannelsAddOptions(channelArg, opts), defaultRuntime, {
+        hasFlags,
+      });
     });
   });
 

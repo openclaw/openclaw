@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Perplexity provider module implements model/runtime integration.
 import {
   readPositiveIntegerParam,
@@ -142,11 +143,7 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
 }
 
 async function readPerplexityJsonResponse<T>(response: Response, label: string): Promise<T> {
-  try {
-    return (await response.json()) as T;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+  return await readProviderJsonResponse<T>(response, label);
 }
 
 function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
@@ -230,10 +227,10 @@ async function runPerplexitySearchApi(params: {
     body.search_language_filter = params.searchLanguageFilter;
   }
   if (params.searchAfterDate) {
-    body.search_after_date = params.searchAfterDate;
+    body.search_after_date_filter = params.searchAfterDate;
   }
   if (params.searchBeforeDate) {
-    body.search_before_date = params.searchBeforeDate;
+    body.search_before_date_filter = params.searchBeforeDate;
   }
   if (params.maxTokens !== undefined) {
     body.max_tokens = params.maxTokens;

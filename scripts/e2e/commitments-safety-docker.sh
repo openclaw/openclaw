@@ -23,6 +23,7 @@ set +e
 docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e OPENCLAW_COMMITMENTS_SAFETY_E2E=1 \
   "$IMAGE_NAME" \
   bash -lc 'set -euo pipefail; tsx scripts/e2e/commitments-safety-docker-client.ts' \
   >"$RUN_LOG" 2>&1
@@ -31,7 +32,7 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker commitments safety smoke failed"
-  cat "$RUN_LOG"
+  docker_e2e_print_log "$RUN_LOG"
   exit "$status"
 fi
 

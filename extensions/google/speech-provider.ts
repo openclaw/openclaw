@@ -3,6 +3,7 @@ import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
+  readProviderJsonResponse,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -503,7 +504,11 @@ async function synthesizeGoogleTtsPcmOnce(params: {
       }
     }
     try {
-      return extractGoogleSpeechPcm((await res.json()) as GoogleGenerateSpeechResponse);
+      const payload = await readProviderJsonResponse<GoogleGenerateSpeechResponse>(
+        res,
+        "Google TTS response",
+      );
+      return extractGoogleSpeechPcm(payload);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new GoogleTtsRetryableError(message);
@@ -658,15 +663,3 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     },
   };
 }
-
-export const testing = {
-  DEFAULT_GOOGLE_TTS_MODEL,
-  DEFAULT_GOOGLE_TTS_VOICE,
-  GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE,
-  GOOGLE_TTS_MODELS,
-  GOOGLE_TTS_SAMPLE_RATE,
-  normalizeGoogleTtsModel,
-  renderGoogleAudioProfilePrompt,
-  wrapPcm16MonoToWav,
-};
-export { testing as __testing };

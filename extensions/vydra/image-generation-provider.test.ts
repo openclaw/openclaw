@@ -1,5 +1,5 @@
 // Vydra tests cover image generation provider plugin behavior.
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVydraImageGenerationProvider } from "./image-generation-provider.js";
 import {
@@ -15,6 +15,13 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, Req
     throw new Error(`Expected fetch call ${index}`);
   }
   return call as [string, RequestInit];
+}
+
+function oversizedJsonResponse(): Response {
+  return new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 describe("vydra image-generation provider", () => {
@@ -94,6 +101,21 @@ describe("vydra image-generation provider", () => {
     ).rejects.toThrow("Vydra image download exceeds 1 bytes");
   });
 
+  it("rejects image creation JSON responses that exceed the provider cap", async () => {
+    stubVydraApiKey();
+    stubFetch(oversizedJsonResponse());
+
+    const provider = buildVydraImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "vydra",
+        model: "grok-imagine",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("vydra.image-generation: JSON response exceeds 16777216 bytes");
+  });
+
   it("passes request SSRF policy to the image creation request", async () => {
     stubVydraApiKey();
     const fetchMock = stubFetch(
@@ -150,5 +172,20 @@ describe("vydra image-generation provider", () => {
     const pollCall = fetchCall(fetchMock, 1);
     expect(pollCall[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-456");
     expect(pollCall[1].method).toBe("GET");
+  });
+
+  it("rejects job poll JSON responses that exceed the provider cap", async () => {
+    stubVydraApiKey();
+    stubFetch(jsonResponse({ jobId: "job-456", status: "queued" }), oversizedJsonResponse());
+
+    const provider = buildVydraImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "vydra",
+        model: "grok-imagine",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Vydra job status request failed: JSON response exceeds 16777216 bytes");
   });
 });

@@ -76,9 +76,9 @@
           }
         },
         "install": {
-          "npmSpec": "openclaw-plugin-yuanbao@2.13.1",
+          "npmSpec": "openclaw-plugin-yuanbao@2.15.0",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-lH2I9/nsmrg7l0YJJSQhOSpWMEFBAa6FwKbZcRLDFHDT2+mOZkHa44XE+8KYN4VmorlUdAxHzpZQmVr7C98IuA=="
+          "expectedIntegrity": "sha512-3GD+mf3EjTSUTOAREjTHAyp/deXdpgqB+q+xE0b19Qtat4ADhUV1mHDwFkVCRqTCBY5ATFKtKcipoDejqFj/+w=="
         }
       }
     },
@@ -114,10 +114,10 @@
           }
         },
         "install": {
-          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.3",
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.6",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-dPQbidUNWigC6V10vGW4i+GLH09x+6zUhafZRjuxkJ9GDu8o62WBsnUTojp4KqUH756hz+t2v9khiCRSi0dBDw==",
-          "minHostVersion": ">=2026.3.22"
+          "expectedIntegrity": "sha512-qw9k3PLTiMWGNjjsknHgcTManH1w4j+Ji1ArWIaYLKCq3aFRsVwcqnPi127bvOoVMJGW4dbyJ8NECEMgoO+iRw==",
+          "minHostVersion": ">=2026.5.12"
         }
       }
     },

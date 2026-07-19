@@ -8,8 +8,10 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  normalizeSessionIconInput,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -22,7 +24,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -44,14 +46,27 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
+  isAgentHarnessSessionKeyOwnedBy,
+  resolveMissingAgentHarnessSessionError,
+} from "../sessions/agent-harness-session-key.js";
+import {
   applyTraceOverride,
   applyVerboseOverride,
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
+import {
+  isAgentSessionModelPatchOrigin,
+  shouldPreserveSessionAuthProfileOverride,
+  snapshotAgentModelFallback,
+} from "./session-model-patch-origin.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -71,43 +86,6 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
     return normalized;
   }
   return undefined;
-}
-
-function shouldPreserveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  currentProvider: string;
-  provider: string;
-}): boolean {
-  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
-  if (!profileOverride) {
-    return false;
-  }
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
-    const candidate = normalizeOptionalLowercaseString(rawProvider);
-    if (!candidate) {
-      return false;
-    }
-    return (
-      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
-      resolveProviderIdForAuth(provider, { config: params.cfg })
-    );
-  };
-  const delimiterIndex = profileOverride.indexOf(":");
-  if (delimiterIndex < 0) {
-    return resolvesToTargetProvider(params.currentProvider);
-  }
-  const profileProvider = normalizeOptionalLowercaseString(
-    profileOverride.slice(0, delimiterIndex),
-  );
-  if (!profileProvider) {
-    return false;
-  }
-  return resolvesToTargetProvider(profileProvider);
 }
 
 function supportsSpawnLineage(storeKey: string): boolean {
@@ -144,8 +122,22 @@ export async function projectSessionsPatchEntry(params: {
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  /** Exact harness owner authorized to project its new reserved session row. */
+  authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch } = params;
+  const authorizedHarnessCreation =
+    params.existingEntry === undefined &&
+    isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
+  const harnessSessionError = authorizedHarnessCreation
+    ? undefined
+    : resolveMissingAgentHarnessSessionError(storeKey, params.existingEntry);
+  if (harnessSessionError) {
+    return invalid(harnessSessionError);
+  }
+  if ("model" in patch && isModelSelectionLocked(params.existingEntry)) {
+    return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
+  }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
@@ -155,8 +147,28 @@ export async function projectSessionsPatchEntry(params: {
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
+  const resolveThinkingRuntime = (
+    provider: string,
+    model: string,
+    entry?: SessionEntry,
+  ): string => {
+    // ACP metadata can own canonical agent keys (for example agent:main:main),
+    // so key shape alone cannot identify the runtime that validates thinking.
+    const acpMeta = readAcpSessionMetaForEntry({ sessionKey: storeKey, entry });
+    return (
+      acpMeta?.backend ??
+      resolveEffectiveAgentRuntime({
+        cfg,
+        provider,
+        modelId: model,
+        agentId: sessionAgentId,
+        sessionKey: storeKey,
+        sessionEntry: entry,
+      })
+    );
+  };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadModelCatalogForPatch = async () => {
+  const loadPreparedModelCatalogForPatch = async () => {
     if (loadedModelCatalog) {
       return loadedModelCatalog;
     }
@@ -183,6 +195,7 @@ export async function projectSessionsPatchEntry(params: {
       };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.category;
     delete next.displayName;
   }
 
@@ -369,6 +382,66 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("category" in patch) {
+    const raw = patch.category;
+    if (raw === null) {
+      delete next.category;
+    } else if (raw !== undefined) {
+      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid category: empty");
+      }
+      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
+        return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
+      }
+      next.category = trimmed;
+    }
+  }
+
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null) {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const normalized = normalizeSessionIconInput(raw);
+      if (!normalized.ok) {
+        return invalid(`invalid icon: ${normalized.reason}`);
+      }
+      next.icon = normalized.value;
+    }
+  }
+
+  if ("archived" in patch) {
+    if (patch.archived === true) {
+      // Archived sessions leave the active quick-access set in the same write.
+      next.archivedAt ??= now;
+      delete next.pinnedAt;
+    } else {
+      delete next.archivedAt;
+    }
+  }
+
+  if ("pinned" in patch) {
+    if (patch.pinned === true) {
+      if (next.archivedAt !== undefined) {
+        return invalid("cannot pin an archived session; restore it first");
+      }
+      next.pinnedAt ??= now;
+    } else {
+      delete next.pinnedAt;
+    }
+  }
+
+  if ("unread" in patch) {
+    if (patch.unread === true) {
+      next.markedUnreadAt = now;
+    } else {
+      next.lastReadAt = now;
+      delete next.markedUnreadAt;
+    }
+  }
+
   if ("thinkingLevel" in patch) {
     const raw = patch.thinkingLevel;
     if (raw === null) {
@@ -380,9 +453,10 @@ export async function projectSessionsPatchEntry(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadModelCatalogForPatch();
+        const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+        const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog)})`,
+          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
         );
       }
       next.thinkingLevel = normalized;
@@ -444,11 +518,7 @@ export async function projectSessionsPatchEntry(params: {
       if (!normalized) {
         return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       }
-      if (normalized === "off") {
-        delete next.responseUsage;
-      } else {
-        next.responseUsage = normalized;
-      }
+      next.responseUsage = normalized;
     }
   }
 
@@ -509,16 +579,26 @@ export async function projectSessionsPatchEntry(params: {
     const raw = patch.execNode;
     if (raw === null) {
       delete next.execNode;
+      delete next.execCwd;
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid execNode: empty");
       }
+      if (trimmed !== next.execNode) {
+        // A cwd belongs to one node's filesystem; never carry it across node bindings.
+        delete next.execCwd;
+      }
       next.execNode = trimmed;
     }
   }
-
   if ("model" in patch) {
+    const agentModelFallback = isAgentSessionModelPatchOrigin()
+      ? next.modelFallback?.source === "agent-patch"
+        ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
+        : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
+      : undefined;
+    delete next.modelFallback;
     const raw = patch.model;
     if (raw === null) {
       applyModelOverrideToSessionEntry({
@@ -547,7 +627,7 @@ export async function projectSessionsPatchEntry(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await loadModelCatalogForPatch();
+      const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
@@ -586,35 +666,56 @@ export async function projectSessionsPatchEntry(params: {
         markLiveSwitchPending: true,
       });
     }
+    if (agentModelFallback) {
+      next.modelFallback = agentModelFallback;
+    }
   }
 
-  if (next.thinkingLevel) {
+  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadModelCatalogForPatch();
+    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
-    } else if (
-      !isThinkingLevelSupported({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      })
-    ) {
-      if ("thinkingLevel" in patch) {
-        return invalid(
-          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog)})`,
-        );
+    } else {
+      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      if (
+        !isThinkingLevelSupported({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          level: thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        })
+      ) {
+        if ("thinkingLevel" in patch) {
+          return invalid(
+            `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog, thinkingRuntime)})`,
+          );
+        }
+        next.thinkingLevel = resolveSupportedThinkingLevel({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          level: thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        });
       }
-      next.thinkingLevel = resolveSupportedThinkingLevel({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      });
     }
+  }
+
+  // A thinkingLevel change made on its own (no model switch) never touches the
+  // agent-patch revert marker, so realign its restore target with the user's
+  // newer choice; otherwise a later model-failure revert clobbers it.
+  if (
+    "thinkingLevel" in patch &&
+    !("model" in patch) &&
+    next.modelFallback?.source === "agent-patch"
+  ) {
+    next.modelFallback = next.thinkingLevel
+      ? { ...next.modelFallback, prevThinkingLevel: next.thinkingLevel }
+      : { ...next.modelFallback, prevThinkingLevel: undefined };
   }
 
   if ("sendPolicy" in patch) {
@@ -654,6 +755,8 @@ export async function applySessionsPatchToStore(params: {
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  /** Exact harness owner authorized to project its new reserved session row. */
+  authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const projected = await projectSessionsPatchEntry({
     cfg: params.cfg,
@@ -663,9 +766,11 @@ export async function applySessionsPatchToStore(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    authorizedAgentHarnessId: params.authorizedAgentHarnessId,
   });
   if (projected.ok) {
     params.store[params.storeKey] = projected.entry;
   }
   return projected;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

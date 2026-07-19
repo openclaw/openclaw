@@ -15,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
 }));
 
 vi.mock("./token.js", () => ({
-  DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
+  DEFAULT_COPILOT_API_BASE_URL: "https://example.test",
   resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
@@ -33,7 +33,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
-const TEST_BASE_URL = "https://api.githubcopilot.test";
+const TEST_BASE_URL = "https://example.test";
 
 function shouldContinueAutoSelection(error: Error): boolean {
   const shouldContinue = githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection;
@@ -75,13 +75,16 @@ function mockDiscoveryResponse(spec: {
   json?: unknown;
   text?: string;
 }) {
+  const status = spec.status ?? (spec.ok ? 200 : 500);
+  const response =
+    spec.json !== undefined
+      ? new Response(JSON.stringify(spec.json), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        })
+      : new Response(spec.text ?? "", { status });
   fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-    response: {
-      ok: spec.ok,
-      status: spec.status ?? (spec.ok ? 200 : 500),
-      json: async () => spec.json,
-      text: async () => spec.text ?? "",
-    },
+    response,
     release: vi.fn(async () => {}),
   }));
 }
@@ -125,11 +128,11 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   beforeEach(() => {
     resolveConfiguredSecretInputStringMock.mockResolvedValue({});
     resolveFirstGithubTokenMock.mockResolvedValue({
-      githubToken: "gh_test_token_123",
+      githubToken: "test-token-placeholder",
       hasProfile: false,
     });
     resolveCopilotApiTokenMock.mockResolvedValue({
-      token: "copilot_test_token_abc",
+      token: "test-token-placeholder",
       expiresAt: Date.now() + 3_600_000,
       source: "test",
       baseUrl: TEST_BASE_URL,
@@ -165,7 +168,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
-    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_test_token_123");
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("test-token-placeholder");
   });
 
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
@@ -228,20 +231,16 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   it("wraps invalid discovery JSON as a setup error", async () => {
     fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-      response: {
-        ok: true,
+      response: new Response("not-valid-json{{{", {
         status: 200,
-        json: async () => {
-          throw new SyntaxError("bad json");
-        },
-        text: async () => "",
-      },
+        headers: { "Content-Type": "application/json" },
+      }),
       release: vi.fn(async () => {}),
     }));
 
     await expect(
       githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow("GitHub Copilot model discovery returned invalid JSON");
+    ).rejects.toThrow("github-copilot.model-discovery: malformed JSON response");
   });
 
   it("bounds model discovery error bodies", async () => {
@@ -302,7 +301,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("honors remote overrides when creating the provider", async () => {
-    resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "gh_remote_token" });
     mockDiscoveryResponse({
       ok: true,
       json: buildModelsResponse([
@@ -313,20 +311,38 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     await githubCopilotMemoryEmbeddingProviderAdapter.create({
       ...defaultCreateOptions(),
       remote: {
-        apiKey: "ignored-at-runtime",
+        apiKey: "test-token-placeholder",
         baseUrl: "https://proxy.example/v1",
-        headers: { "X-Proxy-Token": "proxy" },
+        headers: { "X-Proxy-Token": "test-token-placeholder" },
       },
     } as never);
 
-    expect(resolveFirstGithubTokenMock).toHaveBeenCalled();
+    expect(resolveFirstGithubTokenMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
     expect(firstCopilotApiTokenRequest().env).toBe(process.env);
-    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_remote_token");
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("test-token-placeholder");
 
     const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
     expect(discoveryCall.init.headers["Accept-Encoding"]).toBe("identity");
-    expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("proxy");
+    expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("test-token-placeholder");
+  });
+
+  it("rejects an unresolved remote ref without falling back to another profile", async () => {
+    await expect(
+      githubCopilotMemoryEmbeddingProviderAdapter.create({
+        ...defaultCreateOptions(),
+        remote: {
+          apiKey: { source: "env", provider: "default", id: "MISSING_TEST_VALUE" },
+        },
+      } as never),
+    ).rejects.toMatchObject({
+      name: "UnresolvedSecretInputError",
+      path: "agents.*.memorySearch.remote.apiKey",
+    });
+    expect(resolveFirstGithubTokenMock).not.toHaveBeenCalled();
+    expect(resolveCopilotApiTokenMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
   });
 
   it("includes provider, baseUrl, and model in runtime cache data", async () => {
@@ -360,7 +376,12 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     ).toBe(true);
     expect(
       shouldContinueAutoSelection(
-        new Error("GitHub Copilot model discovery returned invalid JSON"),
+        new Error("github-copilot.model-discovery: malformed JSON response"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldContinueAutoSelection(
+        new Error("Copilot token exchange failed: timed out after 30000ms"),
       ),
     ).toBe(true);
     expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);

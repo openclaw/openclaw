@@ -11,6 +11,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
@@ -32,11 +33,21 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   messages: unknown[];
   ctx: AgentHarnessHookContext;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  bootstrapContextRunKind?: BootstrapContextRunKind;
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
   const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
+  // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
+  // (e.g. the Codex app-server) build the prompt through this helper rather than
+  // the embedded runner's resolvePromptBuildHookResult, so the hook must run from
+  // here too — otherwise it never fires on those runtimes.
+  const isHeartbeatTurn =
+    params.ctx.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only";
+  const hasHeartbeatContribution =
+    isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   if (
     !hasPrecomputedBeforeAgentStartResult &&
+    !hasHeartbeatContribution &&
     !hookRunner?.hasHooks("before_prompt_build") &&
     !hookRunner?.hasHooks("before_agent_start")
   ) {
@@ -51,6 +62,25 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     prompt: params.prompt,
     messages: params.messages,
   };
+
+  // Match the embedded runner's lifecycle order: heartbeat contributions are
+  // collected before prompt-build hooks so hook side effects stay deterministic.
+  const heartbeatResult =
+    hasHeartbeatContribution && hookRunner
+      ? await hookRunner
+          .runHeartbeatPromptContribution(
+            {
+              sessionKey: params.ctx.sessionKey,
+              agentId: params.ctx.agentId,
+              heartbeatName: "heartbeat",
+            },
+            hookCtx,
+          )
+          .catch((error: unknown) => {
+            log.warn(`heartbeat_prompt_contribution hook failed: ${String(error)}`);
+            return undefined;
+          })
+      : undefined;
 
   // Support the newer before_prompt_build hook plus the deprecated
   // before_agent_start hook during the prompt-build migration window.
@@ -79,10 +109,12 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     beforeAgentStartResult,
   });
   const promptPrefix = joinPresentTextSegments([
+    heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
     beforeAgentStartResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
+    heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
     beforeAgentStartResult?.appendContext,
   ]);

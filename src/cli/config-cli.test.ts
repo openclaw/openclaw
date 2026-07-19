@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { applyCliProfileEnv } from "./profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
@@ -19,7 +20,11 @@ const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
   (
     cfg: OpenClawConfig,
-    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+    options?: {
+      auditOrigin?: "cli";
+      unsetPaths?: string[][];
+      explicitSetPaths?: string[][];
+    },
   ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
@@ -28,21 +33,25 @@ const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
 );
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-    writeConfigFile: (
-      cfg: OpenClawConfig,
-      options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
-    ) => mockWriteConfigFile(cfg, options),
-    replaceConfigFile: (params: {
-      nextConfig: OpenClawConfig;
-      writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
-    }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+  writeConfigFile: (
+    cfg: OpenClawConfig,
+    options?: {
+      auditOrigin?: "cli";
+      unsetPaths?: string[][];
+      explicitSetPaths?: string[][];
+    },
+  ) => mockWriteConfigFile(cfg, options),
+  replaceConfigFile: (params: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: {
+      auditOrigin?: "cli";
+      unsetPaths?: string[][];
+      explicitSetPaths?: string[][];
+    };
+  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
+}));
 
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
@@ -52,15 +61,48 @@ vi.mock("../config/runtime-schema.js", () => ({
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  return {
-    ...actual,
-    loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
-    resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
-      mockLoadPluginMetadataSnapshot(params.config),
-  };
-});
+vi.mock("../gateway/config-reload-plan.js", () => ({
+  buildGatewayReloadPlan: (changedPaths: string[]) => {
+    const restartReasons = changedPaths.filter(
+      (changedPath) =>
+        changedPath.startsWith("models.pricing.") || changedPath.startsWith("plugins.load."),
+    );
+    const hotReasons = changedPaths.filter(
+      (changedPath) =>
+        !restartReasons.includes(changedPath) &&
+        (changedPath.startsWith("agents.list.") ||
+          changedPath.startsWith("agents.defaults.models.") ||
+          changedPath.startsWith("models.") ||
+          changedPath.startsWith("plugins.")),
+    );
+    restartReasons.push(
+      ...changedPaths.filter(
+        (changedPath) => !hotReasons.includes(changedPath) && !restartReasons.includes(changedPath),
+      ),
+    );
+    return {
+      changedPaths,
+      restartGateway: restartReasons.length > 0,
+      restartReasons,
+      hotReasons,
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartCron: false,
+      restartHeartbeat: hotReasons.length > 0,
+      restartHealthMonitor: false,
+      reloadPlugins: false,
+      restartChannels: new Set(),
+      disposeMcpRuntimes: false,
+      noopPaths: [],
+    };
+  },
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+  resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
+    mockLoadPluginMetadataSnapshot(params.config),
+}));
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
@@ -281,14 +323,18 @@ function makeInvalidSnapshot(params: {
   issues: ConfigFileSnapshot["issues"];
   warnings?: ConfigFileSnapshot["warnings"];
   path?: string;
+  raw?: string;
+  parsed?: unknown;
+  sourceConfig?: OpenClawConfig;
 }): ConfigFileSnapshot {
+  const parsed = params.parsed ?? {};
   return {
     path: params.path ?? "/tmp/custom-openclaw.json",
     exists: true,
-    raw: "{}",
-    parsed: {},
-    sourceConfig: {},
-    resolved: {},
+    raw: params.raw ?? "{}",
+    parsed,
+    sourceConfig: params.sourceConfig ?? (parsed as OpenClawConfig),
+    resolved: parsed as OpenClawConfig,
     valid: false,
     runtimeConfig: {},
     config: {},
@@ -322,7 +368,7 @@ function parseLastLogPayload(): unknown {
 }
 
 async function runValidateJsonAndGetPayload() {
-  await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow("__exit__:1");
+  await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(ExitError);
   const raw = firstMockArg(mockLog);
   expect(typeof raw).toBe("string");
   return JSON.parse(String(raw)) as {
@@ -346,12 +392,16 @@ function firstWrittenConfig(): OpenClawConfig {
 }
 
 function firstWriteConfigOptions():
-  | { unsetPaths?: string[][]; explicitSetPaths?: string[][] }
+  | { auditOrigin?: "cli"; unsetPaths?: string[][]; explicitSetPaths?: string[][] }
   | undefined {
   return mockWriteConfigFile.mock.calls[0]?.[1];
 }
 
-function requireWriteOptions(): { unsetPaths?: string[][]; explicitSetPaths?: string[][] } {
+function requireWriteOptions(): {
+  auditOrigin?: "cli";
+  unsetPaths?: string[][];
+  explicitSetPaths?: string[][];
+} {
   const options = firstWriteConfigOptions();
   if (!options) {
     throw new Error("expected write options");
@@ -387,18 +437,25 @@ function requireResolveSecretRefCall(index: number): [unknown, unknown] {
 }
 
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
+let parseConfigSetPath: typeof import("./config-cli.js").parseConfigSetPath;
 let sharedProgram: Command;
 
 async function runConfigCommand(args: string[]) {
   await sharedProgram.parseAsync(args, { from: "user" });
 }
 
+let ExitError: new (code: number, message?: string) => Error;
+
 describe("config cli", () => {
   beforeAll(async () => {
-    ({ registerConfigCli } = await import("./config-cli.js"));
+    ({ parseConfigSetPath, registerConfigCli } = await import("./config-cli.js"));
+    const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
+    resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerConfigCli(sharedProgram);
+    const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+    ExitError = actual.ExitError;
   });
 
   beforeEach(() => {
@@ -437,7 +494,7 @@ describe("config cli", () => {
     });
     mockExit.mockImplementation((code: number) => {
       const errorMessages = mockError.mock.calls.map((call) => call.join(" ")).join("; ");
-      throw new Error(`__exit__:${code} - ${errorMessages}`);
+      throw new ExitError(code, errorMessages || undefined);
     });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
   });
@@ -467,6 +524,7 @@ describe("config cli", () => {
       expect(written.tools).toEqual(resolved.tools);
       expect(written.logging).toEqual(resolved.logging);
       expect(written.agents).not.toHaveProperty("defaults");
+      expect(requireWriteOptions().auditOrigin).toBe("cli");
     });
 
     it("marks set paths explicit so default-equal writes persist", async () => {
@@ -719,7 +777,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("openclaw plugins install <spec>");
@@ -735,7 +793,7 @@ describe("config cli", () => {
           "BOGUS-NOT-A-VERSION",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedVersion");
@@ -751,7 +809,7 @@ describe("config cli", () => {
           "1999-01-01T00:00:00.000Z",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedAt");
@@ -760,7 +818,7 @@ describe("config cli", () => {
 
     it("rejects auto-managed meta paths via config unset (#80849)", async () => {
       await expect(runConfigCommand(["config", "unset", "meta.lastTouchedAt"])).rejects.toThrow(
-        "__exit__:1",
+        ExitError,
       );
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -779,7 +837,7 @@ describe("config cli", () => {
           "--merge",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedVersion");
@@ -797,7 +855,7 @@ describe("config cli", () => {
           "--replace",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedAt");
@@ -805,7 +863,7 @@ describe("config cli", () => {
     });
 
     it("rejects config unset meta because deleting the parent removes auto-managed children (#80849)", async () => {
-      await expect(runConfigCommand(["config", "unset", "meta"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "unset", "meta"])).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("meta.lastTouchedVersion");
@@ -857,7 +915,7 @@ describe("config cli", () => {
           '{"openai/gpt-5.4":{}}',
           "--strict-json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Refusing to replace agents.defaults.models");
@@ -1038,6 +1096,21 @@ describe("config cli", () => {
 
       expect(mockLog).toHaveBeenCalledWith("60");
     });
+
+    it("outputs JSON error to stdout when path is not found and --json is set", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "get", "nonexistent.path", "--json"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockError).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as { error: string };
+      expect(payload.error).toBe("Config path not found: nonexistent.path");
+    });
   });
 
   describe("config validate", () => {
@@ -1097,7 +1170,7 @@ describe("config cli", () => {
         }),
       );
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
 
       expectErrorIncludes("config is invalid");
       expectErrorIncludes("agents.defaults.suppressToolErrorWarnings");
@@ -1123,7 +1196,7 @@ describe("config cli", () => {
         }),
       );
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
 
       expectErrorIncludes("plugin not found: source-only-pack");
       expectErrorIncludes("This is a plugin packaging issue, not a local config problem.");
@@ -1132,6 +1205,47 @@ describe("config cli", () => {
         "openclaw doctor --fix",
       );
       expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("prints line numbers, bracket array paths, and safe received values", async () => {
+      const parsed = {
+        agents: {
+          list: [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d", tools: { profile: "none" } }],
+        },
+      };
+      const raw = [
+        "{",
+        '  "agents": {',
+        '    "list": [',
+        '      { "id": "a" },',
+        '      { "id": "b" },',
+        '      { "id": "c" },',
+        '      { "id": "d", "tools": { "profile": "none" } }',
+        "    ]",
+        "  }",
+        "}",
+      ].join("\n");
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          raw,
+          parsed,
+          path: "/tmp/openclaw.json",
+          issues: [
+            {
+              path: "agents.list.3.tools.profile",
+              pathSegments: ["agents", "list", 3, "tools", "profile"],
+              message: 'Invalid input (allowed: "minimal", "coding", "messaging", "full")',
+              allowedValues: ["minimal", "coding", "messaging", "full"],
+            },
+          ],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
+
+      expectErrorIncludes(
+        'openclaw.json:7 — agents.list[3].tools.profile: Invalid input (allowed: "minimal", "coding", "messaging", "full"), got: "none"',
+      );
     });
 
     it("returns machine-readable JSON with --json for invalid config", async () => {
@@ -1154,8 +1268,8 @@ describe("config cli", () => {
           issues: [
             {
               path: "update.channel",
-              message: 'Invalid input (allowed: "stable", "beta", "dev")',
-              allowedValues: ["stable", "beta", "dev"],
+              message: 'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+              allowedValues: ["stable", "extended-stable", "beta", "dev"],
               allowedValuesHiddenCount: 0,
             },
           ],
@@ -1168,8 +1282,8 @@ describe("config cli", () => {
       expect(payload.issues).toEqual([
         {
           path: "update.channel",
-          message: 'Invalid input (allowed: "stable", "beta", "dev")',
-          allowedValues: ["stable", "beta", "dev"],
+          message: 'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+          allowedValues: ["stable", "extended-stable", "beta", "dev"],
         },
       ]);
       expect(mockError).not.toHaveBeenCalled();
@@ -1191,7 +1305,7 @@ describe("config cli", () => {
         legacyIssues: [],
       });
 
-      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
       expectErrorIncludes("Config file not found:");
       expect(mockLog).not.toHaveBeenCalled();
     });
@@ -1287,7 +1401,7 @@ describe("config cli", () => {
     it("throws when strict parsing is enabled via --strict-json", async () => {
       await expect(
         runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--strict-json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1298,7 +1412,7 @@ describe("config cli", () => {
     it("keeps --json as a strict parsing alias", async () => {
       await expect(
         runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1307,7 +1421,7 @@ describe("config cli", () => {
     it("rejects JSON5-only object syntax when strict parsing is enabled", async () => {
       await expect(
         runConfigCommand(["config", "set", "gateway.auth", "{mode:'token'}", "--strict-json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1484,7 +1598,7 @@ describe("config cli", () => {
           "--ref-id",
           "HOOK_TOKEN",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Config policy validation failed: unsupported SecretRef usage");
@@ -1505,7 +1619,7 @@ describe("config cli", () => {
           '{"token":{"source":"env","provider":"default","id":"HOOK_TOKEN"}}',
           "--strict-json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Config policy validation failed: unsupported SecretRef usage");
@@ -1610,7 +1724,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Dry run failed: config schema validation failed.");
@@ -1665,7 +1779,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Dry run failed: config schema validation failed.");
@@ -1686,7 +1800,7 @@ describe("config cli", () => {
           '[{"path":"hooks.token","ref":{"source":"env","provider":"default","id":"HOOK_TOKEN"}},{"path":"commands.ownerDisplaySecret","ref":{"source":"env","provider":"default","id":"OWNER_DISPLAY_SECRET"}}]',
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("hooks.token");
@@ -1709,7 +1823,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       const payload = parseLastLogPayload() as {
@@ -1845,7 +1959,7 @@ describe("config cli", () => {
       );
       await expect(
         runConfigCommand(["config", "set", "--batch-file", nonexistentBatchPath, "--allow-exec"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
@@ -1874,7 +1988,7 @@ describe("config cli", () => {
           "openai",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
       expectErrorIncludes('Secret provider "runner" is not configured');
@@ -1906,7 +2020,7 @@ describe("config cli", () => {
           "openai",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
       expectErrorIncludes('Secret provider "runner" has source "env" but ref requests "exec".');
@@ -1960,7 +2074,7 @@ describe("config cli", () => {
           "--provider-source",
           "env",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("config set mode error: choose exactly one mode");
     });
@@ -1979,7 +2093,7 @@ describe("config cli", () => {
           "--ref-id",
           "DISCORD_BOT_TOKEN",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes(
         "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined",
@@ -2065,7 +2179,7 @@ describe("config cli", () => {
       fs.writeFileSync(pathname, '{"path":"gateway.auth.mode","value":"token"}', "utf8");
       try {
         await expect(runConfigCommand(["config", "set", "--batch-file", pathname])).rejects.toThrow(
-          "__exit__:1",
+          ExitError,
         );
       } finally {
         fs.rmSync(pathname, { force: true });
@@ -2292,6 +2406,59 @@ describe("config cli", () => {
       expect(resolveOptions).toBeTypeOf("object");
     });
 
+    it("emits the resolved config path in config patch JSON", async () => {
+      const home = path.join(os.tmpdir(), "openclaw-home-token-config-patch");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      const snapshot = buildSnapshot({ resolved, config: resolved });
+      snapshot.path = configPath;
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+      vi.stubEnv("OPENCLAW_HOME", home);
+
+      const patch = writeTempJson5File("openclaw-config-patch-resolved-path", {
+        gateway: { port: 18790 },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", patch, "--dry-run", "--json"]);
+      } finally {
+        fs.rmSync(patch, { force: true });
+        vi.unstubAllEnvs();
+      }
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as { configPath: string };
+      expect(payload.configPath).toBe(configPath);
+      expect(path.isAbsolute(payload.configPath)).toBe(true);
+      expect(payload.configPath).not.toContain("$OPENCLAW_HOME");
+      expect(payload.configPath).not.toContain("~");
+    });
+
+    it("rejects --file when the file does not exist", async () => {
+      await expect(
+        runConfigCommand(["config", "patch", "--file", "/nonexistent/path/patch.json5"]),
+      ).rejects.toThrow(ExitError);
+
+      expectErrorIncludes("--file not found: /nonexistent/path/patch.json5");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects --file patches above the config mutation limit", async () => {
+      const pathname = path.join(
+        os.tmpdir(),
+        `openclaw-config-patch-oversized-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
+      );
+      fs.writeFileSync(pathname, " ".repeat(8 * 1024 * 1024 + 1), "utf8");
+      try {
+        await expect(runConfigCommand(["config", "patch", "--file", pathname])).rejects.toThrow(
+          ExitError,
+        );
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expectErrorIncludes("File exceeds 8388608 bytes");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
@@ -2374,7 +2541,7 @@ describe("config cli", () => {
               "--allow-exec",
               "--json",
             ]),
-          ).rejects.toThrow("__exit__:1");
+          ).rejects.toThrow(ExitError);
         } finally {
           fs.rmSync(invalidPatch, { force: true });
         }
@@ -2458,7 +2625,7 @@ describe("config cli", () => {
       try {
         await expect(
           runConfigCommand(["config", "patch", "--file", patch, "--dry-run", "--json"]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(patch, { force: true });
       }
@@ -2499,7 +2666,7 @@ describe("config cli", () => {
       try {
         await expect(
           runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2558,7 +2725,7 @@ describe("config cli", () => {
             "channels.slack",
             "--dry-run",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2570,7 +2737,7 @@ describe("config cli", () => {
 
     it("rejects config patch --json without dry-run", async () => {
       await expect(runConfigCommand(["config", "patch", "--stdin", "--json"])).rejects.toThrow(
-        "__exit__:1",
+        ExitError,
       );
       expectErrorIncludes("config patch mode error: --json requires --dry-run.");
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -2673,7 +2840,7 @@ describe("config cli", () => {
             "--replace-path",
             "channels.discord.guilds",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2692,7 +2859,7 @@ describe("config cli", () => {
           "--batch-json",
           '[{"path":"channels.discord.token","value":"x","ref":{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}}]',
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("must include exactly one of: value, ref, provider");
     });
@@ -2722,7 +2889,7 @@ describe("config cli", () => {
           "DISCORD_BOT_TOKEN",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
     });
@@ -2838,7 +3005,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const payload = parseLastLogPayload() as {
         ok: boolean;
@@ -2871,7 +3038,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const payload = parseLastLogPayload() as {
         ok: boolean;
@@ -2910,7 +3077,7 @@ describe("config cli", () => {
           "--dry-run",
           "--json",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const payload = parseLastLogPayload() as {
         ok: boolean;
@@ -2959,7 +3126,7 @@ describe("config cli", () => {
           "env",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
       expectErrorIncludes("provider mismatch");
@@ -3000,7 +3167,7 @@ describe("config cli", () => {
           "--strict-json",
           "--dry-run",
         ]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       const [secretRef, resolveOptions] = requireResolveSecretRefCall(0);
       const secretRefRecord = requireRecord(secretRef, "existing SecretRef");
@@ -3107,22 +3274,46 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before a dot", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] .id"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] .id",
+    it.each([
+      "agents.list[0]id",
+      "agents.list[0] id",
+      "agents.list[0]\\id",
+      "agents.list[0] .id",
+      "agents.list[0] [1]",
+    ])("rejects malformed post-bracket path %s", (configPath) => {
+      expect(() => parseConfigSetPath(configPath)).toThrow(
+        `Invalid path (missing separator after bracket): ${configPath}`,
+      );
+    });
+
+    it.each([
+      ["get", ["config", "get", "agents.list[0]id"]],
+      ["set", ["config", "set", "agents.list[0]id", '"renamed"']],
+      ["unset", ["config", "unset", "agents.list[0]id"]],
+      [
+        "batch set",
+        [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([{ path: "agents.list[0]id", value: "renamed" }]),
+        ],
+      ],
+    ])("rejects malformed bracket paths for config %s", async (_command, args) => {
+      await expect(runConfigCommand(args)).rejects.toThrow(
+        "Invalid path (missing separator after bracket): agents.list[0]id",
       );
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before another bracket", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] [1]"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] [1]",
-      );
-
-      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    it.each([
+      ["agents.list[0].id", ["agents", "list", "0", "id"]],
+      ["agents.list[0][1]", ["agents", "list", "0", "1"]],
+      ["[0]", ["0"]],
+    ])("preserves valid bracket path %s", (configPath, expected) => {
+      expect(parseConfigSetPath(configPath)).toEqual(expected);
     });
 
     it("preserves valid bracket path forms", async () => {
@@ -3199,6 +3390,7 @@ describe("config cli", () => {
       expect(written.tools?.profile).toBe("coding");
       expect(written.logging).toEqual(resolved.logging);
       expect(firstWriteConfigOptions()).toEqual({
+        auditOrigin: "cli",
         unsetPaths: [["tools", "alsoAllow"]],
       });
     });
@@ -3219,7 +3411,7 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
       expect(written.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
-      expect(firstWriteConfigOptions()).toBeUndefined();
+      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli" });
     });
 
     it("preserves write-level unset handling for numeric object keys", async () => {
@@ -3245,6 +3437,7 @@ describe("config cli", () => {
         "456": { channels: ["alerts"] },
       });
       expect(firstWriteConfigOptions()).toEqual({
+        auditOrigin: "cli",
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
     });
@@ -3306,7 +3499,7 @@ describe("config cli", () => {
 
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
@@ -3329,6 +3522,62 @@ describe("config cli", () => {
           message: "Config path not found: tools.alsoAllow. Nothing was changed.",
         },
       ]);
+    });
+
+    it("explains when unset targets a runtime-only default shown by config get", async () => {
+      const resolved = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const runtimeMerged = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "gpt" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const aliasPath = 'agents.defaults.models["openai/gpt-5.4"].alias';
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand(["config", "get", aliasPath]);
+
+      expect(mockLog).toHaveBeenCalledWith("gpt");
+      mockLog.mockClear();
+      setSnapshot(resolved, runtimeMerged);
+
+      await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow(ExitError);
+
+      expectErrorIncludes(`Config path not found in authored config: ${aliasPath}.`);
+      expectErrorIncludes("It only exists after runtime defaults are applied");
+      expectErrorIncludes("openclaw config set <path> <value>");
+      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+        "Run openclaw config get <path>",
+      );
+
+      setSnapshot(resolved, runtimeMerged);
+      await expect(
+        runConfigCommand(["config", "unset", aliasPath, "--dry-run", "--json"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: false,
+        errors: [
+          {
+            kind: "missing-path",
+            message: expect.stringContaining(
+              `Config path not found in authored config: ${aliasPath}.`,
+            ),
+          },
+        ],
+      });
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
     it("validates existing refs when unset dry-run removes all secret providers", async () => {
@@ -3358,7 +3607,7 @@ describe("config cli", () => {
 
       await expect(
         runConfigCommand(["config", "unset", "secrets.providers", "--dry-run"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       const [secretRef] = requireResolveSecretRefCall(0);
@@ -3409,7 +3658,7 @@ describe("config cli", () => {
     it("rejects config unset --json without --dry-run", async () => {
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("--json can only be used with --dry-run.");
@@ -3418,33 +3667,333 @@ describe("config cli", () => {
     it("rejects config unset --allow-exec without --dry-run", async () => {
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--allow-exec"]),
-      ).rejects.toThrow("__exit__:1");
+      ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("--allow-exec can only be used with --dry-run.");
     });
   });
 
-  describe("config file", () => {
-    it("prints the active config file path", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      setSnapshot(resolved, resolved);
+  describe("config apply hints - issue #80722", () => {
+    it("prints a hot-reload hint for agents.list model changes", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main" },
+            { id: "mason-vale", model: { primary: "ollama/qwen3-coder-next" } },
+          ],
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
 
-      await runConfigCommand(["config", "file"]);
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[1].model.primary",
+        '"ollama/kimi-k2.6"',
+        "--strict-json",
+      ]);
 
-      expect(mockLog).toHaveBeenCalledWith("/tmp/openclaw.json");
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectLogIncludes("Updated agents.list.1.model.primary");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
     });
 
-    it("handles config file path with home directory", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      const snapshot = buildSnapshot({ resolved, config: resolved });
-      snapshot.path = "/home/user/.openclaw/openclaw.json";
-      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+    it("does not treat legacy per-agent agentRuntime as restart-required", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "codex-legacy",
+              agentRuntime: { id: "codex" },
+              model: { primary: "openai/gpt-5.5" },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
 
-      await runConfigCommand(["config", "file"]);
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[0].model.primary",
+        '"openai/gpt-5.4-mini"',
+        "--strict-json",
+      ]);
 
-      expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("keeps the restart hint for hot-path edits when reload mode is off", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }],
+        },
+        gateway: {
+          reload: { mode: "off" },
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[0].model.primary",
+        '"openai/gpt-5.5"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for hot-path edits when reload mode is restart", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }],
+        },
+        gateway: {
+          reload: { mode: "restart" },
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[0].model.primary",
+        '"openai/gpt-5.5"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("prints a hot-reload hint when removing legacy per-agent agentRuntime", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "codex-legacy",
+              agentRuntime: { id: "codex" },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand(["config", "unset", "agents.list[0].agentRuntime"]);
+
+      expectLogIncludes("Removed agents.list[0].agentRuntime");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("prints a hot-reload hint for provider runtime policy changes", async () => {
+      const resolved: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {},
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "models.providers.openai.agentRuntime.id",
+        '"pi"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated models.providers.openai.agentRuntime.id");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("keeps the restart hint for broad models writes that change pricing bootstrap", async () => {
+      const resolved: OpenClawConfig = {
+        models: {
+          pricing: {
+            enabled: false,
+          },
+          providers: {
+            openai: {
+              agentRuntime: { id: "node" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "models",
+        '{"pricing":{"enabled":true},"providers":{"openai":{"agentRuntime":{"id":"node"}}}}',
+        "--strict-json",
+        "--replace",
+      ]);
+
+      expectLogIncludes("Updated models. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for broad plugins writes that change load paths", async () => {
+      const resolved: OpenClawConfig = {
+        plugins: {
+          load: {
+            paths: ["/tmp/openclaw-plugins-a"],
+          },
+          entries: {
+            canvas: { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "plugins",
+        '{"load":{"paths":["/tmp/openclaw-plugins-b"]},"entries":{"canvas":{"enabled":true}}}',
+        "--strict-json",
+        "--replace",
+      ]);
+
+      expectLogIncludes("Updated plugins. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for broad models unsets that remove pricing bootstrap", async () => {
+      const resolved: OpenClawConfig = {
+        models: {
+          pricing: {
+            enabled: false,
+          },
+          providers: {
+            openai: {
+              agentRuntime: { id: "node" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "models"]);
+
+      expectLogIncludes("Removed models. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for broad plugins unsets that remove load paths", async () => {
+      const resolved: OpenClawConfig = {
+        plugins: {
+          load: {
+            paths: ["/tmp/openclaw-plugins-a"],
+          },
+          entries: {
+            canvas: { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "plugins"]);
+
+      expectLogIncludes("Removed plugins. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for restart-required config paths", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }] },
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps plugin entry config writes restart-backed when reload metadata is absent", async () => {
+      const resolved: OpenClawConfig = {
+        plugins: {
+          entries: {
+            canvas: { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "plugins.entries.canvas.enabled", "false"]);
+
+      expectLogIncludes("Updated plugins.entries.canvas.enabled");
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for mixed hot and restart batch updates", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }] },
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "--batch-json",
+        '[{"path":"agents.list[0].model.primary","value":"openai/gpt-5.5"},{"path":"gateway.auth.mode","value":"token"}]',
+      ]);
+
+      expectLogIncludes("Updated 2 config paths. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+  });
+
+  describe("config file", () => {
+    it("resolves the active path without initializing state", async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-file-"));
+      const profile = "configfile-probe";
+      const stateDir = path.join(home, `.openclaw-${profile}`);
+      const configPath = path.join(stateDir, "openclaw.json");
+      vi.stubEnv("OPENCLAW_HOME", home);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", "");
+      vi.stubEnv("OPENCLAW_PROFILE", "");
+      vi.stubEnv("OPENCLAW_STATE_DIR", "");
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      applyCliProfileEnv({ profile });
+      mockReadConfigFileSnapshot.mockImplementationOnce(async () => {
+        fs.mkdirSync(path.join(stateDir, "state"), { recursive: true });
+        fs.writeFileSync(path.join(stateDir, "state", "openclaw.sqlite"), "initialized");
+        const snapshot = buildSnapshot({ resolved: {}, config: {} });
+        snapshot.path = configPath;
+        return snapshot;
+      });
+
+      try {
+        await runConfigCommand(["config", "file"]);
+        const output = String(lastMockArg(mockLog));
+        expect(output).toBe(configPath);
+        expect(path.isAbsolute(output)).toBe(true);
+        expect(output).not.toContain("$OPENCLAW_HOME");
+        expect(output).not.toContain("~");
+        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+      } finally {
+        vi.unstubAllEnvs();
+        fs.rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

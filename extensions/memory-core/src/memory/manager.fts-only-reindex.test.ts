@@ -18,6 +18,19 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
     providerUnavailableReason: "No embeddings provider available.",
   })),
 );
+const originalFtsOnlyStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setFtsOnlyStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreFtsOnlyStateDir(): void {
+  if (originalFtsOnlyStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalFtsOnlyStateDir);
+  }
+}
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
@@ -44,7 +57,7 @@ describe("memory manager FTS-only reindex", () => {
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
+    setFtsOnlyStateDir(path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
 
@@ -54,7 +67,7 @@ describe("memory manager FTS-only reindex", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
-    vi.unstubAllEnvs();
+    restoreFtsOnlyStateDir();
   });
 
   afterAll(async () => {

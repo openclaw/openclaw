@@ -1,5 +1,7 @@
 // Chat attachment tests cover inbound image/file parsing, media-store cleanup,
 // warning surfaces, size limits, and outbound message block assembly.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveMediaBufferMock = vi.hoisted(() =>
@@ -27,8 +29,8 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type ChatAttachment,
-  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
@@ -134,6 +136,48 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("persistInboundImagesForTranscript", () => {
+  it("preserves mixed image order and appends non-image offloads", async () => {
+    saveMediaBufferMock.mockResolvedValueOnce({
+      id: "inline",
+      path: "/media/inbound/inline.jpg",
+      size: 5,
+      contentType: "image/jpeg",
+    });
+
+    const saved = await persistInboundImagesForTranscript({
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      imageOrder: ["offloaded", "inline"],
+      offloadedRefs: [
+        {
+          mediaRef: "media://inbound/offloaded",
+          id: "offloaded",
+          path: "/media/inbound/offloaded.png",
+          mimeType: "image/png",
+          label: "offloaded.png",
+          sizeBytes: 2_100_000,
+        },
+        {
+          mediaRef: "media://inbound/report",
+          id: "report",
+          path: "/media/inbound/report.pdf",
+          mimeType: "application/pdf",
+          label: "report.pdf",
+          sizeBytes: 100,
+        },
+      ],
+      log: { warn: vi.fn() },
+      logContext: "test",
+    });
+
+    expect(saved.map((entry) => entry.path)).toEqual([
+      "/media/inbound/offloaded.png",
+      "/media/inbound/inline.jpg",
+      "/media/inbound/report.pdf",
+    ]);
+  });
+});
+
 describe("parseMessageWithAttachments", () => {
   it("strips data URL prefix", async () => {
     const parsed = await parseMessageWithAttachments(
@@ -143,6 +187,31 @@ describe("parseMessageWithAttachments", () => {
     );
     expectSingleInlinePng(parsed);
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
+  });
+
+  it("parses large clipboard data URL images without full base64 decoding", async () => {
+    const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
+    const base64 = png.toString("base64");
+    const fromSpy = vi.spyOn(Buffer, "from");
+    try {
+      const parsed = await parseMessageWithAttachments(
+        "see screenshot",
+        [pngAttachment({ content: `data:image/png;base64,${base64}`, fileName: "screenshot.png" })],
+        { log: { warn: () => {} } },
+      );
+
+      expectSingleInlinePng(parsed);
+      expect(parsed.images[0]?.data).toBe(base64);
+      expect(
+        fromSpy.mock.calls.some((call) => {
+          const [value, encoding] = call as unknown[];
+          return value === base64 && encoding === "base64";
+        }),
+      ).toBe(false);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    } finally {
+      fromSpy.mockRestore();
+    }
   });
 
   it("sniffs mime when missing", async () => {
@@ -159,7 +228,7 @@ describe("parseMessageWithAttachments", () => {
     const { parsed, logs } = await parseWithWarnings("read this", [pdfAttachment()]);
     expect(parsed.images).toHaveLength(0);
     expect(parsed.offloadedRefs).toHaveLength(1);
-    const ref = parsed.offloadedRefs[0];
+    const ref = expectDefined(parsed.offloadedRefs[0], "parsed.offloadedRefs[0] test invariant");
     expect(ref.mimeType).toBe("application/pdf");
     expect(ref.label).toBe("report.pdf");
     expect(ref.mediaRef).toMatch(/^media:\/\/inbound\//);
@@ -464,7 +533,7 @@ describe("parseMessageWithAttachments validation errors", () => {
 
 describe("resolveChatAttachmentMaxBytes", () => {
   const MB = 1024 * 1024;
-  const DEFAULT_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * MB;
+  const DEFAULT_BYTES = 20 * MB;
 
   const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
     ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;

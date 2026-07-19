@@ -1,6 +1,10 @@
 // Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  isCanonicalToolProviderPolicyKey,
+  normalizeToolProviderPolicyKey,
+} from "../../../agents/provider-tool-policy.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -39,6 +43,12 @@ type LegacyAgentRuntimeIntent = {
   provider: string;
   runtime: string;
 };
+
+const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
+  { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
+  { legacyKey: "chunkOverlap", parentKey: "chunking", canonicalKey: "overlap" },
+  { legacyKey: "maxResults", parentKey: "query", canonicalKey: "maxResults" },
+] as const;
 
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
@@ -85,6 +95,38 @@ const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
     match: hasAgentListMemorySearchStorePath,
   },
 ];
+
+const LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "memorySearch"],
+    message:
+      'agents.defaults.memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+    match: hasLegacyMemorySearchFlatKeys,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch uses legacy flat chunkSize, chunkOverlap, or maxResults fields. Run "openclaw doctor --fix".',
+    match: hasAgentListLegacyMemorySearchFlatKeys,
+  },
+];
+
+function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
+  const memorySearch = getRecord(value);
+  return Boolean(
+    memorySearch &&
+    LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS.some(({ legacyKey }) =>
+      Object.hasOwn(memorySearch, legacyKey),
+    ),
+  );
+}
+
+function hasAgentListLegacyMemorySearchFlatKeys(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((agent) => hasLegacyMemorySearchFlatKeys(getRecord(agent)?.memorySearch))
+  );
+}
 
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
@@ -419,6 +461,40 @@ function hasAgentListMemorySearchStorePath(value: unknown): boolean {
     Array.isArray(value) &&
     value.some((agent) => hasMemorySearchStorePath(getRecord(agent)?.memorySearch))
   );
+}
+
+function migrateLegacyMemorySearchFlatKeys(
+  memorySearch: Record<string, unknown> | null,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!memorySearch) {
+    return;
+  }
+  for (const { legacyKey, parentKey, canonicalKey } of LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS) {
+    if (!Object.hasOwn(memorySearch, legacyKey)) {
+      continue;
+    }
+    const legacyValue = memorySearch[legacyKey];
+    if (memorySearch[parentKey] === undefined) {
+      memorySearch[parentKey] = { [canonicalKey]: legacyValue };
+      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
+      delete memorySearch[legacyKey];
+      continue;
+    }
+    const canonicalParent = getRecord(memorySearch[parentKey]);
+    if (!canonicalParent) {
+      changes.push(`Removed ${pathLabel}.${legacyKey} (${pathLabel}.${parentKey} already set).`);
+    } else if (canonicalParent[canonicalKey] === undefined) {
+      canonicalParent[canonicalKey] = legacyValue;
+      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
+    } else {
+      changes.push(
+        `Removed ${pathLabel}.${legacyKey} (${pathLabel}.${parentKey}.${canonicalKey} already set).`,
+      );
+    }
+    delete memorySearch[legacyKey];
+  }
 }
 
 function removeLegacyMemorySearchStorePath(
@@ -1028,21 +1104,6 @@ function addHandledProviderPolicyKey(handledProviders: Set<string>, providerKey:
   handledProviders.add(normalizeToolProviderPolicyKey(providerKey));
 }
 
-function normalizeToolProviderPolicyKey(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
-  }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
-
-function isCanonicalToolProviderPolicyKey(value: string): boolean {
-  return value.trim().toLowerCase() === normalizeToolProviderPolicyKey(value);
-}
-
 function buildInheritedProviderPolicyLookup(
   inheritedByProvider: Record<string, unknown> | null | undefined,
 ): Map<
@@ -1382,6 +1443,30 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
+    id: "memorySearch.flat-fields->nested-fields",
+    describe: "Move legacy flat memory search fields to canonical nested fields",
+    legacyRules: LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      migrateLegacyMemorySearchFlatKeys(
+        getRecord(getRecord(agents?.defaults)?.memorySearch),
+        "agents.defaults.memorySearch",
+        changes,
+      );
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        migrateLegacyMemorySearchFlatKeys(
+          getRecord(getRecord(agent)?.memorySearch),
+          `agents.list.${index}.memorySearch`,
+          changes,
+        );
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "memorySearch.provider-auto->openai",
     describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
     legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
@@ -1476,3 +1561,4 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

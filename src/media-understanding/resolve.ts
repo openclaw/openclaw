@@ -12,6 +12,7 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { runtimeMediaModelSecretOwnerId } from "../secrets/runtime-media-secret-owner.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
@@ -22,8 +23,13 @@ import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js"
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
+export type ResolvedMediaModelEntry = {
+  entry: MediaUnderstandingModelConfig;
+  secretOwnerId?: string;
+};
+
 /** Default per-provider media-understanding runtime timeout in milliseconds. */
-export const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
+const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
 const MIN_MEDIA_TIMEOUT_MS = 1000;
 
 /** Converts configured timeout seconds into a timer-safe millisecond deadline. */
@@ -110,12 +116,24 @@ export function resolveModelEntries(params: {
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-}): MediaUnderstandingModelConfig[] {
+}): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
   const entries = [
-    ...(config?.models ?? []).map((entry) => ({ entry, source: "capability" as const })),
-    ...sharedModels.map((entry) => ({ entry, source: "shared" as const })),
+    ...(config?.models ?? []).map((entry, index) => ({
+      entry,
+      source: "capability" as const,
+      secretOwnerId: runtimeMediaModelSecretOwnerId({
+        source: "capability",
+        capability,
+        index,
+      }),
+    })),
+    ...sharedModels.map((entry, index) => ({
+      entry,
+      source: "shared" as const,
+      secretOwnerId: runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+    })),
   ];
   if (entries.length === 0) {
     return [];
@@ -141,7 +159,7 @@ export function resolveModelEntries(params: {
       }
       return caps.includes(capability);
     })
-    .map(({ entry }) => entry);
+    .map(({ entry, secretOwnerId }) => ({ entry, secretOwnerId }));
 }
 
 /** Resolves the bounded media-understanding task concurrency from config. */

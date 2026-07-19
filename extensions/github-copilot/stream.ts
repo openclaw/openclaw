@@ -34,7 +34,7 @@ function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" 
   return last.role === "user" ? "user" : "agent";
 }
 
-export function hasCopilotVisionInput(messages: Context["messages"]): boolean {
+function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   return messages.some((message) => {
     if (message.role === "user" && Array.isArray(message.content)) {
       return message.content.some((item) => containsCopilotContentType(item, "image"));
@@ -46,7 +46,7 @@ export function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   });
 }
 
-export function buildCopilotDynamicHeaders(params: {
+function buildCopilotDynamicHeaders(params: {
   messages: Context["messages"];
   hasImages: boolean;
 }): Record<string, string> {
@@ -115,7 +115,7 @@ export function wrapCopilotAnthropicStream(
   };
 }
 
-export function wrapCopilotOpenAIResponsesStream(
+function wrapCopilotOpenAIResponsesStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
   if (!baseStreamFn) {
@@ -140,7 +140,7 @@ export function wrapCopilotOpenAIResponsesStream(
   };
 }
 
-export function wrapCopilotOpenAICompletionsStream(
+function wrapCopilotOpenAICompletionsStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
   if (!baseStreamFn) {

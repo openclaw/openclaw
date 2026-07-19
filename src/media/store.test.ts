@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -189,7 +190,10 @@ describe("media store", () => {
         expect(saved.id).not.toContain("---");
       }
       if (params.maxBaseNameLength !== undefined) {
-        const baseName = path.parse(saved.id).name.split("---")[0];
+        const baseName = expectDefined(
+          path.parse(saved.id).name.split("---")[0],
+          'path.parse(saved.id).name.split("---")[0] test invariant',
+        );
         expect(baseName.length).toBeLessThanOrEqual(params.maxBaseNameLength);
       }
     });
@@ -1023,6 +1027,12 @@ describe("media store", () => {
         name: "truncates long original filenames",
         originalFilename: `${"a".repeat(100)}.txt`,
         expectedIdPattern: /^a+---[a-f0-9-]{36}\.txt$/,
+        maxBaseNameLength: 60,
+      },
+      {
+        name: "does not split supplementary-plane letters at the filename cap",
+        originalFilename: `${"a".repeat(59)}𐐀.txt`,
+        expectedIdPattern: /^a{59}---[a-f0-9-]{36}\.txt$/,
         maxBaseNameLength: 60,
       },
       {

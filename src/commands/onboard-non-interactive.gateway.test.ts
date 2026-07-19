@@ -135,6 +135,10 @@ vi.mock("./onboard-helpers.js", () => {
       httpUrl: `http://127.0.0.1:${port}`,
       wsUrl: `ws://127.0.0.1:${port}`,
     }),
+    resolveLocalControlUiProbeLinks: ({ port }: { port: number }) => ({
+      httpUrl: `http://127.0.0.1:${port}`,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    }),
     waitForGatewayReachable: (params: {
       url: string;
       token?: string;
@@ -177,13 +181,13 @@ vi.mock("../daemon/diagnostics.js", () => ({
 }));
 
 let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
-let resolveInstallDaemonGatewayHealthTiming: typeof import("./onboard-non-interactive/local.js").resolveInstallDaemonGatewayHealthTiming;
+let resolveInstallDaemonGatewayHealthTiming: typeof import("./onboard-non-interactive/local.test-support.js").resolveInstallDaemonGatewayHealthTiming;
 
 async function loadGatewayOnboardModules(): Promise<void> {
   vi.resetModules();
   ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
   ({ resolveInstallDaemonGatewayHealthTiming } =
-    await import("./onboard-non-interactive/local.js"));
+    await import("./onboard-non-interactive/local.test-support.js"));
 }
 
 function getPseudoPort(base: number): number {
@@ -523,6 +527,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         gateway?: { mode?: string; auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
+        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
       }>();
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
@@ -530,6 +535,31 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+      expect(cfg?.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
+    });
+  }, 60_000);
+
+  it("does not auto-enable default hooks when skipHooks is set", async () => {
+    await withStateDir("state-skip-hooks-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+      expect(cfg.hooks).toBeUndefined();
     });
   }, 60_000);
 
@@ -662,11 +692,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       const cfg = readTestConfig<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
+        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
       }>();
 
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
+      expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
     });
   }, 60_000);
 
@@ -783,7 +815,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           runtime,
         ),
       ).rejects.toThrow(
-        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+        /only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
       );
     });
   }, 60_000);

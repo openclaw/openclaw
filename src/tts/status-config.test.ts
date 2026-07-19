@@ -35,6 +35,33 @@ async function withStatusTempHome(run: (home: string) => Promise<void>): Promise
 }
 
 describe("resolveStatusTtsSnapshot", () => {
+  it("treats null prefs as empty settings", async () => {
+    await withStatusTempHome(async (home) => {
+      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, "null");
+
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "always",
+                provider: "edge",
+                prefsPath,
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "microsoft",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("uses prefs overrides without loading speech providers", async () => {
     await withStatusTempHome(async (home) => {
       const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
@@ -195,6 +222,35 @@ describe("resolveStatusTtsSnapshot", () => {
         maxLength: 1500,
         summarize: true,
       });
+    });
+  });
+
+  it("keeps truncated status detail fields well-formed at UTF-16 boundaries", async () => {
+    await withStatusTempHome(async () => {
+      const displayName = `${"d".repeat(92)}😀tail`;
+      const model = `${"m".repeat(92)}😀tail`;
+      const voice = `${"v".repeat(92)}😀tail`;
+      const snapshot = resolveStatusTtsSnapshot({
+        cfg: {
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  displayName,
+                  model,
+                  voice,
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(snapshot?.displayName).toBe(`${"d".repeat(92)}...`);
+      expect(snapshot?.model).toBe(`${"m".repeat(92)}...`);
+      expect(snapshot?.voice).toBe(`${"v".repeat(92)}...`);
     });
   });
 

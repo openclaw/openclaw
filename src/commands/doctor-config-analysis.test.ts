@@ -1,14 +1,25 @@
 // Doctor config analysis tests cover schema analysis, model fallback values, and issue generation.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import {
-  collectImplicitFallbackClobberWarnings,
   formatConfigPath,
+  noteImplicitFallbackClobberWarnings,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
 } from "./doctor-config-analysis.js";
+
+const noteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
+
+function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+  noteMock.mockClear();
+  noteImplicitFallbackClobberWarnings(cfg);
+  const body = noteMock.mock.calls.at(-1)?.[0];
+  return typeof body === "string" ? body.split(/\n(?=- )/) : [];
+}
 
 describe("doctor config analysis helpers", () => {
   it("formats config paths predictably", () => {
@@ -37,7 +48,7 @@ describe("doctor config analysis helpers", () => {
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
   });
 
-  it("preserves user-authored model and agent metadata during unknown-key cleanup", () => {
+  it("strips unknown root model metadata while preserving supported agent metadata", () => {
     const result = stripUnknownConfigKeys({
       defaultModel: "minimax/MiniMax-M2.7",
       mcp: {
@@ -58,12 +69,11 @@ describe("doctor config analysis helpers", () => {
     } as never);
 
     expect(result.removed).toContain("unexpected");
-    expect(result.removed).not.toContain("defaultModel");
+    expect(result.removed).toContain("defaultModel");
     expect(result.removed).not.toContain("agents.list[0].description");
     expect(result.removed).not.toContain("agents.list[1].description");
     expect(OpenClawSchema.safeParse({ defaultModel: "minimax/MiniMax-M2.7" }).success).toBe(false);
     expect(result.config).toMatchObject({
-      defaultModel: "minimax/MiniMax-M2.7",
       mcp: {
         servers: {
           tushareMcp: {

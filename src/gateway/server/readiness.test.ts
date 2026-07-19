@@ -1,8 +1,9 @@
 // Readiness checker tests cover startup grace, channel health, and stale socket decisions.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
-import type { ChannelManager, ChannelRuntimeSnapshot } from "../server-channels.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { ChannelManager } from "../server-channels.js";
 import { createReadinessChecker } from "./readiness.js";
 
 /**
@@ -32,6 +33,8 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
+    setAutostartSuppression: vi.fn(),
+    getAutostartSuppression: vi.fn(() => null),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -265,6 +268,25 @@ describe("createReadinessChecker", () => {
 
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports crash-loop suppressed stopped channels without failing readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: {
+          discord: stoppedAccount({
+            restartPending: false,
+            lastError: "safe mode",
+          }),
+        },
+      });
+      vi.mocked(manager.getAutostartSuppression).mockReturnValue({
+        reason: "crash-loop-breaker",
+        message: "safe mode",
+      });
+
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
     });
   });
 

@@ -56,6 +56,7 @@ type IncompleteTurnAttempt = Pick<
   | "lastToolError"
   | "lastAssistant"
   | "itemLifecycle"
+  | "messagesSnapshot"
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
@@ -132,10 +133,12 @@ const RETRY_GUARD_MODEL_APIS = new Set([
 // surfacing the existing incomplete-turn error path.
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
 export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
-export const REASONING_ONLY_RETRY_INSTRUCTION =
+const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
-export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 /**
  * Marks whether retrying the attempt can safely replay the prompt. Concrete
@@ -229,17 +232,13 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  // Tool-use terminal guard: when the last assistant message ended with a
-  // tool-call stop reason, the model expected to continue after tool results.
-  // Pre-tool text alone (payloadCount > 0) must not suppress the incomplete-
-  // turn check in that case — the final post-tool response was never
-  // produced. (#76477)
-  const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  // Prefer the current attempt's terminal message. The session fallback can
+  // still point at the pre-tool turn after a post-tool answer completes. (#80918)
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
   const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
-  // A length terminal is provider-confirmed output-budget exhaustion. Partial
-  // visible text is not a complete final answer and must not bypass recovery.
-  const lengthTerminal = isIncompleteTerminalAssistantTurn({
+  // Tool-use expects a post-tool continuation, while length means the output
+  // budget ended. Partial visible text completes neither. (#76477)
+  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     hasTerminalOutput,
     lastAssistant: assistant,
@@ -254,7 +253,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal && !lengthTerminal && !thinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 && !incompleteTerminalAssistant && !thinkingOnlyTerminal) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -281,12 +280,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  const stopReason = params.attempt.lastAssistant?.stopReason;
-  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
-    hasAssistantVisibleText: params.payloadCount > 0,
-    hasTerminalOutput,
-    lastAssistant: params.attempt.lastAssistant,
-  });
+  const stopReason = assistant?.stopReason;
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
     payloadCount: params.payloadCount,
@@ -294,7 +288,6 @@ export function resolveIncompleteTurnPayloadText(params: {
   });
   if (
     !incompleteTerminalAssistant &&
-    !lengthTerminal &&
     !reasoningOnlyAssistant &&
     !thinkingOnlyTerminal &&
     !emptyResponseAssistant &&
@@ -536,6 +529,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
     | "replayMetadata"
+    | "currentAttemptReplayMetadata"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
@@ -545,7 +539,12 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+  // Current-attempt evidence avoids blocking on prior committed effects; older
+  // harnesses retain the cumulative, fail-closed behavior.
+  const retryReplayMetadata = resolveAttemptReplayMetadata({
+    replayMetadata: params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata,
+  });
+  if (retryReplayMetadata.hadPotentialSideEffects) {
     return false;
   }
 
@@ -726,6 +725,82 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+/** Builds a fresh continuation for a clean tool-use terminal turn with settled tool activity. */
+export function resolveToolUseTerminalContinuationInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+  payloadCount: number;
+  hasTerminalToolPresentation?: boolean;
+  aborted: boolean;
+  promptError?: unknown;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  // Idle is not proof of completion: a toolUse terminal whose requested tools never
+  // (or only partially) dispatched must keep the incomplete-turn error, or the model
+  // could claim skipped side effects succeeded. Lifecycle counts are attempt-cumulative
+  // and alias across batches, so completion is proven per tool-call id: every toolCall
+  // in the terminal assistant needs a non-error toolResult in the message snapshot.
+  const requestedToolCallIds = Array.isArray(assistant?.content)
+    ? assistant.content.flatMap((item) => {
+        const block = item as { type?: unknown; id?: unknown } | null;
+        return block?.type === "toolCall" ? [typeof block.id === "string" ? block.id : null] : [];
+      })
+    : [];
+  // Scan only results AFTER the terminal assistant: the snapshot spans the whole
+  // session, and a prior turn's toolResult with a model-reused id would otherwise
+  // prove "completion" for a batch that never dispatched. Assistant not found in
+  // the snapshot fails closed to the existing incomplete-turn error.
+  const snapshot = params.attempt.messagesSnapshot ?? [];
+  const assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
+  const completedToolCallIds = new Set(
+    (assistantIndex >= 0 ? snapshot.slice(assistantIndex + 1) : []).flatMap((message) => {
+      const result = message as { role?: unknown; toolCallId?: unknown; isError?: unknown };
+      return result.role === "toolResult" &&
+        result.isError !== true &&
+        typeof result.toolCallId === "string"
+        ? [result.toolCallId]
+        : [];
+    }),
+  );
+  const allToolsProvenComplete =
+    params.attempt.itemLifecycle?.activeCount === 0 &&
+    requestedToolCallIds.length > 0 &&
+    requestedToolCallIds.every((id) => id !== null && completedToolCallIds.has(id));
+  if (
+    params.payloadCount !== 0 ||
+    params.hasTerminalToolPresentation ||
+    params.aborted ||
+    params.promptError != null ||
+    params.timedOut ||
+    assistant?.stopReason !== "toolUse" ||
+    !allToolsProvenComplete ||
+    params.attempt.lastToolError ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt
+  ) {
+    return null;
+  }
+  if (hasMessagingToolDeliveryEvidence(params.attempt)) {
+    return null;
+  }
+  if (
+    !shouldApplyNonVisibleTurnRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      executionContract: params.executionContract,
+    })
+  ) {
+    return null;
+  }
+  return TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION;
+}
+
 /**
  * Builds the retry instruction for empty assistant turns when the provider/model
  * is eligible for non-visible turn recovery.
@@ -825,3 +900,4 @@ function isIncompleteTurnRecoverySupportedProviderModel(params: {
   const modelId = typeof params.modelId === "string" ? params.modelId : "";
   return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

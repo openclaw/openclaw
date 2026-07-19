@@ -7,6 +7,7 @@ import {
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { isXaiProviderId } from "./provider-id.js";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -23,24 +24,6 @@ function resolveXaiFastModelId(modelId: unknown): string | undefined {
   return XAI_FAST_MODEL_IDS.get(modelId.trim());
 }
 
-function stripUnsupportedStrictFlag(tool: unknown): unknown {
-  if (!tool || typeof tool !== "object") {
-    return tool;
-  }
-  const toolObj = tool as Record<string, unknown>;
-  const fn = toolObj.function;
-  if (!fn || typeof fn !== "object") {
-    return tool;
-  }
-  const fnObj = fn as Record<string, unknown>;
-  if (typeof fnObj.strict !== "boolean") {
-    return tool;
-  }
-  const nextFunction = { ...fnObj };
-  delete nextFunction.strict;
-  return { ...toolObj, function: nextFunction };
-}
-
 function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
@@ -51,6 +34,30 @@ function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknow
       ? (model.compat as { supportsReasoningEffort?: unknown })
       : undefined;
   return model.reasoning === true && compat?.supportsReasoningEffort !== false;
+}
+
+const XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
+
+/** xAI-only: request encrypted reasoning for every reasoning-capable model, even when effort is unsupported. */
+function ensureXaiResponsesEncryptedReasoningInclude(
+  payloadObj: Record<string, unknown>,
+  model: { api?: unknown; provider?: unknown; reasoning?: unknown },
+): void {
+  if (
+    !isXaiProviderId(model.provider) ||
+    model.api !== "openai-responses" ||
+    model.reasoning !== true
+  ) {
+    return;
+  }
+  const existing = payloadObj.include;
+  const include = Array.isArray(existing)
+    ? existing.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  if (!include.includes(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
+    include.push(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE);
+  }
+  payloadObj.include = include;
 }
 
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
@@ -95,6 +102,47 @@ function isReplayableInputImagePart(
   );
 }
 
+function describeXaiFunctionOutputMediaPlaceholder(
+  parts: Array<Record<string, unknown>>,
+): string | undefined {
+  let hasImage = false;
+  let hasAudio = false;
+  let hasOtherMedia = false;
+
+  for (const part of parts) {
+    const type = typeof part.type === "string" ? part.type : "";
+    const mimeType =
+      typeof part.mimeType === "string"
+        ? part.mimeType
+        : typeof part.mime_type === "string"
+          ? part.mime_type
+          : typeof part.mediaType === "string"
+            ? part.mediaType
+            : typeof part.contentType === "string"
+              ? part.contentType
+              : "";
+    const normalizedMime = mimeType.toLowerCase();
+    if (type.includes("image") || normalizedMime.startsWith("image/")) {
+      hasImage = true;
+    } else if (type.includes("audio") || normalizedMime.startsWith("audio/")) {
+      hasAudio = true;
+    } else if (type !== "input_text") {
+      hasOtherMedia = true;
+    }
+  }
+
+  if ((hasImage && hasAudio) || hasOtherMedia) {
+    return "(see attached media)";
+  }
+  if (hasAudio) {
+    return "(see attached audio)";
+  }
+  if (hasImage) {
+    return "(see attached image)";
+  }
+  return undefined;
+}
+
 function normalizeXaiResponsesFunctionCallOutput(
   item: unknown,
   includeImages: boolean,
@@ -123,11 +171,12 @@ function normalizeXaiResponsesFunctionCallOutput(
       )
     : [];
   const hadNonTextParts = outputParts.some((part) => part.type !== "input_text");
+  const mediaPlaceholder = describeXaiFunctionOutputMediaPlaceholder(outputParts);
 
   return {
     normalizedItem: {
       ...itemObj,
-      output: textOutput || (hadNonTextParts ? "(see attached image)" : ""),
+      output: textOutput || mediaPlaceholder || (hadNonTextParts ? "(see attached media)" : ""),
     },
     imageParts,
   };
@@ -165,9 +214,7 @@ function normalizeXaiResponsesToolResultPayload(
   payloadObj.input = normalizedInput;
 }
 
-export function createXaiToolPayloadCompatibilityWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
+function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
@@ -176,15 +223,15 @@ export function createXaiToolPayloadCompatibilityWrapper(
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
-          if (Array.isArray(payloadObj.tools)) {
-            payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
-          }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
+            // Only current flagship Grok models advertise configurable effort.
             delete payloadObj.reasoning;
             delete payloadObj.reasoningEffort;
             delete payloadObj.reasoning_effort;
           }
+          // All reasoning xAI models should still request + later replay encrypted_content.
+          ensureXaiResponsesEncryptedReasoningInclude(payloadObj, model);
         }
         return originalOnPayload?.(payload, model);
       },
@@ -192,7 +239,7 @@ export function createXaiToolPayloadCompatibilityWrapper(
   };
 }
 
-export function createXaiFastModeWrapper(
+function createXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: DynamicFastMode,
 ): StreamFn {
@@ -203,7 +250,7 @@ export function createXaiFastModeWrapper(
     if (
       (typeof fastMode === "function" ? fastMode() : fastMode) !== true ||
       !supportsFastAliasTransport ||
-      model.provider !== "xai"
+      !isXaiProviderId(model.provider)
     ) {
       return underlying(model, context, options);
     }

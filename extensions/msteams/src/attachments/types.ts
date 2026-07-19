@@ -1,5 +1,6 @@
 // Msteams type declarations define plugin contracts.
 export type MSTeamsAttachmentLike = {
+  id?: string | null;
   contentType?: string | null;
   contentUrl?: string | null;
   name?: string | null;
@@ -35,14 +36,4 @@ export type MSTeamsGraphMediaResult = {
   attachmentStatus?: number;
   messageUrl?: string;
   tokenError?: boolean;
-};
-
-/**
- * Narrow logger surface used by `downloadMSTeamsGraphMedia` for diagnostic
- * events. Accepting an optional callback keeps the helper testable without
- * pulling in the full channel logger type, while still allowing the monitor
- * handler to forward its plugin logger.
- */
-export type MSTeamsGraphMediaLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
 };

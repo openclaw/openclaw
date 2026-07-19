@@ -1,25 +1,42 @@
 // Ollama tests cover provider models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaProvider,
   buildOllamaModelDefinition,
+  capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
-  parseOllamaNumCtxParameter,
-  resetOllamaModelShowInfoCacheForTest,
+  fetchOllamaModels,
+  queryOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
 
 describe("ollama provider models", () => {
   afterEach(() => {
-    resetOllamaModelShowInfoCacheForTest();
     vi.unstubAllGlobals();
   });
 
   it("strips /v1 when resolving the Ollama API base", () => {
     expect(resolveOllamaApiBase("http://127.0.0.1:11434/v1")).toBe("http://127.0.0.1:11434");
     expect(resolveOllamaApiBase("http://127.0.0.1:11434///")).toBe("http://127.0.0.1:11434");
+  });
+
+  it("caps local discovered runtime context while preserving native metadata", () => {
+    const provider = capLocalOllamaProviderContext({
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      models: [
+        buildOllamaModelDefinition("qwen3.5:4b", 262_144),
+        buildOllamaModelDefinition("small", 16_384),
+      ],
+    });
+
+    expect(provider.models).toEqual([
+      expect.objectContaining({ contextWindow: 262_144, contextTokens: 32_768 }),
+      expect.objectContaining({ contextWindow: 16_384, contextTokens: 16_384 }),
+    ]);
   });
 
   it("sets discovered models with context windows from /api/show", async () => {
@@ -43,11 +60,12 @@ describe("ollama provider models", () => {
       { name: "llama3:8b", contextWindow: 65536, capabilities: undefined },
       { name: "deepseek-r1:14b", contextWindow: undefined, capabilities: undefined },
     ]);
+    const fallbackModel = expectDefined(enriched[1], "fallback Ollama model");
     expect(
       buildOllamaModelDefinition(
-        enriched[1].name,
-        enriched[1].contextWindow,
-        enriched[1].capabilities,
+        fallbackModel.name,
+        fallbackModel.contextWindow,
+        fallbackModel.capabilities,
       ).compat?.supportsTools,
     ).toBe(true);
   });
@@ -250,16 +268,16 @@ describe("ollama provider models", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [
-      { name: "qwen3:32b", digest: "sha256:abc123" },
+      { name: "qwen3:32b", digest: "sha256:refresh-old" },
     ]);
     const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [
-      { name: "qwen3:32b", digest: "sha256:def456" },
+      { name: "qwen3:32b", digest: "sha256:refresh-new" },
     ]);
 
     expect(first).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:abc123",
+        digest: "sha256:refresh-old",
         contextWindow: 131072,
         capabilities: ["thinking", "tools"],
       },
@@ -267,7 +285,7 @@ describe("ollama provider models", () => {
     expect(second).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:def456",
+        digest: "sha256:refresh-new",
         contextWindow: 262144,
         capabilities: ["vision", "thinking", "tools"],
       },
@@ -287,14 +305,14 @@ describe("ollama provider models", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:abc123" };
+    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:retry-empty" };
     const first = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [model]);
     const second = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", [model]);
 
     expect(first).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:abc123",
+        digest: "sha256:retry-empty",
         contextWindow: undefined,
         capabilities: undefined,
       },
@@ -302,7 +320,7 @@ describe("ollama provider models", () => {
     expect(second).toEqual([
       {
         name: "qwen3:32b",
-        digest: "sha256:abc123",
+        digest: "sha256:retry-empty",
         contextWindow: 131072,
         capabilities: ["thinking", "tools"],
       },
@@ -311,7 +329,7 @@ describe("ollama provider models", () => {
   });
 
   it("normalizes /v1 base URLs before fetching and reuses the same cache entry", async () => {
-    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:abc123" };
+    const model: OllamaTagModel = { name: "qwen3:32b", digest: "sha256:normalized-base" };
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(requestUrl(input)).toBe("http://127.0.0.1:11434/api/show");
       expect(JSON.parse(requestBodyText(init?.body))).toEqual({ name: "qwen3:32b" });
@@ -374,10 +392,72 @@ describe("ollama provider models", () => {
     expect(model.compat?.supportsUsageInStreaming).toBe(true);
   });
 
-  it("parses the last positive Modelfile num_ctx value", () => {
-    expect(parseOllamaNumCtxParameter("num_ctx 8192\nnum_ctx 32768")).toBe(32768);
-    expect(parseOllamaNumCtxParameter("temperature 0.8\nnum_ctx -1\nnum_ctx 0")).toBeUndefined();
-    expect(parseOllamaNumCtxParameter('stop "<|eot_id|>"')).toBeUndefined();
-    expect(parseOllamaNumCtxParameter({ num_ctx: 8192 })).toBeUndefined();
+  it.each([
+    { parameters: "num_ctx 8192\nnum_ctx 32768", expected: 32768 },
+    { parameters: "temperature 0.8\nnum_ctx -1\nnum_ctx 0", expected: undefined },
+    { parameters: 'stop "<|eot_id|>"', expected: undefined },
+    { parameters: { num_ctx: 8192 }, expected: undefined },
+  ])("reads Modelfile num_ctx through the model show query", async ({ parameters, expected }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ model_info: {}, parameters })),
+    );
+
+    const info = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "test-model");
+
+    expect(info.contextWindow).toBe(expected);
+  });
+
+  it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {
+    // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels
+    // the stream mid-flight; if the cap were removed the reader would buffer the whole payload.
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32; // 32 MiB advertised body, double the cap.
+    const chunk = new Uint8Array(ONE_MIB);
+
+    let bytesPulled = 0;
+    let canceled = false;
+    const makeOversizedJsonResponse = (): Response => {
+      bytesPulled = 0;
+      canceled = false;
+      let pulled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pulled >= TOTAL_CHUNKS) {
+            controller.close();
+            return;
+          }
+          pulled += 1;
+          bytesPulled += chunk.length;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => makeOversizedJsonResponse()),
+    );
+    const tags = await fetchOllamaModels("http://127.0.0.1:11434");
+    expect(tags).toEqual({ reachable: false, models: [] });
+    expect(canceled).toBe(true);
+    // Only the bounded prefix is pulled, never the full advertised 32 MiB stream.
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => makeOversizedJsonResponse()),
+    );
+    const showInfo = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "evil-model:latest");
+    expect(showInfo).toEqual({});
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 });
