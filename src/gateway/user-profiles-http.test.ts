@@ -286,8 +286,9 @@ describe("profile avatar HTTP endpoint", () => {
       emails: ["primary@example.com", "secondary@example.com"],
       hasAvatar: false,
     });
-    // Both emails have a Gravatar; the first (primary) must win regardless of
-    // which concurrent lookup settles first.
+    const secondaryHash = emailHash("secondary@example.com");
+    // The primary email has a Gravatar, so its lookup short-circuits — the
+    // secondary email's hash must never be disclosed to Gravatar.
     const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
       fetchUrl(input).includes(primaryHash)
         ? new Response(new Uint8Array([1, 1, 1]), {
@@ -309,6 +310,11 @@ describe("profile avatar HTTP endpoint", () => {
     );
 
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 1, 1]));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalledWith(
+      expect.stringContaining(secondaryHash),
+      expect.anything(),
+    );
   });
 
   it("falls through to a later linked email when the primary has no Gravatar", async () => {
@@ -337,8 +343,8 @@ describe("profile avatar HTTP endpoint", () => {
       { auth: {} as never, fetchImpl },
     );
 
-    // Both lookups run concurrently under one timeout budget, so an unreachable
-    // primary never serializes the request; the secondary hit is still served.
+    // A definite miss on the primary lets the request fall through to the
+    // secondary email under the shared deadline; the secondary hit is served.
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
   });

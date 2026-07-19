@@ -74,6 +74,7 @@ export type GatewayClient = {
     profileId: string;
     displayName: string | null;
     hasAvatar: boolean;
+    updatedAt: number;
   };
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;

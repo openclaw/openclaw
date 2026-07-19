@@ -20,15 +20,21 @@ import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
+// Whole-request budget shared across a profile's linked emails. Lookups run
+// sequentially (see the resolution loop) so a secondary email's hash is only
+// disclosed to Gravatar after the earlier one is a definite miss; this deadline
+// bounds the total wait so an unreachable Gravatar cannot stall the held
+// connection by GRAVATAR_FETCH_TIMEOUT_MS × linked-email-count.
+const GRAVATAR_TOTAL_TIMEOUT_MS = 6_000;
 const GRAVATAR_CACHE_MAX_ENTRIES = 256;
 const GRAVATAR_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const GRAVATAR_HIT_TTL_MS = 24 * 60 * 60_000;
 const GRAVATAR_MISS_TTL_MS = 15 * 60_000;
 const MAX_GRAVATAR_BYTES = 1_000_000;
-// Bound the concurrent Gravatar fan-out per avatar request. Linked emails are
-// primary-first, so the first few cover the realistic case; the cap keeps a
-// profile with many linked addresses from opening an unbounded number of
-// sockets or holding MAX_GRAVATAR_BYTES × N transient bytes at once.
+// Bound the Gravatar fan-out per avatar request. Linked emails are primary-first
+// and resolved sequentially with short-circuit, so the cap only matters when
+// every earlier email misses; it stops a profile with many linked addresses from
+// probing an unbounded number of them against Gravatar.
 const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
 const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
@@ -193,11 +199,13 @@ async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Prom
 async function fetchGravatar(
   hash: string,
   fetchImpl: typeof globalThis.fetch,
+  deadline?: AbortSignal,
 ): Promise<GravatarResult> {
   try {
+    const perCall = AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS);
     const response = await fetchImpl(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
       headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-      signal: AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS),
+      signal: deadline ? AbortSignal.any([deadline, perCall]) : perCall,
     });
     if (response.status === 404) {
       await cancelGravatarBody(response.body);
@@ -229,7 +237,7 @@ async function fetchGravatar(
 
 async function resolveGravatar(
   hash: string,
-  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number },
+  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number; deadline?: AbortSignal },
 ): Promise<GravatarResult> {
   const cached = getCachedGravatar(hash, options.nowMs());
   if (cached) {
@@ -239,7 +247,7 @@ async function resolveGravatar(
   if (inFlight) {
     return await inFlight;
   }
-  const request = fetchGravatar(hash, options.fetchImpl).then((result) => {
+  const request = fetchGravatar(hash, options.fetchImpl, options.deadline).then((result) => {
     if (result.kind !== "error") {
       cacheGravatar(hash, result, options.nowMs());
     }
@@ -368,25 +376,27 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
 
-  // Resolve every linked email concurrently so the request waits one timeout
-  // budget total, not one per email — a Gravatar outage otherwise stalls the
-  // held connection for 5s × linked-email-count. Hit selection still walks the
-  // results in email order, so the primary email keeps precedence.
-  const results = await Promise.all(
-    hashes.map((hash) =>
-      resolveGravatar(hash, {
-        fetchImpl: opts.fetchImpl ?? globalThis.fetch,
-        nowMs: opts.nowMs ?? Date.now,
-      }),
-    ),
-  );
+  // Resolve linked emails sequentially and stop at the first hit: the primary
+  // email keeps precedence, and a secondary email's hash is disclosed to
+  // Gravatar only once the earlier one is a definite miss. A single shared
+  // deadline bounds the total wait, so an unreachable Gravatar cannot stall the
+  // held connection by one timeout per linked email.
+  const deadline = AbortSignal.timeout(GRAVATAR_TOTAL_TIMEOUT_MS);
   let transientFailure = false;
-  for (const result of results) {
+  for (const hash of hashes) {
+    const result = await resolveGravatar(hash, {
+      fetchImpl: opts.fetchImpl ?? globalThis.fetch,
+      nowMs: opts.nowMs ?? Date.now,
+      deadline,
+    });
     if (result.kind === "hit") {
       sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
       return true;
     }
     transientFailure ||= result.kind === "error";
+    if (deadline.aborted) {
+      break;
+    }
   }
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,

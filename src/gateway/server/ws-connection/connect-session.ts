@@ -150,6 +150,7 @@ export async function attachAuthenticatedGatewayConnect(
         profileId: profile.id,
         displayName: profile.displayName,
         hasAvatar: profile.avatarMime !== null,
+        updatedAt: profile.updatedAt,
       };
     } catch (error) {
       // Profile storage must not block login; retain the legacy email-only identity on failure.
@@ -362,7 +363,10 @@ export async function attachAuthenticatedGatewayConnect(
                     : {}),
                   // This authenticated route resolves the uploaded avatar first, then the
                   // gateway-side Gravatar proxy, so clients never need an email-hash URL.
-                  avatarUrl: formatUserProfileAvatarPath(authenticatedUserProfile.profileId),
+                  // The ?v=<updatedAt> revision changes when the profile (avatar) is
+                  // updated, so a reconnecting viewer's <img> refetches instead of reusing
+                  // a stale cached image for the unchanged route.
+                  avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
                 }
               : { id: authenticatedUserId, email: authenticatedUserId },
           }
