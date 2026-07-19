@@ -1060,21 +1060,26 @@ async function connectWebSocket(
       return;
     }
 
-    // 30s handshake timeout guards against an indefinite hang when the
-    // remote accepts TCP but never completes the HTTP upgrade.
-    connectTimer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      socket.close(1000, "handshake_timeout");
-      reject(
-        new Error(
-          `WebSocket connection to OpenAI Responses API timed out after ${WEBSOCKET_CONNECT_HANDSHAKE_MS}ms`,
-        ),
-      );
-    }, WEBSOCKET_CONNECT_HANDSHAKE_MS);
+    // Apply the 30s handshake deadline only when the caller provides no
+    // signal (i.e. no options.timeoutMs was set).  When a signal is
+    // present the caller's timeout — composed upstream via
+    // buildRequestSignal() / AbortSignal.timeout() — governs the
+    // connection phase and the onAbort handler below fires instead.
+    if (!signal) {
+      connectTimer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        socket.close(1000, "handshake_timeout");
+        reject(
+          new Error(
+            `WebSocket connection to OpenAI Responses API timed out after ${WEBSOCKET_CONNECT_HANDSHAKE_MS}ms`,
+          ),
+        );
+      }, WEBSOCKET_CONNECT_HANDSHAKE_MS);
+    }
 
     const onOpen: WebSocketListener = () => {
       if (settled) {

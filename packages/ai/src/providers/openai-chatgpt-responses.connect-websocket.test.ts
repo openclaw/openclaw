@@ -78,6 +78,42 @@ describe("connectWebSocket handshake timeout", () => {
     }
   });
 
+  it("does not apply 30s timer when signal is provided, defers to caller's signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const mock = mockNeverOpenWebSocket();
+      const controller = new AbortController();
+
+      const wsPromise = connectWebSocketForTest(
+        "wss://responses.openai.com/ws",
+        new Headers({ Authorization: "Bearer test" }),
+        controller.signal,
+      );
+
+      // Advance past 30s — the handshake timer was NOT set because a
+      // caller signal was provided, so close() should not have been called.
+      vi.advanceTimersByTime(30_000);
+      expect(mock.getCloseCode()).toBeUndefined();
+      expect(mock.getCloseReason()).toBeUndefined();
+
+      // Now abort via the caller's signal to settle the promise.
+      controller.abort();
+
+      let caught: Error | undefined;
+      try {
+        await wsPromise;
+      } catch (error) {
+        caught = error instanceof Error ? error : new Error(String(error));
+      }
+      expect(caught).toBeDefined();
+      expect(caught!.message).toBe("Request was aborted");
+      expect(mock.getCloseCode()).toBe(1000);
+      expect(mock.getCloseReason()).toBe("aborted");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resolves normally when WebSocket opens before timeout", async () => {
     vi.useFakeTimers();
     try {
