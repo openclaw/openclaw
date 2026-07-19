@@ -23179,6 +23179,51 @@
       "translated": "小工具無法使用"
     },
     {
+      "id": "native.apple.d640691fd196f338",
+      "source": "Widget export failed",
+      "translated": "小工具匯出失敗"
+    },
+    {
+      "id": "native.apple.533c6e22a11e88de",
+      "source": "OK",
+      "translated": "確定"
+    },
+    {
+      "id": "native.apple.e1fb28a2a9756402",
+      "source": "Copy image",
+      "translated": "複製圖片"
+    },
+    {
+      "id": "native.apple.ebd7bc92e1b12235",
+      "source": "Save image…",
+      "translated": "儲存圖片…"
+    },
+    {
+      "id": "native.apple.742c46d4cf2db134",
+      "source": "Save image",
+      "translated": "儲存圖片"
+    },
+    {
+      "id": "native.apple.0589cce608418f90",
+      "source": "The widget image could not be captured.",
+      "translated": "無法擷取小工具圖片。"
+    },
+    {
+      "id": "native.apple.dfe24e827fdbe9c5",
+      "source": "The widget image could not be copied.",
+      "translated": "無法複製小工具圖片。"
+    },
+    {
+      "id": "native.apple.9e611e3a80e71408",
+      "source": "The widget image could not be encoded as PNG.",
+      "translated": "無法將小工具圖片編碼為 PNG。"
+    },
+    {
+      "id": "native.apple.9a6e8afbe24a262b",
+      "source": "The widget image could not be saved.",
+      "translated": "無法儲存小工具圖片。"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"

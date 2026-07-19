@@ -23179,6 +23179,51 @@
       "translated": "विजेट उपलब्ध नहीं है"
     },
     {
+      "id": "native.apple.d640691fd196f338",
+      "source": "Widget export failed",
+      "translated": "विजेट एक्सपोर्ट विफल रहा"
+    },
+    {
+      "id": "native.apple.533c6e22a11e88de",
+      "source": "OK",
+      "translated": "ठीक है"
+    },
+    {
+      "id": "native.apple.e1fb28a2a9756402",
+      "source": "Copy image",
+      "translated": "इमेज कॉपी करें"
+    },
+    {
+      "id": "native.apple.ebd7bc92e1b12235",
+      "source": "Save image…",
+      "translated": "इमेज सेव करें…"
+    },
+    {
+      "id": "native.apple.742c46d4cf2db134",
+      "source": "Save image",
+      "translated": "इमेज सेव करें"
+    },
+    {
+      "id": "native.apple.0589cce608418f90",
+      "source": "The widget image could not be captured.",
+      "translated": "विजेट की छवि कैप्चर नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.dfe24e827fdbe9c5",
+      "source": "The widget image could not be copied.",
+      "translated": "विजेट की छवि कॉपी नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.9e611e3a80e71408",
+      "source": "The widget image could not be encoded as PNG.",
+      "translated": "विजेट की छवि को PNG के रूप में एन्कोड नहीं किया जा सका।"
+    },
+    {
+      "id": "native.apple.9a6e8afbe24a262b",
+      "source": "The widget image could not be saved.",
+      "translated": "विजेट की छवि सहेजी नहीं जा सकी।"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
