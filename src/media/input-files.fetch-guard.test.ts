@@ -211,7 +211,6 @@ describe("HEIC input image normalization", () => {
       source: {
         type: "base64",
         data: Buffer.from("jpeg-bytes").toString("base64"),
-        // No mediaType — the production hardcodes "image/png" as the default (line 375).
       } as const,
       limits: createImageSourceLimits(["image/png", "image/jpeg"]),
       detectedMime: "image/jpeg",
@@ -222,7 +221,22 @@ describe("HEIC input image normalization", () => {
       },
     },
     {
-      name: "prefers sniffed MIME for URL images with no Content-Type header",
+      name: "prefers sniffed JPEG when declared HEIC bytes are actually JPEG",
+      source: {
+        type: "base64",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mediaType: "image/heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "image/jpeg",
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "prefers sniffed MIME for URL images with a generic Content-Type header",
       source: {
         type: "url",
         url: "https://example.com/photo",
@@ -230,7 +244,6 @@ describe("HEIC input image normalization", () => {
       limits: createImageSourceLimits(["image/png", "image/webp"], true),
       detectedMime: "image/webp",
       fetchedUrl: "https://example.com/photo",
-      // No Content-Type from server — reaches normalizeInputImage as undefined.
       fetchedBody: Buffer.from("webp-bytes"),
       expectedImage: {
         type: "image",
