@@ -225,6 +225,25 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("projects only unexpired agent status", () => {
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      agentStatus: { note: "Need a key", attention: "key", expiresAt: 1_001 },
+    } satisfies SessionEntry;
+    const params = {
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry,
+    };
+    expect(buildGatewaySessionRow({ ...params, now: 1_000 }).agentStatus).toEqual(
+      entry.agentStatus,
+    );
+    expect(buildGatewaySessionRow({ ...params, now: 1_001 }).agentStatus).toBeUndefined();
+  });
+
   test("session lists apply a bounded default and expose truncation metadata", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(

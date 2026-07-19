@@ -192,6 +192,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
         attention: this.resolveSessionAttention(row),
+        agentStatusNote: this.resolveSessionAgentStatus(row)?.note,
         spawnedBy: row.spawnedBy,
         status: row.status,
         startedAt: row.startedAt,

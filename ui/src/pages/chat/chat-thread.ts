@@ -313,8 +313,8 @@ function findNearestAssistantMessageIndex(
       if (index < currentTurnStart || index >= currentTurnEnd || item.kind !== "message") {
         return null;
       }
-      const message = item.message as Record<string, unknown>;
-      const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+      const message = asRecord(item.message);
+      const role = typeof message?.role === "string" ? message.role.toLowerCase() : "";
       if (role !== "assistant") {
         return null;
       }

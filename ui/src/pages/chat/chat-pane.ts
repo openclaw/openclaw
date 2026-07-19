@@ -760,8 +760,12 @@ class ChatPane extends OpenClawLightDomElement {
     const unreadFailure =
       (row.status === "failed" || row.status === "timeout") &&
       (row.lastReadAt == null || failureAt > row.lastReadAt);
+    const agentStatusActive = Boolean(row.agentStatus && row.agentStatus.expiresAt > Date.now());
     if (
-      !this.unreadPatchGuard.shouldPatch(state.sessionKey, row.unread === true || unreadFailure)
+      !this.unreadPatchGuard.shouldPatch(
+        state.sessionKey,
+        row.unread === true || unreadFailure || agentStatusActive,
+      )
     ) {
       return;
     }

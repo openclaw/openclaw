@@ -3700,6 +3700,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--warn);
 }
 
+.sidebar-session-attention__icon--agent {
+  color: var(--warn);
+}
+
 .sidebar-session-attention__icon--error {
   color: var(--danger);
 }
