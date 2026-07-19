@@ -7,7 +7,7 @@ import { isDurableAuthorityEnabled, isDurableRuntimeEnabled } from "./config.js"
 import { recordDurableRuntimeHealthFailure, recordDurableRuntimeHealthSuccess } from "./health.js";
 import { buildDurableIntakeEnvelope } from "./intake-envelope.js";
 import { DURABLE_AGENT_TURN_OPERATION_KIND } from "./runtime-ids.js";
-import { openDurableRuntimeStore } from "./store-factory.js";
+import { openDurableRuntimeStore, openDurableRuntimeStoreReadOnly } from "./store-factory.js";
 import type {
   DurableRecoveryState,
   DurableRuntimeRun,
@@ -235,6 +235,29 @@ function createNoopLifecycle(): DurableAgentTurnLifecycle {
 }
 
 const AGENT_TURN_HEARTBEAT_INTERVAL_MS = 30_000;
+
+export function hasUnresolvedDurableSessionSideEffectUncertainty(params: {
+  sessionKey: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  const store = openDurableRuntimeStoreReadOnly({ env: params.env });
+  try {
+    return store
+      .listUncertaintyFacts({
+        sourceOwner: "session_store",
+        sourceRef: sessionKey,
+        status: "open",
+        limit: 5_000,
+      })
+      .some((fact) => fact.kind === "lost_after_dispatch");
+  } finally {
+    store.close();
+  }
+}
 
 export function startDurableAgentTurnLifecycle(params: {
   runId: string;

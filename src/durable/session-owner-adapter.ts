@@ -152,6 +152,7 @@ export async function recoverDurableSessionAttentionDeliveries(params: {
           contextKey: entry.idempotencyKey,
           deliveryContext: entry.deliveryContext,
           deliveryQueueId: entry.id,
+          disableTools: entry.disableTools,
         });
         requestHeartbeat({
           source: "other",
@@ -205,6 +206,7 @@ export const sessionStoreOwnerAdapter: DurableOwnerAdapter = {
       text: formatInterruptedSessionAttention(wake),
       idempotencyKey: `durable-wake:${wake.wakeId}`,
       wakeId: wake.wakeId,
+      disableTools: wake.reason === "restart_interrupted",
     });
     if (result.status === "missing") {
       return {

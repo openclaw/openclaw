@@ -51,6 +51,7 @@ export type QueuedSessionDeliveryPayload =
       source?: SessionDeliverySource;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
+      disableTools?: boolean;
     } & SessionDeliveryRetryPolicy)
   | ({
       kind: "agentTurn";

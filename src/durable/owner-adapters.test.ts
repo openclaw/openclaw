@@ -691,12 +691,18 @@ describe("durable canonical owner adapters", () => {
     expect(peekSystemEvents(sessionKey)).toEqual([
       expect.stringContaining("Do not repeat tools or external side effects automatically"),
     ]);
+    expect(peekSystemEventEntries(sessionKey)).toEqual([
+      expect.objectContaining({ disableTools: true }),
+    ]);
     resetSystemEventsForTest();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     await recoverDurableSessionAttentionDeliveries({ log });
     await recoverDurableSessionAttentionDeliveries({ log });
     expect(peekSystemEvents(sessionKey)).toEqual([
       expect.stringContaining("Do not repeat tools or external side effects automatically"),
+    ]);
+    expect(peekSystemEventEntries(sessionKey)).toEqual([
+      expect.objectContaining({ disableTools: true }),
     ]);
     expect(await loadPendingSessionDeliveries()).toEqual([
       expect.objectContaining({

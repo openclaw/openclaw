@@ -81,6 +81,7 @@ export async function requestSessionAttentionDelivery(params: {
   wakeId: string;
   contextKey?: string;
   deliveryContext?: DeliveryContext;
+  disableTools?: boolean;
 }): Promise<SessionAttentionDeliveryResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -99,12 +100,14 @@ export async function requestSessionAttentionDelivery(params: {
     source: { owner: "durable_wake", ref: params.wakeId },
     deliveryContext: params.deliveryContext,
     idempotencyKey: params.idempotencyKey,
+    ...(params.disableTools === true ? { disableTools: true } : {}),
   });
   const queued = enqueueSystemEventEntry(params.text, {
     sessionKey,
     contextKey: params.contextKey ?? params.idempotencyKey,
     deliveryContext: params.deliveryContext,
     deliveryQueueId,
+    disableTools: params.disableTools,
   });
   const admitted =
     queued ??

@@ -21,6 +21,7 @@ export type SystemEvent = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   deliveryQueueIds?: string[];
+  disableTools?: boolean;
 };
 
 const MAX_EVENTS = 20;
@@ -43,6 +44,7 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   deliveryQueueId?: string;
+  disableTools?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -131,6 +133,9 @@ export function enqueueSystemEventEntry(
     if (deliveryQueueId && !duplicate.deliveryQueueIds?.includes(deliveryQueueId)) {
       duplicate.deliveryQueueIds = [...(duplicate.deliveryQueueIds ?? []), deliveryQueueId];
     }
+    if (options.disableTools === true) {
+      duplicate.disableTools = true;
+    }
     return null;
   }
   if (normalizedContextKey !== null) {
@@ -142,6 +147,7 @@ export function enqueueSystemEventEntry(
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     ...(deliveryQueueId ? { deliveryQueueIds: [deliveryQueueId] } : {}),
+    ...(options.disableTools === true ? { disableTools: true } : {}),
   };
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
@@ -203,7 +209,8 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext) &&
-    JSON.stringify(left.deliveryQueueIds ?? []) === JSON.stringify(right.deliveryQueueIds ?? [])
+    JSON.stringify(left.deliveryQueueIds ?? []) === JSON.stringify(right.deliveryQueueIds ?? []) &&
+    left.disableTools === right.disableTools
   );
 }
 

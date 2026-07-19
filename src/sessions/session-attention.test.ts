@@ -111,6 +111,7 @@ describe("session attention delivery", () => {
         text: "new durable attention",
         idempotencyKey: "durable-wake:overflow",
         wakeId: "wake-overflow",
+        disableTools: true,
       });
 
       expect(result).toMatchObject({
@@ -124,6 +125,7 @@ describe("session attention delivery", () => {
           sessionKey,
           text: "new durable attention",
           idempotencyKey: "durable-wake:overflow",
+          disableTools: true,
         }),
       ]);
     });

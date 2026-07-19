@@ -996,6 +996,7 @@ ${JSON.stringify(items, null, 2)}`;
 type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
+  disableTools: boolean;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
   dueCommitments: CommitmentRecord[];
   hasTaggedCronEvents: boolean;
@@ -1031,7 +1032,12 @@ function resolveHeartbeatWakePayloadFlags(params: {
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isWakePayload:
+      source === "hook" ||
+      source === "acp-spawn" ||
+      reason === "wake" ||
+      reason === "durable-attention" ||
+      reason === "durable-attention-recovery",
   };
 }
 
@@ -1057,6 +1063,7 @@ async function resolveHeartbeatPreflight(params: {
   );
   const pendingEventEntries =
     params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
+  const disableTools = pendingEventEntries.some((event) => event.disableTools === true);
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({
@@ -1103,6 +1110,7 @@ async function resolveHeartbeatPreflight(params: {
     ...wakeFlags,
     session,
     pendingEventEntries,
+    disableTools,
     turnSourceDeliveryContext,
     dueCommitments,
     hasTaggedCronEvents,
@@ -1582,7 +1590,7 @@ export async function runHeartbeatOnce(opts: {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const useIsolatedSession = heartbeat?.isolatedSession === true && !preflight.disableTools;
   const firstDueCommitment =
     canHeartbeatDeliverCommitments(heartbeat) && dueHeartbeatTasks.length === 0
       ? preflight.dueCommitments[0]
@@ -2016,7 +2024,9 @@ export async function runHeartbeatOnce(opts: {
       ...(usesHeartbeatResponseTool
         ? { sourceReplyDeliveryMode: "message_tool_only" as const }
         : {}),
-      ...(hasDueCommitments ? { disableTools: true, skillFilter: [] } : {}),
+      ...(hasDueCommitments || preflight.disableTools
+        ? { disableTools: true, skillFilter: [] }
+        : {}),
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,
       bootstrapContextMode,
