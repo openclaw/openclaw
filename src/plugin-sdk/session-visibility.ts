@@ -274,6 +274,7 @@ export function createSessionVisibilityChecker(params: {
   action: SessionAccessAction;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  currentSessionKeys?: ReadonlySet<string>;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
   spawnedKeys: Set<string> | null;
@@ -283,6 +284,7 @@ export function createSessionVisibilityChecker(params: {
     action: params.action,
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
+    currentSessionKeys: params.currentSessionKeys,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,
   });
@@ -311,6 +313,7 @@ export function createSessionVisibilityRowChecker(params: {
   action: SessionAccessAction;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  currentSessionKeys?: ReadonlySet<string>;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
 }): { check: (row: SessionVisibilityRow) => SessionAccessResult } {
@@ -323,7 +326,9 @@ export function createSessionVisibilityRowChecker(params: {
     const targetSessionKey = row.key;
     const targetAgentId = row.agentId ?? resolveAgentIdFromSessionKey(targetSessionKey);
     const isRequesterSession =
-      targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
+      targetSessionKey === params.requesterSessionKey ||
+      targetSessionKey === "current" ||
+      params.currentSessionKeys?.has(targetSessionKey) === true;
     // Only durable ambient-group provenance makes the target ownership-equivalent
     // for same-agent reads. Explicit A2A watches, send access, and cross-agent
     // targets remain fail-closed.
@@ -397,6 +402,7 @@ export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  currentSessionKeys?: ReadonlySet<string>;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
 }): Promise<{
@@ -412,6 +418,7 @@ export async function createSessionVisibilityGuard(params: {
     action: params.action,
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
+    currentSessionKeys: params.currentSessionKeys,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,
     spawnedKeys,
