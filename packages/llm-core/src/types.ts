@@ -322,6 +322,9 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  // Server-advised cooldown for a retryable failure, in ms. Sources include the
+  // HTTP `Retry-After` header on a 429; consumed by the auto-retry backoff.
+  retryAfterMs?: number;
   timestamp: number; // Unix timestamp in milliseconds
 }
 

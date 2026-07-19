@@ -30,6 +30,7 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  retryAfterMs?: number;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -149,6 +150,7 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  retryAfterMs?: number;
 };
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
@@ -174,6 +176,17 @@ function readObjectProperty(value: unknown, key: string): Record<string, unknown
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
+}
+
+function readFiniteNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+    return undefined;
+  }
+  return raw;
 }
 
 function stringifyErrorBody(value: unknown): string | undefined {
@@ -229,11 +242,17 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
+  // Preserve a server-advised cooldown (e.g. HTTP Retry-After) so the agent
+  // auto-retry backoff can respect it instead of fixed exponential delays.
+  const retryAfterMs =
+    readFiniteNumberProperty(errorObject, "retryAfterMs") ??
+    readFiniteNumberProperty(nestedError, "retryAfterMs");
 
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
   };
 }
 

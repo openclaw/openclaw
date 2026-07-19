@@ -32,6 +32,7 @@ import {
   type AnthropicThinkingDisplay,
   type AnthropicToolProjection,
 } from "@openclaw/ai/internal/anthropic";
+import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
 import {
   calculateCost,
   clampThinkingLevel,
@@ -852,7 +853,16 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(formatAnthropicMessagesHttpError(response, detail));
+          // Preserve HTTP status + Retry-After on the error for structured
+          // transport normalization, while keeping the canonical formatted
+          // message (includes Retry-After text) for string-based fallbacks.
+          const retryAfterMs = parseAnthropicRetryAfterMs(response.headers.get("retry-after"));
+          const error = new Error(formatAnthropicMessagesHttpError(response, detail));
+          (error as Error & { status?: number; retryAfterMs?: number }).status = response.status;
+          if (retryAfterMs !== undefined) {
+            (error as Error & { retryAfterMs?: number }).retryAfterMs = retryAfterMs;
+          }
+          throw error;
         }
         if (!response.body) {
           return;
@@ -895,6 +905,19 @@ async function readAnthropicMessagesErrorBodySnippet(response: Response): Promis
     }
     return "";
   }
+}
+
+/** Parses an HTTP `Retry-After` value (delta-seconds or HTTP-date) into ms. */
+function parseAnthropicRetryAfterMs(retryAfter: string | null): number | undefined {
+  const value = retryAfter?.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (/^\d+$/.test(value)) {
+    return Math.round(Number(value) * 1_000);
+  }
+  const retryAtMs = parseRetryAfterHttpDateMs(value);
+  return retryAtMs === undefined ? undefined : Math.max(0, retryAtMs - Date.now());
 }
 
 function createAnthropicTransportClient(params: {

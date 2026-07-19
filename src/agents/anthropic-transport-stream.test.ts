@@ -948,6 +948,61 @@ describe("anthropic transport stream", () => {
     expect(cancelCount).toBe(1);
   });
 
+  it("preserves Retry-After (delta-seconds) from a 429 on the error result", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        '{"type":"error","error":{"type":"rate_limit_error","message":"too many requests"}}',
+        { status: 429, headers: { "retry-after": "5" } },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.retryAfterMs).toBe(5_000);
+    expect(result.errorMessage).toContain("rate_limit_error");
+  });
+
+  it("preserves Retry-After (HTTP-date) from a 429 on the error result", async () => {
+    const retryAt = new Date(Date.now() + 12_000).toUTCString();
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response("rate limited", { status: 429, headers: { "retry-after": retryAt } }),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.retryAfterMs).toBeGreaterThanOrEqual(10_000);
+    expect(result.retryAfterMs).toBeLessThanOrEqual(12_000);
+  });
+
+  it("leaves retryAfterMs unset when a 429 has no Retry-After header", async () => {
+    guardedFetchMock.mockResolvedValueOnce(new Response("rate limited", { status: 429 }));
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.retryAfterMs).toBeUndefined();
+  });
+
   it("aborts stalled streamed Anthropic error responses", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();

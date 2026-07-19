@@ -15,6 +15,13 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
   // =========================================================================
 
   /**
+   * Upper bound for a server-advised Retry-After cooldown. Providers ask for far
+   * longer waits than exponential backoff would otherwise use; cap so a stray
+   * header cannot stall the agent indefinitely.
+   */
+  private static readonly RETRY_AFTER_MAX_MS = 60_000;
+
+  /**
    * Check if an error is retryable (overloaded, rate limit, server errors).
    * Context overflow errors are NOT retryable (handled by compaction instead).
    */
@@ -50,13 +57,13 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    const backoffDelayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
-    const rateLimitWindow = classifyRateLimitWindow(message.errorMessage);
-    const retryAfterDelayMs =
-      rateLimitWindow.kind === "short" && rateLimitWindow.retryAfterSeconds !== undefined
-        ? Math.ceil(rateLimitWindow.retryAfterSeconds * 1000)
-        : 0;
-    const delayMs = Math.max(backoffDelayMs, retryAfterDelayMs);
+    const delayMs = resolveAutoRetryDelayMs({
+      retryAfterMs: message.retryAfterMs,
+      baseDelayMs: settings.baseDelayMs,
+      attempt: this.retryCount,
+      maxMs: AgentSessionExecution.RETRY_AFTER_MAX_MS,
+      errorMessage: message.errorMessage,
+    });
 
     this.emit({
       type: "auto_retry_start",
@@ -72,7 +79,7 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       this.agent.state.messages = messages.slice(0, -1);
     }
 
-    // Wait with exponential backoff (abortable)
+    // Wait before retrying (abortable): server-advised cooldown or backoff.
     this.retryAbortController = new AbortController();
     try {
       await sleep(delayMs, this.retryAbortController.signal);
@@ -230,4 +237,29 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
 
     this.pendingBashMessages = [];
   }
+}
+
+/**
+ * Picks the auto-retry delay. Prefers a structured server-advised Retry-After
+ * (clamped to `maxMs`); otherwise uses exponential backoff with any Retry-After
+ * parsed from the error message as a delay floor.
+ */
+function resolveAutoRetryDelayMs(params: {
+  retryAfterMs?: number;
+  baseDelayMs: number;
+  attempt: number;
+  maxMs: number;
+  errorMessage?: string;
+}): number {
+  const { retryAfterMs, baseDelayMs, attempt, maxMs, errorMessage } = params;
+  if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+    return Math.min(retryAfterMs, maxMs);
+  }
+  const backoffDelayMs = baseDelayMs * 2 ** (attempt - 1);
+  const rateLimitWindow = classifyRateLimitWindow(errorMessage);
+  const retryAfterDelayMs =
+    rateLimitWindow.kind === "short" && rateLimitWindow.retryAfterSeconds !== undefined
+      ? Math.ceil(rateLimitWindow.retryAfterSeconds * 1000)
+      : 0;
+  return Math.max(backoffDelayMs, retryAfterDelayMs);
 }
