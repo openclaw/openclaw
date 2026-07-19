@@ -454,6 +454,18 @@ describe("session MCP runtime", () => {
     expect(shared.controller.signal.reason).toBe(secondReason);
   });
 
+  it("cancels new shared MCP work when its first waiter is already aborted", async () => {
+    const shared = createSharedSessionMcpRequest({ promise: new Promise<void>(() => {}) });
+    const controller = new AbortController();
+    const reason = new Error("waiter was already gone");
+    controller.abort(reason);
+
+    await expect(waitForSharedSessionMcpRequest(shared, controller.signal)).rejects.toBe(reason);
+
+    expect(shared.waiterCount).toBe(0);
+    expect(shared.controller.signal.reason).toBe(reason);
+  });
+
   it("advertises the stable MCP Apps client extension only when enabled", () => {
     expect(testing.buildMcpClientCapabilities(false)).toEqual({});
     expect(testing.buildMcpClientCapabilities(true)).toEqual({

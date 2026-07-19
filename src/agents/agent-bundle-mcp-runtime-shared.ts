@@ -88,7 +88,13 @@ export async function waitForSharedSessionMcpRequest<T>(
   request: SharedSessionMcpRequest<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  signal?.throwIfAborted();
+  if (signal?.aborted) {
+    const reason = signal.reason ?? new Error("MCP request aborted");
+    if (!request.settled && request.waiterCount === 0 && !request.controller.signal.aborted) {
+      request.controller.abort(reason);
+    }
+    signal.throwIfAborted();
+  }
   request.waiterCount += 1;
   try {
     return await waitForSessionMcpRequest(request.promise, signal);
