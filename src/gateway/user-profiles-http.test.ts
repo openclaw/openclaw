@@ -25,6 +25,10 @@ function emailHash(email: string): string {
   return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
 }
 
+function fetchUrl(input: URL | RequestInfo): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
 function response() {
   const end = vi.fn();
   const setHeader = vi.fn();
@@ -284,8 +288,8 @@ describe("profile avatar HTTP endpoint", () => {
     });
     // Both emails have a Gravatar; the first (primary) must win regardless of
     // which concurrent lookup settles first.
-    const fetchImpl = vi.fn(async (url: string) =>
-      url.includes(primaryHash)
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
+      fetchUrl(input).includes(primaryHash)
         ? new Response(new Uint8Array([1, 1, 1]), {
             status: 200,
             headers: { "content-type": "image/png" },
@@ -316,8 +320,8 @@ describe("profile avatar HTTP endpoint", () => {
       emails: ["primary-miss@example.com", "secondary-hit@example.com"],
       hasAvatar: false,
     });
-    const fetchImpl = vi.fn(async (url: string) =>
-      url.includes(primaryHash)
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
+      fetchUrl(input).includes(primaryHash)
         ? new Response(null, { status: 404 })
         : new Response(new Uint8Array([2, 2, 2]), {
             status: 200,
@@ -346,8 +350,8 @@ describe("profile avatar HTTP endpoint", () => {
     const reachableHash = emailHash(emails[emails.length - 1] ?? "");
     getProfileAvatar.mockReturnValue(undefined);
     getUserProfileListItem.mockReturnValue({ id: profileId, emails, hasAvatar: false });
-    const fetchImpl = vi.fn(async (url: string) =>
-      url.includes(reachableHash)
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) =>
+      fetchUrl(input).includes(reachableHash)
         ? new Response(new Uint8Array([9, 9, 9]), {
             status: 200,
             headers: { "content-type": "image/png" },
