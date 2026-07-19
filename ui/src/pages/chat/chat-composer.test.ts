@@ -1,12 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { i18n, t } from "../../i18n/index.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
 const discoverRealtimeTalkInputsMock = vi.hoisted(() => vi.fn());
 const openRealtimeTalkInputMock = vi.hoisted(() => vi.fn());
@@ -21,10 +18,13 @@ vi.mock("./realtime-talk-input.ts", async (importOriginal) => ({
   describeRealtimeTalkInputError: () => "Microphone access failed.",
 }));
 
-vi.mock("../../components/icons.ts", async () => {
+vi.mock("../../components/icons.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/icons.ts")>();
   const { html: litHtml } = await import("lit");
   return {
+    ...actual,
     icons: {
+      ...actual.icons,
       camera: litHtml`<svg data-icon="camera"></svg>`,
       cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
       switchCamera: litHtml`<svg data-icon="switch-camera"></svg>`,
@@ -34,7 +34,16 @@ vi.mock("../../components/icons.ts", async () => {
   };
 });
 
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
+type ComposerProps = Parameters<
+  typeof import("./components/chat-composer.ts").renderChatComposer
+>[0];
+
+let loadSettings: typeof import("../../app/settings.ts").loadSettings;
+let patchSettings: typeof import("../../app/settings.ts").patchSettings;
+let i18n: typeof import("../../i18n/index.ts").i18n;
+let t: typeof import("../../i18n/index.ts").t;
+let renderChatComposer: typeof import("./components/chat-composer.ts").renderChatComposer;
+let resetChatComposerState: typeof import("./components/chat-composer.ts").resetChatComposerState;
 
 function props(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
@@ -133,6 +142,15 @@ function dictationPointerDown(pointerId: number): PointerEvent {
   Object.defineProperty(event, "pointerId", { value: pointerId });
   return event as PointerEvent;
 }
+
+beforeEach(async () => {
+  // isolate:false keeps a worker's module registry across test files. chat-view
+  // eagerly imports the composer, so reload it after this file's mocks are active.
+  vi.resetModules();
+  ({ loadSettings, patchSettings } = await import("../../app/settings.ts"));
+  ({ i18n, t } = await import("../../i18n/index.ts"));
+  ({ renderChatComposer, resetChatComposerState } = await import("./components/chat-composer.ts"));
+});
 
 afterEach(async () => {
   resetChatComposerState();
