@@ -58,7 +58,7 @@ struct QuickChatModelTests {
 
     @Test func `unchanged draft reuses idempotency key after transport failure`() async {
         var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, idempotencyKey, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
             if keys.count == 1 { throw FakeSendError.rejected }
             return "started"
@@ -72,9 +72,44 @@ struct QuickChatModelTests {
         #expect(keys[0] == keys[1])
     }
 
+    @Test func `no-op reasoning selection preserves idempotent retry`() async {
+        var keys: [String] = []
+        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
+            keys.append(idempotencyKey)
+            if keys.count == 1 { throw FakeSendError.rejected }
+            return "started"
+        })
+        await self.prepare(model)
+        model.text = "hello"
+
+        #expect(await !(model.send()))
+        model.selectThinkingLevel(nil)
+        #expect(await model.send())
+
+        #expect(keys.count == 2)
+        #expect(keys[0] == keys[1])
+    }
+
+    @Test func `new dispatch clears the previous accepted reply key`() async {
+        var shouldFail = false
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
+            if shouldFail { throw FakeSendError.rejected }
+            return "started"
+        })
+        await self.prepare(model)
+        model.text = "first"
+        #expect(await model.send())
+        #expect(model.lastAcceptedIdempotencyKey != nil)
+
+        shouldFail = true
+        model.text = "second"
+        #expect(await !(model.send()))
+        #expect(model.lastAcceptedIdempotencyKey == nil)
+    }
+
     @Test func `edited draft gets new idempotency key`() async {
         var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, idempotencyKey, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
             throw FakeSendError.rejected
         })
@@ -91,7 +126,7 @@ struct QuickChatModelTests {
 
     @Test func `empty text does not call gateway`() async {
         var sendCount = 0
-        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
             sendCount += 1
             return "ok"
         })
@@ -107,7 +142,7 @@ struct QuickChatModelTests {
         var sendCount = 0
         let model = self.makeModel(
             gate: .disconnected,
-            sendHandler: { _, _, _, _, _ in
+            sendHandler: { _, _, _, _, _, _ in
                 sendCount += 1
                 return "ok"
             })
@@ -135,7 +170,7 @@ struct QuickChatModelTests {
 
     @Test func `dismissal lets dispatched send settle without retry`() async {
         let latch = SendLatch()
-        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
             try await latch.wait()
         })
         await self.prepare(model)
@@ -188,7 +223,7 @@ struct QuickChatModelTests {
             sessionKeyProvider: { "main" },
             agentsProvider: { Self.agentsResult(defaultID: "main", agentIDs: ["main"]) },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map {
                     ($0, granted.value || $0 != .screenRecording)
@@ -198,7 +233,9 @@ struct QuickChatModelTests {
                 granted.value = true
                 return Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         await self.prepare(model)
         #expect(model.missingPermissions == [.screenRecording])
 
@@ -217,7 +254,7 @@ struct QuickChatModelTests {
             sessionKeyProvider: { "main" },
             agentsProvider: { Self.agentsResult(defaultID: "main", agentIDs: ["main"]) },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, $0 != .accessibility) })
             },
@@ -225,7 +262,9 @@ struct QuickChatModelTests {
                 await latch.wait()
                 return Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         await self.prepare(model)
 
         model.grantMissingPermissions()
@@ -310,7 +349,7 @@ struct QuickChatModelTests {
 
     @Test func `override send uses canonical session key verbatim`() async {
         var sentRoute: QuickChatRoutingTarget?
-        let model = self.makeModel(sendHandler: { sessionKey, agentID, _, _, _ in
+        let model = self.makeModel(sendHandler: { sessionKey, agentID, _, _, _, _ in
             sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
             return "started"
         })
@@ -332,7 +371,7 @@ struct QuickChatModelTests {
                     agentIDs: ["main", "work"],
                     scope: "global")
             },
-            sendHandler: { sessionKey, agentID, _, _, _ in
+            sendHandler: { sessionKey, agentID, _, _, _, _ in
                 sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
                 return "started"
             })
@@ -409,7 +448,7 @@ struct QuickChatModelTests {
     @Test func `edits during a screenshot send survive and keep their draft`() async throws {
         let latch = SendLatch()
         var receivedMessage: String?
-        let model = self.makeModel(sendHandler: { _, _, message, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, message, _, _, _ in
             receivedMessage = message
             return try await latch.wait()
         })
@@ -439,7 +478,7 @@ struct QuickChatModelTests {
 
     @Test func `capture pipeline blocks concurrent sends and unwinds`() async {
         var sendCount = 0
-        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
             sendCount += 1
             return "ok"
         })
@@ -478,7 +517,7 @@ struct QuickChatModelTests {
     @Test func `window screenshot sends attachment and default caption`() async throws {
         var receivedMessage: String?
         var receivedAttachments: [OpenClawChatAttachmentPayload] = []
-        let model = self.makeModel(sendHandler: { _, _, message, _, attachments in
+        let model = self.makeModel(sendHandler: { _, _, message, _, _, attachments in
             receivedMessage = message
             receivedAttachments = attachments
             return "started"
@@ -523,7 +562,7 @@ struct QuickChatModelTests {
 
     @Test func `accepted send clears attached context`() async {
         var receivedMessage: String?
-        let model = self.makeModel(sendHandler: { _, _, message, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, message, _, _, _ in
             receivedMessage = message
             return "ok"
         })
@@ -591,7 +630,7 @@ struct QuickChatModelTests {
             agentIdentityProvider: { _ in
                 QuickChatAgentDisplay(id: "main", name: "Molty", emoji: "🦞")
             },
-            sendProvider: sendHandler ?? { _, _, _, _, _ in
+            sendProvider: sendHandler ?? { _, _, _, _, _, _ in
                 if let sendError { throw sendError }
                 return sendStatus
             },
@@ -601,7 +640,9 @@ struct QuickChatModelTests {
             permissionGrantProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
-            connectionGateProvider: { gate })
+            connectionGateProvider: { gate },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
     }
 
     private static func agentsResult(

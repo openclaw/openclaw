@@ -66,9 +66,9 @@ describe("show_widget", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(5221);
+    expect(Buffer.byteLength(html)).toBe(9649);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "8a6c07f9004e816fcadd8fab009f9c78ef831a8027991d61dbeeb4b254721acc",
+      "3326950b5fde8ef742df1f288102f6cb3cc330548b4b4c157424a54d1e164b3a",
     );
   });
 
@@ -125,7 +125,7 @@ describe("show_widget", () => {
     expect(manifest.cspSandbox).toBe("scripts");
   });
 
-  it("keeps the prompt bridge ahead of HTML widget code", async () => {
+  it("keeps the host bridges ordered around HTML widget code", async () => {
     const stateDir = await createStateDir();
     const { viewId } = await executeWidget({
       stateDir,
@@ -140,6 +140,13 @@ describe("show_widget", () => {
     expect(html.indexOf("window.sendPrompt")).toBeLessThan(html.indexOf("<section>"));
     expect(html).toContain("openclaw:widget-theme");
     expect(html.indexOf("openclaw:widget-theme")).toBeLessThan(html.indexOf("<section>"));
+    expect(html).toContain("openclaw:widget-snapshot-request");
+    expect(html.indexOf("openclaw:widget-theme")).toBeLessThan(
+      html.indexOf("openclaw:widget-snapshot-request"),
+    );
+    expect(html.indexOf("openclaw:widget-snapshot-request")).toBeLessThan(
+      html.indexOf("<section>"),
+    );
     const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
     expect(bridgeKeys).toEqual([
       "surface",
@@ -166,6 +173,11 @@ describe("show_widget", () => {
     expect(html).toContain("c.port1.postMessage.bind(c.port1)");
     expect(html).toContain('post({type:"openclaw:widget-prompt"');
     expect(html).not.toContain('window.parent.postMessage({type:"openclaw:widget-prompt",');
+    expect(html).toContain("const post=(message,origin)=>parent.postMessage(message,origin)");
+    expect(html).toContain('query.call(root,"script")');
+    expect(html).toContain('queryDocument("canvas")');
+    expect(html).toContain("canvasWidth*canvasHeight>16777216");
+    expect(html).toContain('toDataURL.call(canvas,"image/png")');
   });
 
   it("uses opaque ids and evicts the oldest widget within a session scope", async () => {

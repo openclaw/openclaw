@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export { readMissingScopeError, readMissingScopeErrorDetails } from "./gateway-error-details.js";
 export * from "./session-icon.js";
 export * from "./terminal-validators.js";
 export {
@@ -14,9 +15,15 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
 export type { GatewayErrorDetails, MissingScopeErrorDetails } from "./schema/error-codes.js";
+export * from "./schema/board.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
+  BoardEventParamsSchema,
+  BoardGetParamsSchema,
+  BoardUpdateParamsSchema,
+  BoardWidgetGrantParamsSchema,
+  BoardWidgetPutParamsSchema,
   AgentEventSchema,
   AuditActivityAgentRunV1Schema,
   AuditActivityEventV1Schema,
@@ -29,6 +36,17 @@ import {
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
+  UserProfileSchema,
+  UsersLinkEmailParamsSchema,
+  UsersLinkEmailResultSchema,
+  UsersListParamsSchema,
+  UsersListResultSchema,
+  UsersSelfParamsSchema,
+  UsersSelfResultSchema,
+  UsersSetAvatarParamsSchema,
+  UsersSetAvatarResultSchema,
+  UsersSetDisplayNameParamsSchema,
+  UsersSetDisplayNameResultSchema,
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
   AgentParamsSchema,
@@ -78,10 +96,13 @@ import {
   TalkCatalogResultSchema,
   TalkClientCreateParamsSchema,
   TalkClientCreateResultSchema,
+  TalkClientCloseParamsSchema,
+  TalkClientMutationResultSchema,
   TalkAgentControlResultSchema,
   TalkClientSteerParamsSchema,
   TalkClientToolCallParamsSchema,
   TalkClientToolCallResultSchema,
+  TalkClientTranscriptParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
   TalkSessionAppendAudioParamsSchema,
@@ -625,11 +646,25 @@ export const validateAuditActivityListParams = lazyCompile<AuditActivityListPara
   AuditActivityListParamsSchema,
 );
 export const validateAuditListParams = lazyCompile(AuditListParamsSchema);
+export const validateUsersListParams = lazyCompile(UsersListParamsSchema);
+export const validateUsersSelfParams = lazyCompile(UsersSelfParamsSchema);
+export const validateUsersSelfResult = lazyCompile(UsersSelfResultSchema);
+export const validateUsersLinkEmailParams = lazyCompile(UsersLinkEmailParamsSchema);
+export const validateUsersLinkEmailResult = lazyCompile(UsersLinkEmailResultSchema);
+export const validateUsersSetDisplayNameParams = lazyCompile(UsersSetDisplayNameParamsSchema);
+export const validateUsersSetDisplayNameResult = lazyCompile(UsersSetDisplayNameResultSchema);
+export const validateUsersSetAvatarParams = lazyCompile(UsersSetAvatarParamsSchema);
+export const validateUsersSetAvatarResult = lazyCompile(UsersSetAvatarResultSchema);
 export const validateAgentIdentityParams = lazyCompile(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = lazyCompile(AgentWaitParamsSchema);
 export const validateWakeParams = lazyCompile(WakeParamsSchema);
 export const validateAgentsListParams = lazyCompile(AgentsListParamsSchema);
 export const validateWorktreesListParams = lazyCompile(WorktreesListParamsSchema);
+export const validateBoardGetParams = lazyCompile(BoardGetParamsSchema);
+export const validateBoardUpdateParams = lazyCompile(BoardUpdateParamsSchema);
+export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
+export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
+export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);
 export const validateWorktreesCreateParams = lazyCompile(WorktreesCreateParamsSchema);
 export const validateWorktreesRemoveParams = lazyCompile(WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = lazyCompile(WorktreesRestoreParamsSchema);
@@ -776,8 +811,11 @@ export const validateTalkConfigParams = lazyCompile(TalkConfigParamsSchema);
 export const validateTalkConfigResult = lazyCompile(TalkConfigResultSchema);
 export const validateTalkClientCreateParams = lazyCompile(TalkClientCreateParamsSchema);
 export const validateTalkClientCreateResult = lazyCompile(TalkClientCreateResultSchema);
+export const validateTalkClientCloseParams = lazyCompile(TalkClientCloseParamsSchema);
+export const validateTalkClientMutationResult = lazyCompile(TalkClientMutationResultSchema);
 export const validateTalkClientToolCallParams = lazyCompile(TalkClientToolCallParamsSchema);
 export const validateTalkClientToolCallResult = lazyCompile(TalkClientToolCallResultSchema);
+export const validateTalkClientTranscriptParams = lazyCompile(TalkClientTranscriptParamsSchema);
 export const validateTalkClientSteerParams = lazyCompile(TalkClientSteerParamsSchema);
 export const validateTalkAgentControlResult = lazyCompile(TalkAgentControlResultSchema);
 export const validateTalkSessionCreateParams = lazyCompile(TalkSessionCreateParamsSchema);
@@ -1140,6 +1178,17 @@ export {
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
+  UserProfileSchema,
+  UsersLinkEmailParamsSchema,
+  UsersLinkEmailResultSchema,
+  UsersListParamsSchema,
+  UsersListResultSchema,
+  UsersSelfParamsSchema,
+  UsersSelfResultSchema,
+  UsersSetAvatarParamsSchema,
+  UsersSetAvatarResultSchema,
+  UsersSetDisplayNameParamsSchema,
+  UsersSetDisplayNameResultSchema,
   TaskSuggestionSchema,
   TaskSuggestionEventSchema,
   TaskSuggestionResolutionSchema,
@@ -1191,10 +1240,13 @@ export {
   TalkCatalogResultSchema,
   TalkClientCreateParamsSchema,
   TalkClientCreateResultSchema,
+  TalkClientCloseParamsSchema,
+  TalkClientMutationResultSchema,
   TalkAgentControlResultSchema,
   TalkClientSteerParamsSchema,
   TalkClientToolCallParamsSchema,
   TalkClientToolCallResultSchema,
+  TalkClientTranscriptParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
   TalkSessionAppendAudioParamsSchema,
@@ -1517,10 +1569,13 @@ export type {
   TalkCatalogResult,
   TalkClientCreateParams,
   TalkClientCreateResult,
+  TalkClientCloseParams,
+  TalkClientMutationResult,
   TalkClientSteerParams,
   TalkAgentControlResult,
   TalkClientToolCallParams,
   TalkClientToolCallResult,
+  TalkClientTranscriptParams,
   TalkConfigParams,
   TalkConfigResult,
   TalkSessionAppendAudioParams,
@@ -1734,6 +1789,17 @@ export type {
   AuditEvent,
   AuditListParams,
   AuditListResult,
+  UserProfile,
+  UsersLinkEmailParams,
+  UsersLinkEmailResult,
+  UsersListParams,
+  UsersListResult,
+  UsersSelfParams,
+  UsersSelfResult,
+  UsersSetAvatarParams,
+  UsersSetAvatarResult,
+  UsersSetDisplayNameParams,
+  UsersSetDisplayNameResult,
   TaskSuggestion,
   TaskSuggestionEvent,
   TaskSuggestionResolution,

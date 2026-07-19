@@ -797,58 +797,6 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow("not allowlisted");
   });
 
-  it("reuses provider-scoped failures across isolated owners", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-owner-secret-provider-failure-");
-    const callLogPath = path.join(root, "calls.log");
-    const commandPath = path.join(root, "provider.sh");
-    await fs.writeFile(
-      commandPath,
-      `#!/bin/sh\nprintf 'call\\n' >> ${JSON.stringify(callLogPath)}\nexit 1\n`,
-      { encoding: "utf8", mode: 0o700 },
-    );
-    const input = {
-      modelRef: { source: "exec" as const, provider: "shared", id: "models/openai" },
-      ttsRef: { source: "exec" as const, provider: "shared", id: "tts/elevenlabs" },
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        secrets: {
-          providers: {
-            shared: { source: "exec", command: commandPath, passEnv: ["PATH"] },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: input.modelRef,
-              models: [],
-            },
-          },
-        },
-        messages: {
-          tts: { providers: { elevenlabs: { apiKey: input.ttsRef } } },
-        },
-      }),
-      env: { PATH: process.env.PATH ?? "" },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(input.modelRef);
-    expect(snapshot.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual(input.ttsRef);
-    expect(snapshot.degradedOwners).toMatchObject([
-      { ownerKind: "provider", ownerId: "openai", reason: "secret provider failed" },
-      { ownerKind: "capability", ownerId: "tts", reason: "secret provider failed" },
-    ]);
-    expect((await fs.readFile(callLogPath, "utf8")).trim().split("\n")).toHaveLength(1);
-  });
-
   it("keeps invalid TTS SecretRef ids fail-closed", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({

@@ -127,7 +127,7 @@ struct RootTabsSourceGuardTests {
         #expect(!rootSource.contains("tabViewBottomAccessory"))
         #expect(!rootSource.contains("PhoneVoiceTabAccessory"))
         #expect(!chromeSource.contains("PhoneVoiceTabAccessory"))
-        #expect(chatSource.contains("talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl"))
+        #expect(chatSource.contains("talkControl: Self.shouldExposeCaptureControl("))
         #expect(chatSource.contains("private var talkControl: OpenClawChatTalkControl"))
         #expect(chatSource.contains("self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)"))
     }
@@ -716,9 +716,9 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("self.previewHeader(\"Loading\")"))
         #expect(source.contains("self.previewHeader(\"Empty\")"))
         #expect(source.contains("self.previewHeader(\"Error\")"))
-        #expect(source.contains("title: \"Sessions unavailable\""))
-        #expect(source.contains("title: \"No recent sessions\""))
-        #expect(source.contains("title: \"Loading sessions\""))
+        #expect(source.contains("title: \"Threads unavailable\""))
+        #expect(source.contains("title: \"No recent threads\""))
+        #expect(source.contains("title: \"Loading threads\""))
     }
 
     @Test func `routed feature screens reuse shared pro components`() throws {

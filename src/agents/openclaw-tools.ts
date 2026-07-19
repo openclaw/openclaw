@@ -4,6 +4,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
@@ -40,6 +41,7 @@ import {
   shouldIncludeAskUserToolForOpenClawTools,
   shouldIncludeUpdatePlanToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -54,6 +56,7 @@ import {
   createConversationsTurnTool,
 } from "./tools/conversation-tools.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
+import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -178,7 +181,7 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Server-owned operation-local origin for conversation-read visibility policy. */
     conversationReadOrigin?: ConversationReadInvocationOrigin;
-    /** Restrict the cron tool to self-removing this active cron job. */
+    /** Restrict cron operations to the active cron job's self-scoped surface. */
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
     requireExplicitMessageTarget?: boolean;
@@ -189,6 +192,8 @@ export function createOpenClawTools(
     inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    swarmCollector?: boolean;
+    swarmOutputSchema?: Record<string, unknown>;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
@@ -242,6 +247,16 @@ export function createOpenClawTools(
     sessionKey: options?.agentSessionKey,
     config: resolvedConfig,
     agentId: options?.requesterAgentIdOverride,
+  });
+  const effectiveRequesterAgentId = sessionAgentId;
+  const swarmToolGroups = createOpenClawSwarmToolGroups({
+    config: resolvedConfig,
+    effectiveRequesterAgentId,
+    agentSessionKey: options?.agentSessionKey,
+    runSessionKey: options?.runSessionKey,
+    runId: options?.runId,
+    swarmCollector: options?.swarmCollector,
+    swarmOutputSchema: options?.swarmOutputSchema,
   });
   // Fall back to the session agent workspace so plugin loading stays workspace-stable
   // even when a caller forgets to thread workspaceDir explicitly.
@@ -471,6 +486,9 @@ export function createOpenClawTools(
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
+    createDashboardTool({
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    }),
     ...(embedded
       ? []
       : [
@@ -496,6 +514,7 @@ export function createOpenClawTools(
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+            runId: options?.runId,
             ...(options?.cronSelfRemoveOnlyJobId
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),
@@ -527,7 +546,7 @@ export function createOpenClawTools(
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     // Discord sessions get the Discord plugin's own show_widget (Activities
     // delivery); registering the core tool there would collide on the name.
-    ...(options?.agentChannel === "discord"
+    ...(options?.agentChannel === "discord" || !isCoreCanvasHostEnabled(resolvedConfig)
       ? []
       : [
           createShowWidgetTool({
@@ -586,11 +605,13 @@ export function createOpenClawTools(
           }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
+    ...swarmToolGroups.structuredOutput,
     ...(includeAskUserTool
       ? [
           createAskUserTool({
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
           }),
         ]
       : []),
@@ -665,13 +686,16 @@ export function createOpenClawTools(
             agentMemberRoleIds: options?.agentMemberRoleIds,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
-            requesterAgentIdOverride: options?.requesterAgentIdOverride,
+            requesterAgentIdOverride: effectiveRequesterAgentId,
+            requesterRunId: options?.runId,
+            swarmCollector: options?.swarmCollector,
             workspaceDir: spawnWorkspaceDir,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
         ]
       : []),
+    ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onBeforeYield:

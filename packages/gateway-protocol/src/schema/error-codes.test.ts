@@ -6,6 +6,8 @@ import {
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   missingScopeErrorShape,
+  readMissingScopeError,
+  readMissingScopeErrorDetails,
 } from "./error-codes.js";
 
 describe("gateway error details", () => {
@@ -48,5 +50,59 @@ describe("gateway error details", () => {
       missingScope: "operator.admin",
       requiredScopes: ["operator.admin"],
     });
+  });
+
+  it("reads structured missing-scope details without parsing the message", () => {
+    expect(
+      readMissingScopeError({
+        code: ErrorCodes.FORBIDDEN,
+        message: "permission denied",
+        details: {
+          code: GatewayErrorDetailCodes.MISSING_SCOPE,
+          missingScope: "operator.questions",
+          requiredScopes: ["operator.read", "operator.questions"],
+        },
+      }),
+    ).toEqual({
+      code: GatewayErrorDetailCodes.MISSING_SCOPE,
+      missingScope: "operator.questions",
+      requiredScopes: ["operator.read", "operator.questions"],
+    });
+  });
+
+  it("falls back to the legacy message only for authorization error codes", () => {
+    expect(
+      readMissingScopeError({
+        gatewayCode: ErrorCodes.INVALID_REQUEST,
+        message: "missing scope: operator.read",
+      }),
+    ).toEqual({
+      code: GatewayErrorDetailCodes.MISSING_SCOPE,
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+    expect(
+      readMissingScopeError({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "missing scope: operator.read",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects malformed structured details", () => {
+    expect(
+      readMissingScopeErrorDetails({
+        code: GatewayErrorDetailCodes.MISSING_SCOPE,
+        missingScope: "operator.read",
+        requiredScopes: [],
+      }),
+    ).toBeNull();
+    expect(
+      readMissingScopeErrorDetails({
+        code: GatewayErrorDetailCodes.MISSING_SCOPE,
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read", 42],
+      }),
+    ).toBeNull();
   });
 });

@@ -1,5 +1,11 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import {
+  SIDEBAR_SESSION_NO_ATTENTION,
+  sidebarSessionAttentionPriority,
+  type SidebarKnownSessionAttention,
+  type SidebarRecentSession,
+} from "./app-sidebar-session-types.ts";
 
 /**
  * Pure projection of flat session rows into the sidebar's parent/child tree.
@@ -12,9 +18,17 @@ export function projectSessionTree(params: {
   agentRows: readonly GatewaySessionRow[];
   childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
   loadingChildKeys: ReadonlySet<string>;
+  knownSessionAttention: readonly SidebarKnownSessionAttention[];
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
-  const { roots, agentRows, childRowsByParent, loadingChildKeys, toSidebarSession } = params;
+  const {
+    roots,
+    agentRows,
+    childRowsByParent,
+    loadingChildKeys,
+    knownSessionAttention,
+    toSidebarSession,
+  } = params;
   const rowsByKey = new Map<string, GatewaySessionRow>();
   for (const rows of Object.values(childRowsByParent)) {
     for (const row of rows) {
@@ -75,8 +89,33 @@ export function projectSessionTree(params: {
         child.failedChildCount,
       0,
     );
+    const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
+    // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
+    // Grandchildren join the normal transitive fold after their branch is materialized.
+    const unloadedChildAttention = knownSessionAttention.reduce(
+      (current, entry) =>
+        unloadedChildKeys.some((key) => areUiSessionKeysEquivalent(entry.sessionKey, key)) &&
+        sidebarSessionAttentionPriority(entry.attention) > sidebarSessionAttentionPriority(current)
+          ? entry.attention
+          : current,
+      SIDEBAR_SESSION_NO_ATTENTION,
+    );
+    // Accepted gap: an unloaded failed child needs expansion before its error attention can surface.
+    // Child attention is transitive just like live-run counts: a collapsed
+    // ancestor remains actionable even when the blocked descendant is hidden.
+    const attention = children.reduce(
+      (current, child) =>
+        sidebarSessionAttentionPriority(child.attention) > sidebarSessionAttentionPriority(current)
+          ? child.attention
+          : current,
+      sidebarSessionAttentionPriority(unloadedChildAttention) >
+        sidebarSessionAttentionPriority(projected.attention)
+        ? unloadedChildAttention
+        : projected.attention,
+    );
     return {
       ...projected,
+      attention,
       childSessionKeys,
       children,
       loadingChildren: loadingChildKeys.has(row.key),

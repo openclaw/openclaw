@@ -3680,6 +3680,32 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
+  it("applies stored session permissions to resumed harness turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const harness = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "guardian" } },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const resumeParams = harness.requests.find((request) => request.method === "thread/resume")
+      ?.params as Record<string, unknown> | undefined;
+    const turnParams = harness.requests.find((request) => request.method === "turn/start")
+      ?.params as Record<string, unknown> | undefined;
+    expect(resumeParams?.approvalPolicy).toBe("never");
+    expect(resumeParams?.sandbox).toBe("danger-full-access");
+    expect(turnParams?.approvalPolicy).toBe("never");
+    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+  });
+
   it("keeps normalized full exec mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
@@ -6110,7 +6136,10 @@ describe("runCodexAppServerAttempt", () => {
         pluginConfig: { supervision: { enabled: true } },
         clientFactory,
       }),
-    ).rejects.toThrow("Codex session generation is no longer current");
+    ).rejects.toMatchObject({
+      name: "AgentHarnessSessionSupersededError",
+      message: "Codex session generation is no longer current: session-current",
+    });
     expect(clientFactory).not.toHaveBeenCalled();
 
     registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);

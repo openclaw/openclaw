@@ -377,6 +377,9 @@ export function reconcileSessionChanged(
   if (rowFields.thinkingLevel === null) {
     delete row.thinkingLevel;
   }
+  if (rowFields.lastRunError === null) {
+    delete row.lastRunError;
+  }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
     selectedGlobalAgentId,

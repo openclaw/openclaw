@@ -435,6 +435,10 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease?
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
+    func rewindSession(sessionKey: String, entryId: String) async throws -> OpenClawChatRewindResponse
+    func forkSessionAtMessage(
+        sessionKey: String,
+        entryId: String) async throws -> OpenClawChatForkAtMessageResponse
     func setSessionModel(sessionKey: String, model: String?) async throws
     func patchSessionModel(
         sessionKey: String,
@@ -742,6 +746,26 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.create fork not supported by this transport"])
+    }
+
+    public func rewindSession(
+        sessionKey _: String,
+        entryId _: String) async throws -> OpenClawChatRewindResponse
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.rewind not supported by this transport"])
+    }
+
+    public func forkSessionAtMessage(
+        sessionKey _: String,
+        entryId _: String) async throws -> OpenClawChatForkAtMessageResponse
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.fork not supported by this transport"])
     }
 
     public func listModels() async throws -> [OpenClawChatModelChoice] {
