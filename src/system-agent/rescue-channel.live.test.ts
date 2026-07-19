@@ -88,7 +88,6 @@ describeLive("OpenClaw live rescue channel smoke", () => {
       );
 
       const cfg: OpenClawConfig = {
-        systemAgent: { rescue: { enabled: true } },
         tools: { exec: { security: "full", ask: "off" } },
       };
 

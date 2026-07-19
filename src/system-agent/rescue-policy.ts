@@ -6,7 +6,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
  * Policy checks for remote OpenClaw rescue commands.
  *
  * Rescue intentionally opens only for owner-controlled, non-sandboxed YOLO host
- * posture unless config explicitly enables it, because remote commands can write local state.
+ * posture because remote commands can write local state.
  */
 type SystemAgentRescueDecision =
   | {
@@ -24,7 +24,7 @@ type SystemAgentRescueDecision =
       pendingTtlMinutes: number;
       yolo: boolean;
       sandboxActive: boolean;
-      reason: "disabled" | "sandbox-active" | "not-yolo" | "not-owner" | "not-direct-message";
+      reason: "disabled" | "sandbox-active" | "not-owner" | "not-direct-message";
       message: string;
     };
 
@@ -34,10 +34,6 @@ type SystemAgentRescuePolicyInput = {
   senderIsOwner: boolean;
   isDirectMessage: boolean;
 };
-
-function resolvePendingTtlMinutes(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 15;
-}
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId?: string) {
   if (!agentId) {
@@ -74,28 +70,12 @@ function isYoloHostPosture(cfg: OpenClawConfig, agentId?: string): boolean {
 export function resolveSystemAgentRescuePolicy(
   input: SystemAgentRescuePolicyInput,
 ): SystemAgentRescueDecision {
-  const rescue = input.cfg.systemAgent?.rescue;
-  const configuredEnabled = rescue?.enabled ?? "auto";
-  const ownerDmOnly = rescue?.ownerDmOnly ?? true;
-  const pendingTtlMinutes = resolvePendingTtlMinutes(rescue?.pendingTtlMinutes);
+  const ownerDmOnly = true;
+  const pendingTtlMinutes = 15;
   const sandboxActive = resolveScopedSandboxMode(input.cfg, input.agentId) !== "off";
   const yolo = !sandboxActive && isYoloHostPosture(input.cfg, input.agentId);
-  // "auto" means rescue follows host posture; explicit false/true still keeps owner/DM gates.
-  const enabled = configuredEnabled === "auto" ? yolo : configuredEnabled;
+  const enabled = yolo;
 
-  if (!enabled) {
-    return {
-      allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
-      reason: "disabled",
-      message:
-        "OpenClaw rescue is disabled. Set systemAgent.rescue.enabled=true or use YOLO host posture with sandboxing off.",
-    };
-  }
   if (sandboxActive) {
     return {
       allowed: false,
@@ -109,7 +89,7 @@ export function resolveSystemAgentRescuePolicy(
         "OpenClaw rescue is blocked because OpenClaw sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.",
     };
   }
-  if (configuredEnabled === "auto" && !yolo) {
+  if (!enabled) {
     return {
       allowed: false,
       enabled,
@@ -117,9 +97,8 @@ export function resolveSystemAgentRescuePolicy(
       pendingTtlMinutes,
       yolo,
       sandboxActive,
-      reason: "not-yolo",
-      message:
-        "OpenClaw rescue auto-mode only opens in YOLO host posture: tools.exec.security=full, tools.exec.ask=off, and sandboxing off.",
+      reason: "disabled",
+      message: "OpenClaw rescue requires YOLO host posture with sandboxing off.",
     };
   }
   if (!input.senderIsOwner) {

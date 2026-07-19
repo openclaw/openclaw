@@ -592,26 +592,6 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     The Gateway watches the config and supports hot-reload: `gateway.reload.mode: "hybrid"` (default) hot-applies safe changes and restarts for critical ones. `hot`, `restart`, and `off` are also supported. Most `tools.*`, `agents.*` policy, `session.*`, and `messages.*` changes apply immediately with no reload action at all; `gateway.*` binding/port changes require a restart.
   </Accordion>
 
-  <Accordion title="How do I disable funny CLI taglines?">
-    Set `cli.banner.taglineMode`:
-
-    ```json5
-    {
-      cli: {
-        banner: {
-          taglineMode: "off", // random | default | off
-        },
-      },
-    }
-    ```
-
-    - `off`: hides tagline text but keeps the banner title/version line.
-    - `default`: always uses `All your chats, one OpenClaw.`.
-    - `random`: rotating funny/seasonal taglines (default behavior).
-    - For no banner at all, set env `OPENCLAW_HIDE_BANNER=1`.
-
-  </Accordion>
-
   <Accordion title="How do I enable web search (and web fetch)?">
     `web_fetch` works without an API key. `web_search` depends on your selected provider:
 

@@ -175,6 +175,10 @@ describe("retired runtime config migrations", () => {
     expect(getPath(result.raw, "tools.media.image.preferredModel")).toBeUndefined();
   });
   it.each([
+    "systemAgent",
+    "marketplaces",
+    "cli.banner.taglineMode",
+    "commitments",
     "auth.cooldowns",
     "secrets.resolution",
     "browser.remoteCdpTimeoutMs",

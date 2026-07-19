@@ -15,13 +15,10 @@ import type {
 } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
-import type { CliConfig } from "./types.cli.js";
 import type { CloudWorkersConfig } from "./types.cloud-workers.js";
-import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
-import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.messages.js";
@@ -30,7 +27,6 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
-import type { SystemAgentConfig } from "./types.system-agent.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
@@ -152,10 +148,6 @@ export type OpenClawConfig = {
   audit?: AuditConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
-  /** CLI defaults and command-specific settings. */
-  cli?: CliConfig;
-  /** System-agent rescue/maintenance integration settings. */
-  systemAgent?: SystemAgentConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
     channel?: "stable" | "extended-stable" | "beta" | "dev";
@@ -210,8 +202,6 @@ export type OpenClawConfig = {
   };
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
-  /** Marketplace feed and local package source profile configuration. */
-  marketplaces?: MarketplacesConfig;
   /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
   /** Plugin registry/install/runtime configuration. */
@@ -254,8 +244,6 @@ export type OpenClawConfig = {
   cron?: CronConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
-  /** Commitment/reminder extraction settings. */
-  commitments?: CommitmentsConfig;
   /** Runtime hook registration and queue behavior. */
   hooks?: HooksConfig;
   /** Network discovery and service advertisement settings. */

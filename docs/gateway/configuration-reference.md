@@ -388,17 +388,6 @@ See [Plugins](/tools/plugin).
 
 ---
 
-## Commitments
-
-`commitments` controls inferred follow-up memory: OpenClaw can detect check-ins from conversation turns and deliver them through heartbeat runs.
-
-- `commitments.enabled`: enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: `false`.
-- `commitments.maxPerDay`: maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: `3`.
-
-See [Inferred commitments](/concepts/commitments).
-
----
-
 ## Browser
 
 ```json5
@@ -1369,26 +1358,6 @@ writer is best-effort, not a lossless compliance archive.
 - `stream.deliveryMode`: `"live"` streams incrementally; `"final_only"` buffers until turn terminal events.
 - `stream.tagVisibility`: record of tag names to boolean visibility overrides for streamed events.
 - `runtime.installCommand`: optional install command to run when bootstrapping an ACP runtime environment.
-
----
-
-## CLI
-
-```json5
-{
-  cli: {
-    banner: {
-      taglineMode: "off", // random | default | off
-    },
-  },
-}
-```
-
-- `cli.banner.taglineMode` controls banner tagline style:
-  - `"random"` (default): rotating funny/seasonal taglines.
-  - `"default"`: fixed neutral tagline (`All your chats, one OpenClaw.`).
-  - `"off"`: no tagline text (banner title/version still shown).
-- To hide the entire banner (not just taglines), set env `OPENCLAW_HIDE_BANNER=1`.
 
 ---
 

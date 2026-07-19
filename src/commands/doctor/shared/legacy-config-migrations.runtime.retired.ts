@@ -147,6 +147,10 @@ function hasMediaDeepgram(value: unknown): boolean {
 }
 
 const RETIRED_TUNING_PATHS = [
+  ["systemAgent"],
+  ["marketplaces"],
+  ["cli", "banner", "taglineMode"],
+  ["commitments"],
   ["auth", "cooldowns"],
   ["secrets", "resolution"],
   ["browser", "remoteCdpTimeoutMs"],

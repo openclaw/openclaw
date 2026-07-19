@@ -20,16 +20,13 @@ import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
   AccessGroupsSchema,
-  CommitmentsSchema,
   LoggingLevelSchema,
-  MarketplacesSchema,
   McpConfigSchema,
   MemorySchema,
   NodeHostSchema,
   PluginEntrySchema,
   SecuritySchema,
   SkillEntrySchema,
-  SystemAgentSchema,
   TalkSchema,
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -158,18 +155,6 @@ export const OpenClawSchemaShape = {
       redactPatterns: z.array(z.string()).optional(),
     })
     .optional(),
-  cli: z
-    .strictObject({
-      banner: z
-        .strictObject({
-          taglineMode: z
-            .union([z.literal("random"), z.literal("default"), z.literal("off")])
-            .optional(),
-        })
-        .optional(),
-    })
-    .optional(),
-  systemAgent: SystemAgentSchema,
   update: z
     .strictObject({
       channel: z
@@ -294,7 +279,6 @@ export const OpenClawSchemaShape = {
     })
     .optional(),
   secrets: SecretsConfigSchema,
-  marketplaces: MarketplacesSchema,
   auth: z
     .strictObject({
       profiles: z
@@ -430,7 +414,6 @@ export const OpenClawSchemaShape = {
         .optional(),
     })
     .optional(),
-  commitments: CommitmentsSchema,
   hooks: z
     .strictObject({
       enabled: z.boolean().optional(),

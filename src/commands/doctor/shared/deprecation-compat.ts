@@ -63,6 +63,22 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-phase4-product-config-retirements",
+    deprecated: "2026-07-19",
+    warningStarts: "2026-07-19",
+    removeAfter: "2026-09-18",
+    owner: "config",
+    introduced: "2026-07-19",
+    source: "systemAgent; crestodian; marketplaces; cli.banner.taglineMode; commitments",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.ts",
+    replacement: "built-in rescue, marketplace, banner, and disabled commitments behavior",
+    docsPath: "/gateway/doctor",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.retired.test.ts",
+      "src/config/dead-config-keys.test.ts",
+    ],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-media-models-consolidation",
     deprecated: "2026-07-19",
     warningStarts: "2026-07-19",

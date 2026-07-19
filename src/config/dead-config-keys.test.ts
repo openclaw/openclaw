@@ -34,6 +34,10 @@ function configWithPath(path: string): Record<string, unknown> {
 
 describe("dead config keys", () => {
   it.each([
+    "systemAgent",
+    "marketplaces",
+    "cli",
+    "commitments",
     "auth.cooldowns",
     "secrets.resolution",
     "browser.remoteCdpTimeoutMs",
