@@ -758,4 +758,42 @@ describe("wrapStreamResultRepairDoubleEscapedCodeStrings", () => {
     expect(args?.command).not.toContain("\\n");
     expect(args?.command).toContain('python -c "for i in range(3):');
   });
+
+  it("preserves intentional literal \\n in exec.command when not an indented code block", async () => {
+    // A shell command with an intentional literal \n (correctly
+    // JSON-encoded as \\n, producing two chars backslash+n after
+    // parse). The colon precedes the \n but the \n is not followed
+    // by indentation — this is NOT a Python code block. The
+    // constrained fingerprint must not trigger, leaving the value
+    // byte-for-byte unchanged.
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "exec",
+              arguments: {
+                command: "echo 'end:\\n' > /dev/null",
+              },
+            },
+          ],
+        },
+      });
+
+    const wrapped = wrapStreamResultRepairDoubleEscapedCodeStrings(baseFn as never);
+    const stream = await Promise.resolve(wrapped({} as never, {} as never, {} as never));
+    const message = (await stream.result()) as {
+      content: Array<{ arguments?: { command?: string } }>;
+    };
+
+    const args = message.content[0]?.arguments;
+    // The literal \n after the colon is followed by a closing quote,
+    // not by whitespace indentation. It must remain as literal \n.
+    expect(args?.command).toContain("\\n");
+    expect(args?.command).not.toContain("\n");
+    expect(args?.command).toBe("echo 'end:\\n' > /dev/null");
+  });
 });

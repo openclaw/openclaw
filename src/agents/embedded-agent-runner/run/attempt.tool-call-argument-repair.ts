@@ -76,9 +76,12 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
 
 // Pattern: colon followed by literal \n then indent or consecutive
 // escapes (\n\t) — fingerprint of double-escaped JSON in code blocks
-// (issue #109478). Allows other escapes between \n and the first
-// non-whitespace code character so \n\t chains are detected.
-const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE = /:\s*\\n(?:\s|\\[nrt])*\S/s;
+// (issue #109478). Requires at least one whitespace or escape char
+// between \n and the next code character so the fingerprint only
+// triggers on actual indented code-block structure, not on shell
+// commands or string literals that happen to contain colon-then-\n
+// without indentation.
+const TOOLCALL_REPAIR_DOUBLE_ESCAPED_CODE_RE = /:\s*\\n(?:\s|\\[nrt])+\S/s;
 
 // Maps JSON escape chars to their real equivalents. Only applied at
 // fingerprint positions, preserving intentional escapes elsewhere.
@@ -90,8 +93,10 @@ const TOOLCALL_REPAIR_DOUBLE_ESCAPE_MAP: Record<string, string> = {
 
 // Matches corrupted \n, \t, \r at structural code positions: after a
 // colon, semicolon, closing brace, another literal escape, or a real
-// newline (result of a previous repair). The lookahead allows
-// consecutive escapes (\n\t) so each is matched in turn.
+// newline (result of a previous repair). Applied only after the
+// fingerprint confirms this is an indented code block, so the
+// lookahead intentionally uses * (not +) to also repair structural \n
+// at non-indented positions (e.g. top-level def after a class body).
 const TOOLCALL_REPAIR_DOUBLE_ESCAPED_REPLACE_RE =
   /((?::|;|\}|\\[nrt]|\n)\s*)\\([nrt])(?=(?:\s|\\[nrt])*\S)/gs;
 
