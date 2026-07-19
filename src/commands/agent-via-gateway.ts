@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-// Gateway-first agent CLI implementation with explicit embedded reruns for ambiguous failures.
+// Gateway-first agent CLI implementation with recovery before embedded fallback.
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -91,7 +91,6 @@ type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
-  rerunOnAmbiguous?: boolean;
 };
 type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   message: string;
@@ -338,7 +337,7 @@ class GatewayAgentOutcomeUnknownError extends Error {
     runId: string;
   }) {
     super(
-      `Gateway run ${params.runId} could not be recovered after the connection became uncertain. Its outcome is unknown, so no fallback was started. Use --rerun-on-ambiguous only if duplicate side effects are acceptable.`,
+      `Gateway run ${params.runId} could not be recovered after the connection became uncertain. Its outcome remains unknown.`,
       { cause: params.cause },
     );
     this.name = "GatewayAgentOutcomeUnknownError";
@@ -920,7 +919,7 @@ async function agentViaGatewayCommand(
         const runId = acceptedRunId ?? idempotencyKey;
         const remainingMs = Math.max(0, gatewayDeadlineMs - Date.now());
         runtime.error?.(
-          `Gateway connection became uncertain; waiting for original run ${runId} before considering a rerun.`,
+          `Gateway connection became uncertain; waiting for original run ${runId} before considering fallback.`,
         );
         let recoveryError: unknown = err;
         try {
@@ -1107,9 +1106,6 @@ export async function agentCliCommand(
           ? err.fallbackReason
           : resolveGatewayAgentEmbeddedFallbackReason(err);
       if (!fallbackReason) {
-        throw err;
-      }
-      if (!dispatchOpts.rerunOnAmbiguous) {
         throw err;
       }
 

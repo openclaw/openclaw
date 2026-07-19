@@ -150,13 +150,6 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
-  it("forwards explicit ambiguous-rerun consent", async () => {
-    await runCli(["agent", "--message", "hi", "--agent", "ops", "--rerun-on-ambiguous"]);
-
-    const [options] = commandCall(agentCliCommandMock);
-    expect((options as { rerunOnAmbiguous?: boolean }).rerunOnAmbiguous).toBe(true);
-  });
-
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);

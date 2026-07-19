@@ -7,7 +7,7 @@ title: "Agent"
 
 # `openclaw agent`
 
-Run one agent turn through the Gateway. If the connection becomes uncertain, the CLI waits for the original run and replays its cached terminal result. It fails closed when that result cannot be recovered; pass `--local` to force embedded execution up front.
+Run one agent turn through the Gateway. If the connection becomes uncertain, the CLI first waits for the original run and replays its cached terminal result. If recovery still cannot determine the outcome, it preserves the existing automatic embedded fallback on a fresh isolated session; pass `--local` to force embedded execution up front.
 
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`.
 
@@ -30,7 +30,6 @@ Related: [Agent send tool](/tools/agent-send)
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
 - `--deliver`: send the reply back to the selected channel/target
-- `--rerun-on-ambiguous`: if a disconnected Gateway run cannot be recovered, explicitly allow a fresh embedded run; this can duplicate external side effects from the original run
 - `--timeout <seconds>`: override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours.
 - `--json`: output JSON
 
@@ -53,14 +52,14 @@ openclaw agent --agent ops --message "Run locally" --local
 
 - Pass exactly one of `--message` or `--message-file`. `--message-file` strips a leading UTF-8 BOM and preserves multiline content; it rejects files that are not valid UTF-8. Files larger than 4 MiB are rejected before dispatch.
 - Slash commands (for example `/compact`) cannot run through `--message`. The CLI rejects them and points you at the first-class command instead (`openclaw sessions compact <key>` for compaction).
-- `--local` and explicit ambiguous reruns are one-shot: bundled MCP loopback resources and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave local child processes running. Gateway-backed runs keep Gateway-owned MCP loopback resources under the running Gateway process instead.
-- Standalone embedded execution (`--local` and `--rerun-on-ambiguous`) refuses to reuse an existing main session while restart recovery is pending. Run the turn through a healthy Gateway, or reset it there with `/new` or `/reset`; an independent embedded process cannot safely coordinate that recovery owner with the Gateway scanner.
+- `--local` and automatic embedded fallback runs are one-shot: bundled MCP loopback resources and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave local child processes running. Gateway-backed runs keep Gateway-owned MCP loopback resources under the running Gateway process instead.
+- Standalone embedded execution (`--local` and transport fallback) refuses to reuse an existing main session while restart recovery is pending. Run the turn through a healthy Gateway, or reset it there with `/new` or `/reset`; an independent embedded process cannot safely coordinate that recovery owner with the Gateway scanner.
 - With `--agent`, `--channel` and `--to` together, session routing follows the channel's canonical recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.
 - `--session-key` selects an explicit session key. Agent-prefixed keys must use `agent:<agent-id>:<session-key>`, and `--agent` must match the key's agent id when both are given. Bare non-sentinel keys scope to `--agent` when supplied, or to the configured default agent otherwise; for example `--agent ops --session-key incident-42` routes to `agent:ops:incident-42`. The literal keys `global` and `unknown` stay unscoped only when no `--agent` is supplied.
-- `--json` reserves stdout for the JSON response; Gateway, plugin, and explicit-rerun diagnostics go to stderr so scripts can parse stdout directly.
-- A transport close or timeout is ambiguous even if the CLI never received the Gateway's `accepted` response. The CLI reconnects, waits for the original run id, and requests a cache-only idempotent replay. A cache miss never starts a replacement run.
-- If recovery cannot prove the original result, the command exits with an unknown-outcome error by default. `--rerun-on-ambiguous` is the explicit escape hatch: it starts a fresh `gateway-fallback-*` session/run id and reports `meta.transport: "embedded"`, `meta.fallbackFrom: "gateway"`, `meta.fallbackReason`, and the fallback session fields. Do not use it for runs whose tools or delivery may have non-idempotent external side effects.
-- `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` and explicit embedded reruns receive the same signal but do not send `chat.abort`. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
+- `--json` reserves stdout for the JSON response; Gateway, plugin, and embedded-fallback diagnostics go to stderr so scripts can parse stdout directly.
+- A transport close or timeout is ambiguous even if the CLI never received the Gateway's `accepted` response. The CLI reconnects, waits for the original run id, and requests a cache-only idempotent replay before considering fallback.
+- If recovery cannot prove the original result, the CLI preserves the existing automatic fallback behavior. It starts a fresh `gateway-fallback-*` session/run id and reports `meta.transport: "embedded"`, `meta.fallbackFrom: "gateway"`, `meta.fallbackReason`, and the fallback session fields. The original Gateway run may still have completed, so tools or `--deliver` can produce duplicate external side effects in this rare path.
+- `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` and embedded fallback runs receive the same signal but do not send `chat.abort`. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), never resolved secret plaintext. Marker writes come from the active source config snapshot, not from resolved runtime secret values.
 
 ## JSON delivery status
