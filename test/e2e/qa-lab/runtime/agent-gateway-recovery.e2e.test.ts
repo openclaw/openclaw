@@ -176,7 +176,7 @@ describe("agent Gateway recovery", () => {
       const output = await gateway.runCli([
         "agent",
         "--agent",
-        "main",
+        "qa",
         "--message",
         RECOVERY_PROMPT,
         "--json",
@@ -199,7 +199,7 @@ describe("agent Gateway recovery", () => {
           "agent",
           {
             message: "cache-only recovery must not start this turn",
-            agentId: "main",
+            agentId: "qa",
             idempotencyKey: cacheMissRunId,
             replayOnly: true,
           },
