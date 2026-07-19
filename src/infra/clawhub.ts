@@ -749,7 +749,7 @@ function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
  * This prevents corrupted payloads from passing JSON.parse, schema
  * validation, or being persisted into the local etag cache.
  */
-export function decodeClawHubResponseBody(buffer: Uint8Array): string {
+function decodeClawHubResponseBody(buffer: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 

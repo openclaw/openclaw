@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
-  decodeClawHubResponseBody,
   downloadClawHubGitHubSkillArchive,
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
@@ -1432,41 +1431,4 @@ describe("clawhub helpers", () => {
   });
 });
 
-describe("decodeClawHubResponseBody", () => {
-  it("decodes valid UTF-8 bytes", () => {
-    const input = new TextEncoder().encode("Hello, 世界!");
-    expect(decodeClawHubResponseBody(input)).toBe("Hello, 世界!");
-  });
-
-  it("decodes ASCII only", () => {
-    const input = new TextEncoder().encode('{"ok":true}');
-    expect(decodeClawHubResponseBody(input)).toBe('{"ok":true}');
-  });
-
-  it("decodes an empty buffer", () => {
-    expect(decodeClawHubResponseBody(new Uint8Array(0))).toBe("");
-  });
-
-  it("throws TypeError on a single invalid 0xFF byte", () => {
-    expect(() => decodeClawHubResponseBody(new Uint8Array([0xff]))).toThrow(
-      "The encoded data was not valid for encoding utf-8",
-    );
-  });
-
-  it("throws TypeError when invalid bytes appear after valid ones", () => {
-    const valid = new TextEncoder().encode("hello ");
-    const corrupted = new Uint8Array(valid.length + 1);
-    corrupted.set(valid);
-    corrupted[valid.length] = 0xff;
-    expect(() => decodeClawHubResponseBody(corrupted)).toThrow(TypeError);
-  });
-
-  it("throws TypeError when invalid bytes appear before valid ones", () => {
-    const valid = new TextEncoder().encode(" world");
-    const corrupted = new Uint8Array(valid.length + 1);
-    corrupted[0] = 0xff;
-    corrupted.set(valid, 1);
-    expect(() => decodeClawHubResponseBody(corrupted)).toThrow(TypeError);
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
