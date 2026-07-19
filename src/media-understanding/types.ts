@@ -5,7 +5,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Agent-owned runtime handle carried opaquely through media provider requests. */
-export type MediaPreparedModelRuntime = Readonly<{
+type MediaPreparedModelRuntime = Readonly<{
   agentDir: string;
   workspaceDir?: string;
   config: OpenClawConfig;
