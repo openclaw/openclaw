@@ -1998,6 +1998,17 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Missing session key");
   });
 
+  it("rejects explicit target tokens for /acp sessions", async () => {
+    const params = createDiscordParams("/acp sessions agent:claude:acp:foreign");
+    params.command.senderIsOwner = false;
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toBe("Usage: /acp sessions");
+    expect(hoisted.readAcpSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
+  });
+
   it("shows ACP status for the thread-bound ACP session", async () => {
     mockBoundThreadSession({
       identity: {
