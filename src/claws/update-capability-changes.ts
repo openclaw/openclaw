@@ -19,6 +19,7 @@ export type ClawUpdateCapabilityChange = {
   classification: "escalation" | "reduction" | "neutral";
   requiresDistinctConsent: boolean;
   reason: string;
+  effect: Record<string, unknown>;
   current?: ClawUpdateCapabilityValue;
   desired?: ClawUpdateCapabilityValue;
 };
@@ -229,6 +230,7 @@ function pushAgentCapabilityChanges(params: {
       classification,
       requiresDistinctConsent: classification === "escalation",
       reason: `Agent capability field ${path} changes in the target manifest.`,
+      effect: { path, current, desired },
       ...(current === undefined
         ? {}
         : { current: capabilityValue(summarizeAgentCapability(current)) }),
@@ -292,6 +294,9 @@ export function packageCapabilityChange(params: {
   action: ClawUpdateCapabilityChange["action"];
   currentVersion?: string;
   desiredVersion?: string;
+  integrity?: string;
+  installId?: string;
+  riskWarning?: string;
 }): ClawUpdateCapabilityChange | undefined {
   if (params.pkg.kind !== "plugin" || params.action === "unchanged") {
     return undefined;
@@ -307,6 +312,14 @@ export function packageCapabilityChange(params: {
     reason: reduction
       ? "Target manifest removes or releases plugin executable code."
       : "Target manifest adds or changes plugin executable code.",
+    effect: {
+      kind: params.pkg.kind,
+      ref: params.pkg.ref,
+      ...(params.desiredVersion ? { version: params.desiredVersion } : {}),
+      ...(params.integrity ? { integrity: params.integrity } : {}),
+      ...(params.installId ? { installId: params.installId } : {}),
+      ...(params.riskWarning ? { riskWarning: params.riskWarning } : {}),
+    },
     ...(params.currentVersion
       ? {
           current: capabilityValue(`version ${params.currentVersion}`),
@@ -365,6 +378,22 @@ export function mcpCapabilityChange(params: {
     reason: reduction
       ? "Target manifest removes or releases an MCP tool surface."
       : "Target manifest adds, restores, or changes an MCP tool surface.",
+    effect:
+      params.desired && typeof params.desired === "object"
+        ? {
+            ...(params.desired as Record<string, unknown>),
+            ...("env" in (params.desired as Record<string, unknown>)
+              ? {
+                  env: Object.keys(
+                    ((params.desired as Record<string, unknown>).env ?? {}) as Record<
+                      string,
+                      unknown
+                    >,
+                  ).toSorted(),
+                }
+              : {}),
+          }
+        : { removed: true },
     ...(params.current === undefined
       ? {}
       : {
@@ -410,6 +439,10 @@ export function cronCapabilityChange(params: {
     reason: reduction
       ? "Target manifest removes a scheduled automation."
       : "Target manifest adds, restores, or changes a scheduled automation.",
+    effect:
+      params.desired && typeof params.desired === "object"
+        ? { ...(params.desired as Record<string, unknown>) }
+        : { removed: true },
     ...(params.current === undefined
       ? {}
       : {

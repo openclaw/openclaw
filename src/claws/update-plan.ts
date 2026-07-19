@@ -84,6 +84,9 @@ export async function buildClawUpdatePlan(params: {
     code?: string;
     message?: string;
     installedVersion?: string;
+    integrity?: string;
+    installId?: string;
+    warning?: string;
   }>;
   diagnostics?: ClawDiagnostic[];
 }): Promise<ClawUpdatePlan> {
@@ -204,6 +207,9 @@ export async function buildClawUpdatePlan(params: {
         code?: string;
         message?: string;
         installedVersion?: string;
+        integrity?: string;
+        installId?: string;
+        warning?: string;
       }
     >();
     const targetPlan = await buildClawAddPlan({
@@ -450,13 +456,21 @@ export async function buildClawUpdatePlan(params: {
                 ? "Recorded package reference already matches the exact target version."
                 : "Target manifest changes the exact package version.",
         ...(current ? { currentDigest: digest(current) } : {}),
-        desiredDigest: digest(target),
+        desiredDigest: digest({
+          package: target,
+          integrity: preflight?.integrity,
+          installId: preflight?.installId,
+          riskWarning: preflight?.warning,
+        }),
       });
       const capabilityChange = packageCapabilityChange({
         pkg: target,
         action,
         currentVersion: current?.version,
         desiredVersion: target.version,
+        integrity: preflight?.integrity,
+        installId: preflight?.installId,
+        riskWarning: preflight?.warning,
       });
       if (capabilityChange) {
         capabilityChanges.push(capabilityChange);
@@ -475,11 +489,7 @@ export async function buildClawUpdatePlan(params: {
     for (const [key, current] of currentPackages) {
       if (!targetPackages.has(key)) {
         const manual = current.state !== "present";
-        const action = manual
-          ? "manual"
-          : current.relationship === "managed" && !current.independentOwner
-            ? "remove"
-            : "release";
+        const action = manual ? "manual" : "release";
         actions.push({
           kind: "package",
           id: key,
@@ -488,9 +498,7 @@ export async function buildClawUpdatePlan(params: {
           blocked: manual,
           reason: manual
             ? `Target removes this package, but current lifecycle state is ${current.state}.`
-            : action === "release"
-              ? "Target manifest releases this referenced package while preserving the shared artifact."
-              : "Target manifest removes this managed package reference; apply may remove the unchanged artifact when it is otherwise unused.",
+            : "Target manifest releases this package dependency while preserving the artifact.",
           currentDigest: digest(current),
         });
         const capabilityChange = packageCapabilityChange({

@@ -212,7 +212,10 @@ openclaw claws update incident-triage \
 The plan compares current provenance and live state with the target manifest.
 It reports agent, workspace, package, MCP, cron, and ownership changes,
 including capability escalations and blockers. Capability escalations have
-separate machine-readable records and `!` lines in human output; the eventual
+separate machine-readable records and `!` lines with exact redacted effects in
+human output. Resolved package integrity, install identity, and any trust
+warning are included. Removing a package declaration releases this Claw's edge
+without uninstalling the artifact during update. The eventual
 exact `planIntegrity` confirmation binds that disclosed set as well as ordinary
 content changes. Hosts may use the same records for a separate dialog or an
 aggregate multi-agent review. This stage is read-only: `claws update` requires

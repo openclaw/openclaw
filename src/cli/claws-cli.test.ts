@@ -260,6 +260,7 @@ describe("claws cli", () => {
           classification: "escalation",
           requiresDistinctConsent: true,
           reason: "Agent capability field sandbox.mode changes in the target manifest.",
+          effect: { path: "sandbox.mode", current: "non-main", desired: "all" },
           current: { summary: "non-main", digest: "sha256:current" },
           desired: { summary: "all", digest: "sha256:desired" },
         },
@@ -725,6 +726,9 @@ describe("claws cli", () => {
       "Capability consent: the exact plan-integrity token binds every ! change disclosed below.",
     );
     expect(output).toContain("! agent.sandbox.mode: non-main -> all (change)");
+    expect(output).toContain(
+      'effect: {"path":"sandbox.mode","current":"non-main","desired":"all"}',
+    );
   });
 
   it("returns failure when an update plan contains blocked actions", async () => {
